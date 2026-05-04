@@ -5,7 +5,12 @@ import json
 import sys
 
 from auto_bdsp_rng import __version__
-from auto_bdsp_rng.blink_detection import ProjectXsIntegrationError, load_project_xs_config, save_preview_frame
+from auto_bdsp_rng.blink_detection import (
+    ProjectXsIntegrationError,
+    load_project_xs_config,
+    save_eye_preview,
+    save_preview_frame,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +55,21 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Output image path.",
     )
+
+    preview_eye = subparsers.add_parser(
+        "preview-eye",
+        help="Capture one frame, draw eye-template matching preview, and save it.",
+    )
+    preview_eye.add_argument(
+        "--project-xs-config",
+        required=True,
+        help="Project_Xs config file name or absolute JSON path.",
+    )
+    preview_eye.add_argument(
+        "--output",
+        required=True,
+        help="Output annotated image path.",
+    )
     return parser
 
 
@@ -71,6 +91,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(f"saved preview frame: {output}")
+        return 0
+    if args.command == "preview-eye":
+        try:
+            config = load_project_xs_config(args.project_xs_config)
+            output, preview = save_eye_preview(config.capture, args.output)
+        except ProjectXsIntegrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"output": str(output), **preview.as_dict()}, ensure_ascii=False, indent=2))
         return 0
 
     print("auto_bdsp_rng startup entry is ready.")

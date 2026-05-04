@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 
+import numpy as np
 import pytest
 
 from auto_bdsp_rng.blink_detection import (
@@ -11,7 +12,9 @@ from auto_bdsp_rng.blink_detection import (
     SeedState32,
     capture_preview_frame,
     load_project_xs_config,
+    render_eye_preview,
     recover_seed_from_observation,
+    save_eye_preview,
     save_preview_frame,
 )
 from auto_bdsp_rng.blink_detection.project_xs import ProjectXsIntegrationError
@@ -208,3 +211,53 @@ def test_save_preview_frame_writes_output(monkeypatch, tmp_path):
 
     assert save_preview_frame(config, output) == output
     assert saved_paths == [(str(output), "camera-frame")]
+
+
+def test_render_eye_preview_matches_template(tmp_path):
+    import cv2
+
+    eye = np.full((4, 4), 255, dtype=np.uint8)
+    eye_path = tmp_path / "eye.png"
+    assert cv2.imwrite(str(eye_path), eye)
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    frame[8:12, 9:13] = 255
+    config = BlinkCaptureConfig(
+        eye_image_path=eye_path,
+        roi=(6, 5, 10, 10),
+        threshold=0.5,
+    )
+
+    annotated, preview = render_eye_preview(config, frame)
+
+    assert annotated.shape == frame.shape
+    assert preview.matched is True
+    assert preview.match_score >= 0.5
+    assert preview.template_size == (4, 4)
+    assert preview.roi == (6, 5, 10, 10)
+
+
+def test_save_eye_preview_writes_annotated_output(monkeypatch, tmp_path):
+    import cv2
+
+    eye = np.full((4, 4), 255, dtype=np.uint8)
+    eye_path = tmp_path / "eye.png"
+    assert cv2.imwrite(str(eye_path), eye)
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    frame[8:12, 9:13] = 255
+    saved_paths = []
+    config = BlinkCaptureConfig(
+        eye_image_path=eye_path,
+        roi=(6, 5, 10, 10),
+        threshold=0.5,
+        monitor_window=False,
+    )
+
+    monkeypatch.setattr("auto_bdsp_rng.blink_detection.project_xs.capture_preview_frame", lambda _config: frame)
+    monkeypatch.setattr(cv2, "imwrite", lambda path, image: saved_paths.append((path, image.shape)) or True)
+    output = tmp_path / "debug" / "eye_preview.png"
+
+    saved, preview = save_eye_preview(config, output)
+
+    assert saved == output
+    assert preview.matched is True
+    assert saved_paths == [(str(output), frame.shape)]

@@ -77,6 +77,31 @@ class BlinkCaptureConfig:
 
 
 @dataclass(frozen=True)
+class EyePreviewResult:
+    """Eye template match result for one preview frame."""
+
+    roi: tuple[int, int, int, int]
+    match_score: float
+    match_location: tuple[int, int]
+    template_size: tuple[int, int]
+    threshold: float
+
+    @property
+    def matched(self) -> bool:
+        return self.match_score >= self.threshold
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "roi": list(self.roi),
+            "match_score": self.match_score,
+            "match_location": list(self.match_location),
+            "template_size": list(self.template_size),
+            "threshold": self.threshold,
+            "matched": self.matched,
+        }
+
+
+@dataclass(frozen=True)
 class ProjectXsSeedResult:
     """Normalized seed output from Project_Xs recovery."""
 

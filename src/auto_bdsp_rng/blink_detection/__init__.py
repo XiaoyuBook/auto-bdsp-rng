@@ -3,6 +3,7 @@
 from auto_bdsp_rng.blink_detection.models import (
     BlinkCaptureConfig,
     BlinkObservation,
+    EyePreviewResult,
     ProjectXsSeedResult,
     ProjectXsTrackingConfig,
     SeedState32,
@@ -12,13 +13,16 @@ from auto_bdsp_rng.blink_detection.project_xs import (
     capture_preview_frame,
     capture_player_blinks,
     load_project_xs_config,
+    render_eye_preview,
     recover_seed_from_observation,
+    save_eye_preview,
     save_preview_frame,
 )
 
 __all__ = [
     "BlinkCaptureConfig",
     "BlinkObservation",
+    "EyePreviewResult",
     "ProjectXsIntegrationError",
     "ProjectXsSeedResult",
     "ProjectXsTrackingConfig",
@@ -26,6 +30,8 @@ __all__ = [
     "capture_preview_frame",
     "capture_player_blinks",
     "load_project_xs_config",
+    "render_eye_preview",
     "recover_seed_from_observation",
+    "save_eye_preview",
     "save_preview_frame",
 ]

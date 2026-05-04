@@ -39,3 +39,11 @@ rngtool.tracking_blink(...)
 ```powershell
 .\.venv\Scripts\python.exe -m auto_bdsp_rng capture-frame --project-xs-config config_cave.json --output .\debug\preview.png
 ```
+
+眼部模板和 ROI 的调试可以使用带标注的预览命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng preview-eye --project-xs-config config_cave.json --output .\debug\eye_preview.png
+```
+
+输出图片中红框表示 ROI，绿框表示模板匹配达到阈值，黄框表示未达到阈值。命令行会同时打印匹配分数、匹配位置和模板尺寸。

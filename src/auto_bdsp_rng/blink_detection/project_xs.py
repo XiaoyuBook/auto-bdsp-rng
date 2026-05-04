@@ -12,6 +12,7 @@ from typing import Any
 from auto_bdsp_rng.blink_detection.models import (
     BlinkCaptureConfig,
     BlinkObservation,
+    EyePreviewResult,
     ProjectXsSeedResult,
     ProjectXsTrackingConfig,
     SeedState32,
@@ -199,6 +200,67 @@ def save_preview_frame(config: BlinkCaptureConfig, output_path: str | Path) -> P
     if not saved:
         raise ProjectXsIntegrationError(f"Cannot save preview frame: {output}")
     return output
+
+
+def _load_eye_template(config: BlinkCaptureConfig) -> Any:
+    cv2 = _load_cv2()
+    eye_image = cv2.imread(str(config.eye_image_path), cv2.IMREAD_GRAYSCALE)
+    if eye_image is None:
+        raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
+    return eye_image
+
+
+def render_eye_preview(config: BlinkCaptureConfig, frame: Any) -> tuple[Any, EyePreviewResult]:
+    """Draw ROI and eye-template match box on a captured frame."""
+
+    cv2 = _load_cv2()
+    eye_image = _load_eye_template(config)
+    roi_x, roi_y, roi_w, roi_h = config.roi
+    eye_width, eye_height = eye_image.shape[::-1]
+    if roi_w < eye_width or roi_h < eye_height:
+        raise ProjectXsIntegrationError("ROI is smaller than the configured eye template")
+
+    try:
+        annotated = frame.copy()
+        roi = frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w]
+        roi_gray = roi if len(roi.shape) == 2 else cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
+        result = cv2.matchTemplate(roi_gray, eye_image, cv2.TM_CCOEFF_NORMED)
+        _, match_score, _, max_loc = cv2.minMaxLoc(result)
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Eye template preview matching failed") from exc
+
+    roi_bottom_right = (roi_x + roi_w, roi_y + roi_h)
+    cv2.rectangle(annotated, (roi_x, roi_y), roi_bottom_right, (0, 0, 255), 2)
+    match_location = (max_loc[0] + roi_x, max_loc[1] + roi_y)
+    match_bottom_right = (match_location[0] + eye_width, match_location[1] + eye_height)
+    color = (0, 255, 0) if match_score >= config.threshold else (0, 255, 255)
+    cv2.rectangle(annotated, match_location, match_bottom_right, color, 2)
+
+    preview = EyePreviewResult(
+        roi=config.roi,
+        match_score=float(match_score),
+        match_location=match_location,
+        template_size=(eye_width, eye_height),
+        threshold=config.threshold,
+    )
+    return annotated, preview
+
+
+def save_eye_preview(config: BlinkCaptureConfig, output_path: str | Path) -> tuple[Path, EyePreviewResult]:
+    """Capture a frame, draw eye-template preview information, and save it."""
+
+    cv2 = _load_cv2()
+    output = Path(output_path)
+    frame = capture_preview_frame(config)
+    annotated, preview = render_eye_preview(config, frame)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        saved = cv2.imwrite(str(output), annotated)
+    except Exception as exc:
+        raise ProjectXsIntegrationError(f"Cannot save eye preview: {output}") from exc
+    if not saved:
+        raise ProjectXsIntegrationError(f"Cannot save eye preview: {output}")
+    return output, preview
 
 
 def recover_seed_from_observation(
