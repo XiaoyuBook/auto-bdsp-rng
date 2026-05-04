@@ -83,3 +83,31 @@ class ProjectXsSeedResult:
     state: SeedState32
     observation: BlinkObservation
 
+
+@dataclass(frozen=True)
+class ProjectXsTrackingConfig:
+    """Project_Xs config normalized for this application."""
+
+    source_path: Path
+    capture: BlinkCaptureConfig
+    npc: int = 0
+    pokemon_npc: int = 0
+    timeline_npc: int = 0
+    display_percent: int = 100
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "source_path": str(self.source_path),
+            "eye_image_path": str(self.capture.eye_image_path),
+            "roi": list(self.capture.roi),
+            "threshold": self.capture.threshold,
+            "blink_count": self.capture.blink_count,
+            "monitor_window": self.capture.monitor_window,
+            "window_prefix": self.capture.window_prefix,
+            "crop": None if self.capture.crop is None else list(self.capture.crop),
+            "camera": self.capture.camera,
+            "npc": self.npc,
+            "pokemon_npc": self.pokemon_npc,
+            "timeline_npc": self.timeline_npc,
+            "display_percent": self.display_percent,
+        }

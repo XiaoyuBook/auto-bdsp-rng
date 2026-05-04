@@ -5,13 +5,57 @@ import types
 
 import pytest
 
-from auto_bdsp_rng.blink_detection import BlinkObservation, SeedState32, recover_seed_from_observation
+from auto_bdsp_rng.blink_detection import (
+    BlinkCaptureConfig,
+    BlinkObservation,
+    SeedState32,
+    capture_preview_frame,
+    load_project_xs_config,
+    recover_seed_from_observation,
+    save_preview_frame,
+)
 from auto_bdsp_rng.blink_detection.project_xs import ProjectXsIntegrationError
 
 
 class FakeRng:
     def get_state(self):
         return [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222]
+
+
+class FakeVideoCapture:
+    last_instance = None
+
+    def __init__(self, camera, backend):
+        self.camera = camera
+        self.backend = backend
+        self.settings = []
+        self.released = False
+        FakeVideoCapture.last_instance = self
+
+    def set(self, prop, value):
+        self.settings.append((prop, value))
+
+    def read(self):
+        return True, "camera-frame"
+
+    def release(self):
+        self.released = True
+
+
+class FakeWindowCapture:
+    last_instance = None
+
+    def __init__(self, window_prefix, crop):
+        self.window_prefix = window_prefix
+        self.crop = crop
+        self.released = False
+        FakeWindowCapture.last_instance = self
+
+    def read(self):
+        return True, "window-frame"
+
+    def release(self):
+        self.released = True
 
 
 def test_seed_state_formats_words_and_seed64_pair():
@@ -43,3 +87,124 @@ def test_recover_seed_from_observation_wraps_project_xs_failures(monkeypatch):
 
     with pytest.raises(ProjectXsIntegrationError):
         recover_seed_from_observation(observation)
+
+
+def test_load_project_xs_config_from_real_submodule_config():
+    config = load_project_xs_config("config_cave.json")
+
+    assert config.source_path.name == "config_cave.json"
+    assert config.capture.eye_image_path.name == "eye.png"
+    assert config.capture.roi == (610, 330, 30, 30)
+    assert config.capture.threshold == 0.9
+    assert config.capture.monitor_window is True
+    assert config.capture.crop == (0, 0, 0, 0)
+    assert config.npc == 0
+
+
+def test_load_project_xs_config_from_absolute_path(tmp_path):
+    eye = tmp_path / "eye.png"
+    eye.write_bytes(b"not-a-real-image-yet")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        """
+        {
+          "MonitorWindow": 0,
+          "WindowPrefix": "",
+          "image": "eye.png",
+          "view": [1, 2, 3, 4],
+          "thresh": 0.75,
+          "crop": [5, 6, 7, 8],
+          "camera": 2,
+          "npc": 3,
+          "pokemon_npc": 4,
+          "timeline_npc": 5,
+          "display_percent": 60
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_project_xs_config(config_path, blink_count=7)
+
+    assert config.capture.eye_image_path == eye.resolve()
+    assert config.capture.roi == (1, 2, 3, 4)
+    assert config.capture.blink_count == 7
+    assert config.capture.monitor_window is False
+    assert config.capture.crop == (5, 6, 7, 8)
+    assert config.capture.camera == 2
+    assert config.npc == 3
+    assert config.pokemon_npc == 4
+    assert config.timeline_npc == 5
+    assert config.display_percent == 60
+
+
+def test_capture_preview_frame_from_camera(monkeypatch, tmp_path):
+    fake_cv2 = types.SimpleNamespace(
+        CAP_ANY=100,
+        CAP_PROP_FRAME_WIDTH=1,
+        CAP_PROP_FRAME_HEIGHT=2,
+        CAP_PROP_BUFFERSIZE=3,
+        VideoCapture=FakeVideoCapture,
+    )
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        monitor_window=False,
+        camera=2,
+    )
+
+    frame = capture_preview_frame(config)
+
+    video = FakeVideoCapture.last_instance
+    assert frame == "camera-frame"
+    assert video.camera == 2
+    assert video.backend == 100
+    assert video.released is True
+    assert (1, 1920) in video.settings
+    assert (2, 1080) in video.settings
+    assert (3, 1) in video.settings
+
+
+def test_capture_preview_frame_from_window(monkeypatch, tmp_path):
+    fake_cv2 = types.SimpleNamespace()
+    fake_windowcapture = types.SimpleNamespace(WindowCapture=FakeWindowCapture)
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setitem(sys.modules, "windowcapture", fake_windowcapture)
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        monitor_window=True,
+        window_prefix="SysDVR",
+        crop=(0, 0, 0, 0),
+    )
+
+    frame = capture_preview_frame(config)
+
+    video = FakeWindowCapture.last_instance
+    assert frame == "window-frame"
+    assert video.window_prefix == "SysDVR"
+    assert video.crop == [0, 0, 0, 0]
+    assert video.released is True
+
+
+def test_save_preview_frame_writes_output(monkeypatch, tmp_path):
+    saved_paths = []
+    fake_cv2 = types.SimpleNamespace(
+        CAP_ANY=100,
+        CAP_PROP_FRAME_WIDTH=1,
+        CAP_PROP_FRAME_HEIGHT=2,
+        CAP_PROP_BUFFERSIZE=3,
+        VideoCapture=FakeVideoCapture,
+        imwrite=lambda path, frame: saved_paths.append((path, frame)) or True,
+    )
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    output = tmp_path / "debug" / "preview.png"
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        monitor_window=False,
+    )
+
+    assert save_preview_frame(config, output) == output
+    assert saved_paths == [(str(output), "camera-frame")]

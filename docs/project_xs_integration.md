@@ -23,3 +23,19 @@ rngtool.tracking_blink(...)
 - `SeedState32.format_seed64_pair()`：输出 `Seed[0-1]`，固定 16 位大写十六进制。
 
 后续阶段接 UI 时，UI 只依赖这些本项目接口，不直接依赖 Project_Xs 的 Tk 控件和全局工作目录。
+
+## 配置调试命令
+
+可以先只解析 Project_Xs 配置，不启动窗口或摄像头捕获：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng blink-config --project-xs-config config_cave.json
+```
+
+配置名会从 `third_party/Project_Xs_CHN/configs` 中查找；也可以传入 JSON 文件的绝对路径。
+
+也可以按配置捕获一帧画面并保存，方便检查窗口或摄像头输入是否正确：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng capture-frame --project-xs-config config_cave.json --output .\debug\preview.png
+```
