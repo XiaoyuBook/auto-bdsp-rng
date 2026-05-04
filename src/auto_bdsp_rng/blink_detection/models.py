@@ -108,6 +108,17 @@ class ProjectXsSeedResult:
     state: SeedState32
     observation: BlinkObservation
 
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "seed_0_3": list(self.state.format_words()),
+            "seed_0_1": list(self.state.format_seed64_pair()),
+            "state_words": list(self.state.words),
+            "seed64_pair": list(self.state.seed64_pair),
+            "blinks": list(self.observation.blinks),
+            "intervals": list(self.observation.intervals),
+            "offset_time": self.observation.offset_time,
+        }
+
 
 @dataclass(frozen=True)
 class ProjectXsTrackingConfig:

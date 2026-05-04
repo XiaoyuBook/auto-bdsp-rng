@@ -79,6 +79,7 @@ def test_recover_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
 
     assert result.state.format_words() == ("12345678", "9ABCDEF0", "11111111", "22222222")
     assert result.observation == observation
+    assert result.as_dict()["seed_0_1"] == ["123456789ABCDEF0", "1111111122222222"]
 
 
 def test_recover_seed_from_observation_wraps_project_xs_failures(monkeypatch):

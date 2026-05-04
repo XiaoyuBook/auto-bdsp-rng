@@ -7,7 +7,9 @@ import sys
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     ProjectXsIntegrationError,
+    capture_player_blinks,
     load_project_xs_config,
+    recover_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
 )
@@ -70,6 +72,28 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Output annotated image path.",
     )
+
+    capture_blinks = subparsers.add_parser(
+        "capture-blinks",
+        help="Capture player blinks through Project_Xs and recover Seed[0-3]/Seed[0-1].",
+    )
+    capture_blinks.add_argument(
+        "--project-xs-config",
+        required=True,
+        help="Project_Xs config file name or absolute JSON path.",
+    )
+    capture_blinks.add_argument(
+        "--blink-count",
+        type=int,
+        default=40,
+        help="Blink count to capture before seed recovery.",
+    )
+    capture_blinks.add_argument(
+        "--npc",
+        type=int,
+        default=None,
+        help="Override npc count from the Project_Xs config.",
+    )
     return parser
 
 
@@ -100,6 +124,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(json.dumps({"output": str(output), **preview.as_dict()}, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "capture-blinks":
+        try:
+            config = load_project_xs_config(args.project_xs_config, blink_count=args.blink_count)
+            observation = capture_player_blinks(config.capture)
+            npc = config.npc if args.npc is None else args.npc
+            result = recover_seed_from_observation(observation, npc=npc)
+        except ProjectXsIntegrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"npc": npc, **result.as_dict()}, ensure_ascii=False, indent=2))
         return 0
 
     print("auto_bdsp_rng startup entry is ready.")

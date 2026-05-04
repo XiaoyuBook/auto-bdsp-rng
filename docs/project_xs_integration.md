@@ -47,3 +47,17 @@ rngtool.tracking_blink(...)
 ```
 
 输出图片中红框表示 ROI，绿框表示模板匹配达到阈值，黄框表示未达到阈值。命令行会同时打印匹配分数、匹配位置和模板尺寸。
+
+确认预览正确后，可以启动 Project_Xs 眨眼捕获并恢复 Seed：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng capture-blinks --project-xs-config config_cave.json
+```
+
+默认捕获 40 次眨眼。可以临时覆盖捕获数量和 NPC 数：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng capture-blinks --project-xs-config config_cave.json --blink-count 40 --npc 0
+```
+
+命令会输出 `Seed[0-3]`、`Seed[0-1]`、原始 blink 类型和 interval，供后续 UI 和定点生成器接入。

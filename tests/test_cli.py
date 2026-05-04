@@ -48,3 +48,30 @@ def test_preview_eye_command_saves_annotated_preview(monkeypatch, tmp_path, caps
     payload = json.loads(capsys.readouterr().out)
     assert payload["output"] == str(output)
     assert payload["matched"] is True
+
+
+def test_capture_blinks_command_outputs_seed(monkeypatch, capsys):
+    class FakeObservation:
+        pass
+
+    class FakeResult:
+        def as_dict(self):
+            return {
+                "seed_0_3": ["12345678", "9ABCDEF0", "11111111", "22222222"],
+                "seed_0_1": ["123456789ABCDEF0", "1111111122222222"],
+                "state_words": [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222],
+                "seed64_pair": [0x123456789ABCDEF0, 0x1111111122222222],
+                "blinks": [0, 1],
+                "intervals": [0, 12],
+                "offset_time": 0.0,
+            }
+
+    monkeypatch.setattr(cli, "capture_player_blinks", lambda _config: FakeObservation())
+    monkeypatch.setattr(cli, "recover_seed_from_observation", lambda _observation, npc=0: FakeResult())
+
+    assert main(["capture-blinks", "--project-xs-config", "config_cave.json", "--blink-count", "2", "--npc", "0"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["npc"] == 0
+    assert payload["seed_0_3"] == ["12345678", "9ABCDEF0", "11111111", "22222222"]
+    assert payload["seed_0_1"] == ["123456789ABCDEF0", "1111111122222222"]
