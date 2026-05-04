@@ -13,6 +13,7 @@ from auto_bdsp_rng.blink_detection.models import (
     BlinkCaptureConfig,
     BlinkObservation,
     EyePreviewResult,
+    ProjectXsReidentifyResult,
     ProjectXsSeedResult,
     ProjectXsTrackingConfig,
     SeedState32,
@@ -284,3 +285,43 @@ def recover_seed_from_observation(
         raise ProjectXsIntegrationError("Project_Xs returned an invalid seed state") from exc
 
     return ProjectXsSeedResult(state=state, observation=observation)
+
+
+def reidentify_seed_from_observation(
+    state: SeedState32,
+    observation: BlinkObservation,
+    *,
+    npc: int = 0,
+    search_min: int = 0,
+    search_max: int = 1_000_000,
+) -> ProjectXsReidentifyResult:
+    """Reidentify Project_Xs Xorshift state from later blink intervals."""
+
+    rngtool = _load_module("rngtool")
+    xorshift = _load_module("xorshift")
+    try:
+        rng = xorshift.Xorshift(*state.words)
+        reidentified_rng, advances = rngtool.reidentiy_by_intervals(
+            rng,
+            list(observation.intervals),
+            npc=npc,
+            search_min=search_min,
+            search_max=search_max,
+            return_advance=True,
+        )
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Project_Xs reidentify failed") from exc
+
+    if reidentified_rng is None:
+        raise ProjectXsIntegrationError("Project_Xs reidentify did not find a matching state")
+
+    try:
+        reidentified_state = SeedState32.from_words(reidentified_rng.get_state())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ProjectXsIntegrationError("Project_Xs reidentify returned an invalid seed state") from exc
+
+    return ProjectXsReidentifyResult(
+        state=reidentified_state,
+        observation=observation,
+        advances=int(advances),
+    )

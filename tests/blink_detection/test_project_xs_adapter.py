@@ -12,6 +12,7 @@ from auto_bdsp_rng.blink_detection import (
     SeedState32,
     capture_preview_frame,
     load_project_xs_config,
+    reidentify_seed_from_observation,
     render_eye_preview,
     recover_seed_from_observation,
     save_eye_preview,
@@ -21,6 +22,9 @@ from auto_bdsp_rng.blink_detection.project_xs import ProjectXsIntegrationError
 
 
 class FakeRng:
+    def __init__(self, *state):
+        self.state = state or (0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+
     def get_state(self):
         return [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222]
 
@@ -68,6 +72,12 @@ def test_seed_state_formats_words_and_seed64_pair():
     assert state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
 
 
+def test_seed_state_parses_hex_words():
+    state = SeedState32.from_hex_words(["12345678", "9abcdef0", "11111111", "22222222"])
+
+    assert state.words == (0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+
+
 def test_recover_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
     fake_rngtool = types.SimpleNamespace(
         recov=lambda blinks, intervals, npc=0: FakeRng(),
@@ -91,6 +101,27 @@ def test_recover_seed_from_observation_wraps_project_xs_failures(monkeypatch):
 
     with pytest.raises(ProjectXsIntegrationError):
         recover_seed_from_observation(observation)
+
+
+def test_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
+    def fake_reidentify(rng, intervals, npc=0, search_min=0, search_max=0, return_advance=False):
+        assert rng.get_state() == [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222]
+        assert intervals == [0, 12, 24]
+        assert npc == 1
+        assert search_min == 10
+        assert search_max == 100
+        assert return_advance is True
+        return FakeRng(), 42
+
+    monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
+    monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(reidentiy_by_intervals=fake_reidentify))
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    observation = BlinkObservation.from_sequences([], [0, 12, 24])
+
+    result = reidentify_seed_from_observation(state, observation, npc=1, search_min=10, search_max=100)
+
+    assert result.advances == 42
+    assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
 
 
 def test_load_project_xs_config_from_real_submodule_config():

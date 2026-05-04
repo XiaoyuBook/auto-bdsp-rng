@@ -61,3 +61,15 @@ rngtool.tracking_blink(...)
 ```
 
 命令会输出 `Seed[0-3]`、`Seed[0-1]`、原始 blink 类型和 interval，供后续 UI 和定点生成器接入。
+
+已有 Seed 后，可以用后续眨眼 interval 重新定位当前 RNG 状态：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng reidentify --project-xs-config config_cave.json --seed 12345678 9ABCDEF0 11111111 22222222
+```
+
+默认捕获 7 次 blink interval，搜索 0 到 1000000 advances。可以按需要覆盖：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng reidentify --project-xs-config config_cave.json --seed 12345678 9ABCDEF0 11111111 22222222 --blink-count 7 --search-min 0 --search-max 1000000
+```

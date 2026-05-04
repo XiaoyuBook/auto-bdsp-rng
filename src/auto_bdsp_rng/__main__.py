@@ -7,8 +7,10 @@ import sys
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     ProjectXsIntegrationError,
+    SeedState32,
     capture_player_blinks,
     load_project_xs_config,
+    reidentify_seed_from_observation,
     recover_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
@@ -94,6 +96,47 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override npc count from the Project_Xs config.",
     )
+
+    reidentify = subparsers.add_parser(
+        "reidentify",
+        help="Capture later blink intervals and reidentify an existing Seed[0-3].",
+    )
+    reidentify.add_argument(
+        "--project-xs-config",
+        required=True,
+        help="Project_Xs config file name or absolute JSON path.",
+    )
+    reidentify.add_argument(
+        "--seed",
+        nargs=4,
+        required=True,
+        metavar=("S0", "S1", "S2", "S3"),
+        help="Existing Seed[0-3] as four hexadecimal 32-bit words.",
+    )
+    reidentify.add_argument(
+        "--blink-count",
+        type=int,
+        default=7,
+        help="Blink interval count to capture for reidentify.",
+    )
+    reidentify.add_argument(
+        "--npc",
+        type=int,
+        default=None,
+        help="Override npc count from the Project_Xs config.",
+    )
+    reidentify.add_argument(
+        "--search-min",
+        type=int,
+        default=0,
+        help="Minimum advance to search.",
+    )
+    reidentify.add_argument(
+        "--search-max",
+        type=int,
+        default=1_000_000,
+        help="Maximum advance to search.",
+    )
     return parser
 
 
@@ -132,6 +175,24 @@ def main(argv: list[str] | None = None) -> int:
             npc = config.npc if args.npc is None else args.npc
             result = recover_seed_from_observation(observation, npc=npc)
         except ProjectXsIntegrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"npc": npc, **result.as_dict()}, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "reidentify":
+        try:
+            state = SeedState32.from_hex_words(args.seed)
+            config = load_project_xs_config(args.project_xs_config, blink_count=args.blink_count)
+            observation = capture_player_blinks(config.capture)
+            npc = config.npc if args.npc is None else args.npc
+            result = reidentify_seed_from_observation(
+                state,
+                observation,
+                npc=npc,
+                search_min=args.search_min,
+                search_max=args.search_max,
+            )
+        except (ProjectXsIntegrationError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(json.dumps({"npc": npc, **result.as_dict()}, ensure_ascii=False, indent=2))

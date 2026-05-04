@@ -21,7 +21,7 @@
 - [x] 接入预览功能。
 - [x] 接入眨眼检测流程。
 - [ ] 接入 Monitor Blinks。
-- [ ] 接入 Reidentify。
+- [x] 接入 Reidentify。
 - [ ] 接入 TID/SID。
 - [ ] 接入 Timeline。
 - [ ] 接入 Advances 追踪。

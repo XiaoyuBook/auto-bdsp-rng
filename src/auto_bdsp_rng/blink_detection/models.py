@@ -28,6 +28,15 @@ class SeedState32:
             raise ValueError("Project_Xs seed state must contain exactly four words")
         return cls(*(int(word) for word in words))
 
+    @classmethod
+    def from_hex_words(cls, words: Sequence[str]) -> "SeedState32":
+        if len(words) != 4:
+            raise ValueError("Seed[0-3] input must contain exactly four hex words")
+        try:
+            return cls.from_words([int(word, 16) for word in words])
+        except ValueError as exc:
+            raise ValueError("Seed[0-3] input must be hexadecimal") from exc
+
     @property
     def words(self) -> tuple[int, int, int, int]:
         return (self.s0, self.s1, self.s2, self.s3)
@@ -117,6 +126,27 @@ class ProjectXsSeedResult:
             "blinks": list(self.observation.blinks),
             "intervals": list(self.observation.intervals),
             "offset_time": self.observation.offset_time,
+        }
+
+
+@dataclass(frozen=True)
+class ProjectXsReidentifyResult:
+    """Project_Xs reidentify output with the matched advance count."""
+
+    state: SeedState32
+    observation: BlinkObservation
+    advances: int
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "seed_0_3": list(self.state.format_words()),
+            "seed_0_1": list(self.state.format_seed64_pair()),
+            "state_words": list(self.state.words),
+            "seed64_pair": list(self.state.seed64_pair),
+            "blinks": list(self.observation.blinks),
+            "intervals": list(self.observation.intervals),
+            "offset_time": self.observation.offset_time,
+            "advances": self.advances,
         }
 
 
