@@ -155,3 +155,27 @@ def test_advance_seed_command_outputs_advanced_seed(monkeypatch, capsys):
 
     assert payload["advances"] == 7
     assert payload["seed_0_3"] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "00000007"]
+
+
+def test_tidsid_command_outputs_seed(monkeypatch, capsys):
+    class FakeObservation:
+        pass
+
+    class FakeResult:
+        def as_dict(self):
+            return {
+                "seed_0_3": ["12345678", "9ABCDEF0", "11111111", "22222222"],
+                "seed_0_1": ["123456789ABCDEF0", "1111111122222222"],
+                "state_words": [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222],
+                "seed64_pair": [0x123456789ABCDEF0, 0x1111111122222222],
+                "pokemon_intervals": [1.25, 3.5],
+            }
+
+    monkeypatch.setattr(cli, "capture_pokemon_blinks", lambda _config: FakeObservation())
+    monkeypatch.setattr(cli, "recover_tidsid_seed_from_observation", lambda _observation: FakeResult())
+
+    assert main(["tidsid", "--project-xs-config", "config_cave.json", "--blink-count", "2"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["seed_0_1"] == ["123456789ABCDEF0", "1111111122222222"]
+    assert payload["pokemon_intervals"] == [1.25, 3.5]

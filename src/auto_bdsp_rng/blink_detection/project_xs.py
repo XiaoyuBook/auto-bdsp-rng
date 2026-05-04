@@ -13,9 +13,11 @@ from auto_bdsp_rng.blink_detection.models import (
     BlinkCaptureConfig,
     BlinkObservation,
     EyePreviewResult,
+    PokemonBlinkObservation,
     ProjectXsAdvanceResult,
     ProjectXsReidentifyResult,
     ProjectXsSeedResult,
+    ProjectXsTidSidResult,
     ProjectXsTrackingConfig,
     SeedState32,
 )
@@ -158,6 +160,33 @@ def capture_player_blinks(config: BlinkCaptureConfig) -> BlinkObservation:
         raise ProjectXsIntegrationError("Project_Xs blink tracking failed") from exc
 
     return BlinkObservation.from_sequences(blinks, intervals, offset_time)
+
+
+def capture_pokemon_blinks(config: BlinkCaptureConfig) -> PokemonBlinkObservation:
+    """Capture Pokemon blink intervals through Project_Xs tracking logic."""
+
+    cv2 = _load_cv2()
+    rngtool = _load_module("rngtool")
+    eye_image = cv2.imread(str(config.eye_image_path), cv2.IMREAD_GRAYSCALE)
+    if eye_image is None:
+        raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
+
+    try:
+        intervals = rngtool.tracking_poke_blink(
+            eye_image,
+            *config.roi,
+            threshold=config.threshold,
+            size=config.blink_count,
+            monitor_window=config.monitor_window,
+            window_prefix=config.window_prefix,
+            crop=_project_xs_crop(config.crop),
+            camera=config.camera,
+            tk_window=None,
+        )
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Project_Xs Pokemon blink tracking failed") from exc
+
+    return PokemonBlinkObservation.from_sequence(intervals)
 
 
 def capture_preview_frame(config: BlinkCaptureConfig) -> Any:
@@ -343,3 +372,22 @@ def advance_seed_state(state: SeedState32, advances: int) -> ProjectXsAdvanceRes
         raise ProjectXsIntegrationError("Project_Xs seed advance failed") from exc
 
     return ProjectXsAdvanceResult(state=advanced_state, advances=advances)
+
+
+def recover_tidsid_seed_from_observation(observation: PokemonBlinkObservation) -> ProjectXsTidSidResult:
+    """Recover Project_Xs seed from Pokemon blink intervals used by TID/SID flow."""
+
+    rngtool = _load_module("rngtool")
+    try:
+        rng = rngtool.recov_by_munchlax(list(observation.intervals))
+    except (AssertionError, IndexError) as exc:
+        raise ProjectXsIntegrationError("Project_Xs TID/SID seed recovery could not validate intervals") from exc
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Project_Xs TID/SID seed recovery failed") from exc
+
+    try:
+        state = SeedState32.from_words(rng.get_state())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ProjectXsIntegrationError("Project_Xs TID/SID recovery returned an invalid seed state") from exc
+
+    return ProjectXsTidSidResult(state=state, observation=observation)

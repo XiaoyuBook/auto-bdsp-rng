@@ -9,10 +9,12 @@ from auto_bdsp_rng.blink_detection import (
     ProjectXsIntegrationError,
     SeedState32,
     advance_seed_state,
+    capture_pokemon_blinks,
     capture_player_blinks,
     load_project_xs_config,
     reidentify_seed_from_observation,
     recover_seed_from_observation,
+    recover_tidsid_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
 )
@@ -156,6 +158,22 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Number of advances to apply.",
     )
+
+    tidsid = subparsers.add_parser(
+        "tidsid",
+        help="Capture Pokemon blinks through Project_Xs and recover Seed for TID/SID flow.",
+    )
+    tidsid.add_argument(
+        "--project-xs-config",
+        required=True,
+        help="Project_Xs config file name or absolute JSON path.",
+    )
+    tidsid.add_argument(
+        "--blink-count",
+        type=int,
+        default=64,
+        help="Pokemon blink interval count to capture before recovery.",
+    )
     return parser
 
 
@@ -221,6 +239,16 @@ def main(argv: list[str] | None = None) -> int:
             state = SeedState32.from_hex_words(args.seed)
             result = advance_seed_state(state, args.advances)
         except (ProjectXsIntegrationError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "tidsid":
+        try:
+            config = load_project_xs_config(args.project_xs_config, blink_count=args.blink_count)
+            observation = capture_pokemon_blinks(config.capture)
+            result = recover_tidsid_seed_from_observation(observation)
+        except ProjectXsIntegrationError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))

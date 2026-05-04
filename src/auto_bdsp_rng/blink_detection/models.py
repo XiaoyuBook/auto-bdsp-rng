@@ -72,6 +72,17 @@ class BlinkObservation:
 
 
 @dataclass(frozen=True)
+class PokemonBlinkObservation:
+    """Pokemon blink intervals captured for TID/SID style recovery."""
+
+    intervals: tuple[float, ...]
+
+    @classmethod
+    def from_sequence(cls, intervals: Sequence[float]) -> "PokemonBlinkObservation":
+        return cls(tuple(float(interval) for interval in intervals))
+
+
+@dataclass(frozen=True)
 class BlinkCaptureConfig:
     """Configuration needed to call Project_Xs blink tracking without its Tk UI."""
 
@@ -164,6 +175,23 @@ class ProjectXsAdvanceResult:
             "state_words": list(self.state.words),
             "seed64_pair": list(self.state.seed64_pair),
             "advances": self.advances,
+        }
+
+
+@dataclass(frozen=True)
+class ProjectXsTidSidResult:
+    """Project_Xs TID/SID recovery output."""
+
+    state: SeedState32
+    observation: PokemonBlinkObservation
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "seed_0_3": list(self.state.format_words()),
+            "seed_0_1": list(self.state.format_seed64_pair()),
+            "state_words": list(self.state.words),
+            "seed64_pair": list(self.state.seed64_pair),
+            "pokemon_intervals": list(self.observation.intervals),
         }
 
 

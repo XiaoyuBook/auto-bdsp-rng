@@ -81,3 +81,15 @@ rngtool.tracking_blink(...)
 ```
 
 命令会输出推进后的 `Seed[0-3]` 和 `Seed[0-1]`。
+
+TID/SID 流程使用 Project_Xs 的宝可梦 blink interval 识别：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng tidsid --project-xs-config config_munchlax.json
+```
+
+默认捕获 64 个宝可梦 blink interval，也可以调整：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng tidsid --project-xs-config config_munchlax.json --blink-count 64
+```

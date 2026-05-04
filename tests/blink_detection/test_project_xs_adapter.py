@@ -9,13 +9,16 @@ import pytest
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     BlinkObservation,
+    PokemonBlinkObservation,
     SeedState32,
     advance_seed_state,
+    capture_pokemon_blinks,
     capture_preview_frame,
     load_project_xs_config,
     reidentify_seed_from_observation,
     render_eye_preview,
     recover_seed_from_observation,
+    recover_tidsid_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
 )
@@ -136,6 +139,41 @@ def test_advance_seed_state_uses_project_xs_xorshift(monkeypatch):
 
     assert result.advances == 7
     assert result.state.format_words() == ("AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "00000007")
+
+
+def test_capture_pokemon_blinks_uses_project_xs_rngtool(monkeypatch, tmp_path):
+    fake_cv2 = types.SimpleNamespace(
+        IMREAD_GRAYSCALE=0,
+        imread=lambda _path, _mode: "eye-image",
+    )
+    fake_rngtool = types.SimpleNamespace(
+        tracking_poke_blink=lambda *args, **kwargs: [1.25, 3.5],
+    )
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setitem(sys.modules, "rngtool", fake_rngtool)
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        blink_count=2,
+    )
+
+    observation = capture_pokemon_blinks(config)
+
+    assert observation.intervals == (1.25, 3.5)
+
+
+def test_recover_tidsid_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
+    def fake_recov_by_munchlax(intervals):
+        assert intervals == [1.25, 3.5]
+        return FakeRng()
+
+    monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(recov_by_munchlax=fake_recov_by_munchlax))
+    observation = PokemonBlinkObservation.from_sequence([1.25, 3.5])
+
+    result = recover_tidsid_seed_from_observation(observation)
+
+    assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
+    assert result.as_dict()["pokemon_intervals"] == [1.25, 3.5]
 
 
 def test_load_project_xs_config_from_real_submodule_config():
