@@ -25,7 +25,7 @@
 - [ ] 接入 TID/SID。
 - [ ] 接入 Timeline。
 - [ ] 接入 Advances 追踪。
-- [ ] 接入手动增加 Advances 功能。
+- [x] 接入手动增加 Advances 功能。
 - [ ] 接入配置保存和读取。
 - [x] 保留 `Seed[0-3]` 显示。
 - [x] 保留 `Seed[0-1]` 显示。

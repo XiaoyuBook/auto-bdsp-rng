@@ -73,3 +73,11 @@ rngtool.tracking_blink(...)
 ```powershell
 .\.venv\Scripts\python.exe -m auto_bdsp_rng reidentify --project-xs-config config_cave.json --seed 12345678 9ABCDEF0 11111111 22222222 --blink-count 7 --search-min 0 --search-max 1000000
 ```
+
+也可以手动推进已有 Seed：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng advance-seed --seed 12345678 9ABCDEF0 11111111 22222222 --advances 165
+```
+
+命令会输出推进后的 `Seed[0-3]` 和 `Seed[0-1]`。

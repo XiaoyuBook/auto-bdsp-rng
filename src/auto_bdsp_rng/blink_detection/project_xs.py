@@ -13,6 +13,7 @@ from auto_bdsp_rng.blink_detection.models import (
     BlinkCaptureConfig,
     BlinkObservation,
     EyePreviewResult,
+    ProjectXsAdvanceResult,
     ProjectXsReidentifyResult,
     ProjectXsSeedResult,
     ProjectXsTrackingConfig,
@@ -325,3 +326,20 @@ def reidentify_seed_from_observation(
         observation=observation,
         advances=int(advances),
     )
+
+
+def advance_seed_state(state: SeedState32, advances: int) -> ProjectXsAdvanceResult:
+    """Advance a Project_Xs Xorshift state by a fixed amount."""
+
+    if advances < 0:
+        raise ProjectXsIntegrationError("Advances must be non-negative")
+
+    xorshift = _load_module("xorshift")
+    try:
+        rng = xorshift.Xorshift(*state.words)
+        rng.advance(advances)
+        advanced_state = SeedState32.from_words(rng.get_state())
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Project_Xs seed advance failed") from exc
+
+    return ProjectXsAdvanceResult(state=advanced_state, advances=advances)

@@ -8,6 +8,7 @@ from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     ProjectXsIntegrationError,
     SeedState32,
+    advance_seed_state,
     capture_player_blinks,
     load_project_xs_config,
     reidentify_seed_from_observation,
@@ -137,6 +138,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=1_000_000,
         help="Maximum advance to search.",
     )
+
+    advance_seed = subparsers.add_parser(
+        "advance-seed",
+        help="Manually advance an existing Seed[0-3] through Project_Xs Xorshift.",
+    )
+    advance_seed.add_argument(
+        "--seed",
+        nargs=4,
+        required=True,
+        metavar=("S0", "S1", "S2", "S3"),
+        help="Existing Seed[0-3] as four hexadecimal 32-bit words.",
+    )
+    advance_seed.add_argument(
+        "--advances",
+        type=int,
+        required=True,
+        help="Number of advances to apply.",
+    )
     return parser
 
 
@@ -196,6 +215,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(json.dumps({"npc": npc, **result.as_dict()}, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "advance-seed":
+        try:
+            state = SeedState32.from_hex_words(args.seed)
+            result = advance_seed_state(state, args.advances)
+        except (ProjectXsIntegrationError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
         return 0
 
     print("auto_bdsp_rng startup entry is ready.")

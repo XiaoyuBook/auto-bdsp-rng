@@ -151,6 +151,23 @@ class ProjectXsReidentifyResult:
 
 
 @dataclass(frozen=True)
+class ProjectXsAdvanceResult:
+    """Project_Xs Xorshift state after manual advances."""
+
+    state: SeedState32
+    advances: int
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "seed_0_3": list(self.state.format_words()),
+            "seed_0_1": list(self.state.format_seed64_pair()),
+            "state_words": list(self.state.words),
+            "seed64_pair": list(self.state.seed64_pair),
+            "advances": self.advances,
+        }
+
+
+@dataclass(frozen=True)
 class ProjectXsTrackingConfig:
     """Project_Xs config normalized for this application."""
 

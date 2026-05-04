@@ -10,6 +10,7 @@ from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     BlinkObservation,
     SeedState32,
+    advance_seed_state,
     capture_preview_frame,
     load_project_xs_config,
     reidentify_seed_from_observation,
@@ -26,7 +27,10 @@ class FakeRng:
         self.state = state or (0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
 
     def get_state(self):
-        return [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222]
+        return list(self.state)
+
+    def advance(self, advances):
+        self.state = (0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, advances)
 
 
 class FakeVideoCapture:
@@ -122,6 +126,16 @@ def test_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
 
     assert result.advances == 42
     assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
+
+
+def test_advance_seed_state_uses_project_xs_xorshift(monkeypatch):
+    monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+
+    result = advance_seed_state(state, 7)
+
+    assert result.advances == 7
+    assert result.state.format_words() == ("AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "00000007")
 
 
 def test_load_project_xs_config_from_real_submodule_config():

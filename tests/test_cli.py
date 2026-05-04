@@ -121,3 +121,37 @@ def test_reidentify_command_outputs_seed_and_advances(monkeypatch, capsys):
     assert payload["npc"] == 0
     assert payload["advances"] == 42
     assert payload["seed_0_1"] == ["123456789ABCDEF0", "1111111122222222"]
+
+
+def test_advance_seed_command_outputs_advanced_seed(monkeypatch, capsys):
+    class FakeResult:
+        def as_dict(self):
+            return {
+                "seed_0_3": ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "00000007"],
+                "seed_0_1": ["AAAAAAAABBBBBBBB", "CCCCCCCC00000007"],
+                "state_words": [0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 7],
+                "seed64_pair": [0xAAAAAAAABBBBBBBB, 0xCCCCCCCC00000007],
+                "advances": 7,
+            }
+
+    monkeypatch.setattr(cli, "advance_seed_state", lambda *_args, **_kwargs: FakeResult())
+
+    assert (
+        main(
+            [
+                "advance-seed",
+                "--seed",
+                "12345678",
+                "9ABCDEF0",
+                "11111111",
+                "22222222",
+                "--advances",
+                "7",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["advances"] == 7
+    assert payload["seed_0_3"] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "00000007"]
