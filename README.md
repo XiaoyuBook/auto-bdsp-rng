@@ -7,9 +7,38 @@
 - Project_Xs_CHN: https://github.com/HaKu76/Project_Xs_CHN
   - 提供 BDSP 眨眼检测、窗口或摄像头画面捕获、Seed 推算、Advances 追踪等功能。
   - 当前重点使用其输出的 `Seed[0-3]` 和 `Seed[0-1]`。
+  - 本仓库以 submodule 形式放在 `third_party/Project_Xs_CHN`。
 - PokeFinder: https://github.com/Admiral-Fish/PokeFinder
   - 提供 Gen 8 BDSP 定点乱数生成逻辑。
   - 第一阶段重点参考 `Core/Gen8/Generators/StaticGenerator8.cpp` 和相关 RNG、Template、State、Filter 逻辑。
+  - 本仓库以 submodule 形式放在 `third_party/PokeFinder`。
+
+## 上游源码管理
+
+两个上游项目先作为 Git submodule 固定版本引入，方便后续对照实现、追踪差异和更新上游。
+
+首次克隆本仓库后，需要执行：
+
+```powershell
+git submodule update --init --recursive
+```
+
+更新上游源码时，进入对应目录拉取目标版本，然后在主仓库提交 submodule 指针变更：
+
+```powershell
+Set-Location 'third_party/Project_Xs_CHN'
+git fetch --tags
+git checkout <target-ref>
+
+Set-Location '..\..\third_party\PokeFinder'
+git fetch --tags
+git checkout <target-ref>
+
+Set-Location '..\..'
+git status
+```
+
+后续真正集成功能时，优先在本仓库自己的模块中实现稳定接口；`third_party` 目录只作为上游参考和对照测试来源。
 
 ## 第一阶段目标
 

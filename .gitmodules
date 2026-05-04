@@ -1,0 +1,6 @@
+[submodule "third_party/Project_Xs_CHN"]
+	path = third_party/Project_Xs_CHN
+	url = https://github.com/HaKu76/Project_Xs_CHN.git
+[submodule "third_party/PokeFinder"]
+	path = third_party/PokeFinder
+	url = https://github.com/Admiral-Fish/PokeFinder.git

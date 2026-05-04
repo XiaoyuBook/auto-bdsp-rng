@@ -2,6 +2,9 @@
 
 ## 阶段 0: 项目准备
 
+- [x] 以 submodule 形式拉取 Project_Xs_CHN。
+- [x] 以 submodule 形式拉取 PokeFinder。
+- [ ] 记录两个上游仓库的目标版本和更新策略。
 - [ ] 确认最终技术栈：Python、C++/Qt，或 Python UI 加 Python 移植版 RNG 核心。
 - [ ] 确认发布方式：仅自用、开源发布，或打包给他人使用。
 - [ ] 确认是否直接移植 PokeFinder 代码，以及 GPL-3.0 许可影响。
