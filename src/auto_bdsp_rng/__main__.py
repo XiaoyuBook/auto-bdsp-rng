@@ -17,6 +17,7 @@ from auto_bdsp_rng.blink_detection import (
     recover_tidsid_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
+    track_advances,
 )
 
 
@@ -174,6 +175,40 @@ def build_parser() -> argparse.ArgumentParser:
         default=64,
         help="Pokemon blink interval count to capture before recovery.",
     )
+
+    monitor_blinks = subparsers.add_parser(
+        "monitor-blinks",
+        help="Capture player blinks, recover Seed, and list future blink advance events.",
+    )
+    monitor_blinks.add_argument(
+        "--project-xs-config",
+        required=True,
+        help="Project_Xs config file name or absolute JSON path.",
+    )
+    monitor_blinks.add_argument(
+        "--blink-count",
+        type=int,
+        default=40,
+        help="Blink count to capture before seed recovery.",
+    )
+    monitor_blinks.add_argument(
+        "--npc",
+        type=int,
+        default=None,
+        help="Override npc count from the Project_Xs config.",
+    )
+    monitor_blinks.add_argument(
+        "--track-steps",
+        type=int,
+        default=10,
+        help="Number of future advance events to print after seed recovery.",
+    )
+    monitor_blinks.add_argument(
+        "--menu-advance",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Start from Project_Xs menu-close +1 advance behavior.",
+    )
     return parser
 
 
@@ -252,6 +287,35 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "monitor-blinks":
+        try:
+            config = load_project_xs_config(args.project_xs_config, blink_count=args.blink_count)
+            observation = capture_player_blinks(config.capture)
+            npc = config.npc if args.npc is None else args.npc
+            result = recover_seed_from_observation(observation, npc=npc)
+            start_advances = 1 if args.menu_advance else 0
+            events = track_advances(
+                result.state,
+                steps=args.track_steps,
+                npc=npc,
+                start_advances=start_advances,
+            )
+        except ProjectXsIntegrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            json.dumps(
+                {
+                    "npc": npc,
+                    "start_advances": start_advances,
+                    **result.as_dict(),
+                    "events": [event.as_dict() for event in events],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
     print("auto_bdsp_rng startup entry is ready.")

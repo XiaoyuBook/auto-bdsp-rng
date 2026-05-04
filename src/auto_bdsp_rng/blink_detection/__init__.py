@@ -1,6 +1,7 @@
 """Blink detection integration based on Project_Xs_CHN."""
 
 from auto_bdsp_rng.blink_detection.models import (
+    AdvanceEvent,
     BlinkCaptureConfig,
     BlinkObservation,
     EyePreviewResult,
@@ -25,9 +26,11 @@ from auto_bdsp_rng.blink_detection.project_xs import (
     recover_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
+    track_advances,
 )
 
 __all__ = [
+    "AdvanceEvent",
     "BlinkCaptureConfig",
     "BlinkObservation",
     "EyePreviewResult",
@@ -50,4 +53,5 @@ __all__ = [
     "recover_tidsid_seed_from_observation",
     "save_eye_preview",
     "save_preview_frame",
+    "track_advances",
 ]

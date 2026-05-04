@@ -21,6 +21,7 @@ from auto_bdsp_rng.blink_detection import (
     recover_tidsid_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
+    track_advances,
 )
 from auto_bdsp_rng.blink_detection.project_xs import ProjectXsIntegrationError
 
@@ -34,6 +35,9 @@ class FakeRng:
 
     def advance(self, advances):
         self.state = (0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, advances)
+
+    def get_next_rand_sequence(self, length):
+        return [0x10 + index for index in range(length)]
 
 
 class FakeVideoCapture:
@@ -174,6 +178,22 @@ def test_recover_tidsid_seed_from_observation_uses_project_xs_rngtool(monkeypatc
 
     assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
     assert result.as_dict()["pokemon_intervals"] == [1.25, 3.5]
+
+
+def test_track_advances_uses_project_xs_xorshift(monkeypatch):
+    monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+
+    events = track_advances(state, steps=2, npc=1, start_advances=1)
+
+    assert [event.advance for event in events] == [3, 5]
+    assert [event.rand for event in events] == [0x11, 0x11]
+    assert events[0].as_dict() == {
+        "advance": 3,
+        "rand": "00000011",
+        "blink_value": "1",
+        "is_blink": True,
+    }
 
 
 def test_load_project_xs_config_from_real_submodule_config():

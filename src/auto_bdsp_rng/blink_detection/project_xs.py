@@ -10,6 +10,7 @@ from typing import Iterator
 from typing import Any
 
 from auto_bdsp_rng.blink_detection.models import (
+    AdvanceEvent,
     BlinkCaptureConfig,
     BlinkObservation,
     EyePreviewResult,
@@ -391,3 +392,33 @@ def recover_tidsid_seed_from_observation(observation: PokemonBlinkObservation) -
         raise ProjectXsIntegrationError("Project_Xs TID/SID recovery returned an invalid seed state") from exc
 
     return ProjectXsTidSidResult(state=state, observation=observation)
+
+
+def track_advances(
+    state: SeedState32,
+    *,
+    steps: int,
+    npc: int = 0,
+    start_advances: int = 0,
+) -> tuple[AdvanceEvent, ...]:
+    """Track future Project_Xs advance blink values from a seed state."""
+
+    if steps < 0:
+        raise ProjectXsIntegrationError("Track steps must be non-negative")
+    if npc < 0:
+        raise ProjectXsIntegrationError("NPC count must be non-negative")
+
+    xorshift = _load_module("xorshift")
+    try:
+        rng = xorshift.Xorshift(*state.words)
+        events = []
+        current_advance = start_advances
+        step_size = npc + 1
+        for _ in range(steps):
+            current_advance += step_size
+            rand = rng.get_next_rand_sequence(step_size)[-1]
+            events.append(AdvanceEvent(advance=current_advance, rand=int(rand)))
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Project_Xs advance tracking failed") from exc
+
+    return tuple(events)

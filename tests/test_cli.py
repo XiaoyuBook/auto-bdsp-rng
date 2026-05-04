@@ -179,3 +179,62 @@ def test_tidsid_command_outputs_seed(monkeypatch, capsys):
 
     assert payload["seed_0_1"] == ["123456789ABCDEF0", "1111111122222222"]
     assert payload["pokemon_intervals"] == [1.25, 3.5]
+
+
+def test_monitor_blinks_command_outputs_events(monkeypatch, capsys):
+    class FakeObservation:
+        pass
+
+    class FakeState:
+        pass
+
+    class FakeResult:
+        state = FakeState()
+
+        def as_dict(self):
+            return {
+                "seed_0_3": ["12345678", "9ABCDEF0", "11111111", "22222222"],
+                "seed_0_1": ["123456789ABCDEF0", "1111111122222222"],
+                "state_words": [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222],
+                "seed64_pair": [0x123456789ABCDEF0, 0x1111111122222222],
+                "blinks": [0, 1],
+                "intervals": [0, 12],
+                "offset_time": 0.0,
+            }
+
+    class FakeEvent:
+        def __init__(self, advance):
+            self.advance = advance
+
+        def as_dict(self):
+            return {
+                "advance": self.advance,
+                "rand": "00000011",
+                "blink_value": "1",
+                "is_blink": True,
+            }
+
+    monkeypatch.setattr(cli, "capture_player_blinks", lambda _config: FakeObservation())
+    monkeypatch.setattr(cli, "recover_seed_from_observation", lambda _observation, npc=0: FakeResult())
+    monkeypatch.setattr(cli, "track_advances", lambda *_args, **_kwargs: (FakeEvent(1), FakeEvent(2)))
+
+    assert (
+        main(
+            [
+                "monitor-blinks",
+                "--project-xs-config",
+                "config_cave.json",
+                "--blink-count",
+                "2",
+                "--track-steps",
+                "2",
+                "--no-menu-advance",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["start_advances"] == 0
+    assert payload["events"][0]["advance"] == 1
+    assert payload["events"][0]["is_blink"] is True

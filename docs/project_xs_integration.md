@@ -93,3 +93,15 @@ TID/SID 流程使用 Project_Xs 的宝可梦 blink interval 识别：
 ```powershell
 .\.venv\Scripts\python.exe -m auto_bdsp_rng tidsid --project-xs-config config_munchlax.json --blink-count 64
 ```
+
+Monitor Blinks 调试入口会先捕获玩家眨眼并恢复 Seed，然后列出后续 advances 的 blink 状态：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng monitor-blinks --project-xs-config config_cave.json --track-steps 10
+```
+
+默认会模拟 Project_Xs 关闭菜单时 `+1` advance 的行为；如果不需要这个起始偏移，可以传：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng monitor-blinks --project-xs-config config_cave.json --track-steps 10 --no-menu-advance
+```

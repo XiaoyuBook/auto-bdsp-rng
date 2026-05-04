@@ -122,6 +122,30 @@ class EyePreviewResult:
 
 
 @dataclass(frozen=True)
+class AdvanceEvent:
+    """One Project_Xs advance tracking event."""
+
+    advance: int
+    rand: int
+
+    @property
+    def blink_value(self) -> int:
+        return self.rand & 0xF
+
+    @property
+    def is_blink(self) -> bool:
+        return (self.rand & 0b1110) == 0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "advance": self.advance,
+            "rand": f"{self.rand:08X}",
+            "blink_value": f"{self.blink_value:X}",
+            "is_blink": self.is_blink,
+        }
+
+
+@dataclass(frozen=True)
 class ProjectXsSeedResult:
     """Normalized seed output from Project_Xs recovery."""
 

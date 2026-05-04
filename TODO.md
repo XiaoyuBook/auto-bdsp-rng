@@ -20,11 +20,11 @@
 - [x] 接入眼部模板选择。
 - [x] 接入预览功能。
 - [x] 接入眨眼检测流程。
-- [ ] 接入 Monitor Blinks。
+- [x] 接入 Monitor Blinks。
 - [x] 接入 Reidentify。
 - [x] 接入 TID/SID。
 - [ ] 接入 Timeline。
-- [ ] 接入 Advances 追踪。
+- [x] 接入 Advances 追踪。
 - [x] 接入手动增加 Advances 功能。
 - [ ] 接入配置保存和读取。
 - [x] 保留 `Seed[0-3]` 显示。
