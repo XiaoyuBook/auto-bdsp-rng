@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-bdsp-rng"
+version = "0.1.0"
+description = "BDSP blink seed detection and Gen 8 static RNG helper."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "numpy>=1.26,<3",
+    "opencv-python>=4.9,<5",
+    "Pillow>=10,<12",
+    "PySide6>=6.7,<7",
+    "pyautogui>=0.9,<1",
+    "pywin32>=306; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pyinstaller>=6,<7",
+]
+
+[project.scripts]
+auto-bdsp-rng = "auto_bdsp_rng.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["auto_bdsp_rng*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
