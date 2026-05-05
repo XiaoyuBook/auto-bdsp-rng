@@ -59,6 +59,7 @@ from auto_bdsp_rng.blink_detection import (
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter, StaticGenerator8
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
+from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -282,6 +283,7 @@ TEXT = {
         "preview": "Preview",
         "project_xs": "Project_Xs",
         "bdsp_search": "BDSP / PokeFinder",
+        "easycon": "EasyCon",
         "status": "Status",
         "config": "Config",
         "browse": "Browse",
@@ -341,6 +343,7 @@ TEXT = {
         "preview": "捕获预览",
         "project_xs": "Project_Xs",
         "bdsp_search": "BDSP / PokeFinder",
+        "easycon": "伊机控",
         "status": "状态",
         "config": "配置",
         "browse": "浏览",
@@ -594,8 +597,10 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
+        self.easycon_tab = EasyConPanel()
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
+        self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         root_layout.addWidget(self.tabs, 1)
 
         self.setCentralWidget(root)
@@ -1120,6 +1125,36 @@ class MainWindow(QMainWindow):
                 padding: 2px 6px;
                 selection-background-color: #2C6F73;
             }
+            QPlainTextEdit {
+                background: #0A0E12;
+                border: 1px solid #33444A;
+                border-radius: 4px;
+                color: #E7ECE9;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                font-size: 12px;
+                padding: 10px;
+                selection-background-color: #2C6F73;
+            }
+            QTextEdit#EasyConLog {
+                background: #05080A;
+                border: 1px solid #2E3B3F;
+                border-radius: 4px;
+                color: #E7ECE9;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                font-size: 11px;
+                padding: 8px;
+            }
+            QFrame#EasyConToolbar {
+                background: #151D22;
+                border: 1px solid #2F3E43;
+                border-radius: 4px;
+            }
+            QStatusBar {
+                background: #0C1014;
+                border: 1px solid #2D3B3F;
+                border-radius: 4px;
+                color: #AEB9B8;
+            }
             QLineEdit#Readonly {
                 color: #91E0C3;
                 background: #10171A;
@@ -1257,6 +1292,7 @@ class MainWindow(QMainWindow):
         self.language_label.setText(self._text("language"))
         self.tabs.setTabText(0, self._text("project_xs"))
         self.tabs.setTabText(1, self._text("bdsp_search"))
+        self.tabs.setTabText(2, self._text("easycon"))
         self.status_group.setTitle(self._text("status"))
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
