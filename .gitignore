@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+script/.generated/
+bridge/**/bin/
+bridge/**/obj/

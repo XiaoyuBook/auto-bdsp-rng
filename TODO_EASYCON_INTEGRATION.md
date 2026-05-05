@@ -13,6 +13,7 @@
 - [x] 2026-05-05 21:01，耗时 1 分钟：完成 Bridge IPC 协议文档和“主动断开前一直复用连接”验收契约，新增后端单测并通过全量回归（110 passed）。
 - [x] 2026-05-05 21:05，耗时 1 分钟：纠正 Bridge 验收表述，明确三次连续运行只是最低冒烟测试，不是连接复用次数上限。
 - [x] 2026-05-05 21:06-21:07，耗时 1 分钟：将伊机控 UI 主路径切换为 Bridge 优先，新增 Bridge 路径、连接/断开按钮和 Bridge 文本运行入口，CLI 降为诊断模式。
+- [x] 2026-05-05 21:08-21:10，耗时 2 分钟：新增 `bridge/EasyConBridge` 服务端项目骨架，包含 JSON Lines 服务循环、EasyCon 会话适配器和主动断开前保持连接的服务端结构。
 
 ## 目标
 
@@ -648,8 +649,8 @@ script\.generated
 ### 可选实现方案
 
 - [ ] fork `ezcon`，新增 `server` 模式。
-- [ ] 新建独立 `.NET` 项目，引用 EasyCon 核心库实现 `EasyConBridge.exe`。
-- [ ] 使用 HTTP localhost、WebSocket、Named Pipe 或 stdin/stdout JSON 作为 IPC。
+- [x] 新建独立 `.NET` 项目，引用 EasyCon 核心库实现 `EasyConBridge.exe`。（2026-05-05，耗时 2 分钟，已新增项目骨架；本机缺少 .NET SDK，尚未编译验证）
+- [x] 使用 HTTP localhost、WebSocket、Named Pipe 或 stdin/stdout JSON 作为 IPC。（2026-05-05，耗时 1 分钟，已选 stdin/stdout JSON Lines）
 
 ### Bridge 最小接口
 
