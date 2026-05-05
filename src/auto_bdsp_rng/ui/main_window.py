@@ -43,6 +43,7 @@ from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     ProjectXsIntegrationError,
     ProjectXsTrackingConfig,
+    advance_seed_state,
     capture_player_blinks,
     capture_preview_frame,
     load_project_xs_config,
@@ -157,6 +158,7 @@ TEXT = {
         "capturing": "Capturing 40 blinks...",
         "capture_stopping": "Stopping blink capture...",
         "capture_stopped": "Blink capture stopped",
+        "seed_captured_npc_fallback": "Seed captured with NPCs reset to 0",
         "seed_captured": "Seed captured",
         "config_saved": "Config saved",
         "preview_running": "Preview running",
@@ -213,6 +215,7 @@ TEXT = {
         "capturing": "正在捕捉 40 次眨眼...",
         "capture_stopping": "正在停止捕捉...",
         "capture_stopped": "捕捉已停止",
+        "seed_captured_npc_fallback": "Seed 捕捉完成，已将 NPC 数重置为 0",
         "seed_captured": "Seed 捕捉完成",
         "config_saved": "配置已保存",
         "preview_running": "正在预览",
@@ -319,6 +322,11 @@ class MainWindow(QMainWindow):
         self._capture_error: Exception | None = None
         self._capture_frame: object | None = None
         self._capture_progress = (0, DEFAULT_BLINK_COUNT)
+        self._advance_timer = QTimer(self)
+        self._advance_timer.setInterval(1018)
+        self._advance_timer.timeout.connect(self._advance_tick)
+        self._tracked_advances = 0
+        self._advance_step = 1
         self._build_actions()
         self._build_ui()
         self._apply_theme()
@@ -433,7 +441,7 @@ class MainWindow(QMainWindow):
         self.x_to_advance_label = QLabel("X to advance:")
         self.x_to_advance = self._spin(0, 10_000_000, 165)
         self.advance_button = QPushButton("Advance")
-        self.advance_button.setEnabled(False)
+        self.advance_button.clicked.connect(self.advance_current_seed)
         layout.addWidget(self.progress_label, 0, 0)
         layout.addWidget(self.progress_value, 0, 1)
         layout.addWidget(self.advances_label, 1, 0)
@@ -1207,6 +1215,32 @@ class MainWindow(QMainWindow):
     def _is_capturing(self) -> bool:
         return self._capture_thread is not None and self._capture_thread.is_alive()
 
+    def _stop_advance_tracking(self) -> None:
+        self._advance_timer.stop()
+        self._tracked_advances = 0
+        self.advances_value.setText("0")
+        self.timer_value.setText("0")
+
+    def _advance_tick(self) -> None:
+        self._tracked_advances += self._advance_step
+        self.advances_value.setText(str(self._tracked_advances))
+
+    def advance_current_seed(self) -> None:
+        advances = self.x_to_advance.value()
+        if advances <= 0:
+            return
+        try:
+            state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
+            advanced = advance_seed_state(state, advances).state
+        except Exception as exc:
+            self._show_error("Advance failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+        for box, text in zip(self.seed32_inputs, advanced.format_words()):
+            box.setText(text)
+        self._sync_seed64_from_state32()
+        self._tracked_advances += advances
+        self.advances_value.setText(str(self._tracked_advances))
+
     def capture_seed(self) -> None:
         if self._is_capturing():
             self._capture_cancel.set()
@@ -1224,6 +1258,7 @@ class MainWindow(QMainWindow):
             self.preview_button.setText(self._text("preview_button"))
         self.preview_button.setEnabled(False)
         self.preview_label.set_selection_enabled(False)
+        self._stop_advance_tracking()
         self._capture_cancel.clear()
         self._capture_result = None
         self._capture_error = None
@@ -1259,7 +1294,12 @@ class MainWindow(QMainWindow):
                     progress_callback=store_progress,
                     show_window=False,
                 )
-                self._capture_result = recover_seed_from_observation(observation, npc=config.npc)
+                result = recover_seed_from_observation(observation, npc=config.npc)
+                elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
+                elapsed_advances = elapsed_seconds * (config.npc + 1)
+                if elapsed_advances:
+                    result = replace(result, state=advance_seed_state(result.state, elapsed_advances).state)
+                self._capture_result = result
             except Exception as exc:  # pragma: no cover - exercised through UI polling
                 self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
 
@@ -1300,6 +1340,11 @@ class MainWindow(QMainWindow):
             box.setText(text)
         self.progress_value.setText(f"{DEFAULT_BLINK_COUNT}/{DEFAULT_BLINK_COUNT}")
         self._sync_seed64_from_state32()
+        self._advance_step = self.npc_count.value() + 1
+        self._tracked_advances = 0
+        self.advances_value.setText("0")
+        self.timer_value.setText("0")
+        self._advance_timer.start()
         self.statusBar().showMessage(self._text("seed_captured"))
 
     def generate_results(self) -> None:
