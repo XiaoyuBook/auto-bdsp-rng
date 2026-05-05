@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QRect, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -90,6 +92,34 @@ NATURES = (
     "Quirky",
 )
 IV_LABELS = ("HP", "Atk", "Def", "SpA", "SpD", "Spe")
+STAT_LABELS_ZH = ("HP能力", "攻击能力", "防御能力", "特攻能力", "特防能力", "速度能力")
+NATURE_MODIFIERS = (
+    (-1, -1),
+    (1, 2),
+    (1, 5),
+    (1, 3),
+    (1, 4),
+    (2, 1),
+    (-1, -1),
+    (2, 5),
+    (2, 3),
+    (2, 4),
+    (5, 1),
+    (5, 2),
+    (-1, -1),
+    (5, 3),
+    (5, 4),
+    (3, 1),
+    (3, 2),
+    (3, 5),
+    (-1, -1),
+    (3, 4),
+    (4, 1),
+    (4, 2),
+    (4, 5),
+    (4, 3),
+    (-1, -1),
+)
 RESULT_HEADERS = (
     "Adv",
     "EC",
@@ -427,6 +457,52 @@ class RoiPreviewLabel(QLabel):
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(QRect(self._drag_start, self._drag_current).normalized().intersected(self._pixmap_rect))
+
+
+class PokeFinderTableWidget(QTableWidget):
+    """QTableWidget with PokeFinder-style prefix search on the active column."""
+
+    searchStatusChanged = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._search_text = ""
+        self._last_search_at = 0.0
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        text = event.text()
+        if text and text.isprintable() and not event.modifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier
+        ):
+            now = time.monotonic()
+            if now - self._last_search_at > 1.0:
+                self._search_text = ""
+            self._last_search_at = now
+            self._search_text += text
+            if self._select_next_prefix_match(self._search_text):
+                self.searchStatusChanged.emit(f"查找: {self._search_text}")
+            else:
+                self.searchStatusChanged.emit(f"未找到: {self._search_text}")
+            event.accept()
+            return
+        self._search_text = ""
+        super().keyPressEvent(event)
+
+    def _select_next_prefix_match(self, prefix: str) -> bool:
+        if self.rowCount() <= 0 or self.columnCount() <= 0:
+            return False
+        column = self.currentColumn()
+        if column < 0:
+            column = 0
+        start = self.currentRow()
+        for offset in range(1, self.rowCount() + 1):
+            row = (start + offset) % self.rowCount()
+            item = self.item(row, column)
+            if item is not None and item.text().lower().startswith(prefix.lower()):
+                self.setCurrentCell(row, column)
+                self.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                return True
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -840,6 +916,10 @@ class MainWindow(QMainWindow):
         self.weight_min = self._spin(0, 255, 0)
         self.weight_max = self._spin(0, 255, 255)
         self.skip_filter = QCheckBox("取消筛选")
+        self.show_stats_check = QCheckBox("显示能力值")
+        self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
+        self.iv_calculator_button = QPushButton("个体值计算器")
+        self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
 
         self.nature_list = QListWidget()
         self.nature_list.setVisible(False)
@@ -886,6 +966,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Weight"), 5, 4)
         layout.addWidget(self.weight_min, 5, 5)
         layout.addWidget(self.weight_max, 5, 6)
+        layout.addWidget(self.show_stats_check, 6, 0, 1, 3)
+        layout.addWidget(self.iv_calculator_button, 7, 0, 1, 3)
         layout.addWidget(self.skip_filter, 6, 4, 1, 3)
         layout.setColumnStretch(3, 1)
         return group
@@ -940,10 +1022,15 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.result_count)
         layout.addLayout(toolbar)
 
-        self.table = QTableWidget(0, len(RESULT_HEADERS))
-        self.table.setHorizontalHeaderLabels(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table = PokeFinderTableWidget()
+        self.table.setColumnCount(len(self._result_headers()))
+        self.table.setHorizontalHeaderLabels(self._result_headers())
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_result_context_menu)
+        self.table.searchStatusChanged.connect(self.statusBar().showMessage)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -1051,6 +1138,10 @@ class MainWindow(QMainWindow):
                 border: 1px solid #2D3B3F;
                 gridline-color: #203036;
             }
+            QTableWidget::item:selected {
+                background: #1E91E6;
+                color: #FFFFFF;
+            }
             QHeaderView::section {
                 background: #19252A;
                 color: #F4F1E8;
@@ -1078,6 +1169,24 @@ class MainWindow(QMainWindow):
 
     def _text(self, key: str) -> str:
         return TEXT[self.lang].get(key, TEXT["en"].get(key, key))
+
+    def _base_result_headers(self) -> tuple[str, ...]:
+        return RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS
+
+    def _result_headers(self) -> list[str]:
+        headers = list(self._base_result_headers())
+        if hasattr(self, "show_stats_check") and self.show_stats_check.isChecked():
+            stat_headers = STAT_LABELS_ZH if self.lang == "zh" else tuple(f"{label} Stat" for label in IV_LABELS)
+            headers[-1:-1] = stat_headers
+        return headers
+
+    def _refresh_result_columns(self) -> None:
+        if not hasattr(self, "table"):
+            return
+        self.table.setColumnCount(len(self._result_headers()))
+        self.table.setHorizontalHeaderLabels(self._result_headers())
+        if self._states:
+            self._populate_table(self._states)
 
     def _game_label(self, version: GameVersion) -> str:
         labels = GAME_LABELS_ZH if self.lang == "zh" else GAME_LABELS_EN
@@ -1160,7 +1269,9 @@ class MainWindow(QMainWindow):
         self.generate_button.setText(self._text("generate"))
         self.copy_button.setText(self._text("copy"))
         self.export_button.setText(self._text("export"))
-        self.table.setHorizontalHeaderLabels(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)
+        self.show_stats_check.setText("显示能力值" if self.lang == "zh" else "Show Stats")
+        self.iv_calculator_button.setText("个体值计算器" if self.lang == "zh" else "IV Calculator")
+        self._refresh_result_columns()
         self.seed_badge.setText(self._text("seed_linked"))
         if not self._preview_timer.isActive():
             self.preview_label.clear()
@@ -1493,6 +1604,43 @@ class MainWindow(QMainWindow):
             return CHARACTERISTICS_ZH[stat_index][characteristic_index]
         return f"{IV_LABELS[stat_index]} {max_iv}"
 
+    def _stat_values(self, state: State8) -> tuple[int, int, int, int, int, int]:
+        if self._active_record is None:
+            return (0, 0, 0, 0, 0, 0)
+        stats = self._active_record.species_info.stats
+        level = state.level
+        hp = ((2 * stats[0] + state.ivs[0]) * level) // 100 + level + 10
+        values = []
+        increased, decreased = NATURE_MODIFIERS[state.nature]
+        for index in range(1, 6):
+            value = ((2 * stats[index] + state.ivs[index]) * level) // 100 + 5
+            if index == increased:
+                value = (value * 110) // 100
+            elif index == decreased:
+                value = (value * 90) // 100
+            values.append(value)
+        return (hp, *values)
+
+    def open_iv_calculator(self) -> None:
+        row = self.table.currentRow() if hasattr(self, "table") else -1
+        state = self._states[row] if 0 <= row < len(self._states) else None
+        dialog = QDialog(self)
+        dialog.setWindowTitle("个体值计算器" if self.lang == "zh" else "IV Calculator")
+        layout = QGridLayout(dialog)
+        labels = ("HP", "攻击", "防御", "特攻", "特防", "速度") if self.lang == "zh" else IV_LABELS
+        ivs = state.ivs if state is not None else tuple(spin.value() for spin in self.iv_min)
+        for index, (label, value) in enumerate(zip(labels, ivs)):
+            layout.addWidget(QLabel(label), index, 0)
+            spin = self._spin(0, 31, value)
+            layout.addWidget(spin, index, 1)
+        if state is not None:
+            layout.addWidget(QLabel("个性" if self.lang == "zh" else "Characteristic"), 6, 0)
+            layout.addWidget(QLabel(self._characteristic_text(state)), 6, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons, 7, 0, 1, 2)
+        dialog.exec()
+
     def _sync_seed64_from_state32(self) -> None:
         try:
             state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
@@ -1732,6 +1880,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
 
     def _populate_table(self, states: list[State8]) -> None:
+        self.table.setColumnCount(len(self._result_headers()))
+        self.table.setHorizontalHeaderLabels(self._result_headers())
         self.table.setRowCount(len(states))
         for row, state in enumerate(states):
             values = self._state_row(state)
@@ -1751,7 +1901,7 @@ class MainWindow(QMainWindow):
             shiny = {0: "-", 1: "Star", 2: "Square"}.get(state.shiny, str(state.shiny))
             gender = {0: "M", 1: "F", 2: "-"}.get(state.gender, str(state.gender))
             nature = NATURES[state.nature]
-        return [
+        row = [
             str(state.advances),
             f"{state.ec:08X}",
             f"{state.pid:08X}",
@@ -1764,12 +1914,28 @@ class MainWindow(QMainWindow):
             str(state.weight),
             self._characteristic_text(state),
         ]
+        if hasattr(self, "show_stats_check") and self.show_stats_check.isChecked():
+            row[-1:-1] = [str(value) for value in self._stat_values(state)]
+        return row
 
     def _table_text(self) -> str:
-        rows = ["\t".join(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)]
+        rows = ["\t".join(self._result_headers())]
         for state in self._states:
             rows.append("\t".join(self._state_row(state)))
         return "\n".join(rows)
+
+    def _show_result_context_menu(self, position: QPoint) -> None:
+        menu = QMenu(self.table)
+        copy_action = menu.addAction("复制" if self.lang == "zh" else "Copy")
+        txt_action = menu.addAction("导出 TXT" if self.lang == "zh" else "Export TXT")
+        csv_action = menu.addAction("导出 CSV" if self.lang == "zh" else "Export CSV")
+        selected = menu.exec(self.table.viewport().mapToGlobal(position))
+        if selected == copy_action:
+            self.copy_results()
+        elif selected == txt_action:
+            self.export_results_txt()
+        elif selected == csv_action:
+            self.export_results()
 
     def copy_results(self) -> None:
         if not self._states:
@@ -1788,9 +1954,20 @@ class MainWindow(QMainWindow):
         output = Path(path)
         with output.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)
+            writer.writerow(self._result_headers())
             for state in self._states:
                 writer.writerow(self._state_row(state))
+        self.statusBar().showMessage(f"Exported {output}")
+
+    def export_results_txt(self) -> None:
+        if not self._states:
+            self.statusBar().showMessage("No results to export")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export results", "bdsp_static_results.txt", "Text files (*.txt)")
+        if not path:
+            return
+        output = Path(path)
+        output.write_text(self._table_text(), encoding="utf-8")
         self.statusBar().showMessage(f"Exported {output}")
 
     def _show_error(self, title: str, error: Exception) -> None:

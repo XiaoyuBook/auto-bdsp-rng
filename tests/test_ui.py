@@ -4,7 +4,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog
 
 from auto_bdsp_rng.ui import MainWindow
 
@@ -29,6 +31,39 @@ def test_main_window_generates_static_results(app):
     assert window.result_count.text() == "3 条结果"
     assert window.table.item(0, 0).text() == "0"
     assert window.table.item(0, 1).text()
+
+
+def test_bdsp_table_uses_pokefinder_cell_interactions(app):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    window.max_advances.setValue(30)
+    window.show_stats_check.setChecked(True)
+    window.generate_results()
+
+    height_column = window._result_headers().index("身高")
+    window.table.item(5, height_column).setText("208")
+    window.table.setCurrentCell(0, height_column)
+    QTest.keyClicks(window.table, "208")
+
+    assert window.table.selectionBehavior() == QAbstractItemView.SelectionBehavior.SelectItems
+    assert window.table.currentColumn() == height_column
+    assert window.table.currentItem().text().startswith("208")
+    assert "HP能力" in window._result_headers()
+
+
+def test_main_window_exports_txt_from_results(app, monkeypatch, tmp_path):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    window.max_advances.setValue(2)
+    window.generate_results()
+    output = tmp_path / "results.txt"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args, **_kwargs: (str(output), "Text files (*.txt)"))
+
+    window.export_results_txt()
+
+    text = output.read_text(encoding="utf-8")
+    assert text.startswith("帧数\tEC\tPID")
+    assert "\t个性\n" in text.splitlines()[0] + "\n"
 
 
 def test_main_window_syncs_seed64_display(app):
