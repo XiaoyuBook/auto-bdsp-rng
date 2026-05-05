@@ -347,9 +347,11 @@ def render_eye_preview(config: BlinkCaptureConfig, frame: Any) -> tuple[Any, Eye
     roi_bottom_right = (roi_x + roi_w, roi_y + roi_h)
     cv2.rectangle(annotated, (roi_x, roi_y), roi_bottom_right, (0, 0, 255), 2)
     match_location = (max_loc[0] + roi_x, max_loc[1] + roi_y)
-    match_bottom_right = (match_location[0] + eye_width, match_location[1] + eye_height)
-    color = (0, 255, 0) if match_score >= config.threshold else (0, 255, 255)
-    cv2.rectangle(annotated, match_location, match_bottom_right, color, 2)
+    if 0.01 < match_score < config.threshold:
+        cv2.rectangle(annotated, (roi_x, roi_y), roi_bottom_right, (255, 255, 255), 2)
+    else:
+        match_bottom_right = (match_location[0] + eye_width, match_location[1] + eye_height)
+        cv2.rectangle(annotated, match_location, match_bottom_right, (255, 255, 255), 2)
 
     preview = EyePreviewResult(
         roi=config.roi,
