@@ -25,6 +25,18 @@ def test_capture_frame_command_saves_preview(monkeypatch, tmp_path, capsys):
     assert f"saved preview frame: {output}" in capsys.readouterr().out
 
 
+def test_export_config_command_saves_config(monkeypatch, tmp_path, capsys):
+    output = tmp_path / "config.json"
+
+    def fake_save_project_xs_config(_config, output_path):
+        return output_path
+
+    monkeypatch.setattr(cli, "save_project_xs_config", fake_save_project_xs_config)
+
+    assert main(["export-config", "--project-xs-config", "config_cave.json", "--output", str(output)]) == 0
+    assert f"saved Project_Xs config: {output}" in capsys.readouterr().out
+
+
 def test_preview_eye_command_saves_annotated_preview(monkeypatch, tmp_path, capsys):
     output = tmp_path / "eye_preview.png"
 

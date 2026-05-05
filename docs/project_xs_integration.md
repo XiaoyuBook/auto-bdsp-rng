@@ -34,6 +34,12 @@ rngtool.tracking_blink(...)
 
 配置名会从 `third_party/Project_Xs_CHN/configs` 中查找；也可以传入 JSON 文件的绝对路径。
 
+也可以把读取后的配置另存为 Project_Xs 兼容 JSON：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng export-config --project-xs-config config_cave.json --output .\debug\config_cave.normalized.json
+```
+
 也可以按配置捕获一帧画面并保存，方便检查窗口或摄像头输入是否正确：
 
 ```powershell

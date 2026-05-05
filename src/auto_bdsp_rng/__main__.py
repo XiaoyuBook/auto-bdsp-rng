@@ -17,6 +17,7 @@ from auto_bdsp_rng.blink_detection import (
     recover_tidsid_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
+    save_project_xs_config,
     track_advances,
 )
 
@@ -47,6 +48,21 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=40,
         help="Blink count to request when capture is later started.",
+    )
+
+    export_config = subparsers.add_parser(
+        "export-config",
+        help="Load a Project_Xs config and save it as a normalized Project_Xs-compatible JSON file.",
+    )
+    export_config.add_argument(
+        "--project-xs-config",
+        required=True,
+        help="Project_Xs config file name or absolute JSON path.",
+    )
+    export_config.add_argument(
+        "--output",
+        required=True,
+        help="Output JSON path.",
     )
 
     capture_frame = subparsers.add_parser(
@@ -221,6 +237,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(config.as_dict(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "export-config":
+        try:
+            config = load_project_xs_config(args.project_xs_config)
+            output = save_project_xs_config(config, args.output)
+        except ProjectXsIntegrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"saved Project_Xs config: {output}")
         return 0
     if args.command == "capture-frame":
         try:

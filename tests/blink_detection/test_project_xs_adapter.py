@@ -21,6 +21,7 @@ from auto_bdsp_rng.blink_detection import (
     recover_tidsid_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
+    save_project_xs_config,
     track_advances,
 )
 from auto_bdsp_rng.blink_detection.project_xs import ProjectXsIntegrationError
@@ -243,6 +244,21 @@ def test_load_project_xs_config_from_absolute_path(tmp_path):
     assert config.pokemon_npc == 4
     assert config.timeline_npc == 5
     assert config.display_percent == 60
+
+
+def test_save_project_xs_config_round_trips(tmp_path):
+    config = load_project_xs_config("config_cave.json")
+    output = tmp_path / "saved_config.json"
+
+    saved = save_project_xs_config(config, output)
+    reloaded = load_project_xs_config(saved)
+
+    assert saved == output
+    assert reloaded.capture.eye_image_path == config.capture.eye_image_path
+    assert reloaded.capture.roi == config.capture.roi
+    assert reloaded.capture.threshold == config.capture.threshold
+    assert reloaded.capture.monitor_window == config.capture.monitor_window
+    assert reloaded.npc == config.npc
 
 
 def test_capture_preview_frame_from_camera(monkeypatch, tmp_path):

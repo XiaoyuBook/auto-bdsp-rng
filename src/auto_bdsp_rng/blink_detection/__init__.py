@@ -26,6 +26,7 @@ from auto_bdsp_rng.blink_detection.project_xs import (
     recover_seed_from_observation,
     save_eye_preview,
     save_preview_frame,
+    save_project_xs_config,
     track_advances,
 )
 
@@ -53,5 +54,6 @@ __all__ = [
     "recover_tidsid_seed_from_observation",
     "save_eye_preview",
     "save_preview_frame",
+    "save_project_xs_config",
     "track_advances",
 ]

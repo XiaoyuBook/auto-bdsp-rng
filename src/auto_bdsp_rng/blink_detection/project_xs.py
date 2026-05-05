@@ -97,6 +97,34 @@ def _resolve_project_xs_asset_path(raw_path: str, *, config_path: Path) -> Path:
     return (config_path.parent / path).resolve()
 
 
+def _project_xs_relative_path(path: Path) -> str:
+    project_xs_root = PROJECT_XS_SRC.parent.resolve()
+    try:
+        relative = path.resolve().relative_to(project_xs_root)
+    except ValueError:
+        return str(path)
+    return "./" + relative.as_posix()
+
+
+def _to_project_xs_config_dict(config: ProjectXsTrackingConfig) -> dict[str, object]:
+    return {
+        "MonitorWindow": config.capture.monitor_window,
+        "WindowPrefix": config.capture.window_prefix,
+        "image": _project_xs_relative_path(config.capture.eye_image_path),
+        "view": list(config.capture.roi),
+        "thresh": config.capture.threshold,
+        "white_delay": 0,
+        "advance_delay": 0,
+        "advance_delay_2": 0,
+        "npc": config.npc,
+        "pokemon_npc": config.pokemon_npc,
+        "timeline_npc": config.timeline_npc,
+        "crop": [0, 0, 0, 0] if config.capture.crop is None else list(config.capture.crop),
+        "camera": config.capture.camera,
+        "display_percent": config.display_percent,
+    }
+
+
 def load_project_xs_config(config: str | Path, *, blink_count: int = 40) -> ProjectXsTrackingConfig:
     """Load a Project_Xs JSON config and normalize paths for this project."""
 
@@ -134,6 +162,20 @@ def load_project_xs_config(config: str | Path, *, blink_count: int = 40) -> Proj
         timeline_npc=int(raw_config.get("timeline_npc", 0)),
         display_percent=int(raw_config.get("display_percent", 100)),
     )
+
+
+def save_project_xs_config(config: ProjectXsTrackingConfig, output_path: str | Path) -> Path:
+    """Save a normalized config back to a Project_Xs-compatible JSON file."""
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with output.open("w", encoding="utf-8", newline="\n") as file:
+            json.dump(_to_project_xs_config_dict(config), file, ensure_ascii=False, indent=4)
+            file.write("\n")
+    except OSError as exc:
+        raise ProjectXsIntegrationError(f"Cannot save Project_Xs config: {output}") from exc
+    return output
 
 
 def capture_player_blinks(config: BlinkCaptureConfig) -> BlinkObservation:
