@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -52,7 +54,7 @@ from auto_bdsp_rng.blink_detection import (
     save_project_xs_config,
 )
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
-from auto_bdsp_rng.gen8_static import Lead, Profile8, State8, StateFilter, StaticGenerator8
+from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter, StaticGenerator8
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 
 
@@ -104,7 +106,138 @@ RESULT_HEADERS = (
     "Spe",
     "Height",
     "Weight",
+    "Characteristic",
 )
+RESULT_HEADERS_ZH = (
+    "帧数",
+    "EC",
+    "PID",
+    "异色",
+    "性格",
+    "特性",
+    "性别",
+    "HP",
+    "攻击",
+    "防御",
+    "特攻",
+    "特防",
+    "速度",
+    "身高",
+    "体重",
+    "个性",
+)
+GAME_LABELS_ZH = {
+    GameVersion.BD: "晶灿钻石",
+    GameVersion.SP: "明亮珍珠",
+    GameVersion.BDSP: "晶灿钻石 / 明亮珍珠",
+}
+GAME_LABELS_EN = {
+    GameVersion.BD: "Brilliant Diamond",
+    GameVersion.SP: "Shining Pearl",
+    GameVersion.BDSP: "BDSP",
+}
+CHARACTERISTICS_ZH = (
+    ("非常喜欢吃", "经常打瞌睡", "经常午睡", "经常乱扔东西", "喜欢放松"),
+    ("以力气自豪", "喜欢打闹", "有点易怒", "喜欢打架", "血气方刚"),
+    ("身体强壮", "能忍耐", "抗打能力强", "不屈不挠", "毅力十足"),
+    ("好奇心强", "爱恶作剧", "考虑周到", "经常思考", "非常讲究"),
+    ("意志坚强", "有点固执", "讨厌输", "有点爱逞强", "忍耐力强"),
+    ("喜欢跑步", "警觉性高", "冲动", "有点轻浮", "逃得快"),
+)
+ABILITY_NAMES_ZH = {
+    65: "茂盛",
+    66: "猛火",
+    67: "激流",
+    75: "硬壳盔甲",
+}
+NATURES_ZH = (
+    "勤奋",
+    "怕寂寞",
+    "勇敢",
+    "固执",
+    "顽皮",
+    "大胆",
+    "坦率",
+    "悠闲",
+    "淘气",
+    "乐天",
+    "胆小",
+    "急躁",
+    "认真",
+    "爽朗",
+    "天真",
+    "内敛",
+    "慢吞吞",
+    "冷静",
+    "害羞",
+    "马虎",
+    "温和",
+    "温顺",
+    "自大",
+    "慎重",
+    "浮躁",
+)
+CATEGORY_LABELS_ZH = {
+    None: "全部",
+    "starters": "御三家",
+    "gifts": "赠送",
+    "fossils": "化石",
+    "stationary": "定点",
+    "roamers": "游走",
+    "legends": "传说",
+    "ramanasParkPureSpace": "玫瑰公园（纯净空间）",
+    "ramanasParkStrangeSpace": "玫瑰公园（奇异空间）",
+    "mythics": "幻兽",
+}
+POKEMON_LABELS_ZH = {
+    "Turtwig": "草苗龟",
+    "Chimchar": "小火焰猴",
+    "Piplup": "波加曼",
+    "Eevee": "伊布",
+    "Happiny egg": "小福蛋蛋",
+    "Riolu egg": "利欧路蛋",
+    "Omanyte": "菊石兽",
+    "Kabuto": "化石盔",
+    "Aerodactyl": "化石翼龙",
+    "Lileep": "触手百合",
+    "Anorith": "太古羽虫",
+    "Cranidos": "头盖龙",
+    "Shieldon": "盾甲龙",
+    "Drifloon": "飘飘球",
+    "Spiritomb": "花岩怪",
+    "Rotom": "洛托姆",
+    "Mespirit": "艾姆利多",
+    "Cresselia": "克雷色利亚",
+    "Uxie": "由克希",
+    "Azelf": "亚克诺姆",
+    "Dialga": "帝牙卢卡",
+    "Palkia": "帕路奇亚",
+    "Heatran": "席多蓝恩",
+    "Regigigas": "雷吉奇卡斯",
+    "Giratina": "骑拉帝纳",
+    "Articuno": "急冻鸟",
+    "Zapdos": "闪电鸟",
+    "Moltres": "火焰鸟",
+    "Raikou": "雷公",
+    "Entei": "炎帝",
+    "Suicune": "水君",
+    "Regirock": "雷吉洛克",
+    "Regice": "雷吉艾斯",
+    "Registeel": "雷吉斯奇鲁",
+    "Latias": "拉帝亚斯",
+    "Latios": "拉帝欧斯",
+    "Mewtwo": "超梦",
+    "Lugia": "洛奇亚",
+    "Ho-Oh": "凤王",
+    "Kyogre": "盖欧卡",
+    "Groudon": "固拉多",
+    "Rayquaza": "烈空坐",
+    "Mew": "梦幻",
+    "Jirachi": "基拉祈",
+    "Darkrai": "达克莱伊",
+    "Shaymin": "谢米",
+    "Arceus": "阿尔宙斯",
+}
 
 TEXT = {
     "en": {
@@ -302,6 +435,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("auto_bdsp_rng")
         self.resize(1480, 900)
         self.lang = "zh"
+        self._profile_version = GameVersion.BD
+        self._active_record: StaticEncounterRecord | None = None
         self._records: tuple[StaticEncounterRecord, ...] = ()
         self._states: list[State8] = []
         self._eye_image_path: Path | None = None
@@ -406,28 +541,29 @@ class MainWindow(QMainWindow):
         return splitter
 
     def _build_bdsp_tab(self) -> QWidget:
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
+        panel = QWidget()
+        layout = QGridLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(10)
 
-        controls = QScrollArea()
-        controls.setWidgetResizable(True)
-        control_panel = QWidget()
-        control_layout = QVBoxLayout(control_panel)
-        control_layout.setContentsMargins(0, 0, 8, 0)
-        control_layout.setSpacing(10)
-        self.static_group = self._build_static_group()
         self.profile_group = self._build_profile_group()
+        self.rng_info_group = self._build_rng_info_group()
+        self.static_group = self._build_static_group()
         self.filter_group = self._build_filter_group()
-        control_layout.addWidget(self.static_group)
-        control_layout.addWidget(self.profile_group)
-        control_layout.addWidget(self.filter_group)
-        control_layout.addStretch(1)
-        controls.setWidget(control_panel)
+        self.results_panel = self._build_results()
 
-        splitter.addWidget(controls)
-        splitter.addWidget(self._build_results())
-        splitter.setSizes([430, 1050])
-        return splitter
+        layout.addWidget(self.profile_group, 0, 0, 1, 3)
+        layout.addWidget(self.rng_info_group, 1, 0)
+        layout.addWidget(self.static_group, 1, 1)
+        layout.addWidget(self.filter_group, 1, 2)
+        layout.addWidget(self.results_panel, 2, 0, 1, 3)
+        layout.setRowMinimumHeight(1, 270)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 0)
+        layout.setColumnStretch(2, 1)
+        layout.setRowStretch(2, 1)
+        return panel
 
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox()
@@ -562,40 +698,84 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.seed64_outputs[1], 3, 1, 1, 3)
         return group
 
-    def _build_static_group(self) -> QGroupBox:
-        group = QGroupBox()
-        form = QFormLayout(group)
-        self.version_combo = QComboBox()
-        self.version_combo.addItems([version.value for version in GameVersion])
-        self.version_combo.setCurrentText(GameVersion.BDSP.value)
-        self.version_combo.currentTextChanged.connect(self._refresh_encounters)
-        self.category_combo = QComboBox()
-        self.category_combo.addItem("All", None)
-        for category in StaticEncounterCategory:
-            self.category_combo.addItem(category.value, category.value)
-        self.category_combo.currentIndexChanged.connect(self._refresh_encounters)
-        self.encounter_combo = QComboBox()
+    def _build_rng_info_group(self) -> QGroupBox:
+        group = QGroupBox("乱数信息")
+        layout = QGridLayout(group)
+        self.lead_label = QLabel("队首")
+        self.lead_combo = QComboBox()
+        self.lead_combo.addItem("无", int(Lead.NONE))
+        self.lead_combo.addItem("同步：勤奋", int(Lead.SYNCHRONIZE_START))
+        self.lead_combo.addItem("迷人之躯 ♀", int(Lead.CUTE_CHARM_F))
+        self.lead_combo.addItem("迷人之躯 ♂", int(Lead.CUTE_CHARM_M))
+        self.bdsp_seed64_inputs = [QLineEdit(text) for text in ("123456789ABCDEF0", "1111111122222222")]
+        for input_box in self.bdsp_seed64_inputs:
+            input_box.setMaxLength(16)
+            input_box.editingFinished.connect(self._sync_state32_from_bdsp_seed64)
         self.initial_advances = self._spin(0, 10_000_000, 0)
         self.max_advances = self._spin(0, 100_000, 100)
         self.offset = self._spin(0, 1_000_000, 0)
-        self.lead_combo = QComboBox()
-        self.lead_combo.addItem("None", int(Lead.NONE))
-        self.lead_combo.addItem("Synchronize Hardy", int(Lead.SYNCHRONIZE_START))
-        self.lead_combo.addItem("Cute Charm F", int(Lead.CUTE_CHARM_F))
-        self.lead_combo.addItem("Cute Charm M", int(Lead.CUTE_CHARM_M))
-        form.addRow("Version", self.version_combo)
-        form.addRow("Category", self.category_combo)
-        form.addRow("Encounter", self.encounter_combo)
-        form.addRow("Initial advances", self.initial_advances)
-        form.addRow("Max advances", self.max_advances)
-        form.addRow("Offset", self.offset)
-        form.addRow("Lead", self.lead_combo)
+        self.generate_button = QPushButton("生成")
+        self.generate_button.clicked.connect(self.generate_results)
+
+        layout.addWidget(self.lead_label, 0, 0)
+        layout.addWidget(self.lead_combo, 0, 1)
+        layout.addWidget(QLabel("Seed 0"), 1, 0)
+        layout.addWidget(self.bdsp_seed64_inputs[0], 1, 1)
+        layout.addWidget(QLabel("Seed 1"), 2, 0)
+        layout.addWidget(self.bdsp_seed64_inputs[1], 2, 1)
+        layout.addWidget(QLabel("初始帧"), 3, 0)
+        layout.addWidget(self.initial_advances, 3, 1)
+        layout.addWidget(QLabel("最大帧数"), 4, 0)
+        layout.addWidget(self.max_advances, 4, 1)
+        layout.addWidget(QLabel("Offset"), 5, 0)
+        layout.addWidget(self.offset, 5, 1)
+        layout.addWidget(self.generate_button, 6, 0, 1, 2)
+        group.setMinimumWidth(260)
+        return group
+
+    def _build_static_group(self) -> QGroupBox:
+        group = QGroupBox()
+        layout = QGridLayout(group)
+        self.category_combo = QComboBox()
+        self.category_combo.addItem("御三家", StaticEncounterCategory.STARTERS.value)
+        self.category_combo.addItem("全部", None)
+        for category in StaticEncounterCategory:
+            if category == StaticEncounterCategory.STARTERS:
+                continue
+            self.category_combo.addItem(CATEGORY_LABELS_ZH.get(category.value, category.value), category.value)
+        self.category_combo.currentIndexChanged.connect(self._refresh_encounters)
+        self.encounter_combo = QComboBox()
+        self.encounter_combo.currentIndexChanged.connect(self._update_encounter_details)
+        self.level_display = self._spin(1, 100, 1)
+        self.level_display.setEnabled(False)
+        self.template_ability_display = QComboBox()
+        self.template_ability_display.addItems(["0", "1", "隐藏", "0/1", "任意"])
+        self.template_ability_display.setEnabled(False)
+        self.template_shiny_display = QComboBox()
+        self.template_shiny_display.addItems(["随机", "锁闪"])
+        self.template_shiny_display.setEnabled(False)
+        self.iv_count_display = self._spin(0, 6, 0)
+        self.iv_count_display.setEnabled(False)
+
+        rows = (
+            ("分类", self.category_combo),
+            ("宝可梦", self.encounter_combo),
+            ("等级", self.level_display),
+            ("特性", self.template_ability_display),
+            ("异色", self.template_shiny_display),
+            ("IV Count", self.iv_count_display),
+        )
+        for row, (label, widget) in enumerate(rows):
+            layout.addWidget(QLabel(label), row, 0)
+            layout.addWidget(widget, row, 1)
+        group.setMinimumWidth(300)
         return group
 
     def _build_profile_group(self) -> QGroupBox:
-        group = QGroupBox()
-        form = QFormLayout(group)
+        group = QGroupBox("存档信息")
+        layout = QGridLayout(group)
         self.profile_name = QLineEdit("-")
+        self.profile_name.setPlaceholderText("存档信息")
         self.tid = self._spin(0, 65535, 12345)
         self.sid = self._spin(0, 65535, 54321)
         self.tsv = QLineEdit()
@@ -607,45 +787,62 @@ class MainWindow(QMainWindow):
         self.sid.valueChanged.connect(self._update_tsv)
         self._update_tsv()
 
-        charms = QWidget()
-        charm_layout = QHBoxLayout(charms)
-        charm_layout.setContentsMargins(0, 0, 0, 0)
-        charm_layout.addWidget(self.national_dex)
-        charm_layout.addWidget(self.shiny_charm)
-        charm_layout.addWidget(self.oval_charm)
-        form.addRow("Name", self.profile_name)
-        form.addRow("TID", self.tid)
-        form.addRow("SID", self.sid)
-        form.addRow("TSV", self.tsv)
-        form.addRow("Flags", charms)
+        self.profile_manager_button = QPushButton("存档信息管理")
+        self.profile_manager_button.clicked.connect(self.open_profile_manager)
+        self.profile_game_value = QLabel(self._game_label(self._profile_version))
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFrameShadow(QFrame.Shadow.Sunken)
+
+        layout.addWidget(QLabel("存档信息"), 0, 0)
+        layout.addWidget(self.profile_name, 0, 1)
+        layout.addWidget(self.profile_manager_button, 1, 1)
+        layout.addWidget(QLabel("TID"), 0, 2)
+        layout.addWidget(self.tid, 0, 3)
+        layout.addWidget(QLabel("SID"), 1, 2)
+        layout.addWidget(self.sid, 1, 3)
+        layout.addWidget(QLabel("TSV"), 2, 2)
+        layout.addWidget(self.tsv, 2, 3)
+        layout.addWidget(divider, 0, 4, 3, 1)
+        layout.addWidget(QLabel("游戏"), 0, 5)
+        layout.addWidget(self.profile_game_value, 0, 6)
+        layout.addWidget(self.national_dex, 1, 5)
+        layout.addWidget(self.shiny_charm, 1, 6)
+        layout.addWidget(self.oval_charm, 2, 5)
+        layout.setColumnStretch(6, 1)
         return group
 
     def _build_filter_group(self) -> QGroupBox:
         group = QGroupBox()
-        layout = QVBoxLayout(group)
-        row = QHBoxLayout()
+        layout = QGridLayout(group)
         self.shiny_filter = QComboBox()
-        self.shiny_filter.addItem("Any", "any")
-        self.shiny_filter.addItem("Shiny", "shiny")
+        self.shiny_filter.addItem("任意", "any")
+        self.shiny_filter.addItem("异色", "shiny")
         self.shiny_filter.addItem("Star", "star")
         self.shiny_filter.addItem("Square", "square")
-        self.shiny_filter.addItem("Non-shiny", "none")
+        self.shiny_filter.addItem("非异色", "none")
         self.ability_filter = QComboBox()
-        self.ability_filter.addItem("Any ability", 255)
-        self.ability_filter.addItem("Ability 0", 0)
-        self.ability_filter.addItem("Ability 1", 1)
-        self.ability_filter.addItem("Hidden", 2)
+        self.ability_filter.addItem("任意", 255)
+        self.ability_filter.addItem("0", 0)
+        self.ability_filter.addItem("1", 1)
+        self.ability_filter.addItem("隐藏", 2)
         self.gender_filter = QComboBox()
-        self.gender_filter.addItem("Any gender", 255)
-        self.gender_filter.addItem("Male", 0)
-        self.gender_filter.addItem("Female", 1)
-        self.gender_filter.addItem("Genderless", 2)
-        row.addWidget(self.shiny_filter)
-        row.addWidget(self.ability_filter)
-        row.addWidget(self.gender_filter)
-        layout.addLayout(row)
+        self.gender_filter.addItem("任意", 255)
+        self.gender_filter.addItem("雄性", 0)
+        self.gender_filter.addItem("雌性", 1)
+        self.gender_filter.addItem("无性别", 2)
+        self.nature_combo = QComboBox()
+        self.nature_combo.addItem("任意", -1)
+        for index, nature in enumerate(NATURES_ZH):
+            self.nature_combo.addItem(nature, index)
+        self.height_min = self._spin(0, 255, 0)
+        self.height_max = self._spin(0, 255, 255)
+        self.weight_min = self._spin(0, 255, 0)
+        self.weight_max = self._spin(0, 255, 255)
+        self.skip_filter = QCheckBox("取消筛选")
 
         self.nature_list = QListWidget()
+        self.nature_list.setVisible(False)
         self.nature_list.setMaximumHeight(126)
         for nature in NATURES:
             item = QListWidgetItem(nature)
@@ -657,23 +854,40 @@ class MainWindow(QMainWindow):
         self.all_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Checked))
         self.clear_natures_button = QPushButton("Clear")
         self.clear_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Unchecked))
-        nature_buttons.addWidget(self.all_natures_button)
-        nature_buttons.addWidget(self.clear_natures_button)
-        layout.addWidget(self.nature_list)
-        layout.addLayout(nature_buttons)
+        self.all_natures_button.setVisible(False)
+        self.clear_natures_button.setVisible(False)
 
         iv_grid = QGridLayout()
         self.iv_min: list[QSpinBox] = []
         self.iv_max: list[QSpinBox] = []
-        for column, label in enumerate(IV_LABELS):
-            iv_grid.addWidget(QLabel(label), 0, column)
+        iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+        for row, label in enumerate(iv_labels):
             min_spin = self._spin(0, 31, 0)
             max_spin = self._spin(0, 31, 31)
             self.iv_min.append(min_spin)
             self.iv_max.append(max_spin)
-            iv_grid.addWidget(min_spin, 1, column)
-            iv_grid.addWidget(max_spin, 2, column)
-        layout.addLayout(iv_grid)
+            iv_grid.addWidget(QLabel(label), row, 0)
+            iv_grid.addWidget(min_spin, row, 1)
+            iv_grid.addWidget(max_spin, row, 2)
+        left = QWidget()
+        left.setLayout(iv_grid)
+        layout.addWidget(left, 0, 0, 7, 3)
+        layout.addWidget(QLabel("特性"), 0, 4)
+        layout.addWidget(self.ability_filter, 0, 5, 1, 2)
+        layout.addWidget(QLabel("性别"), 1, 4)
+        layout.addWidget(self.gender_filter, 1, 5, 1, 2)
+        layout.addWidget(QLabel("Height"), 2, 4)
+        layout.addWidget(self.height_min, 2, 5)
+        layout.addWidget(self.height_max, 2, 6)
+        layout.addWidget(QLabel("性格"), 3, 4)
+        layout.addWidget(self.nature_combo, 3, 5, 1, 2)
+        layout.addWidget(QLabel("异色"), 4, 4)
+        layout.addWidget(self.shiny_filter, 4, 5, 1, 2)
+        layout.addWidget(QLabel("Weight"), 5, 4)
+        layout.addWidget(self.weight_min, 5, 5)
+        layout.addWidget(self.weight_max, 5, 6)
+        layout.addWidget(self.skip_filter, 6, 4, 1, 3)
+        layout.setColumnStretch(3, 1)
         return group
 
     def _build_right_side(self) -> QWidget:
@@ -727,7 +941,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(toolbar)
 
         self.table = QTableWidget(0, len(RESULT_HEADERS))
-        self.table.setHorizontalHeaderLabels(RESULT_HEADERS)
+        self.table.setHorizontalHeaderLabels(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -743,7 +957,7 @@ class MainWindow(QMainWindow):
             QWidget {
                 background: #101418;
                 color: #E7ECE9;
-                font-family: "Segoe UI";
+                font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
                 font-size: 12px;
             }
             QFrame#Header {
@@ -865,6 +1079,57 @@ class MainWindow(QMainWindow):
     def _text(self, key: str) -> str:
         return TEXT[self.lang].get(key, TEXT["en"].get(key, key))
 
+    def _game_label(self, version: GameVersion) -> str:
+        labels = GAME_LABELS_ZH if self.lang == "zh" else GAME_LABELS_EN
+        return labels.get(version, str(version))
+
+    def _set_profile_version(self, version: GameVersion) -> None:
+        self._profile_version = version
+        self.profile_game_value.setText(self._game_label(version))
+        self._refresh_encounters()
+
+    def open_profile_manager(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("存档信息管理" if self.lang == "zh" else "Profile Manager")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        name = QLineEdit(self.profile_name.text())
+        tid = self._spin(0, 65535, self.tid.value())
+        sid = self._spin(0, 65535, self.sid.value())
+        version = QComboBox()
+        for game_version in (GameVersion.BD, GameVersion.SP):
+            version.addItem(self._game_label(game_version), game_version.value)
+        version.setCurrentIndex(max(0, version.findData(self._profile_version.value)))
+        national_dex = QCheckBox("National Dex")
+        shiny_charm = QCheckBox("Shiny Charm")
+        oval_charm = QCheckBox("Oval Charm")
+        national_dex.setChecked(self.national_dex.isChecked())
+        shiny_charm.setChecked(self.shiny_charm.isChecked())
+        oval_charm.setChecked(self.oval_charm.isChecked())
+        form.addRow("存档信息" if self.lang == "zh" else "Profile", name)
+        form.addRow("TID", tid)
+        form.addRow("SID", sid)
+        form.addRow("游戏" if self.lang == "zh" else "Game", version)
+        form.addRow("", national_dex)
+        form.addRow("", shiny_charm)
+        form.addRow("", oval_charm)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.profile_name.setText(name.text() or "-")
+        self.tid.setValue(tid.value())
+        self.sid.setValue(sid.value())
+        self.national_dex.setChecked(national_dex.isChecked())
+        self.shiny_charm.setChecked(shiny_charm.isChecked())
+        self.oval_charm.setChecked(oval_charm.isChecked())
+        self._set_profile_version(GameVersion(version.currentData()))
+        self.statusBar().showMessage("存档信息已应用" if self.lang == "zh" else "Profile applied")
+
     def _change_language(self) -> None:
         self.lang = self.language_combo.currentData()
         self._apply_language()
@@ -877,9 +1142,12 @@ class MainWindow(QMainWindow):
         self.status_group.setTitle(self._text("status"))
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
-        self.static_group.setTitle(self._text("static"))
-        self.profile_group.setTitle(self._text("profile"))
-        self.filter_group.setTitle(self._text("filters"))
+        self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
+        self.static_group.setTitle("设置" if self.lang == "zh" else "Settings")
+        self.profile_group.setTitle("存档信息" if self.lang == "zh" else "Profile")
+        self.filter_group.setTitle("筛选项" if self.lang == "zh" else "Filters")
+        self.profile_manager_button.setText("存档信息管理" if self.lang == "zh" else "Profile Manager")
+        self.profile_game_value.setText(self._game_label(self._profile_version))
         self.preview_group.setTitle(self._text("preview"))
         self.config_label.setText(self._text("config"))
         self.browse_button.setText(self._text("browse"))
@@ -892,6 +1160,7 @@ class MainWindow(QMainWindow):
         self.generate_button.setText(self._text("generate"))
         self.copy_button.setText(self._text("copy"))
         self.export_button.setText(self._text("export"))
+        self.table.setHorizontalHeaderLabels(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)
         self.seed_badge.setText(self._text("seed_linked"))
         if not self._preview_timer.isActive():
             self.preview_label.clear()
@@ -1165,7 +1434,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Saved {path}")
 
     def _refresh_encounters(self) -> None:
-        version = self.version_combo.currentText() if hasattr(self, "version_combo") else GameVersion.BDSP.value
+        version = self._profile_version.value
         category = self.category_combo.currentData() if hasattr(self, "category_combo") else None
         try:
             self._records = get_static_encounters(category, version)
@@ -1175,7 +1444,29 @@ class MainWindow(QMainWindow):
         self.encounter_combo.clear()
         for record in self._records:
             suffix = " roamer" if record.template.roamer else ""
-            self.encounter_combo.addItem(f"{record.description} [{record.category.value}]{suffix}", record)
+            name = POKEMON_LABELS_ZH.get(record.description, record.description) if self.lang == "zh" else record.description
+            category_text = CATEGORY_LABELS_ZH.get(record.category.value, record.category.value) if self.lang == "zh" else record.category.value
+            roamer_text = " 游走" if self.lang == "zh" and record.template.roamer else suffix
+            self.encounter_combo.addItem(f"{name} [{category_text}]{roamer_text}", record)
+        self._update_encounter_details()
+
+    def _update_encounter_details(self) -> None:
+        if not hasattr(self, "encounter_combo"):
+            return
+        record = self.encounter_combo.currentData()
+        if record is None:
+            return
+        template = record.template
+        if hasattr(self, "level_display"):
+            self.level_display.setValue(template.level)
+        if hasattr(self, "iv_count_display"):
+            self.iv_count_display.setValue(template.iv_count)
+        if hasattr(self, "template_ability_display"):
+            ability_text = {0: "0", 1: "1", 2: "隐藏", 255: "0/1"}.get(template.ability, "任意")
+            index = self.template_ability_display.findText(ability_text)
+            self.template_ability_display.setCurrentIndex(max(0, index))
+        if hasattr(self, "template_shiny_display"):
+            self.template_shiny_display.setCurrentText("锁闪" if template.shiny == Shiny.NEVER else "随机")
 
     def _update_tsv(self) -> None:
         self.tsv.setText(str(self.tid.value() ^ self.sid.value()))
@@ -1184,24 +1475,61 @@ class MainWindow(QMainWindow):
         for row in range(self.nature_list.count()):
             self.nature_list.item(row).setCheckState(state)
 
+    def _ability_text(self, state: State8) -> str:
+        if self.lang != "zh" or self._active_record is None:
+            return str(state.ability)
+        abilities = self._active_record.species_info.abilities
+        slot = state.ability
+        ability_id = abilities[slot] if 0 <= slot < len(abilities) and abilities[slot] else abilities[0]
+        name = ABILITY_NAMES_ZH.get(ability_id)
+        return f"{slot}: {name}" if name else str(slot)
+
+    def _characteristic_text(self, state: State8) -> str:
+        max_iv = max(state.ivs)
+        start = state.pid % 6
+        stat_index = next(index for offset in range(6) for index in ((start + offset) % 6,) if state.ivs[index] == max_iv)
+        characteristic_index = max_iv % 5
+        if self.lang == "zh":
+            return CHARACTERISTICS_ZH[stat_index][characteristic_index]
+        return f"{IV_LABELS[stat_index]} {max_iv}"
+
     def _sync_seed64_from_state32(self) -> None:
         try:
             state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
         except ValueError as exc:
             self.seed_badge.setText(str(exc))
             return
-        for output, text in zip(self.seed64_outputs, state.format_seed64_pair()):
+        seed64_pair = state.format_seed64_pair()
+        for output, text in zip(self.seed64_outputs, seed64_pair):
             output.setText(text)
+        if hasattr(self, "bdsp_seed64_inputs"):
+            for output, text in zip(self.bdsp_seed64_inputs, seed64_pair):
+                output.setText(text)
         self.seed_badge.setText(self._text("seed_linked"))
 
     def _current_seed_pair(self) -> SeedPair64:
+        if hasattr(self, "bdsp_seed64_inputs"):
+            return SeedPair64.from_hex_words([box.text() for box in self.bdsp_seed64_inputs])
         state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
         return state.to_seed_pair64()
+
+    def _sync_state32_from_bdsp_seed64(self) -> None:
+        try:
+            seed_pair = SeedPair64.from_hex_words([box.text() for box in self.bdsp_seed64_inputs])
+        except ValueError as exc:
+            self.seed_badge.setText(str(exc))
+            return
+        state = seed_pair.to_state32()
+        for input_box, text in zip(self.seed32_inputs, state.format_words()):
+            input_box.setText(text)
+        for output, text in zip(self.seed64_outputs, seed_pair.format_seeds()):
+            output.setText(text)
+        self.seed_badge.setText(self._text("seed_linked"))
 
     def _current_profile(self) -> Profile8:
         return Profile8(
             name=self.profile_name.text() or "-",
-            version=self.version_combo.currentText(),
+            version=self._profile_version.value,
             tid=self.tid.value(),
             sid=self.sid.value(),
             national_dex=self.national_dex.isChecked(),
@@ -1218,10 +1546,11 @@ class MainWindow(QMainWindow):
             "square": 2,
             "none": 255,
         }[shiny_mode]
-        natures = tuple(
-            self.nature_list.item(row).checkState() == Qt.CheckState.Checked
-            for row in range(self.nature_list.count())
-        )
+        nature_index = self.nature_combo.currentData() if hasattr(self, "nature_combo") else -1
+        if nature_index == -1:
+            natures = (True,) * len(NATURES)
+        else:
+            natures = tuple(index == nature_index for index in range(len(NATURES)))
         return (
             StateFilter.from_iv_ranges(
                 [spin.value() for spin in self.iv_min],
@@ -1229,6 +1558,11 @@ class MainWindow(QMainWindow):
                 ability=self.ability_filter.currentData(),
                 gender=self.gender_filter.currentData(),
                 shiny=shiny_value,
+                height_min=self.height_min.value() if hasattr(self, "height_min") else 0,
+                height_max=self.height_max.value() if hasattr(self, "height_max") else 255,
+                weight_min=self.weight_min.value() if hasattr(self, "weight_min") else 0,
+                weight_max=self.weight_max.value() if hasattr(self, "weight_max") else 255,
+                skip=self.skip_filter.isChecked() if hasattr(self, "skip_filter") else False,
                 natures=natures,
             ),
             shiny_mode,
@@ -1376,7 +1710,8 @@ class MainWindow(QMainWindow):
                 raise ValueError("Select a static encounter")
             seed = self._current_seed_pair()
             state_filter, shiny_mode = self._current_filter()
-            template = replace(record.template, version=self.version_combo.currentText())
+            self._active_record = record
+            template = replace(record.template, version=self._profile_version.value)
             generator = StaticGenerator8(
                 self.initial_advances.value(),
                 self.max_advances.value(),
@@ -1402,29 +1737,36 @@ class MainWindow(QMainWindow):
             values = self._state_row(state)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column == 3 and value != "-":
+                if column == 3 and value not in ("-", "否"):
                     item.setForeground(Qt.GlobalColor.yellow)
                 self.table.setItem(row, column, item)
         self.result_count.setText(f"{len(states)} {self._text('results')}")
 
     def _state_row(self, state: State8) -> list[str]:
-        shiny = {0: "-", 1: "Star", 2: "Square"}.get(state.shiny, str(state.shiny))
-        gender = {0: "M", 1: "F", 2: "-"}.get(state.gender, str(state.gender))
+        if self.lang == "zh":
+            shiny = {0: "否", 1: "星闪", 2: "方闪"}.get(state.shiny, str(state.shiny))
+            gender = {0: "雄", 1: "雌", 2: "-"}.get(state.gender, str(state.gender))
+            nature = NATURES_ZH[state.nature]
+        else:
+            shiny = {0: "-", 1: "Star", 2: "Square"}.get(state.shiny, str(state.shiny))
+            gender = {0: "M", 1: "F", 2: "-"}.get(state.gender, str(state.gender))
+            nature = NATURES[state.nature]
         return [
             str(state.advances),
             f"{state.ec:08X}",
             f"{state.pid:08X}",
             shiny,
-            NATURES[state.nature],
-            str(state.ability),
+            nature,
+            self._ability_text(state),
             gender,
             *(str(iv) for iv in state.ivs),
             str(state.height),
             str(state.weight),
+            self._characteristic_text(state),
         ]
 
     def _table_text(self) -> str:
-        rows = ["\t".join(RESULT_HEADERS)]
+        rows = ["\t".join(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)]
         for state in self._states:
             rows.append("\t".join(self._state_row(state)))
         return "\n".join(rows)
@@ -1446,7 +1788,7 @@ class MainWindow(QMainWindow):
         output = Path(path)
         with output.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(RESULT_HEADERS)
+            writer.writerow(RESULT_HEADERS_ZH if self.lang == "zh" else RESULT_HEADERS)
             for state in self._states:
                 writer.writerow(self._state_row(state))
         self.statusBar().showMessage(f"Exported {output}")
