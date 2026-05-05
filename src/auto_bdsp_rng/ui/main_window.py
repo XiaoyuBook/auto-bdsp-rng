@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStatusBar,
@@ -578,7 +579,9 @@ class MainWindow(QMainWindow):
         self.preview_label = QLabel()
         self.preview_label.setObjectName("Preview")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumHeight(560)
+        self.preview_label.setMinimumSize(480, 360)
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.preview_label.setScaledContents(False)
         preview_layout.addWidget(self.preview_label)
         layout.addWidget(self.preview_group, 1)
         return panel
@@ -750,7 +753,9 @@ class MainWindow(QMainWindow):
         self.copy_button.setText(self._text("copy"))
         self.export_button.setText(self._text("export"))
         self.seed_badge.setText(self._text("seed_linked"))
-        self.preview_label.setText(self._text("no_preview"))
+        if not self._preview_timer.isActive():
+            self.preview_label.clear()
+            self.preview_label.setText(self._text("no_preview"))
         self.result_count.setText(f"{len(self._states)} {self._text('results')}")
         for label in self.findChildren(QLabel):
             key = label.property("i18n")
@@ -843,6 +848,7 @@ class MainWindow(QMainWindow):
         if self._preview_timer.isActive():
             self._preview_timer.stop()
             self.preview_button.setText(self._text("preview_button"))
+            self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
             return
         self._preview_timer.start()
@@ -860,7 +866,9 @@ class MainWindow(QMainWindow):
             self.preview_button.setText(self._text("preview_button"))
             self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
-        target = self.preview_label.size()
+        target = self.preview_label.contentsRect().size()
+        if target.width() <= 0 or target.height() <= 0:
+            return
         self.preview_label.setPixmap(pixmap.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         self.statusBar().showMessage(f"{self._text('preview_running')} | score {preview.match_score:.3f}")
 
