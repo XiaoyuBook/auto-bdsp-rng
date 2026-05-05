@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
+    subparsers.add_parser(
+        "gui",
+        help="Start the PySide6 desktop interface.",
+    )
+
     blink_config = subparsers.add_parser(
         "blink-config",
         help="Load and print a Project_Xs blink config without starting capture.",
@@ -285,6 +290,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "gui":
+        from auto_bdsp_rng.ui import run
+
+        return run()
     if args.command == "blink-config":
         try:
             config = load_project_xs_config(args.project_xs_config, blink_count=args.blink_count)
