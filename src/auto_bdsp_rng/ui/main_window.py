@@ -144,6 +144,7 @@ TEXT = {
         "select_roi": "Select ROI",
         "eye_selecting": "Right-drag on preview to capture the eye template",
         "eye_captured": "Eye template captured",
+        "eye_captured_select_roi": "Eye template captured. Redraw the ROI around the eye.",
         "roi_selected": "ROI selected",
         "roi_selecting": "Right-drag on preview to select ROI",
         "roi_too_small": "ROI is smaller than the eye template. Restored previous ROI.",
@@ -199,6 +200,7 @@ TEXT = {
         "select_roi": "选择 ROI",
         "eye_selecting": "请在预览图上按住右键框选眼睛模板",
         "eye_captured": "眼睛模板已应用",
+        "eye_captured_select_roi": "眼睛模板已应用，请重新框选眼睛 ROI",
         "roi_selected": "ROI 已选择",
         "roi_selecting": "请在预览图上按住右键拖拽选择 ROI",
         "roi_too_small": "ROI 小于眼睛模板，已恢复之前的 ROI。",
@@ -303,6 +305,7 @@ class MainWindow(QMainWindow):
         self._latest_preview_frame: object | None = None
         self._roi_before_selection: tuple[int, int, int, int] | None = None
         self._selection_mode: str | None = None
+        self._resume_preview_after_selection = False
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(100)
         self._preview_timer.timeout.connect(self._update_preview_frame)
@@ -969,21 +972,33 @@ class MainWindow(QMainWindow):
     def start_roi_selection(self) -> None:
         if self._is_capturing():
             return
-        self._selection_mode = "roi"
         self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
-        if self.preview_label.pixmap() is None:
-            self._update_preview_frame()
-        self.preview_label.set_selection_enabled(True)
+        self._begin_preview_selection("roi")
         self.statusBar().showMessage(self._text("roi_selecting"))
 
     def start_eye_capture_selection(self) -> None:
         if self._is_capturing():
             return
-        self._selection_mode = "eye"
-        if self.preview_label.pixmap() is None or self._latest_preview_frame is None:
-            self._update_preview_frame()
-        self.preview_label.set_selection_enabled(True)
+        self._begin_preview_selection("eye")
         self.statusBar().showMessage(self._text("eye_selecting"))
+
+    def _begin_preview_selection(self, mode: str) -> None:
+        self._selection_mode = mode
+        self._resume_preview_after_selection = self._preview_timer.isActive()
+        if self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+        if self._latest_preview_frame is None:
+            try:
+                frame = capture_preview_frame(self._config_from_form().capture)
+                frame_copy = getattr(frame, "copy", None)
+                self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
+            except Exception as exc:
+                self._selection_mode = None
+                self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+                return
+        self._display_frame(self._latest_preview_frame)
+        self.preview_label.set_selection_enabled(True)
 
     def _handle_preview_selection(self, roi: object) -> None:
         if self._selection_mode == "eye":
@@ -1007,12 +1022,22 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._set_roi_values(old_roi)
             self.preview_label.set_selection_enabled(False)
+            self._selection_mode = None
             self._show_error("ROI failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
         self._set_roi_values((x, y, width, height))
         self.preview_label.set_selection_enabled(False)
         self._roi_before_selection = None
         self._selection_mode = None
+        if self._resume_preview_after_selection:
+            self._preview_timer.start()
+            self.preview_button.setText(self._text("stop_preview"))
+        if self._latest_preview_frame is not None:
+            try:
+                annotated, _preview = render_eye_preview(self._config_from_form().capture, self._latest_preview_frame)
+                self._display_frame(annotated)
+            except Exception:
+                pass
         self.statusBar().showMessage(f"{self._text('roi_selected')}: {x}, {y}, {width}, {height}")
 
     def apply_selected_eye(self, roi: object) -> None:
@@ -1043,10 +1068,11 @@ class MainWindow(QMainWindow):
             self._show_error("Eye capture failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
         self._eye_image_path = output_path
-        self.preview_label.set_selection_enabled(False)
-        self._selection_mode = None
-        self._update_preview_frame()
-        self.statusBar().showMessage(f"{self._text('eye_captured')}: {output_path}")
+        self._selection_mode = "roi"
+        self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        self._display_frame(self._latest_preview_frame if self._latest_preview_frame is not None else frame)
+        self.preview_label.set_selection_enabled(True)
+        self.statusBar().showMessage(f"{self._text('eye_captured_select_roi')}: {output_path}")
 
     def _set_roi_values(self, roi: tuple[int, int, int, int]) -> None:
         self.x.setValue(roi[0])
