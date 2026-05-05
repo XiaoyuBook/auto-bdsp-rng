@@ -4,8 +4,8 @@ import csv
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction, QGuiApplication, QImage, QPixmap
+from PySide6.QtCore import QPoint, QRect, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -138,6 +138,10 @@ TEXT = {
         "stop_preview": "Stop Preview",
         "save_config": "Save Config",
         "raw_screenshot": "Raw Screenshot",
+        "select_roi": "Select ROI",
+        "roi_selected": "ROI selected",
+        "roi_selecting": "Right-drag on preview to select ROI",
+        "roi_too_small": "ROI is smaller than the eye template. Restored previous ROI.",
         "generate": "Generate",
         "copy": "Copy",
         "export": "Export CSV",
@@ -184,6 +188,10 @@ TEXT = {
         "stop_preview": "停止预览",
         "save_config": "保存配置",
         "raw_screenshot": "原始截图",
+        "select_roi": "选择 ROI",
+        "roi_selected": "ROI 已选择",
+        "roi_selecting": "请在预览图上按住右键拖拽选择 ROI",
+        "roi_too_small": "ROI 小于眼睛模板，已恢复之前的 ROI。",
         "generate": "生成",
         "copy": "复制",
         "export": "导出 CSV",
@@ -199,6 +207,78 @@ TEXT = {
 }
 
 
+class RoiPreviewLabel(QLabel):
+    roiSelected = Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._selection_enabled = False
+        self._drag_start: QPoint | None = None
+        self._drag_current: QPoint | None = None
+        self._image_width = 0
+        self._image_height = 0
+        self._pixmap_rect = QRect()
+
+    def set_image_geometry(self, image_width: int, image_height: int, pixmap_rect: QRect) -> None:
+        self._image_width = image_width
+        self._image_height = image_height
+        self._pixmap_rect = QRect(pixmap_rect)
+
+    def set_selection_enabled(self, enabled: bool) -> None:
+        self._selection_enabled = enabled
+        self._drag_start = None
+        self._drag_current = None
+        self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+        self.update()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if (
+            self._selection_enabled
+            and event.button() == Qt.MouseButton.RightButton
+            and self._pixmap_rect.contains(event.position().toPoint())
+        ):
+            self._drag_start = event.position().toPoint()
+            self._drag_current = self._drag_start
+            self.update()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._selection_enabled and self._drag_start is not None:
+            self._drag_current = event.position().toPoint()
+            self.update()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._selection_enabled and event.button() == Qt.MouseButton.RightButton and self._drag_start is not None:
+            self._drag_current = event.position().toPoint()
+            selected = QRect(self._drag_start, self._drag_current).normalized().intersected(self._pixmap_rect)
+            self._drag_start = None
+            self._drag_current = None
+            self.update()
+            if selected.isValid() and self._pixmap_rect.width() > 0 and self._pixmap_rect.height() > 0:
+                scale_x = self._image_width / self._pixmap_rect.width()
+                scale_y = self._image_height / self._pixmap_rect.height()
+                x = round((selected.left() - self._pixmap_rect.left()) * scale_x)
+                y = round((selected.top() - self._pixmap_rect.top()) * scale_y)
+                width = max(1, round(selected.width() * scale_x))
+                height = max(1, round(selected.height() * scale_y))
+                self.roiSelected.emit((x, y, width, height))
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().paintEvent(event)
+        if self._selection_enabled and self._drag_start is not None and self._drag_current is not None:
+            painter = QPainter(self)
+            pen = QPen(QColor("#D7C17C"))
+            pen.setWidth(2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawRect(QRect(self._drag_start, self._drag_current).normalized().intersected(self._pixmap_rect))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -207,6 +287,7 @@ class MainWindow(QMainWindow):
         self.lang = "zh"
         self._records: tuple[StaticEncounterRecord, ...] = ()
         self._states: list[State8] = []
+        self._roi_before_selection: tuple[int, int, int, int] | None = None
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(250)
         self._preview_timer.timeout.connect(self._update_preview_frame)
@@ -376,6 +457,8 @@ class MainWindow(QMainWindow):
         self.save_config_button.clicked.connect(self.save_current_config)
         self.raw_screenshot_button = QPushButton()
         self.raw_screenshot_button.clicked.connect(self.save_raw_screenshot)
+        self.select_roi_button = QPushButton()
+        self.select_roi_button.clicked.connect(self.start_roi_selection)
 
         self.monitor_window = QCheckBox()
         self.window_prefix = QLineEdit()
@@ -403,20 +486,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel(), 2, 0)
         layout.addWidget(self.window_prefix, 2, 1, 1, 3)
         self._add_form_row(layout, 3, "camera", self.camera)
-        self._add_form_row(layout, 4, "x", self.x)
-        self._add_form_row(layout, 5, "y", self.y)
-        self._add_form_row(layout, 6, "w", self.w)
-        self._add_form_row(layout, 7, "h", self.h)
-        self._add_form_row(layout, 8, "threshold", self.threshold)
-        self._add_form_row(layout, 9, "time_delay", self.white_delay)
-        self._add_form_row(layout, 10, "advance_delay", self.advance_delay)
-        self._add_form_row(layout, 11, "advance_delay_2", self.advance_delay_2)
-        self._add_form_row(layout, 12, "npcs", self.npc_count)
-        self._add_form_row(layout, 13, "timeline_npcs", self.timeline_npc)
-        self._add_form_row(layout, 14, "pokemon_npcs", self.pokemon_npc)
-        self._add_form_row(layout, 15, "display_percent", self.display_percent)
-        layout.addWidget(self.save_config_button, 16, 2)
-        layout.addWidget(self.raw_screenshot_button, 16, 3)
+        layout.addWidget(self.select_roi_button, 4, 1, 1, 3)
+        self._add_form_row(layout, 5, "threshold", self.threshold)
+        self._add_form_row(layout, 6, "time_delay", self.white_delay)
+        self._add_form_row(layout, 7, "advance_delay", self.advance_delay)
+        self._add_form_row(layout, 8, "advance_delay_2", self.advance_delay_2)
+        self._add_form_row(layout, 9, "npcs", self.npc_count)
+        self._add_form_row(layout, 10, "timeline_npcs", self.timeline_npc)
+        self._add_form_row(layout, 11, "pokemon_npcs", self.pokemon_npc)
+        self._add_form_row(layout, 12, "display_percent", self.display_percent)
+        layout.addWidget(self.save_config_button, 13, 2)
+        layout.addWidget(self.raw_screenshot_button, 13, 3)
         return group
 
     def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:
@@ -576,7 +656,8 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         self.preview_group = QGroupBox()
         preview_layout = QVBoxLayout(self.preview_group)
-        self.preview_label = QLabel()
+        self.preview_label = RoiPreviewLabel()
+        self.preview_label.roiSelected.connect(self.apply_selected_roi)
         self.preview_label.setObjectName("Preview")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(480, 360)
@@ -749,6 +830,7 @@ class MainWindow(QMainWindow):
         self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
         self.save_config_button.setText(self._text("save_config"))
         self.raw_screenshot_button.setText(self._text("raw_screenshot"))
+        self.select_roi_button.setText(self._text("select_roi"))
         self.generate_button.setText(self._text("generate"))
         self.copy_button.setText(self._text("copy"))
         self.export_button.setText(self._text("export"))
@@ -848,12 +930,49 @@ class MainWindow(QMainWindow):
         if self._preview_timer.isActive():
             self._preview_timer.stop()
             self.preview_button.setText(self._text("preview_button"))
+            self.preview_label.set_selection_enabled(False)
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
             return
         self._preview_timer.start()
         self.preview_button.setText(self._text("stop_preview"))
         self.statusBar().showMessage(self._text("preview_running"))
+
+    def start_roi_selection(self) -> None:
+        self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        if self.preview_label.pixmap() is None:
+            self._update_preview_frame()
+        self.preview_label.set_selection_enabled(True)
+        self.statusBar().showMessage(self._text("roi_selecting"))
+
+    def apply_selected_roi(self, roi: object) -> None:
+        old_roi = self._roi_before_selection or (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
+        try:
+            import cv2
+
+            config = self._config_from_form().capture
+            eye_image = cv2.imread(str(config.eye_image_path), cv2.IMREAD_GRAYSCALE)
+            if eye_image is None:
+                raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
+            eye_width, eye_height = eye_image.shape[::-1]
+            if width < eye_width or height < eye_height:
+                raise ValueError(self._text("roi_too_small"))
+        except Exception as exc:
+            self._set_roi_values(old_roi)
+            self.preview_label.set_selection_enabled(False)
+            self._show_error("ROI failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+        self._set_roi_values((x, y, width, height))
+        self.preview_label.set_selection_enabled(False)
+        self._roi_before_selection = None
+        self.statusBar().showMessage(f"{self._text('roi_selected')}: {x}, {y}, {width}, {height}")
+
+    def _set_roi_values(self, roi: tuple[int, int, int, int]) -> None:
+        self.x.setValue(roi[0])
+        self.y.setValue(roi[1])
+        self.w.setValue(roi[2])
+        self.h.setValue(roi[3])
 
     def _update_preview_frame(self) -> None:
         try:
@@ -869,7 +988,16 @@ class MainWindow(QMainWindow):
         target = self.preview_label.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
             return
-        self.preview_label.setPixmap(pixmap.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        scaled = pixmap.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        contents = self.preview_label.contentsRect()
+        left = contents.left() + (contents.width() - scaled.width()) // 2
+        top = contents.top() + (contents.height() - scaled.height()) // 2
+        self.preview_label.set_image_geometry(
+            pixmap.width(),
+            pixmap.height(),
+            QRect(left, top, scaled.width(), scaled.height()),
+        )
+        self.preview_label.setPixmap(scaled)
         self.statusBar().showMessage(f"{self._text('preview_running')} | score {preview.match_score:.3f}")
 
     def _frame_to_pixmap(self, frame: object) -> QPixmap:

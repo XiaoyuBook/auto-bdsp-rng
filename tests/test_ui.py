@@ -55,3 +55,20 @@ def test_main_window_can_switch_language(app):
 
     assert window.capture_group.title() == "Blink capture"
     assert window.capture_button.text() == "Capture Seed"
+
+
+def test_main_window_applies_selected_roi(app, monkeypatch):
+    window = MainWindow()
+
+    class FakeImage:
+        shape = (10, 12)
+
+    fake_cv2 = type("FakeCv2", (), {"IMREAD_GRAYSCALE": 0, "imread": staticmethod(lambda *_args: FakeImage())})
+    monkeypatch.setitem(__import__("sys").modules, "cv2", fake_cv2)
+
+    window.apply_selected_roi((20, 30, 40, 50))
+
+    assert window.x.value() == 20
+    assert window.y.value() == 30
+    assert window.w.value() == 40
+    assert window.h.value() == 50
