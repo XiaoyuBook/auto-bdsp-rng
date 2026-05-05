@@ -140,8 +140,10 @@ TEXT = {
         "preview_button": "Preview",
         "stop_preview": "Stop Preview",
         "save_config": "Save Config",
-        "raw_screenshot": "Raw Screenshot",
+        "raw_screenshot": "Capture Eye",
         "select_roi": "Select ROI",
+        "eye_selecting": "Right-drag on preview to capture the eye template",
+        "eye_captured": "Eye template captured",
         "roi_selected": "ROI selected",
         "roi_selecting": "Right-drag on preview to select ROI",
         "roi_too_small": "ROI is smaller than the eye template. Restored previous ROI.",
@@ -193,8 +195,10 @@ TEXT = {
         "preview_button": "预览",
         "stop_preview": "停止预览",
         "save_config": "保存配置",
-        "raw_screenshot": "原始截图",
+        "raw_screenshot": "截取眼睛",
         "select_roi": "选择 ROI",
+        "eye_selecting": "请在预览图上按住右键框选眼睛模板",
+        "eye_captured": "眼睛模板已应用",
         "roi_selected": "ROI 已选择",
         "roi_selecting": "请在预览图上按住右键拖拽选择 ROI",
         "roi_too_small": "ROI 小于眼睛模板，已恢复之前的 ROI。",
@@ -295,7 +299,10 @@ class MainWindow(QMainWindow):
         self.lang = "zh"
         self._records: tuple[StaticEncounterRecord, ...] = ()
         self._states: list[State8] = []
+        self._eye_image_path: Path | None = None
+        self._latest_preview_frame: object | None = None
         self._roi_before_selection: tuple[int, int, int, int] | None = None
+        self._selection_mode: str | None = None
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(100)
         self._preview_timer.timeout.connect(self._update_preview_frame)
@@ -474,7 +481,7 @@ class MainWindow(QMainWindow):
         self.save_config_button = QPushButton()
         self.save_config_button.clicked.connect(self.save_current_config)
         self.raw_screenshot_button = QPushButton()
-        self.raw_screenshot_button.clicked.connect(self.save_raw_screenshot)
+        self.raw_screenshot_button.clicked.connect(self.start_eye_capture_selection)
         self.select_roi_button = QPushButton()
         self.select_roi_button.clicked.connect(self.start_roi_selection)
 
@@ -675,7 +682,7 @@ class MainWindow(QMainWindow):
         self.preview_group = QGroupBox()
         preview_layout = QVBoxLayout(self.preview_group)
         self.preview_label = RoiPreviewLabel()
-        self.preview_label.roiSelected.connect(self.apply_selected_roi)
+        self.preview_label.roiSelected.connect(self._handle_preview_selection)
         self.preview_label.setObjectName("Preview")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(480, 360)
@@ -910,11 +917,12 @@ class MainWindow(QMainWindow):
         self.timeline_npc.setValue(config.timeline_npc)
         self.pokemon_npc.setValue(config.pokemon_npc)
         self.display_percent.setValue(config.display_percent)
+        self._eye_image_path = config.capture.eye_image_path
 
     def _config_from_form(self) -> ProjectXsTrackingConfig:
         loaded = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
         capture = BlinkCaptureConfig(
-            eye_image_path=loaded.capture.eye_image_path,
+            eye_image_path=self._eye_image_path or loaded.capture.eye_image_path,
             roi=(self.x.value(), self.y.value(), self.w.value(), self.h.value()),
             threshold=self.threshold.value(),
             blink_count=DEFAULT_BLINK_COUNT,
@@ -961,11 +969,27 @@ class MainWindow(QMainWindow):
     def start_roi_selection(self) -> None:
         if self._is_capturing():
             return
+        self._selection_mode = "roi"
         self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
         if self.preview_label.pixmap() is None:
             self._update_preview_frame()
         self.preview_label.set_selection_enabled(True)
         self.statusBar().showMessage(self._text("roi_selecting"))
+
+    def start_eye_capture_selection(self) -> None:
+        if self._is_capturing():
+            return
+        self._selection_mode = "eye"
+        if self.preview_label.pixmap() is None or self._latest_preview_frame is None:
+            self._update_preview_frame()
+        self.preview_label.set_selection_enabled(True)
+        self.statusBar().showMessage(self._text("eye_selecting"))
+
+    def _handle_preview_selection(self, roi: object) -> None:
+        if self._selection_mode == "eye":
+            self.apply_selected_eye(roi)
+        else:
+            self.apply_selected_roi(roi)
 
     def apply_selected_roi(self, roi: object) -> None:
         old_roi = self._roi_before_selection or (self.x.value(), self.y.value(), self.w.value(), self.h.value())
@@ -988,7 +1012,41 @@ class MainWindow(QMainWindow):
         self._set_roi_values((x, y, width, height))
         self.preview_label.set_selection_enabled(False)
         self._roi_before_selection = None
+        self._selection_mode = None
         self.statusBar().showMessage(f"{self._text('roi_selected')}: {x}, {y}, {width}, {height}")
+
+    def apply_selected_eye(self, roi: object) -> None:
+        x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
+        try:
+            import cv2
+
+            frame = self._latest_preview_frame
+            if frame is None:
+                frame = capture_preview_frame(self._config_from_form().capture)
+            frame_height, frame_width = frame.shape[:2]
+            left = max(0, min(x, frame_width - 1))
+            top = max(0, min(y, frame_height - 1))
+            right = max(left + 1, min(x + width, frame_width))
+            bottom = max(top + 1, min(y + height, frame_height))
+            eye = frame[top:bottom, left:right]
+            if len(eye.shape) == 3:
+                eye = cv2.cvtColor(eye, cv2.COLOR_BGR2GRAY)
+            output_dir = PROJECT_ROOT / "third_party" / "Project_Xs_CHN" / "images" / "custom"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            config_name = Path(self._selected_config_path()).stem or "current"
+            output_path = output_dir / f"{config_name}_eye.png"
+            if not cv2.imwrite(str(output_path), eye):
+                raise ProjectXsIntegrationError(f"Cannot save eye template: {output_path}")
+        except Exception as exc:
+            self.preview_label.set_selection_enabled(False)
+            self._selection_mode = None
+            self._show_error("Eye capture failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+        self._eye_image_path = output_path
+        self.preview_label.set_selection_enabled(False)
+        self._selection_mode = None
+        self._update_preview_frame()
+        self.statusBar().showMessage(f"{self._text('eye_captured')}: {output_path}")
 
     def _set_roi_values(self, roi: tuple[int, int, int, int]) -> None:
         self.x.setValue(roi[0])
@@ -1000,6 +1058,8 @@ class MainWindow(QMainWindow):
         try:
             config = self._config_from_form().capture
             frame = capture_preview_frame(config)
+            frame_copy = getattr(frame, "copy", None)
+            self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
             annotated, preview = render_eye_preview(config, frame)
         except Exception as exc:
             self._preview_timer.stop()
