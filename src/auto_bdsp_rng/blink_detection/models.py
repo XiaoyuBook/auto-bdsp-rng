@@ -4,53 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-
-U32_MAX = 0xFFFFFFFF
-
-
-@dataclass(frozen=True)
-class SeedState32:
-    """Four 32-bit Xorshift state words produced by Project_Xs."""
-
-    s0: int
-    s1: int
-    s2: int
-    s3: int
-
-    def __post_init__(self) -> None:
-        for name, value in zip(("s0", "s1", "s2", "s3"), self.words):
-            if not 0 <= value <= U32_MAX:
-                raise ValueError(f"{name} must be a 32-bit unsigned integer")
-
-    @classmethod
-    def from_words(cls, words: Sequence[int]) -> "SeedState32":
-        if len(words) != 4:
-            raise ValueError("Project_Xs seed state must contain exactly four words")
-        return cls(*(int(word) for word in words))
-
-    @classmethod
-    def from_hex_words(cls, words: Sequence[str]) -> "SeedState32":
-        if len(words) != 4:
-            raise ValueError("Seed[0-3] input must contain exactly four hex words")
-        try:
-            return cls.from_words([int(word, 16) for word in words])
-        except ValueError as exc:
-            raise ValueError("Seed[0-3] input must be hexadecimal") from exc
-
-    @property
-    def words(self) -> tuple[int, int, int, int]:
-        return (self.s0, self.s1, self.s2, self.s3)
-
-    @property
-    def seed64_pair(self) -> tuple[int, int]:
-        return ((self.s0 << 32) | self.s1, (self.s2 << 32) | self.s3)
-
-    def format_words(self) -> tuple[str, str, str, str]:
-        return tuple(f"{word:08X}" for word in self.words)
-
-    def format_seed64_pair(self) -> tuple[str, str]:
-        seed0, seed1 = self.seed64_pair
-        return (f"{seed0:016X}", f"{seed1:016X}")
+from auto_bdsp_rng.rng_core import SeedState32
 
 
 @dataclass(frozen=True)

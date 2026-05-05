@@ -169,6 +169,40 @@ def test_advance_seed_command_outputs_advanced_seed(monkeypatch, capsys):
     assert payload["seed_0_3"] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "00000007"]
 
 
+def test_convert_seed_command_outputs_seed32_and_seed64(capsys):
+    assert (
+        main(
+            [
+                "convert-seed",
+                "--seed",
+                "12345678",
+                "9abcdef0",
+                "11111111",
+                "22222222",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["seed_0_3"] == ["12345678", "9ABCDEF0", "11111111", "22222222"]
+    assert payload["seed_0_1"] == ["123456789ABCDEF0", "1111111122222222"]
+
+
+def test_convert_seed_command_accepts_seed64(capsys):
+    assert main(["convert-seed", "--seed64", "123456789abcdef0", "2"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["seed_0_3"] == ["12345678", "9ABCDEF0", "00000000", "00000002"]
+    assert payload["seed_0_1"] == ["123456789ABCDEF0", "0000000000000002"]
+
+
+def test_convert_seed_command_reports_invalid_hex(capsys):
+    assert main(["convert-seed", "--seed", "123456789", "0", "0", "0"]) == 2
+
+    assert "8 hexadecimal digits" in capsys.readouterr().err
+
+
 def test_tidsid_command_outputs_seed(monkeypatch, capsys):
     class FakeObservation:
         pass

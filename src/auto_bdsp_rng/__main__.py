@@ -7,7 +7,6 @@ import sys
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     ProjectXsIntegrationError,
-    SeedState32,
     advance_seed_state,
     capture_pokemon_blinks,
     capture_player_blinks,
@@ -21,6 +20,7 @@ from auto_bdsp_rng.blink_detection import (
     plan_timeline,
     track_advances,
 )
+from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -175,6 +175,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         required=True,
         help="Number of advances to apply.",
+    )
+
+    convert_seed = subparsers.add_parser(
+        "convert-seed",
+        help="Validate and convert between Seed[0-3] and Seed[0-1].",
+    )
+    seed_input = convert_seed.add_mutually_exclusive_group(required=True)
+    seed_input.add_argument(
+        "--seed",
+        nargs=4,
+        metavar=("S0", "S1", "S2", "S3"),
+        help="Seed[0-3] as four hexadecimal 32-bit words.",
+    )
+    seed_input.add_argument(
+        "--seed64",
+        nargs=2,
+        metavar=("SEED0", "SEED1"),
+        help="Seed[0-1] as two hexadecimal 64-bit seeds.",
     )
 
     tidsid = subparsers.add_parser(
@@ -339,6 +357,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "convert-seed":
+        try:
+            state = (
+                SeedState32.from_hex_words(args.seed)
+                if args.seed is not None
+                else SeedPair64.from_hex_words(args.seed64).to_state32()
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(state.as_dict(), ensure_ascii=False, indent=2))
         return 0
     if args.command == "tidsid":
         try:
