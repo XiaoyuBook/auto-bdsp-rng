@@ -51,6 +51,7 @@ from auto_bdsp_rng.blink_detection import (
     capture_player_blinks,
     capture_preview_frame,
     load_project_xs_config,
+    reidentify_seed_from_observation,
     recover_seed_from_observation,
     render_eye_preview,
     save_project_xs_config,
@@ -300,6 +301,7 @@ TEXT = {
         "pokemon_npcs": "Pokemon NPCs",
         "display_percent": "Display Percent",
         "capture_seed": "Capture Seed",
+        "reidentify_seed": "Reidentify",
         "stop_capture": "Stop Capture",
         "preview_button": "Preview",
         "stop_preview": "Stop Preview",
@@ -323,6 +325,7 @@ TEXT = {
         "capture_stopped": "Blink capture stopped",
         "seed_captured_npc_fallback": "Seed captured with NPCs reset to 0",
         "seed_captured": "Seed captured",
+        "seed_reidentified": "Seed reidentified",
         "config_saved": "Config saved",
         "preview_running": "Preview running",
         "results": "results",
@@ -357,6 +360,7 @@ TEXT = {
         "pokemon_npcs": "Pokemon NPC 数",
         "display_percent": "显示百分比",
         "capture_seed": "捕捉 Seed",
+        "reidentify_seed": "重新识别",
         "stop_capture": "停止捕捉",
         "preview_button": "预览",
         "stop_preview": "停止预览",
@@ -380,6 +384,7 @@ TEXT = {
         "capture_stopped": "捕捉已停止",
         "seed_captured_npc_fallback": "Seed 捕捉完成，已将 NPC 数重置为 0",
         "seed_captured": "Seed 捕捉完成",
+        "seed_reidentified": "Seed 重新识别完成",
         "config_saved": "配置已保存",
         "preview_running": "正在预览",
         "results": "条结果",
@@ -532,6 +537,7 @@ class MainWindow(QMainWindow):
         self._capture_result: object | None = None
         self._capture_error: Exception | None = None
         self._capture_frame: object | None = None
+        self._capture_mode = "seed"
         self._capture_progress = (0, DEFAULT_BLINK_COUNT)
         self._advance_timer = QTimer(self)
         self._advance_timer.setInterval(1018)
@@ -699,6 +705,8 @@ class MainWindow(QMainWindow):
         self.capture_button = QPushButton()
         self.capture_button.setObjectName("PrimaryButton")
         self.capture_button.clicked.connect(self.capture_seed)
+        self.reidentify_button = QPushButton()
+        self.reidentify_button.clicked.connect(self.reidentify_seed)
         self.preview_button = QPushButton()
         self.preview_button.clicked.connect(self.toggle_preview)
         self.save_config_button = QPushButton()
@@ -729,8 +737,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.config_combo, 0, 1, 1, 2)
         layout.addWidget(self.browse_button, 0, 3)
         layout.addWidget(self.monitor_window, 1, 1)
+        layout.addWidget(self.preview_button, 1, 0)
         layout.addWidget(self.capture_button, 1, 2)
-        layout.addWidget(self.preview_button, 1, 3)
+        layout.addWidget(self.reidentify_button, 1, 3)
         layout.addWidget(QLabel(), 2, 0)
         layout.addWidget(self.window_prefix, 2, 1, 1, 3)
         self._add_form_row(layout, 3, "camera", self.camera)
@@ -1265,6 +1274,7 @@ class MainWindow(QMainWindow):
         self.browse_button.setText(self._text("browse"))
         self.monitor_window.setText(self._text("monitor_window"))
         self.capture_button.setText(self._text("stop_capture") if self._is_capturing() else self._text("capture_seed"))
+        self.reidentify_button.setText(self._text("reidentify_seed"))
         self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
         self.save_config_button.setText(self._text("save_config"))
         self.raw_screenshot_button.setText(self._text("raw_screenshot"))
@@ -1657,6 +1667,7 @@ class MainWindow(QMainWindow):
             for output, text in zip(self.bdsp_seed64_inputs, seed64_pair):
                 output.setText(text)
         self.seed_badge.setText(self._text("seed_linked"))
+        self._auto_refresh_results()
 
     def _current_seed_pair(self) -> SeedPair64:
         if hasattr(self, "bdsp_seed64_inputs"):
@@ -1676,6 +1687,11 @@ class MainWindow(QMainWindow):
         for output, text in zip(self.seed64_outputs, seed_pair.format_seeds()):
             output.setText(text)
         self.seed_badge.setText(self._text("seed_linked"))
+        self._auto_refresh_results()
+
+    def _auto_refresh_results(self) -> None:
+        if getattr(self, "_states", None):
+            self.generate_results()
 
     def _current_profile(self) -> Profile8:
         return Profile8(
@@ -1769,11 +1785,13 @@ class MainWindow(QMainWindow):
         self._capture_cancel.clear()
         self._capture_result = None
         self._capture_error = None
+        self._capture_mode = "seed"
         self._capture_progress = (0, DEFAULT_BLINK_COUNT)
         with self._capture_lock:
             self._capture_frame = None
         self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
         self.capture_button.setText(self._text("stop_capture"))
+        self.reidentify_button.setEnabled(False)
         self.statusBar().showMessage(self._text("capturing"))
 
         last_display_frame_at = 0.0
@@ -1814,6 +1832,76 @@ class MainWindow(QMainWindow):
         self._capture_thread.start()
         self._capture_timer.start()
 
+    def reidentify_seed(self) -> None:
+        if self._is_capturing():
+            self._capture_cancel.set()
+            self.capture_button.setText(self._text("stop_capture"))
+            self.statusBar().showMessage(self._text("capture_stopping"))
+            return
+        try:
+            config = self._config_from_form()
+            current_state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
+        except Exception as exc:
+            self._show_error("Reidentify failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+
+        if self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+        self.preview_button.setEnabled(False)
+        self.reidentify_button.setEnabled(False)
+        self.preview_label.set_selection_enabled(False)
+        self._stop_advance_tracking()
+        self._capture_cancel.clear()
+        self._capture_result = None
+        self._capture_error = None
+        self._capture_mode = "reidentify"
+        self._capture_progress = (0, DEFAULT_BLINK_COUNT)
+        with self._capture_lock:
+            self._capture_frame = None
+        self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
+        self.capture_button.setText(self._text("stop_capture"))
+        self.statusBar().showMessage(self._text("capturing"))
+
+        last_display_frame_at = 0.0
+
+        def store_frame(frame: object) -> None:
+            nonlocal last_display_frame_at
+            now = time.perf_counter()
+            if now - last_display_frame_at < 0.1:
+                return
+            last_display_frame_at = now
+            with self._capture_lock:
+                copy = getattr(frame, "copy", None)
+                self._capture_frame = copy() if callable(copy) else frame
+
+        def store_progress(done: int, total: int) -> None:
+            with self._capture_lock:
+                self._capture_progress = (done, total)
+
+        def run_reidentify() -> None:
+            try:
+                observation = capture_player_blinks(
+                    config.capture,
+                    should_stop=self._capture_cancel.is_set,
+                    frame_callback=store_frame,
+                    progress_callback=store_progress,
+                    show_window=False,
+                )
+                self._capture_result = reidentify_seed_from_observation(
+                    current_state,
+                    observation,
+                    npc=config.npc,
+                    search_min=0,
+                    search_max=max(100_000, self.max_advances.value() if hasattr(self, "max_advances") else 100_000),
+                )
+            except Exception as exc:  # pragma: no cover - exercised through UI polling
+                self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
+
+        self._capture_thread = threading.Thread(target=run_reidentify, daemon=True)
+        self._capture_thread.start()
+        self._capture_timer.start()
+
     def _poll_capture_thread(self) -> None:
         with self._capture_lock:
             frame = self._capture_frame
@@ -1831,12 +1919,14 @@ class MainWindow(QMainWindow):
         if thread is not None:
             thread.join(timeout=0)
         self.preview_button.setEnabled(True)
+        self.reidentify_button.setEnabled(True)
         self.capture_button.setText(self._text("capture_seed"))
         if self._capture_error is not None:
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))
             else:
-                self._show_error("Blink capture failed", self._capture_error)
+                title = "Reidentify failed" if self._capture_mode == "reidentify" else "Blink capture failed"
+                self._show_error(title, self._capture_error)
             return
 
         result = self._capture_result
@@ -1848,11 +1938,15 @@ class MainWindow(QMainWindow):
         self.progress_value.setText(f"{DEFAULT_BLINK_COUNT}/{DEFAULT_BLINK_COUNT}")
         self._sync_seed64_from_state32()
         self._advance_step = self.npc_count.value() + 1
-        self._tracked_advances = 0
+        self._tracked_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
         self.advances_value.setText("0")
         self.timer_value.setText("0")
         self._advance_timer.start()
-        self.statusBar().showMessage(self._text("seed_captured"))
+        if self._capture_mode == "reidentify":
+            self.advances_value.setText(str(self._tracked_advances))
+            self.statusBar().showMessage(self._text("seed_reidentified"))
+        else:
+            self.statusBar().showMessage(self._text("seed_captured"))
 
     def generate_results(self) -> None:
         try:

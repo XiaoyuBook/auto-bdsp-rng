@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from auto_bdsp_rng.gen8_static import Lead, PersonalInfo8, Profile8, Shiny, StateFilter, StaticGenerator8, StaticTemplate8
+from auto_bdsp_rng.gen8_static import Lead, PersonalInfo8, Profile8, Shiny, State8, StateFilter, StaticGenerator8, StaticTemplate8
 
 
 SEED0 = 1311768467139281697
@@ -109,3 +109,30 @@ def test_filter_can_constrain_state_fields():
     assert states[0].advances == 1
     assert states[0].ability == 1
     assert states[0].nature == 2
+
+
+def test_shiny_filter_matches_pokefinder_star_square_semantics():
+    base = dict(
+        advances=0,
+        ec=0,
+        sidtid=0,
+        pid=0,
+        ivs=(0, 0, 0, 0, 0, 0),
+        ability=0,
+        gender=0,
+        level=5,
+        nature=0,
+        height=0,
+        weight=0,
+    )
+    non_shiny = State8(**base, shiny=0)
+    star = State8(**base, shiny=1)
+    square = State8(**base, shiny=2)
+
+    assert StateFilter(shiny=1).compare_state(star) is True
+    assert StateFilter(shiny=1).compare_state(square) is False
+    assert StateFilter(shiny=2).compare_state(square) is True
+    assert StateFilter(shiny=2).compare_state(star) is False
+    assert StateFilter(shiny=1 | 2).compare_state(star) is True
+    assert StateFilter(shiny=1 | 2).compare_state(square) is True
+    assert StateFilter(shiny=1 | 2).compare_state(non_shiny) is False

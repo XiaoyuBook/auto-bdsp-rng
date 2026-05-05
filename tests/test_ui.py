@@ -4,6 +4,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog
@@ -96,6 +97,45 @@ def test_main_window_syncs_seed64_display(app):
 
     assert window.seed64_outputs[0].text() == "123456789ABCDEF0"
     assert window.seed64_outputs[1].text() == "1111111122222222"
+
+
+def test_seed_update_auto_refreshes_existing_results(app):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    window.max_advances.setValue(2)
+    window.generate_results()
+    first_ec = window.table.item(0, 1).text()
+
+    window.bdsp_seed64_inputs[0].setText("0000000000000001")
+    window.bdsp_seed64_inputs[1].setText("0000000000000002")
+    window._sync_state32_from_bdsp_seed64()
+
+    assert window.table.rowCount() == 3
+    assert window.table.item(0, 1).text() != first_ec
+
+
+def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    window.max_advances.setValue(2)
+    window.generate_results()
+    observation = BlinkObservation.from_sequences([0, 1, 0], [0, 12, 24])
+    state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+
+    monkeypatch.setattr("auto_bdsp_rng.ui.main_window.capture_player_blinks", lambda *args, **kwargs: observation)
+    monkeypatch.setattr(
+        "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation",
+        lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=42),
+    )
+
+    window.reidentify_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
+    assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
+    assert window.advances_value.text() == "42"
+    assert window.result_count.text() == "3 条结果"
 
 
 def test_main_window_loads_project_xs_config_fields(app):
