@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -111,6 +112,9 @@ TEXT = {
         "profile": "Profile",
         "filters": "Filters",
         "preview": "Preview",
+        "project_xs": "Project_Xs",
+        "bdsp_search": "BDSP / PokeFinder",
+        "status": "Status",
         "config": "Config",
         "browse": "Browse",
         "monitor_window": "Monitor Window",
@@ -154,6 +158,9 @@ TEXT = {
         "profile": "玩家档案",
         "filters": "筛选",
         "preview": "捕获预览",
+        "project_xs": "Project_Xs",
+        "bdsp_search": "BDSP / PokeFinder",
+        "status": "状态",
         "config": "配置",
         "browse": "浏览",
         "monitor_window": "捕捉窗口",
@@ -249,15 +256,84 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.language_combo)
         root_layout.addWidget(header)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_controls())
-        splitter.addWidget(self._build_right_side())
-        splitter.setSizes([520, 960])
-        root_layout.addWidget(splitter, 1)
+        self.tabs = QTabWidget()
+        self.project_xs_tab = self._build_project_xs_tab()
+        self.bdsp_tab = self._build_bdsp_tab()
+        self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
+        self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
+        root_layout.addWidget(self.tabs, 1)
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
+
+    def _build_project_xs_tab(self) -> QWidget:
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 8, 0)
+        left_layout.setSpacing(10)
+        self.status_group = self._build_project_status_group()
+        self.capture_group = self._build_blink_group()
+        self.seed_group = self._build_seed_group()
+        left_layout.addWidget(self.status_group)
+        left_layout.addWidget(self.capture_group)
+        left_layout.addWidget(self.seed_group)
+        left_layout.addStretch(1)
+
+        splitter.addWidget(left)
+        splitter.addWidget(self._build_preview_panel())
+        splitter.setSizes([430, 1050])
+        return splitter
+
+    def _build_bdsp_tab(self) -> QWidget:
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        controls = QScrollArea()
+        controls.setWidgetResizable(True)
+        control_panel = QWidget()
+        control_layout = QVBoxLayout(control_panel)
+        control_layout.setContentsMargins(0, 0, 8, 0)
+        control_layout.setSpacing(10)
+        self.static_group = self._build_static_group()
+        self.profile_group = self._build_profile_group()
+        self.filter_group = self._build_filter_group()
+        control_layout.addWidget(self.static_group)
+        control_layout.addWidget(self.profile_group)
+        control_layout.addWidget(self.filter_group)
+        control_layout.addStretch(1)
+        controls.setWidget(control_panel)
+
+        splitter.addWidget(controls)
+        splitter.addWidget(self._build_results())
+        splitter.setSizes([430, 1050])
+        return splitter
+
+    def _build_project_status_group(self) -> QGroupBox:
+        group = QGroupBox()
+        layout = QGridLayout(group)
+        self.progress_label = QLabel("Progress:")
+        self.progress_value = QLabel("0/0")
+        self.advances_label = QLabel("Advances:")
+        self.advances_value = QLabel("0")
+        self.timer_label = QLabel("Timer:")
+        self.timer_value = QLabel("0")
+        self.x_to_advance_label = QLabel("X to advance:")
+        self.x_to_advance = self._spin(0, 10_000_000, 165)
+        self.advance_button = QPushButton("Advance")
+        self.advance_button.setEnabled(False)
+        layout.addWidget(self.progress_label, 0, 0)
+        layout.addWidget(self.progress_value, 0, 1)
+        layout.addWidget(self.advances_label, 1, 0)
+        layout.addWidget(self.advances_value, 1, 1)
+        layout.addWidget(self.timer_label, 2, 0)
+        layout.addWidget(self.timer_value, 2, 1)
+        layout.addWidget(self.x_to_advance_label, 3, 0)
+        layout.addWidget(self.x_to_advance, 3, 1)
+        layout.addWidget(self.advance_button, 4, 1)
+        return group
 
     def _build_controls(self) -> QWidget:
         scroll = QScrollArea()
@@ -488,15 +564,23 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(10)
+        layout.addWidget(self._build_preview_panel(), 1)
+        layout.addWidget(self._build_results(), 1)
+        return panel
+
+    def _build_preview_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 0, 0, 0)
+        layout.setSpacing(10)
         self.preview_group = QGroupBox()
         preview_layout = QVBoxLayout(self.preview_group)
         self.preview_label = QLabel()
         self.preview_label.setObjectName("Preview")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumHeight(300)
+        self.preview_label.setMinimumHeight(560)
         preview_layout.addWidget(self.preview_label)
         layout.addWidget(self.preview_group, 1)
-        layout.addWidget(self._build_results(), 1)
         return panel
 
     def _build_results(self) -> QWidget:
@@ -646,6 +730,9 @@ class MainWindow(QMainWindow):
     def _apply_language(self) -> None:
         self.title_label.setText(self._text("title"))
         self.language_label.setText(self._text("language"))
+        self.tabs.setTabText(0, self._text("project_xs"))
+        self.tabs.setTabText(1, self._text("bdsp_search"))
+        self.status_group.setTitle(self._text("status"))
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
         self.static_group.setTitle(self._text("static"))
@@ -873,6 +960,7 @@ class MainWindow(QMainWindow):
     def capture_seed(self) -> None:
         try:
             config = self._config_from_form()
+            self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
             self.statusBar().showMessage(self._text("capturing"))
             QApplication.processEvents()
             observation = capture_player_blinks(config.capture)
@@ -882,6 +970,7 @@ class MainWindow(QMainWindow):
             return
         for box, text in zip(self.seed32_inputs, result.state.format_words()):
             box.setText(text)
+        self.progress_value.setText(f"{DEFAULT_BLINK_COUNT}/{DEFAULT_BLINK_COUNT}")
         self._sync_seed64_from_state32()
         self.statusBar().showMessage(self._text("seed_captured"))
 

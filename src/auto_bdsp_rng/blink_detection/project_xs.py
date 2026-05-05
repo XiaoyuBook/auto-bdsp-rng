@@ -53,11 +53,33 @@ def _project_xs_import_path() -> Iterator[None]:
 
 def _load_module(name: str) -> ModuleType:
     if name in sys.modules:
-        return sys.modules[name]
+        module = sys.modules[name]
+        _patch_windowcapture_numpy()
+        return module
     if not PROJECT_XS_SRC.exists():
         raise ProjectXsIntegrationError(f"Project_Xs source directory not found: {PROJECT_XS_SRC}")
     with _project_xs_import_path():
-        return importlib.import_module(name)
+        module = importlib.import_module(name)
+    _patch_windowcapture_numpy()
+    return module
+
+
+def _patch_windowcapture_numpy() -> None:
+    windowcapture = sys.modules.get("windowcapture")
+    if windowcapture is None:
+        return
+    np_module = getattr(windowcapture, "np", None)
+    if np_module is None or getattr(np_module, "_auto_bdsp_rng_fromstring_patch", False):
+        return
+    original_fromstring = np_module.fromstring
+
+    def fromstring_compat(data: object, dtype: object | None = None, *args: object, **kwargs: object) -> object:
+        if isinstance(data, bytes | bytearray | memoryview):
+            return np_module.frombuffer(data, dtype=dtype)
+        return original_fromstring(data, dtype=dtype, *args, **kwargs)
+
+    np_module.fromstring = fromstring_compat
+    np_module._auto_bdsp_rng_fromstring_patch = True
 
 
 def _load_cv2() -> ModuleType:
@@ -205,7 +227,7 @@ def capture_player_blinks(config: BlinkCaptureConfig) -> BlinkObservation:
             tk_window=None,
         )
     except Exception as exc:  # Project_Xs raises broad UI/capture exceptions.
-        raise ProjectXsIntegrationError("Project_Xs blink tracking failed") from exc
+        raise ProjectXsIntegrationError(f"Project_Xs blink tracking failed: {exc}") from exc
 
     return BlinkObservation.from_sequences(blinks, intervals, offset_time)
 
@@ -232,7 +254,7 @@ def capture_pokemon_blinks(config: BlinkCaptureConfig) -> PokemonBlinkObservatio
             tk_window=None,
         )
     except Exception as exc:
-        raise ProjectXsIntegrationError("Project_Xs Pokemon blink tracking failed") from exc
+        raise ProjectXsIntegrationError(f"Project_Xs Pokemon blink tracking failed: {exc}") from exc
 
     return PokemonBlinkObservation.from_sequence(intervals)
 
@@ -254,7 +276,7 @@ def capture_preview_frame(config: BlinkCaptureConfig) -> Any:
     try:
         ok, frame = video.read()
     except Exception as exc:
-        raise ProjectXsIntegrationError("Project_Xs frame capture failed") from exc
+        raise ProjectXsIntegrationError(f"Project_Xs frame capture failed: {exc}") from exc
     finally:
         release = getattr(video, "release", None)
         if callable(release):
