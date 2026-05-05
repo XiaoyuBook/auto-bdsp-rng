@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -134,6 +136,7 @@ TEXT = {
         "pokemon_npcs": "Pokemon NPCs",
         "display_percent": "Display Percent",
         "capture_seed": "Capture Seed",
+        "stop_capture": "Stop Capture",
         "preview_button": "Preview",
         "stop_preview": "Stop Preview",
         "save_config": "Save Config",
@@ -149,6 +152,8 @@ TEXT = {
         "seed_linked": "Seed[0-1] linked",
         "no_preview": "Preview is stopped",
         "capturing": "Capturing 40 blinks...",
+        "capture_stopping": "Stopping blink capture...",
+        "capture_stopped": "Blink capture stopped",
         "seed_captured": "Seed captured",
         "config_saved": "Config saved",
         "preview_running": "Preview running",
@@ -184,6 +189,7 @@ TEXT = {
         "pokemon_npcs": "Pokemon NPC 数",
         "display_percent": "显示百分比",
         "capture_seed": "捕捉 Seed",
+        "stop_capture": "停止捕捉",
         "preview_button": "预览",
         "stop_preview": "停止预览",
         "save_config": "保存配置",
@@ -199,6 +205,8 @@ TEXT = {
         "seed_linked": "Seed[0-1] 已同步",
         "no_preview": "预览已停止",
         "capturing": "正在捕捉 40 次眨眼...",
+        "capture_stopping": "正在停止捕捉...",
+        "capture_stopped": "捕捉已停止",
         "seed_captured": "Seed 捕捉完成",
         "config_saved": "配置已保存",
         "preview_running": "正在预览",
@@ -289,8 +297,18 @@ class MainWindow(QMainWindow):
         self._states: list[State8] = []
         self._roi_before_selection: tuple[int, int, int, int] | None = None
         self._preview_timer = QTimer(self)
-        self._preview_timer.setInterval(250)
+        self._preview_timer.setInterval(100)
         self._preview_timer.timeout.connect(self._update_preview_frame)
+        self._capture_timer = QTimer(self)
+        self._capture_timer.setInterval(100)
+        self._capture_timer.timeout.connect(self._poll_capture_thread)
+        self._capture_cancel = threading.Event()
+        self._capture_lock = threading.Lock()
+        self._capture_thread: threading.Thread | None = None
+        self._capture_result: object | None = None
+        self._capture_error: Exception | None = None
+        self._capture_frame: object | None = None
+        self._capture_progress = (0, DEFAULT_BLINK_COUNT)
         self._build_actions()
         self._build_ui()
         self._apply_theme()
@@ -805,7 +823,7 @@ class MainWindow(QMainWindow):
         return spin
 
     def _text(self, key: str) -> str:
-        return TEXT[self.lang][key]
+        return TEXT[self.lang].get(key, TEXT["en"].get(key, key))
 
     def _change_language(self) -> None:
         self.lang = self.language_combo.currentData()
@@ -826,7 +844,7 @@ class MainWindow(QMainWindow):
         self.config_label.setText(self._text("config"))
         self.browse_button.setText(self._text("browse"))
         self.monitor_window.setText(self._text("monitor_window"))
-        self.capture_button.setText(self._text("capture_seed"))
+        self.capture_button.setText(self._text("stop_capture") if self._is_capturing() else self._text("capture_seed"))
         self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
         self.save_config_button.setText(self._text("save_config"))
         self.raw_screenshot_button.setText(self._text("raw_screenshot"))
@@ -927,6 +945,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(self._text("config_saved"))
 
     def toggle_preview(self) -> None:
+        if self._is_capturing():
+            return
         if self._preview_timer.isActive():
             self._preview_timer.stop()
             self.preview_button.setText(self._text("preview_button"))
@@ -939,6 +959,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(self._text("preview_running"))
 
     def start_roi_selection(self) -> None:
+        if self._is_capturing():
+            return
         self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
         if self.preview_label.pixmap() is None:
             self._update_preview_frame()
@@ -979,12 +1001,16 @@ class MainWindow(QMainWindow):
             config = self._config_from_form().capture
             frame = capture_preview_frame(config)
             annotated, preview = render_eye_preview(config, frame)
-            pixmap = self._frame_to_pixmap(annotated)
         except Exception as exc:
             self._preview_timer.stop()
             self.preview_button.setText(self._text("preview_button"))
             self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
+        self._display_frame(annotated)
+        self.statusBar().showMessage(f"{self._text('preview_running')} | score {preview.match_score:.3f}")
+
+    def _display_frame(self, frame: object) -> None:
+        pixmap = self._frame_to_pixmap(frame)
         target = self.preview_label.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
             return
@@ -998,7 +1024,6 @@ class MainWindow(QMainWindow):
             QRect(left, top, scaled.width(), scaled.height()),
         )
         self.preview_label.setPixmap(scaled)
-        self.statusBar().showMessage(f"{self._text('preview_running')} | score {preview.match_score:.3f}")
 
     def _frame_to_pixmap(self, frame: object) -> QPixmap:
         import cv2
@@ -1093,16 +1118,97 @@ class MainWindow(QMainWindow):
             shiny_mode,
         )
 
+    def _is_capturing(self) -> bool:
+        return self._capture_thread is not None and self._capture_thread.is_alive()
+
     def capture_seed(self) -> None:
+        if self._is_capturing():
+            self._capture_cancel.set()
+            self.capture_button.setText(self._text("stop_capture"))
+            self.statusBar().showMessage(self._text("capture_stopping"))
+            return
         try:
             config = self._config_from_form()
-            self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
-            self.statusBar().showMessage(self._text("capturing"))
-            QApplication.processEvents()
-            observation = capture_player_blinks(config.capture)
-            result = recover_seed_from_observation(observation, npc=config.npc)
         except ProjectXsIntegrationError as exc:
             self._show_error("Blink capture failed", exc)
+            return
+
+        if self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+        self.preview_button.setEnabled(False)
+        self.preview_label.set_selection_enabled(False)
+        self._capture_cancel.clear()
+        self._capture_result = None
+        self._capture_error = None
+        self._capture_progress = (0, DEFAULT_BLINK_COUNT)
+        with self._capture_lock:
+            self._capture_frame = None
+        self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
+        self.capture_button.setText(self._text("stop_capture"))
+        self.statusBar().showMessage(self._text("capturing"))
+
+        last_display_frame_at = 0.0
+
+        def store_frame(frame: object) -> None:
+            nonlocal last_display_frame_at
+            now = time.perf_counter()
+            if now - last_display_frame_at < 0.1:
+                return
+            last_display_frame_at = now
+            with self._capture_lock:
+                copy = getattr(frame, "copy", None)
+                self._capture_frame = copy() if callable(copy) else frame
+
+        def store_progress(done: int, total: int) -> None:
+            with self._capture_lock:
+                self._capture_progress = (done, total)
+
+        def run_capture() -> None:
+            try:
+                observation = capture_player_blinks(
+                    config.capture,
+                    should_stop=self._capture_cancel.is_set,
+                    frame_callback=store_frame,
+                    progress_callback=store_progress,
+                    show_window=False,
+                )
+                self._capture_result = recover_seed_from_observation(observation, npc=config.npc)
+            except Exception as exc:  # pragma: no cover - exercised through UI polling
+                self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
+
+        self._capture_thread = threading.Thread(target=run_capture, daemon=True)
+        self._capture_thread.start()
+        self._capture_timer.start()
+
+    def _poll_capture_thread(self) -> None:
+        with self._capture_lock:
+            frame = self._capture_frame
+            self._capture_frame = None
+            done, total = self._capture_progress
+        if frame is not None:
+            self._display_frame(frame)
+        self.progress_value.setText(f"{done}/{total}")
+        if self._is_capturing():
+            return
+
+        self._capture_timer.stop()
+        thread = self._capture_thread
+        self._capture_thread = None
+        if thread is not None:
+            thread.join(timeout=0)
+        self.preview_button.setEnabled(True)
+        self.capture_button.setText(self._text("capture_seed"))
+        if self._capture_error is not None:
+            if self._capture_cancel.is_set():
+                self.statusBar().showMessage(self._text("capture_stopped"))
+            else:
+                self._show_error("Blink capture failed", self._capture_error)
+            return
+
+        result = self._capture_result
+        if result is None:
+            self.statusBar().showMessage(self._text("capture_stopped"))
             return
         for box, text in zip(self.seed32_inputs, result.state.format_words()):
             box.setText(text)

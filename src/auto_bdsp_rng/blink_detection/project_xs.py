@@ -4,6 +4,7 @@ import heapq
 import importlib
 import json
 import sys
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
@@ -205,7 +206,14 @@ def save_project_xs_config(config: ProjectXsTrackingConfig, output_path: str | P
     return output
 
 
-def capture_player_blinks(config: BlinkCaptureConfig) -> BlinkObservation:
+def capture_player_blinks(
+    config: BlinkCaptureConfig,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+    frame_callback: Callable[[Any], None] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    show_window: bool = True,
+) -> BlinkObservation:
     """Capture player blink observations through Project_Xs tracking logic."""
 
     cv2 = _load_cv2()
@@ -225,9 +233,15 @@ def capture_player_blinks(config: BlinkCaptureConfig) -> BlinkObservation:
             crop=_project_xs_crop(config.crop),
             camera=config.camera,
             tk_window=None,
+            should_stop=should_stop,
+            frame_callback=frame_callback,
+            progress_callback=progress_callback,
+            show_window=show_window,
         )
     except Exception as exc:  # Project_Xs raises broad UI/capture exceptions.
         raise ProjectXsIntegrationError(f"Project_Xs blink tracking failed: {exc}") from exc
+    if should_stop is not None and should_stop():
+        raise ProjectXsIntegrationError("Blink capture stopped")
 
     return BlinkObservation.from_sequences(blinks, intervals, offset_time)
 
