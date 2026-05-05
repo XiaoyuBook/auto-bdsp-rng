@@ -44,12 +44,12 @@
 
 ## 阶段 3: RNG 核心
 
-- [ ] 实现 BDSP Xorshift。
-- [ ] 实现 XoroshiroBDSP。
-- [ ] 实现 RNGList 缓冲或等价推进逻辑。
-- [ ] 实现 advances 推进。
-- [ ] 实现指定范围随机数。
-- [ ] 实现和 PokeFinder 对照的 RNG 测试样例。
+- [x] 实现 BDSP Xorshift。
+- [x] 实现 XoroshiroBDSP。
+- [x] 实现 RNGList 缓冲或等价推进逻辑。
+- [x] 实现 advances 推进。
+- [x] 实现指定范围随机数。
+- [x] 实现和 PokeFinder 对照的 RNG 测试样例。
 
 ## 阶段 4: Gen 8 BDSP 定点生成器
 
