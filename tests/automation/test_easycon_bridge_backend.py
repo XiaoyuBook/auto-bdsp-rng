@@ -29,20 +29,21 @@ class FakeBridgeTransport:
         self.closed = True
 
 
-def test_bridge_backend_reuses_connection_for_multiple_script_runs():
+def test_bridge_backend_reuses_connection_until_explicit_disconnect():
     transport = FakeBridgeTransport()
     backend = BridgeEasyConBackend(transport=transport)
 
     backend.connect("COM7")
-    first = backend.run_script_text("A 100", name="first.ecs")
-    second = backend.run_script_text("B 100", name="second.ecs")
+    results = [
+        backend.run_script_text(f"PRINT {index}", name=f"script-{index}.ecs")
+        for index in range(1, 6)
+    ]
 
     assert backend.status() == EasyConStatus.BRIDGE_CONNECTED
-    assert first.status == EasyConStatus.COMPLETED
-    assert second.status == EasyConStatus.COMPLETED
-    assert first.port == "COM7"
-    assert second.stdout == "ran second.ecs"
-    assert [command for command, _payload in transport.commands] == ["connect", "run_script", "run_script"]
+    assert all(result.status == EasyConStatus.COMPLETED for result in results)
+    assert {result.port for result in results} == {"COM7"}
+    assert results[-1].stdout == "ran script-5.ecs"
+    assert [command for command, _payload in transport.commands] == ["connect", *["run_script"] * 5]
 
 
 def test_bridge_backend_requires_connect_before_running_script():

@@ -123,7 +123,8 @@ Contract:
 - Executes the script against the already-open serial connection.
 - Must not close or reopen the serial port.
 - After completion, bridge status returns to connected/idle.
-- A second and third `run_script` call must reuse the same connection.
+- Every later `run_script` call must reuse the same connection until `disconnect`.
+- There is no fixed run count limit in the protocol. Three consecutive scripts are only a minimum smoke test.
 
 ### stop_current_script
 
@@ -172,9 +173,13 @@ Contract:
 2. Send `connect(COMx)`.
 3. Send `run_script` with script A.
 4. Confirm bridge reports connected/idle after script A.
-5. Send `run_script` with script B.
-6. Confirm the serial port was not closed or reopened.
-7. Send `run_script` with script C.
-8. Confirm no reset was required between A/B/C.
-9. Send `press(A, 100)` and confirm it uses the same connection.
-10. Send `disconnect` and confirm the port is released.
+5. Send any number of additional `run_script` requests.
+6. Confirm the serial port is never closed or reopened between runs.
+7. Confirm no reset is required between runs.
+8. Send `press(A, 100)` and confirm it uses the same connection.
+9. Send `disconnect` and confirm the port is released.
+
+Minimum automated smoke test:
+
+1. Run script A, script B, and script C after one `connect`.
+2. Assert no `disconnect`, serial close, or reconnect occurs before the explicit final `disconnect`.
