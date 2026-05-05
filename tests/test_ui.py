@@ -40,6 +40,20 @@ def test_bdsp_max_advances_matches_pokefinder_limit(app):
     assert window.max_advances.value() == 100_000
 
 
+def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    window.show()
+    app.processEvents()
+    speed_min = window.iv_min[5]
+    show_stats = window.show_stats_check
+
+    assert window.national_dex.text() == "全国图鉴"
+    assert window.shiny_charm.text() == "闪耀护符"
+    assert window.oval_charm.text() == "圆形护符"
+    assert speed_min.geometry().bottom() < show_stats.geometry().top()
+
+
 def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
