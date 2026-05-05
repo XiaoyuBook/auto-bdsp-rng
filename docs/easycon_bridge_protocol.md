@@ -126,7 +126,7 @@ Contract:
 - Every later `run_script` call must reuse the same connection until `disconnect`.
 - There is no fixed run count limit in the protocol. Three consecutive scripts are only a minimum smoke test.
 
-### stop_current_script
+### stop
 
 Request payload: `{}`.
 
@@ -140,6 +140,8 @@ Contract:
 
 - Stops the current script.
 - Keeps the serial connection open.
+
+`stop_current_script` is accepted as a backward-compatible alias.
 
 ### press
 

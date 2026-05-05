@@ -86,11 +86,20 @@ public sealed class JsonLineBridgeServer
                 _session.Disconnect();
                 return new { status = "disconnected" };
             case "status":
-                return new
+                var statusPayload = new Dictionary<string, object?>
                 {
-                    status = _session.IsConnected ? (_isRunning ? "running" : "connected") : "disconnected",
-                    port = _session.ConnectedPort,
+                    ["status"] = _session.IsConnected ? (_isRunning ? "running" : "connected") : "disconnected",
+                    ["port"] = _session.ConnectedPort,
                 };
+                if (_session is IPersistentSessionDiagnostics diagnostics)
+                {
+                    statusPayload["connect_count"] = diagnostics.ConnectCount;
+                    statusPayload["disconnect_count"] = diagnostics.DisconnectCount;
+                    statusPayload["run_count"] = diagnostics.RunCount;
+                    statusPayload["action_count"] = diagnostics.ActionCount;
+                }
+                return statusPayload;
+            case "stop":
             case "stop_current_script":
                 StopCurrentRun();
                 return new { status = _session.IsConnected ? "connected" : "disconnected" };

@@ -35,6 +35,8 @@ class FakeBridgeTransport:
             }
         if command == "run_script":
             return {"exit_code": 0, "stdout": f"ran {data['name']}", "stderr": ""}
+        if command in {"press", "stick", "stop"}:
+            return {"status": "connected"}
         return {}
 
     def close(self) -> None:
@@ -99,3 +101,22 @@ def test_bridge_backend_status_maps_bridge_response():
     backend.connect("COM7")
 
     assert backend.status() == EasyConStatus.BRIDGE_CONNECTED
+
+
+def test_bridge_backend_press_stick_and_stop_use_bridge_session():
+    transport = FakeBridgeTransport()
+    backend = BridgeEasyConBackend(transport=transport)
+
+    backend.connect("COM7")
+    backend.press("A", 100)
+    backend.stick("LS", "RESET", None)
+    backend.stop()
+
+    assert backend.status() == EasyConStatus.BRIDGE_CONNECTED
+    assert [command for command, _payload in transport.commands] == [
+        "connect",
+        "press",
+        "stick",
+        "stop",
+        "status",
+    ]

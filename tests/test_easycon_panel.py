@@ -50,6 +50,9 @@ class FakeBridgeBackend:
         self.log_callback = log_callback
         self.connected_port = None
         self.script_runs: list[tuple[str, str | None]] = []
+        self.presses: list[tuple[str, int]] = []
+        self.sticks: list[tuple[str, str | int, int | None]] = []
+        self.stopped = False
         self.disconnected = False
         FakeBridgeBackend.instances.append(self)
 
@@ -78,6 +81,15 @@ class FakeBridgeBackend:
     def status(self):
         return EasyConStatus.BRIDGE_CONNECTED if self.connected_port else EasyConStatus.BRIDGE_DISCONNECTED
 
+    def stop_current_script(self):
+        self.stopped = True
+
+    def press(self, button, duration_ms):
+        self.presses.append((button, duration_ms))
+
+    def stick(self, side, direction, duration_ms):
+        self.sticks.append((side, direction, duration_ms))
+
 
 def test_easycon_panel_lists_builtin_scripts(easycon_panel):
     assert easycon_panel.script_list.count() == 1
@@ -90,14 +102,18 @@ def test_easycon_panel_loads_script_and_blocks_required_parameter(easycon_panel)
     easycon_panel._load_script_item(item)
 
     assert easycon_panel.script_name_label.text() == "玫瑰公园.txt"
+    assert easycon_panel.template_mode_label.text() == "模板副本"
     assert "_闪帧 = 填入这里" in easycon_panel.editor.toPlainText()
     assert isinstance(easycon_panel.parameter_widgets["_闪帧"], QLineEdit)
     assert isinstance(easycon_panel.parameter_widgets["_等待时间"], QSpinBox)
+    assert easycon_panel.parameter_defaults["_等待时间"] == "8"
+    assert easycon_panel.editor.line_number_area_width() > 0
     assert easycon_panel.run_button.isEnabled() is False
 
 
 def test_easycon_panel_syncs_parameters_and_saves_generated_script(easycon_panel):
     easycon_panel._load_script_item(easycon_panel.script_list.item(0))
+    source = easycon_panel.current_script_path
     blink_input = easycon_panel.parameter_widgets["_闪帧"]
     assert isinstance(blink_input, QLineEdit)
 
@@ -108,6 +124,26 @@ def test_easycon_panel_syncs_parameters_and_saves_generated_script(easycon_panel
     assert generated.parent.name == ".generated"
     assert "_闪帧 = 123  # 目标差值" in easycon_panel.editor.toPlainText()
     assert generated.read_text(encoding="utf-8").startswith("_闪帧 = 123")
+    assert source is not None
+    assert "_闪帧 = 填入这里" in source.read_text(encoding="utf-8")
+
+
+def test_easycon_panel_restores_template_defaults_and_locates_invalid_line(easycon_panel):
+    easycon_panel._load_script_item(easycon_panel.script_list.item(0))
+    blink_input = easycon_panel.parameter_widgets["_闪帧"]
+    wait_input = easycon_panel.parameter_widgets["_等待时间"]
+    assert isinstance(blink_input, QLineEdit)
+    assert isinstance(wait_input, QSpinBox)
+
+    blink_input.setText("123")
+    wait_input.setValue(12)
+    easycon_panel.restore_template_defaults()
+
+    assert "_闪帧 = 填入这里" in easycon_panel.editor.toPlainText()
+    assert "_等待时间 = 8" in easycon_panel.editor.toPlainText()
+    assert easycon_panel._validate_parameters_for_run(focus=True) is False
+    assert easycon_panel.editor.textCursor().blockNumber() == 0
+    assert "第 1 行" in easycon_panel.log_view.toPlainText()
 
 
 def test_easycon_panel_bridge_mode_requires_connection(easycon_panel):
@@ -119,6 +155,49 @@ def test_easycon_panel_bridge_mode_requires_connection(easycon_panel):
     assert easycon_panel.backend_mode.currentData() == "bridge"
     assert easycon_panel.run_button.isEnabled() is False
     assert easycon_panel.backend_label.text() == "单片机: 未连接"
+
+
+def test_easycon_panel_cli_mode_is_not_reported_as_connected(easycon_panel):
+    easycon_panel.backend_mode.setCurrentIndex(1)
+
+    assert easycon_panel.backend_label.text() == "单片机: CLI 过渡后端可用（未长期连接）"
+    assert easycon_panel._connection_state_text() == "CLI 可用（未长期连接）"
+    assert "CLI 过渡" in easycon_panel.status_backend_label.text()
+
+
+def test_easycon_panel_stops_running_cli_process(monkeypatch, tmp_path, easycon_panel):
+    ezcon = tmp_path / "slow_ezcon.cmd"
+    ezcon.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "if \"%1\"==\"--version\" (echo fake-ezcon-1.0& exit /b 0)",
+                "if \"%1\"==\"run\" (ping -n 6 127.0.0.1 >nul& echo done& exit /b 0)",
+                "exit /b 0",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=ezcon, version="fake", source="test"),
+    )
+    easycon_panel.backend_mode.setCurrentIndex(1)
+    easycon_panel.editor.setPlainText("WAIT 5000\n")
+
+    easycon_panel.run_script()
+    assert easycon_panel.process is not None
+    assert easycon_panel.process.waitForStarted(1000)
+
+    easycon_panel.toggle_run()
+    assert easycon_panel.process.waitForFinished(2000)
+    app = QApplication.instance()
+    assert app is not None
+    app.processEvents()
+
+    assert "已中止" in easycon_panel.log_view.toPlainText()
 
 
 def test_easycon_panel_runs_script_text_through_bridge(monkeypatch, tmp_path, easycon_panel):
@@ -143,6 +222,8 @@ def test_easycon_panel_runs_script_text_through_bridge(monkeypatch, tmp_path, ea
     assert backend.script_runs[0][1] == "玫瑰公园.txt"
     assert "_闪帧 = 123" in backend.script_runs[0][0]
     assert "bridge stdout" in easycon_panel.log_view.toPlainText()
+    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.task_state_label.text() == "任务: 已完成"
 
 
 def test_easycon_panel_disconnect_is_explicit(monkeypatch, tmp_path, easycon_panel):
@@ -158,6 +239,23 @@ def test_easycon_panel_disconnect_is_explicit(monkeypatch, tmp_path, easycon_pan
     backend = FakeBridgeBackend.instances[-1]
     assert backend.disconnected is True
     assert easycon_panel.bridge_status == EasyConStatus.BRIDGE_DISCONNECTED
+
+
+def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_path, easycon_panel):
+    FakeBridgeBackend.instances.clear()
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    easycon_panel.bridge_path.setText(str(bridge))
+
+    easycon_panel.connect_bridge()
+    easycon_panel.send_controller_press("A")
+    easycon_panel.send_controller_stick("left", "RESET")
+
+    backend = FakeBridgeBackend.instances[-1]
+    assert backend.presses == [("A", 100)]
+    assert backend.sticks == [("left", "RESET", 100)]
+    assert easycon_panel.task_state_label.text() == "任务: 已完成"
 
 
 def test_easycon_panel_copies_and_saves_logs(monkeypatch, tmp_path, easycon_panel):

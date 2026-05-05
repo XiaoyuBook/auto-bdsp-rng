@@ -159,7 +159,7 @@ class BridgeEasyConBackend(EasyConBackend):
         )
 
     def stop_current_script(self) -> None:
-        self._request("stop_current_script")
+        self._request("stop")
         self._status = EasyConStatus.BRIDGE_CONNECTED if self._connected_port else EasyConStatus.BRIDGE_DISCONNECTED
 
     def stop(self) -> None:

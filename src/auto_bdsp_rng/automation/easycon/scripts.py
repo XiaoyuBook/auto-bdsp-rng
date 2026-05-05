@@ -11,6 +11,14 @@ PARAMETER_RE = re.compile(r"^(?P<indent>\s*)(?P<name>_[^=\s]+)\s*=\s*(?P<value>.
 REQUIRED_MARKER = "填入这里"
 
 
+def detect_newline_style(text: str) -> str:
+    crlf_count = text.count("\r\n")
+    lf_count = text.count("\n") - crlf_count
+    if crlf_count > lf_count:
+        return "\r\n"
+    return "\n"
+
+
 def scan_builtin_scripts(script_dir: Path) -> list[Path]:
     if not script_dir.exists():
         return []
@@ -69,6 +77,7 @@ def generate_script_file(
     source_name: str,
     generated_dir: Path,
     task_type: str | None = None,
+    newline: str | None = None,
 ) -> Path:
     generated_dir.mkdir(parents=True, exist_ok=True)
     stem = _safe_stem(Path(source_name).stem or "script")
@@ -77,8 +86,23 @@ def generate_script_file(
     if task_type:
         parts.append(_safe_stem(task_type))
     output = generated_dir / ("_".join(parts) + ".ecs")
-    output.write_text(script_text, encoding="utf-8", newline="")
+    output.write_text(script_text, encoding="utf-8", newline=newline or detect_newline_style(script_text))
     return output
+
+
+def prune_generated_scripts(generated_dir: Path, keep: int) -> list[Path]:
+    if keep < 0 or not generated_dir.exists():
+        return []
+    scripts = sorted(
+        (path for path in generated_dir.iterdir() if path.is_file() and path.suffix.lower() == ".ecs"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    removed: list[Path] = []
+    for path in scripts[keep:]:
+        path.unlink()
+        removed.append(path)
+    return removed
 
 
 def _is_integer(value: str) -> bool:

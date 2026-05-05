@@ -4,8 +4,8 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QTextCursor
+from PySide6.QtCore import QRect, QSize, QProcess, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -39,11 +39,16 @@ from auto_bdsp_rng.automation.easycon import (
     EasyConInstallation,
     EasyConStatus,
     apply_parameter_values,
+    classify_cli_failure,
+    cli_connection_notice,
+    detect_newline_style,
     discover_ezcon,
+    extract_compile_error_line,
     generate_script_file,
     list_ports,
     load_config,
     parse_script_parameters,
+    prune_generated_scripts,
     save_config,
     scan_builtin_scripts,
 )
@@ -54,14 +59,95 @@ SCRIPT_DIR = PROJECT_ROOT / "script"
 GENERATED_DIR = SCRIPT_DIR / ".generated"
 
 
+class LineNumberArea(QWidget):
+    def __init__(self, editor: EasyConScriptEditor) -> None:
+        super().__init__(editor)
+        self.editor = editor
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self.editor.line_number_area_paint_event(event)
+
+
 class EasyConScriptEditor(QPlainTextEdit):
     fileDropped = Signal(Path)
 
     def __init__(self) -> None:
         super().__init__()
+        self.line_number_area = LineNumberArea(self)
         self.setAcceptDrops(True)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.setPlaceholderText("选择或拖入 .txt / .ecs 脚本")
+        self.blockCountChanged.connect(self._update_line_number_area_width)
+        self.updateRequest.connect(self._update_line_number_area)
+        self.cursorPositionChanged.connect(self._highlight_current_line)
+        self._update_line_number_area_width()
+        self._highlight_current_line()
+
+    def line_number_area_width(self) -> int:
+        digits = len(str(max(1, self.blockCount())))
+        return 12 + self.fontMetrics().horizontalAdvance("9") * digits
+
+    def line_number_area_paint_event(self, event) -> None:  # type: ignore[no-untyped-def]
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), QColor("#F0F3F6"))
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + int(self.blockBoundingRect(block).height())
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+                painter.setPen(QColor("#6B7280"))
+                painter.drawText(
+                    0,
+                    top,
+                    self.line_number_area.width() - 4,
+                    self.fontMetrics().height(),
+                    Qt.AlignmentFlag.AlignRight,
+                    number,
+                )
+            block = block.next()
+            top = bottom
+            bottom = top + int(self.blockBoundingRect(block).height())
+            block_number += 1
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        rect = self.contentsRect()
+        self.line_number_area.setGeometry(QRect(rect.left(), rect.top(), self.line_number_area_width(), rect.height()))
+
+    def go_to_line(self, line_number: int) -> None:
+        block = self.document().findBlockByNumber(max(0, line_number - 1))
+        if not block.isValid():
+            return
+        cursor = QTextCursor(block)
+        self.setTextCursor(cursor)
+        self.centerCursor()
+        self.setFocus()
+
+    def _update_line_number_area_width(self) -> None:
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def _update_line_number_area(self, rect: QRect, dy: int) -> None:
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_line_number_area_width()
+
+    def _highlight_current_line(self) -> None:
+        selection = QTextEdit.ExtraSelection()
+        selection.format.setBackground(QColor("#FFF8DC"))
+        selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+        selection.cursor = self.textCursor()
+        selection.cursor.clearSelection()
+        self.setExtraSelections([selection])
 
     def dragEnterEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if _first_supported_drop(event.mimeData()) is not None:
@@ -85,14 +171,23 @@ class EasyConPanel(QWidget):
         self.installation = EasyConInstallation(path=None, error="未检测")
         self.bridge_backend: BridgeEasyConBackend | None = None
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
+        self.bridge_connecting = False
         self.current_script_path: Path | None = None
         self.current_script_name = "未命名脚本"
+        self.current_script_is_template = False
+        self.current_script_newline = "\n"
+        self.template_script_text = ""
         self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
+        self.parameter_defaults: dict[str, str] = {}
+        self.parameter_lines: dict[str, int] = {}
         self.process: QProcess | None = None
         self.current_run_started_at: datetime | None = None
         self.current_run_script_path: Path | None = None
         self.current_run_port: str | None = None
+        self.current_run_stdout: list[str] = []
+        self.current_run_stderr: list[str] = []
         self.stop_requested = False
+        self.task_state_text = "未检测"
         self.run_seconds = 0
         self.run_timer = QTimer(self)
         self.run_timer.setInterval(1000)
@@ -117,14 +212,18 @@ class EasyConPanel(QWidget):
         toolbar_layout.setSpacing(8)
         self.script_name_label = QLabel("未命名脚本")
         self.script_name_label.setObjectName("Badge")
+        self.template_mode_label = QLabel("普通脚本")
+        self.template_mode_label.setObjectName("Badge")
         self.open_button = QPushButton("打开脚本")
         self.open_button.clicked.connect(self.open_script_dialog)
         self.save_generated_button = QPushButton("保存临时脚本")
         self.save_generated_button.clicked.connect(self.save_generated_script)
+        self.save_original_button = QPushButton("保存到原文件")
+        self.save_original_button.clicked.connect(self.save_to_original_script)
         self.detect_button = QPushButton("检测 EasyCon")
         self.detect_button.clicked.connect(self.detect_easycon)
-        self.connect_button = QPushButton("连接伊机控")
-        self.connect_button.clicked.connect(self.toggle_bridge_connection)
+        self.toolbar_connect_button = QPushButton("连接伊机控")
+        self.toolbar_connect_button.clicked.connect(self.toggle_bridge_connection)
         self.run_button = QPushButton("运行脚本")
         self.run_button.setObjectName("PrimaryButton")
         self.run_button.clicked.connect(self.toggle_run)
@@ -132,10 +231,12 @@ class EasyConPanel(QWidget):
         self.elapsed_label.setObjectName("Badge")
         toolbar_layout.addWidget(QLabel("伊机控"))
         toolbar_layout.addWidget(self.script_name_label, 1)
+        toolbar_layout.addWidget(self.template_mode_label)
         toolbar_layout.addWidget(self.open_button)
         toolbar_layout.addWidget(self.save_generated_button)
+        toolbar_layout.addWidget(self.save_original_button)
         toolbar_layout.addWidget(self.detect_button)
-        toolbar_layout.addWidget(self.connect_button)
+        toolbar_layout.addWidget(self.toolbar_connect_button)
         toolbar_layout.addWidget(self.elapsed_label)
         toolbar_layout.addWidget(self.run_button)
         layout.addWidget(toolbar)
@@ -149,6 +250,20 @@ class EasyConPanel(QWidget):
 
         self.easycon_status = QStatusBar()
         self.easycon_status.setSizeGripEnabled(False)
+        self.status_easycon_label = QLabel("EasyCon: 未检测")
+        self.status_controller_label = QLabel("单片机: 未检测")
+        self.status_capture_label = QLabel("采集卡: 不使用")
+        self.status_labels_label = QLabel("标签: 0")
+        self.status_backend_label = QLabel("后端: 常驻连接")
+        for label in (
+            self.status_easycon_label,
+            self.status_controller_label,
+            self.status_capture_label,
+            self.status_labels_label,
+            self.status_backend_label,
+        ):
+            label.setObjectName("Badge")
+            self.easycon_status.addPermanentWidget(label)
         layout.addWidget(self.easycon_status)
 
     def _build_actions(self) -> None:
@@ -196,9 +311,18 @@ class EasyConPanel(QWidget):
         self.backend_mode.addItem("CLI 诊断", "cli")
         self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
         self.backend_label = QLabel("单片机: 未连接")
+        self.connection_state_label = QLabel("连接: 未检测")
+        self.connection_state_label.setObjectName("Badge")
+        self.task_state_label = QLabel("任务: 未检测")
+        self.task_state_label.setObjectName("Badge")
         self.port_combo = QComboBox()
+        self.port_combo.currentIndexChanged.connect(self._port_changed)
         self.refresh_ports_button = QPushButton("刷新串口")
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
+        self.connect_button = QPushButton("连接伊机控")
+        self.connect_button.clicked.connect(self.toggle_bridge_connection)
+        self.disconnect_button = QPushButton("断开连接")
+        self.disconnect_button.clicked.connect(self.disconnect_bridge)
         self.mock_check = QCheckBox("mock 模式")
         self.mock_check.setChecked(self.config.mock_enabled)
         self.mock_check.toggled.connect(self._save_config_from_ui)
@@ -212,11 +336,42 @@ class EasyConPanel(QWidget):
         config_layout.addWidget(QLabel("后端"), 3, 0)
         config_layout.addWidget(self.backend_mode, 3, 1, 1, 2)
         config_layout.addWidget(self.backend_label, 4, 0, 1, 3)
-        config_layout.addWidget(QLabel("串口"), 5, 0)
-        config_layout.addWidget(self.port_combo, 5, 1)
-        config_layout.addWidget(self.refresh_ports_button, 5, 2)
-        config_layout.addWidget(self.mock_check, 6, 1, 1, 2)
+        config_layout.addWidget(QLabel("状态"), 5, 0)
+        config_layout.addWidget(self.connection_state_label, 5, 1)
+        config_layout.addWidget(self.task_state_label, 5, 2)
+        config_layout.addWidget(QLabel("串口"), 6, 0)
+        config_layout.addWidget(self.port_combo, 6, 1)
+        config_layout.addWidget(self.refresh_ports_button, 6, 2)
+        config_layout.addWidget(self.connect_button, 7, 1)
+        config_layout.addWidget(self.disconnect_button, 7, 2)
+        config_layout.addWidget(self.mock_check, 8, 1, 1, 2)
         layout.addWidget(config_group)
+
+        controller_group = QGroupBox("手柄测试")
+        controller_layout = QGridLayout(controller_group)
+        self.controller_duration = QSpinBox()
+        self.controller_duration.setRange(20, 5000)
+        self.controller_duration.setSingleStep(20)
+        self.controller_duration.setValue(100)
+        self.controller_duration.setSuffix(" ms")
+        self.test_a_button = QPushButton("A")
+        self.test_b_button = QPushButton("B")
+        self.test_home_button = QPushButton("HOME")
+        self.test_ls_reset_button = QPushButton("LS RESET")
+        self.test_rs_reset_button = QPushButton("RS RESET")
+        self.test_a_button.clicked.connect(lambda: self.send_controller_press("A"))
+        self.test_b_button.clicked.connect(lambda: self.send_controller_press("B"))
+        self.test_home_button.clicked.connect(lambda: self.send_controller_press("HOME"))
+        self.test_ls_reset_button.clicked.connect(lambda: self.send_controller_stick("left", "RESET"))
+        self.test_rs_reset_button.clicked.connect(lambda: self.send_controller_stick("right", "RESET"))
+        controller_layout.addWidget(QLabel("时长"), 0, 0)
+        controller_layout.addWidget(self.controller_duration, 0, 1, 1, 2)
+        controller_layout.addWidget(self.test_a_button, 1, 0)
+        controller_layout.addWidget(self.test_b_button, 1, 1)
+        controller_layout.addWidget(self.test_home_button, 1, 2)
+        controller_layout.addWidget(self.test_ls_reset_button, 2, 0, 1, 2)
+        controller_layout.addWidget(self.test_rs_reset_button, 2, 2)
+        layout.addWidget(controller_group)
 
         param_group = QGroupBox("脚本参数")
         param_layout = QVBoxLayout(param_group)
@@ -228,8 +383,13 @@ class EasyConPanel(QWidget):
         self.parameter_scroll.setWidget(self.parameter_panel)
         self.rescan_button = QPushButton("重新扫描参数")
         self.rescan_button.clicked.connect(self._rescan_parameters)
+        self.restore_defaults_button = QPushButton("恢复模板默认值")
+        self.restore_defaults_button.clicked.connect(self.restore_template_defaults)
+        param_buttons = QHBoxLayout()
+        param_buttons.addWidget(self.rescan_button)
+        param_buttons.addWidget(self.restore_defaults_button)
         param_layout.addWidget(self.parameter_scroll)
-        param_layout.addWidget(self.rescan_button)
+        param_layout.addLayout(param_buttons)
         layout.addWidget(param_group, 1)
 
         log_group = QGroupBox("输出日志")
@@ -298,6 +458,7 @@ class EasyConPanel(QWidget):
         self._append_log("info", f"已刷新串口: {', '.join(ports) if ports else '未发现'}")
         self._save_config_from_ui()
         self._update_run_enabled()
+        self._update_status_labels()
 
     def choose_ezcon(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择 ezcon.exe", "", "EasyCon CLI (ezcon.exe);;All files (*.*)")
@@ -334,10 +495,15 @@ class EasyConPanel(QWidget):
             return
         self.current_script_path = path
         self.current_script_name = path.name
+        self.current_script_is_template = _is_builtin_template(path)
+        self.current_script_newline = detect_newline_style(text)
+        self.template_script_text = text
         self.script_name_label.setText(path.name)
+        self._update_template_mode_label()
         self.editor.setPlainText(text)
         self._rescan_parameters()
-        self._append_log("info", f"已加载脚本: {path.name}")
+        mode = "模板副本" if self.current_script_is_template else "外部脚本"
+        self._append_log("info", f"已加载{mode}: {path.name}")
 
     def _load_script_item(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
@@ -348,6 +514,8 @@ class EasyConPanel(QWidget):
         while self.parameter_form.rowCount():
             self.parameter_form.removeRow(0)
         self.parameter_widgets.clear()
+        self.parameter_defaults.clear()
+        self.parameter_lines.clear()
         for parameter in parse_script_parameters(self.editor.toPlainText()):
             if parameter.is_integer:
                 widget = QSpinBox()
@@ -363,10 +531,22 @@ class EasyConPanel(QWidget):
             if parameter.comment:
                 widget.setToolTip(parameter.comment)
             self.parameter_widgets[parameter.name] = widget
+            self.parameter_defaults[parameter.name] = parameter.default
+            self.parameter_lines[parameter.name] = parameter.line_index + 1
             label = f"{parameter.name}{' *' if parameter.required else ''}"
-            self.parameter_form.addRow(label, widget)
+            field = QWidget()
+            field_layout = QHBoxLayout(field)
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.addWidget(widget, 1)
+            default_label = QLabel(f"默认: {parameter.default}")
+            default_label.setObjectName("Hint")
+            if parameter.comment:
+                default_label.setToolTip(parameter.comment)
+            field_layout.addWidget(default_label)
+            self.parameter_form.addRow(label, field)
         if not self.parameter_widgets:
             self.parameter_form.addRow("参数", QLabel("未发现脚本参数"))
+        self.restore_defaults_button.setEnabled(bool(self.parameter_widgets))
         self._update_run_enabled()
 
     def _sync_parameters_to_editor(self) -> None:
@@ -389,12 +569,51 @@ class EasyConPanel(QWidget):
             return None
         self._sync_parameters_to_editor()
         try:
-            path = generate_script_file(self.editor.toPlainText(), self.current_script_name, GENERATED_DIR)
+            path = generate_script_file(
+                self.editor.toPlainText(),
+                self.current_script_name,
+                GENERATED_DIR,
+                newline=self.current_script_newline,
+            )
         except OSError as exc:
             self._append_log("error", f"保存临时脚本失败: {exc}")
             return None
         self._append_log("info", f"已保存临时脚本: {path.name}")
         return path
+
+    def save_to_original_script(self) -> Path | None:
+        if self.current_script_path is None:
+            self._append_log("warn", "当前脚本没有原文件路径")
+            return None
+        self._sync_parameters_to_editor()
+        try:
+            self.current_script_path.write_text(
+                self.editor.toPlainText(),
+                encoding="utf-8",
+                newline=self.current_script_newline,
+            )
+        except OSError as exc:
+            self._append_log("error", f"保存到原文件失败: {exc}")
+            return None
+        self.template_script_text = self.editor.toPlainText()
+        self.current_script_is_template = _is_builtin_template(self.current_script_path)
+        self._update_template_mode_label()
+        self._append_log("info", f"已保存到原文件: {self.current_script_path.name}")
+        return self.current_script_path
+
+    def restore_template_defaults(self) -> None:
+        source_text = self.template_script_text or self.editor.toPlainText()
+        defaults = {parameter.name: parameter.default for parameter in parse_script_parameters(source_text)}
+        if not defaults:
+            self._append_log("warn", "当前脚本没有可恢复的模板默认值")
+            return
+        cursor = self.editor.textCursor()
+        self.editor.blockSignals(True)
+        self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), defaults))
+        self.editor.setTextCursor(cursor)
+        self.editor.blockSignals(False)
+        self._rescan_parameters()
+        self._append_log("info", "已恢复模板默认值")
 
     def toggle_run(self) -> None:
         if self._is_bridge_mode():
@@ -412,6 +631,8 @@ class EasyConPanel(QWidget):
             self.run_script_via_bridge()
             return
         self.detect_easycon()
+        if not self._validate_parameters_for_run(focus=True):
+            return
         if not self._can_run():
             self._append_log("warn", "配置未完成，无法运行脚本")
             return
@@ -427,6 +648,8 @@ class EasyConPanel(QWidget):
         self.process.finished.connect(self._process_finished)
         self.process.errorOccurred.connect(self._process_error)
         self.stop_requested = False
+        self.current_run_stdout = []
+        self.current_run_stderr = []
         self.current_run_started_at = datetime.now()
         self.current_run_script_path = script_path
         self.current_run_port = port
@@ -434,21 +657,35 @@ class EasyConPanel(QWidget):
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
         self.run_button.setText("停止脚本")
+        self._append_log("warn", cli_connection_notice())
         self._append_log("info", f"开始运行脚本，端口: {port}")
+        self.task_state_text = "执行中"
+        self._update_status_labels()
         self.process.start()
 
     def run_script_via_bridge(self) -> None:
+        if self.bridge_status == EasyConStatus.RUNNING:
+            self.stop_bridge_script()
+            return
+        if not self._validate_parameters_for_run(focus=True):
+            return
         if not self._can_run():
             self._append_log("warn", "请先连接伊机控，再运行脚本")
             return
         self._sync_parameters_to_editor()
+        generated_script = self.save_generated_script()
+        if generated_script is None:
+            return
         script_text = self.editor.toPlainText()
         started_at = datetime.now()
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
-        self.run_button.setText("执行中")
-        self.run_button.setEnabled(False)
+        self.run_button.setText("停止脚本")
+        self.run_button.setEnabled(True)
+        self.bridge_status = EasyConStatus.RUNNING
+        self.task_state_text = "执行中"
+        self._update_bridge_controls()
         self._append_log("info", "通过常驻连接运行脚本")
         try:
             result = self._ensure_bridge_backend().run_script_text(script_text, self.current_script_name)
@@ -458,7 +695,7 @@ class EasyConPanel(QWidget):
                 "失败",
                 exit_code=1,
                 started_at=started_at,
-                script_path=Path(self.current_script_name),
+                script_path=generated_script,
                 port=self.port_combo.currentText(),
             )
             self.bridge_status = EasyConStatus.FAILED
@@ -475,9 +712,21 @@ class EasyConPanel(QWidget):
             exit_code=result.exit_code,
             started_at=result.started_at,
             ended_at=result.ended_at,
-            script_path=result.script_path,
+            script_path=generated_script,
             port=result.port,
         )
+        self._update_bridge_controls()
+
+    def stop_bridge_script(self) -> None:
+        try:
+            self._ensure_bridge_backend().stop_current_script()
+        except Exception as exc:
+            self._append_log("error", f"停止 Bridge 当前任务失败: {exc}")
+            return
+        self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+        self.task_state_text = "已中止"
+        self._append_log("warn", "已请求停止当前 Bridge 任务，连接保持")
+        self._finish_run("已中止", exit_code=130, port=self.port_combo.currentText())
         self._update_bridge_controls()
 
     def _read_stdout(self) -> None:
@@ -485,6 +734,7 @@ class EasyConPanel(QWidget):
             return
         text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
         if text:
+            self.current_run_stdout.append(text)
             self._append_log("stdout", text.rstrip())
 
     def _read_stderr(self) -> None:
@@ -492,6 +742,7 @@ class EasyConPanel(QWidget):
             return
         text = bytes(self.process.readAllStandardError()).decode("utf-8", errors="replace")
         if text:
+            self.current_run_stderr.append(text)
             self._append_log("stderr", text.rstrip())
 
     def _process_finished(self, exit_code: int, _status) -> None:  # type: ignore[no-untyped-def]
@@ -499,6 +750,8 @@ class EasyConPanel(QWidget):
             self.stop_requested = False
             self._finish_run("已中止", exit_code=130)
             return
+        if exit_code != 0:
+            self._report_cli_failure(exit_code)
         status = "已完成" if exit_code == 0 else f"失败，exit code: {exit_code}"
         self._finish_run(status, exit_code=exit_code)
 
@@ -522,12 +775,41 @@ class EasyConPanel(QWidget):
         self.run_timer.stop()
         self.run_button.setText("运行脚本")
         self.easycon_status.showMessage(status)
+        self.task_state_text = "已完成" if status.startswith("已完成") else status
         self._append_log("info", status)
         self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
+        if exit_code == 0 and status.startswith("已完成"):
+            self._prune_successful_generated_scripts()
         self.current_run_started_at = None
         self.current_run_script_path = None
         self.current_run_port = None
+        self.current_run_stdout = []
+        self.current_run_stderr = []
         self._update_run_enabled()
+
+    def _prune_successful_generated_scripts(self) -> None:
+        try:
+            removed = prune_generated_scripts(GENERATED_DIR, self.config.keep_generated)
+        except OSError as exc:
+            self._append_log("warn", f"清理临时脚本失败: {exc}")
+            return
+        if removed:
+            self._append_log("info", f"已按配置保留最近 {self.config.keep_generated} 个临时脚本，清理 {len(removed)} 个")
+
+    def _report_cli_failure(self, exit_code: int | None) -> None:
+        stdout = "".join(self.current_run_stdout)
+        stderr = "".join(self.current_run_stderr)
+        failure_type = classify_cli_failure(stdout, stderr, exit_code)
+        if failure_type == "script_compile_failed":
+            line = extract_compile_error_line(stdout, stderr)
+            if line is None:
+                self._append_log("error", "脚本编译失败，请查看 stderr/stdout。")
+                return
+            self._append_log("error", f"脚本编译失败，疑似行号: {line}")
+            self.editor.go_to_line(line)
+            return
+        if failure_type == "device_connection_failed":
+            self._append_log("error", "单片机连接失败，请检查串口、reset 和端口占用情况。")
 
     def _tick_run_timer(self) -> None:
         self.run_seconds += 1
@@ -545,22 +827,58 @@ class EasyConPanel(QWidget):
             return False
         if not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
             return False
-        for widget in self.parameter_widgets.values():
+        if self._first_invalid_required_parameter() is not None:
+            return False
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            return False
+        return True
+
+    def _first_invalid_required_parameter(self) -> str | None:
+        for name, widget in self.parameter_widgets.items():
             if (
                 isinstance(widget, QLineEdit)
                 and widget.placeholderText().startswith("填入这里")
                 and not widget.text().strip()
             ):
-                return False
-        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
-            return False
-        return True
+                return name
+        return None
+
+    def _validate_parameters_for_run(self, focus: bool = False) -> bool:
+        invalid = self._first_invalid_required_parameter()
+        if invalid is None:
+            return True
+        line = self.parameter_lines.get(invalid)
+        if line is not None:
+            self.editor.go_to_line(line)
+            self._append_log("error", f"参数 {invalid} 未填写，已定位到第 {line} 行")
+        else:
+            self._append_log("error", f"参数 {invalid} 未填写")
+        widget = self.parameter_widgets.get(invalid)
+        if focus and widget is not None:
+            widget.setFocus()
+        return False
 
     def _update_run_enabled(self) -> None:
         if hasattr(self, "run_button"):
             self.run_button.setEnabled(self._can_run())
+        if hasattr(self, "save_original_button"):
+            self.save_original_button.setEnabled(self.current_script_path is not None)
         if hasattr(self, "connect_button"):
             self._update_bridge_controls()
+        if hasattr(self, "connection_state_label"):
+            self._update_status_labels()
+
+    def _update_template_mode_label(self) -> None:
+        if not hasattr(self, "template_mode_label"):
+            return
+        if self.current_script_is_template:
+            self.template_mode_label.setText("模板副本")
+            self.template_mode_label.setToolTip("来自 script 目录，运行和 Ctrl+S 只保存临时副本，不覆盖原模板。")
+            self.save_original_button.setEnabled(True)
+            return
+        self.template_mode_label.setText("普通脚本")
+        self.template_mode_label.setToolTip("")
+        self.save_original_button.setEnabled(self.current_script_path is not None)
 
     def _save_config_from_ui(self) -> None:
         if not hasattr(self, "ezcon_path"):
@@ -646,14 +964,21 @@ class EasyConPanel(QWidget):
         if not port:
             self._append_log("warn", "请先选择串口")
             return
+        self.bridge_connecting = True
+        self.task_state_text = "正在连接"
+        self._update_bridge_controls()
         try:
             self._ensure_bridge_backend().connect(port)
         except Exception as exc:
+            self.bridge_connecting = False
             self.bridge_status = EasyConStatus.FAILED
+            self.task_state_text = "连接失败"
             self._append_log("error", f"连接伊机控失败: {exc}")
             self._update_bridge_controls()
             return
+        self.bridge_connecting = False
         self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+        self.task_state_text = "已完成"
         self._append_log("info", f"已连接伊机控: {port}")
         self.easycon_status.showMessage("已长期连接")
         self._update_bridge_controls()
@@ -670,6 +995,82 @@ class EasyConPanel(QWidget):
         self.easycon_status.showMessage("已断开")
         self._update_bridge_controls()
         self._update_run_enabled()
+
+    def send_controller_press(self, button: str) -> None:
+        duration = self.controller_duration.value()
+        if self._is_bridge_mode():
+            if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+                self._append_log("warn", "请先连接伊机控，再测试手柄按钮")
+                return
+            try:
+                self._ensure_bridge_backend().press(button, duration)
+            except Exception as exc:
+                self.bridge_status = EasyConStatus.FAILED
+                self.task_state_text = "连接失败"
+                self._append_log("error", f"发送手柄按钮失败: {exc}")
+                self._update_bridge_controls()
+                return
+            self.task_state_text = "已完成"
+            self._append_log("info", f"手柄测试: {button} {duration}ms")
+            self._update_status_labels()
+            return
+        self._run_inline_cli_script(f"test_{button.lower()}", f"{button} {duration}\n")
+
+    def send_controller_stick(self, side: str, direction: str) -> None:
+        duration = self.controller_duration.value()
+        label = f"{side.upper()} {direction}"
+        if self._is_bridge_mode():
+            if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+                self._append_log("warn", "请先连接伊机控，再测试摇杆")
+                return
+            try:
+                self._ensure_bridge_backend().stick(side, direction, duration)
+            except Exception as exc:
+                self.bridge_status = EasyConStatus.FAILED
+                self.task_state_text = "连接失败"
+                self._append_log("error", f"发送摇杆动作失败: {exc}")
+                self._update_bridge_controls()
+                return
+            self.task_state_text = "已完成"
+            self._append_log("info", f"手柄测试: {label} {duration}ms")
+            self._update_status_labels()
+            return
+        self._run_inline_cli_script(f"test_{side}_{direction.lower()}", f"{label}\n")
+
+    def _run_inline_cli_script(self, task_name: str, script_text: str) -> None:
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            self._append_log("warn", "已有 CLI 任务执行中，暂不能启动手柄测试")
+            return
+        self.detect_easycon()
+        if not self.installation.is_available:
+            self._append_log("warn", "CLI 不可用，无法执行手柄测试脚本")
+            return
+        if not self.mock_check.isChecked() and not self.port_combo.currentText():
+            self._append_log("warn", "请先选择串口；CLI 手柄测试会触发一次连接")
+            return
+        script_path = generate_script_file(script_text, f"{task_name}.ecs", GENERATED_DIR, task_type="controller")
+        port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
+        self.process = QProcess(self)
+        self.process.setProgram(str(self.installation.path))
+        self.process.setArguments(["run", str(script_path), "-p", port])
+        self.process.readyReadStandardOutput.connect(self._read_stdout)
+        self.process.readyReadStandardError.connect(self._read_stderr)
+        self.process.finished.connect(self._process_finished)
+        self.process.errorOccurred.connect(self._process_error)
+        self.stop_requested = False
+        self.current_run_stdout = []
+        self.current_run_stderr = []
+        self.current_run_started_at = datetime.now()
+        self.current_run_script_path = script_path
+        self.current_run_port = port
+        self.run_seconds = 0
+        self.elapsed_label.setText("00:00:00")
+        self.run_timer.start()
+        self.run_button.setText("停止脚本")
+        self.task_state_text = "执行中"
+        self._append_log("warn", cli_connection_notice())
+        self._update_status_labels()
+        self.process.start()
 
     def _ensure_bridge_backend(self) -> BridgeEasyConBackend:
         bridge_path = self._bridge_path_from_ui()
@@ -688,28 +1089,108 @@ class EasyConPanel(QWidget):
         self._update_bridge_controls()
         self._update_run_enabled()
         self._save_config_from_ui()
+        self._update_status_labels()
+
+    def _port_changed(self) -> None:
+        self._save_config_from_ui()
+        self._update_run_enabled()
+        self._update_status_labels()
 
     def _update_bridge_controls(self) -> None:
         if not hasattr(self, "connect_button"):
             return
         is_bridge = self._is_bridge_mode()
         self.connect_button.setEnabled(is_bridge)
+        self.toolbar_connect_button.setEnabled(is_bridge)
         self.bridge_path.setEnabled(is_bridge)
         self.browse_bridge_button.setEnabled(is_bridge)
         self.mock_check.setEnabled(not is_bridge)
         if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
             self.connect_button.setText("断开连接")
+            self.toolbar_connect_button.setText("断开连接")
+            self.disconnect_button.setEnabled(True)
             self.backend_label.setText("单片机: 已长期连接")
+        elif self.bridge_connecting:
+            self.connect_button.setText("正在连接")
+            self.toolbar_connect_button.setText("正在连接")
+            self.disconnect_button.setEnabled(False)
+            self.backend_label.setText("单片机: 正在连接")
+        elif self.bridge_status == EasyConStatus.RUNNING:
+            self.connect_button.setText("连接伊机控")
+            self.toolbar_connect_button.setText("连接伊机控")
+            self.disconnect_button.setEnabled(False)
+            self.backend_label.setText("单片机: 执行中")
         elif self.bridge_status == EasyConStatus.FAILED:
             self.connect_button.setText("连接伊机控")
+            self.toolbar_connect_button.setText("连接伊机控")
+            self.disconnect_button.setEnabled(False)
             self.backend_label.setText("单片机: 连接失败")
         elif is_bridge:
             self.connect_button.setText("连接伊机控")
+            self.toolbar_connect_button.setText("连接伊机控")
+            self.disconnect_button.setEnabled(False)
             status_text = "未选择串口" if not self.port_combo.currentText() else "未连接"
             self.backend_label.setText(f"单片机: {status_text}")
         else:
             self.connect_button.setText("连接伊机控")
-            self.backend_label.setText("单片机: CLI 诊断模式")
+            self.toolbar_connect_button.setText("连接伊机控")
+            self.disconnect_button.setEnabled(False)
+            self.backend_label.setText("单片机: CLI 过渡后端可用（未长期连接）")
+        self._update_controller_controls()
+        self._update_status_labels()
+
+    def _update_controller_controls(self) -> None:
+        enabled = self.bridge_status != EasyConStatus.RUNNING and (
+            (self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED)
+            or (not self._is_bridge_mode() and self.installation.is_available)
+        )
+        for button in (
+            self.test_a_button,
+            self.test_b_button,
+            self.test_home_button,
+            self.test_ls_reset_button,
+            self.test_rs_reset_button,
+        ):
+            button.setEnabled(enabled)
+
+    def _update_status_labels(self) -> None:
+        if not hasattr(self, "connection_state_label"):
+            return
+        connection_text = self._connection_state_text()
+        backend_text = "常驻连接" if self._is_bridge_mode() else "CLI 过渡"
+        easycon_text = (
+            f"EasyCon: {self.installation.version}"
+            if self.installation.is_available and self.installation.version
+            else "EasyCon: 未检测"
+        )
+        self.connection_state_label.setText(f"连接: {connection_text}")
+        self.task_state_label.setText(f"任务: {self.task_state_text}")
+        self.status_easycon_label.setText(easycon_text)
+        self.status_controller_label.setText(f"单片机: {connection_text}")
+        self.status_backend_label.setText(f"后端: {backend_text}")
+
+    def _connection_state_text(self) -> str:
+        if self._is_bridge_mode():
+            if self.bridge_connecting:
+                return "正在连接"
+            if self.bridge_status == EasyConStatus.RUNNING:
+                return "执行中"
+            if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
+                return "已长期连接"
+            if self.bridge_status == EasyConStatus.FAILED:
+                return "连接失败"
+            if not self._bridge_path_from_ui() and not self.installation.is_available:
+                return "未检测"
+            if not self.port_combo.currentText():
+                return "未选择串口"
+            return "未连接"
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            return "执行中"
+        if not self.installation.is_available:
+            return "未检测"
+        if not self.mock_check.isChecked() and not self.port_combo.currentText():
+            return "未选择串口"
+        return "CLI 可用（未长期连接）"
 
 
 def _first_supported_drop(mime_data) -> Path | None:  # type: ignore[no-untyped-def]
@@ -718,3 +1199,13 @@ def _first_supported_drop(mime_data) -> Path | None:  # type: ignore[no-untyped-
         if path.suffix.lower() in {".txt", ".ecs"}:
             return path
     return None
+
+
+def _is_builtin_template(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        script_root = SCRIPT_DIR.resolve()
+        generated_root = GENERATED_DIR.resolve()
+    except OSError:
+        return False
+    return resolved.is_relative_to(script_root) and not resolved.is_relative_to(generated_root)

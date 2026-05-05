@@ -14,8 +14,16 @@ This project references EasyCon source through the `EasyConSourceRoot` MSBuild p
 dotnet build .\bridge\EasyConBridge\EasyConBridge.csproj -p:EasyConSourceRoot=D:\path\to\EasyCon
 ```
 
-The current development machine has only the .NET runtime installed and no SDK, so this project cannot
-be compiled here yet. Install a .NET SDK compatible with EasyCon 1.6.3 (`net10.0`) before building.
+The current development machine has a .NET 10 SDK available through `dotnet`.
+
+## Mock Session Smoke Test
+
+`--mock-session` keeps the JSON Lines protocol and connection lifecycle intact while replacing the
+physical serial device with an in-process fake session. It is only for automated lifecycle smoke tests.
+
+```powershell
+.\bridge\EasyConBridge\bin\Debug\net10.0\EasyConBridge.exe --mock-session
+```
 
 ## Protocol
 
