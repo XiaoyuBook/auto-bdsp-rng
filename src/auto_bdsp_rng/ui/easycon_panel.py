@@ -32,8 +32,10 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.automation.easycon import (
+    BridgeEasyConBackend,
     EasyConConfig,
     EasyConInstallation,
+    EasyConStatus,
     apply_parameter_values,
     discover_ezcon,
     generate_script_file,
@@ -79,6 +81,8 @@ class EasyConPanel(QWidget):
         super().__init__(parent)
         self.config = load_config()
         self.installation = EasyConInstallation(path=None, error="未检测")
+        self.bridge_backend: BridgeEasyConBackend | None = None
+        self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self.current_script_path: Path | None = None
         self.current_script_name = "未命名脚本"
         self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
@@ -113,6 +117,8 @@ class EasyConPanel(QWidget):
         self.save_generated_button.clicked.connect(self.save_generated_script)
         self.detect_button = QPushButton("检测 EasyCon")
         self.detect_button.clicked.connect(self.detect_easycon)
+        self.connect_button = QPushButton("连接伊机控")
+        self.connect_button.clicked.connect(self.toggle_bridge_connection)
         self.run_button = QPushButton("运行脚本")
         self.run_button.setObjectName("PrimaryButton")
         self.run_button.clicked.connect(self.toggle_run)
@@ -123,6 +129,7 @@ class EasyConPanel(QWidget):
         toolbar_layout.addWidget(self.open_button)
         toolbar_layout.addWidget(self.save_generated_button)
         toolbar_layout.addWidget(self.detect_button)
+        toolbar_layout.addWidget(self.connect_button)
         toolbar_layout.addWidget(self.elapsed_label)
         toolbar_layout.addWidget(self.run_button)
         layout.addWidget(toolbar)
@@ -173,8 +180,16 @@ class EasyConPanel(QWidget):
         self.ezcon_path.setPlaceholderText("请选择 ezcon.exe 或设置 EASYCON_ROOT")
         self.browse_ezcon_button = QPushButton("选择")
         self.browse_ezcon_button.clicked.connect(self.choose_ezcon)
+        self.bridge_path = QLineEdit(str(self.config.bridge_path or ""))
+        self.bridge_path.setPlaceholderText("请选择 EasyConBridge.exe")
+        self.browse_bridge_button = QPushButton("选择")
+        self.browse_bridge_button.clicked.connect(self.choose_bridge)
         self.version_label = QLabel("EasyCon: 未检测")
-        self.backend_label = QLabel("后端: CLI")
+        self.backend_mode = QComboBox()
+        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
+        self.backend_mode.addItem("CLI 诊断", "cli")
+        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
+        self.backend_label = QLabel("单片机: 未连接")
         self.port_combo = QComboBox()
         self.refresh_ports_button = QPushButton("刷新串口")
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
@@ -184,12 +199,17 @@ class EasyConPanel(QWidget):
         config_layout.addWidget(QLabel("ezcon"), 0, 0)
         config_layout.addWidget(self.ezcon_path, 0, 1)
         config_layout.addWidget(self.browse_ezcon_button, 0, 2)
-        config_layout.addWidget(self.version_label, 1, 0, 1, 3)
-        config_layout.addWidget(self.backend_label, 2, 0, 1, 3)
-        config_layout.addWidget(QLabel("串口"), 3, 0)
-        config_layout.addWidget(self.port_combo, 3, 1)
-        config_layout.addWidget(self.refresh_ports_button, 3, 2)
-        config_layout.addWidget(self.mock_check, 4, 1, 1, 2)
+        config_layout.addWidget(QLabel("Bridge"), 1, 0)
+        config_layout.addWidget(self.bridge_path, 1, 1)
+        config_layout.addWidget(self.browse_bridge_button, 1, 2)
+        config_layout.addWidget(self.version_label, 2, 0, 1, 3)
+        config_layout.addWidget(QLabel("后端"), 3, 0)
+        config_layout.addWidget(self.backend_mode, 3, 1, 1, 2)
+        config_layout.addWidget(self.backend_label, 4, 0, 1, 3)
+        config_layout.addWidget(QLabel("串口"), 5, 0)
+        config_layout.addWidget(self.port_combo, 5, 1)
+        config_layout.addWidget(self.refresh_ports_button, 5, 2)
+        config_layout.addWidget(self.mock_check, 6, 1, 1, 2)
         layout.addWidget(config_group)
 
         param_group = QGroupBox("脚本参数")
@@ -273,6 +293,20 @@ class EasyConPanel(QWidget):
         self.detect_easycon()
         self.refresh_ports()
 
+    def choose_bridge(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 EasyConBridge.exe",
+            "",
+            "EasyCon Bridge (EasyConBridge.exe);;All files (*.*)",
+        )
+        if not path:
+            return
+        self.bridge_path.setText(path)
+        self.bridge_backend = None
+        self._save_config_from_ui()
+        self._update_bridge_controls()
+
     def open_script_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "打开伊机控脚本", str(SCRIPT_DIR), "EasyCon scripts (*.txt *.ecs)")
         if path:
@@ -349,6 +383,9 @@ class EasyConPanel(QWidget):
         return path
 
     def toggle_run(self) -> None:
+        if self._is_bridge_mode():
+            self.run_script()
+            return
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             self.process.kill()
             self._finish_run("已中止")
@@ -356,6 +393,9 @@ class EasyConPanel(QWidget):
         self.run_script()
 
     def run_script(self) -> None:
+        if self._is_bridge_mode():
+            self.run_script_via_bridge()
+            return
         self.detect_easycon()
         if not self._can_run():
             self._append_log("warn", "配置未完成，无法运行脚本")
@@ -377,6 +417,35 @@ class EasyConPanel(QWidget):
         self.run_button.setText("停止脚本")
         self._append_log("info", f"开始运行脚本，端口: {port}")
         self.process.start()
+
+    def run_script_via_bridge(self) -> None:
+        if not self._can_run():
+            self._append_log("warn", "请先连接伊机控，再运行脚本")
+            return
+        self._sync_parameters_to_editor()
+        script_text = self.editor.toPlainText()
+        self.run_seconds = 0
+        self.elapsed_label.setText("00:00:00")
+        self.run_timer.start()
+        self.run_button.setText("执行中")
+        self.run_button.setEnabled(False)
+        self._append_log("info", "通过常驻连接运行脚本")
+        try:
+            result = self._ensure_bridge_backend().run_script_text(script_text, self.current_script_name)
+        except Exception as exc:
+            self._append_log("error", f"Bridge 运行失败: {exc}")
+            self._finish_run("失败")
+            self.bridge_status = EasyConStatus.FAILED
+            self._update_bridge_controls()
+            return
+        if result.stdout:
+            self._append_log("stdout", result.stdout.rstrip())
+        if result.stderr:
+            self._append_log("stderr", result.stderr.rstrip())
+        status = "已完成，连接保持" if result.status == EasyConStatus.COMPLETED else "失败"
+        self.bridge_status = self._ensure_bridge_backend().status()
+        self._finish_run(status)
+        self._update_bridge_controls()
 
     def _read_stdout(self) -> None:
         if self.process is None:
@@ -414,11 +483,14 @@ class EasyConPanel(QWidget):
         self.elapsed_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
     def _can_run(self) -> bool:
-        if not self.installation.is_available:
+        if self._is_bridge_mode():
+            if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+                return False
+        elif not self.installation.is_available:
             return False
         if not self.editor.toPlainText().strip():
             return False
-        if not self.mock_check.isChecked() and not self.port_combo.currentText():
+        if not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
             return False
         for widget in self.parameter_widgets.values():
             if (
@@ -434,13 +506,17 @@ class EasyConPanel(QWidget):
     def _update_run_enabled(self) -> None:
         if hasattr(self, "run_button"):
             self.run_button.setEnabled(self._can_run())
+        if hasattr(self, "connect_button"):
+            self._update_bridge_controls()
 
     def _save_config_from_ui(self) -> None:
         if not hasattr(self, "ezcon_path"):
             return
         ezcon_text = self.ezcon_path.text().strip()
+        bridge_text = self.bridge_path.text().strip() if hasattr(self, "bridge_path") else ""
         self.config = EasyConConfig(
             ezcon_path=Path(ezcon_text) if ezcon_text else None,
+            bridge_path=Path(bridge_text) if bridge_text else None,
             last_port=self.port_combo.currentText() or self.config.last_port,
             mock_enabled=self.mock_check.isChecked(),
             recent_scripts=self.config.recent_scripts,
@@ -459,6 +535,82 @@ class EasyConPanel(QWidget):
         for line in message.splitlines() or [""]:
             self.log_view.append(f'<span style="color:{color}">[{level}] {line}</span>')
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
+
+    def toggle_bridge_connection(self) -> None:
+        if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
+            self.disconnect_bridge()
+            return
+        self.connect_bridge()
+
+    def connect_bridge(self) -> None:
+        if not self._bridge_path_from_ui():
+            self._append_log("warn", "请先选择 EasyConBridge.exe")
+            return
+        port = self.port_combo.currentText()
+        if not port:
+            self._append_log("warn", "请先选择串口")
+            return
+        try:
+            self._ensure_bridge_backend().connect(port)
+        except Exception as exc:
+            self.bridge_status = EasyConStatus.FAILED
+            self._append_log("error", f"连接伊机控失败: {exc}")
+            self._update_bridge_controls()
+            return
+        self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+        self._append_log("info", f"已连接伊机控: {port}")
+        self._update_bridge_controls()
+        self._update_run_enabled()
+
+    def disconnect_bridge(self) -> None:
+        try:
+            self._ensure_bridge_backend().disconnect()
+        except Exception as exc:
+            self._append_log("error", f"断开伊机控失败: {exc}")
+            return
+        self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
+        self._append_log("info", "已断开伊机控")
+        self._update_bridge_controls()
+        self._update_run_enabled()
+
+    def _ensure_bridge_backend(self) -> BridgeEasyConBackend:
+        bridge_path = self._bridge_path_from_ui()
+        if self.bridge_backend is None:
+            self.bridge_backend = BridgeEasyConBackend(bridge_path=bridge_path)
+        return self.bridge_backend
+
+    def _bridge_path_from_ui(self) -> Path | None:
+        bridge_text = self.bridge_path.text().strip()
+        return Path(bridge_text) if bridge_text else None
+
+    def _is_bridge_mode(self) -> bool:
+        return not hasattr(self, "backend_mode") or self.backend_mode.currentData() == "bridge"
+
+    def _backend_mode_changed(self) -> None:
+        self._update_bridge_controls()
+        self._update_run_enabled()
+        self._save_config_from_ui()
+
+    def _update_bridge_controls(self) -> None:
+        if not hasattr(self, "connect_button"):
+            return
+        is_bridge = self._is_bridge_mode()
+        self.connect_button.setEnabled(is_bridge)
+        self.bridge_path.setEnabled(is_bridge)
+        self.browse_bridge_button.setEnabled(is_bridge)
+        self.mock_check.setEnabled(not is_bridge)
+        if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
+            self.connect_button.setText("断开连接")
+            self.backend_label.setText("单片机: 已长期连接")
+        elif self.bridge_status == EasyConStatus.FAILED:
+            self.connect_button.setText("连接伊机控")
+            self.backend_label.setText("单片机: 连接失败")
+        elif is_bridge:
+            self.connect_button.setText("连接伊机控")
+            self.backend_label.setText("单片机: 未连接")
+        else:
+            self.connect_button.setText("连接伊机控")
+            self.backend_label.setText("单片机: CLI 诊断模式")
 
 
 def _first_supported_drop(mime_data) -> Path | None:  # type: ignore[no-untyped-def]
