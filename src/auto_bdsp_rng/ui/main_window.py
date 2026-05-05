@@ -379,7 +379,6 @@ class MainWindow(QMainWindow):
         self.bdsp_tab = self._build_bdsp_tab()
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
-        self.tabs.setCurrentWidget(self.bdsp_tab)
         root_layout.addWidget(self.tabs, 1)
 
         self.setCentralWidget(root)
@@ -760,6 +759,28 @@ class MainWindow(QMainWindow):
             QLabel#Badge, QLabel#ResultCount {
                 color: #91E0C3;
                 font-weight: 600;
+            }
+            QTabWidget::pane {
+                border: 1px solid #2D3B3F;
+                border-radius: 4px;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background: #182027;
+                border: 1px solid #2D3B3F;
+                color: #AEB9B8;
+                min-width: 150px;
+                padding: 8px 18px;
+                font-weight: 700;
+            }
+            QTabBar::tab:selected {
+                background: #D7C17C;
+                color: #101418;
+                border-color: #E6D79B;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #223038;
+                color: #F4F1E8;
             }
             QLabel#Preview {
                 background: #070A0D;

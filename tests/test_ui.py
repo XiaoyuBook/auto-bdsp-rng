@@ -18,8 +18,10 @@ def app(monkeypatch):
 def test_main_window_generates_static_results(app):
     window = MainWindow()
 
-    assert window.tabs.tabText(window.tabs.currentIndex()) == "BDSP / PokeFinder"
+    assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == ["Project_Xs", "BDSP / PokeFinder"]
+    assert window.tabs.tabText(window.tabs.currentIndex()) == "Project_Xs"
 
+    window.tabs.setCurrentWidget(window.bdsp_tab)
     window.max_advances.setValue(2)
     window.generate_results()
 
