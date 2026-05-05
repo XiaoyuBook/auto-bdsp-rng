@@ -23,7 +23,7 @@
 - [x] 接入 Monitor Blinks。
 - [x] 接入 Reidentify。
 - [x] 接入 TID/SID。
-- [ ] 接入 Timeline。
+- [x] 接入 Timeline。
 - [x] 接入 Advances 追踪。
 - [x] 接入手动增加 Advances 功能。
 - [x] 接入配置保存和读取。

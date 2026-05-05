@@ -250,3 +250,37 @@ def test_monitor_blinks_command_outputs_events(monkeypatch, capsys):
     assert payload["start_advances"] == 0
     assert payload["events"][0]["advance"] == 1
     assert payload["events"][0]["is_blink"] is True
+
+
+def test_timeline_command_outputs_events(monkeypatch, capsys):
+    class FakeEvent:
+        def as_dict(self):
+            return {
+                "advance": 1,
+                "event_type": "blink",
+                "scheduled_time": 1.017,
+                "rand": "12345671",
+                "blink_value": "1",
+            }
+
+    monkeypatch.setattr(cli, "plan_timeline", lambda *_args, **_kwargs: (FakeEvent(),))
+
+    assert (
+        main(
+            [
+                "timeline",
+                "--seed",
+                "12345678",
+                "9ABCDEF0",
+                "11111111",
+                "22222222",
+                "--events",
+                "1",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["events"][0]["event_type"] == "blink"
+    assert payload["events"][0]["blink_value"] == "1"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import importlib
 import json
 import sys
@@ -21,6 +22,7 @@ from auto_bdsp_rng.blink_detection.models import (
     ProjectXsTidSidResult,
     ProjectXsTrackingConfig,
     SeedState32,
+    TimelineEvent,
 )
 
 
@@ -462,5 +464,64 @@ def track_advances(
             events.append(AdvanceEvent(advance=current_advance, rand=int(rand)))
     except Exception as exc:
         raise ProjectXsIntegrationError("Project_Xs advance tracking failed") from exc
+
+    return tuple(events)
+
+
+def plan_timeline(
+    state: SeedState32,
+    *,
+    max_events: int,
+    timeline_npc: int = 0,
+    pokemon_npc: int = 0,
+    start_advances: int = 0,
+    start_time: float = 0.0,
+) -> tuple[TimelineEvent, ...]:
+    """Plan Project_Xs timeline events without sleeping or pressing keys."""
+
+    if max_events < 0:
+        raise ProjectXsIntegrationError("Timeline event count must be non-negative")
+    if timeline_npc < 0 or pokemon_npc < 0:
+        raise ProjectXsIntegrationError("Timeline NPC counts must be non-negative")
+
+    xorshift = _load_module("xorshift")
+    try:
+        rng = xorshift.Xorshift(*state.words)
+        queue: list[tuple[float, int]] = []
+        for _ in range(timeline_npc + 1):
+            heapq.heappush(queue, (start_time + 1.017, 0))
+        for _ in range(pokemon_npc):
+            interval = rng.rangefloat(3, 12) + 0.285
+            heapq.heappush(queue, (start_time + interval, 1))
+
+        events = []
+        advances = start_advances
+        while queue and len(events) < max_events:
+            scheduled_time, event_type = heapq.heappop(queue)
+            advances += 1
+            if event_type == 0:
+                rand = int(rng.next())
+                events.append(
+                    TimelineEvent(
+                        advance=advances,
+                        event_type="blink",
+                        scheduled_time=float(scheduled_time),
+                        rand=rand,
+                    )
+                )
+                heapq.heappush(queue, (scheduled_time + 1.017, 0))
+            else:
+                interval = float(rng.rangefloat(3, 12) + 0.285)
+                events.append(
+                    TimelineEvent(
+                        advance=advances,
+                        event_type="pokemon",
+                        scheduled_time=float(scheduled_time),
+                        next_interval=interval,
+                    )
+                )
+                heapq.heappush(queue, (scheduled_time + interval, 1))
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Project_Xs timeline planning failed") from exc
 
     return tuple(events)

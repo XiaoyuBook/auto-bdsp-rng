@@ -111,3 +111,11 @@ Monitor Blinks 调试入口会先捕获玩家眨眼并恢复 Seed，然后列出
 ```powershell
 .\.venv\Scripts\python.exe -m auto_bdsp_rng monitor-blinks --project-xs-config config_cave.json --track-steps 10 --no-menu-advance
 ```
+
+Timeline 调试入口会根据已有 Seed 生成未来事件计划，不会等待、不按键：
+
+```powershell
+.\.venv\Scripts\python.exe -m auto_bdsp_rng timeline --seed 12345678 9ABCDEF0 11111111 22222222 --events 10 --timeline-npc 0 --pokemon-npc 0
+```
+
+输出事件包含 `advance`、`event_type`、`scheduled_time`，玩家/NPC blink 事件还会包含 `rand` 和 `blink_value`。

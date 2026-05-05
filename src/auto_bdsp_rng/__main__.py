@@ -18,6 +18,7 @@ from auto_bdsp_rng.blink_detection import (
     save_eye_preview,
     save_preview_frame,
     save_project_xs_config,
+    plan_timeline,
     track_advances,
 )
 
@@ -225,6 +226,42 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Start from Project_Xs menu-close +1 advance behavior.",
     )
+
+    timeline = subparsers.add_parser(
+        "timeline",
+        help="Plan Project_Xs timeline events from an existing Seed[0-3].",
+    )
+    timeline.add_argument(
+        "--seed",
+        nargs=4,
+        required=True,
+        metavar=("S0", "S1", "S2", "S3"),
+        help="Existing Seed[0-3] as four hexadecimal 32-bit words.",
+    )
+    timeline.add_argument(
+        "--events",
+        type=int,
+        default=10,
+        help="Number of timeline events to output.",
+    )
+    timeline.add_argument(
+        "--timeline-npc",
+        type=int,
+        default=0,
+        help="Project_Xs timeline NPC count.",
+    )
+    timeline.add_argument(
+        "--pokemon-npc",
+        type=int,
+        default=0,
+        help="Project_Xs Pokemon NPC count.",
+    )
+    timeline.add_argument(
+        "--start-advances",
+        type=int,
+        default=0,
+        help="Advance value to start counting from.",
+    )
     return parser
 
 
@@ -335,6 +372,32 @@ def main(argv: list[str] | None = None) -> int:
                     "npc": npc,
                     "start_advances": start_advances,
                     **result.as_dict(),
+                    "events": [event.as_dict() for event in events],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "timeline":
+        try:
+            state = SeedState32.from_hex_words(args.seed)
+            events = plan_timeline(
+                state,
+                max_events=args.events,
+                timeline_npc=args.timeline_npc,
+                pokemon_npc=args.pokemon_npc,
+                start_advances=args.start_advances,
+            )
+        except (ProjectXsIntegrationError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            json.dumps(
+                {
+                    "timeline_npc": args.timeline_npc,
+                    "pokemon_npc": args.pokemon_npc,
+                    "start_advances": args.start_advances,
                     "events": [event.as_dict() for event in events],
                 },
                 ensure_ascii=False,

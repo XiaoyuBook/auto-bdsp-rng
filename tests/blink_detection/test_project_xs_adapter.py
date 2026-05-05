@@ -15,6 +15,7 @@ from auto_bdsp_rng.blink_detection import (
     capture_pokemon_blinks,
     capture_preview_frame,
     load_project_xs_config,
+    plan_timeline,
     reidentify_seed_from_observation,
     render_eye_preview,
     recover_seed_from_observation,
@@ -39,6 +40,12 @@ class FakeRng:
 
     def get_next_rand_sequence(self, length):
         return [0x10 + index for index in range(length)]
+
+    def next(self):
+        return 0x12345671
+
+    def rangefloat(self, minimum, maximum):
+        return 0.5
 
 
 class FakeVideoCapture:
@@ -195,6 +202,25 @@ def test_track_advances_uses_project_xs_xorshift(monkeypatch):
         "blink_value": "1",
         "is_blink": True,
     }
+
+
+def test_plan_timeline_outputs_blink_and_pokemon_events(monkeypatch):
+    monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+
+    events = plan_timeline(
+        state,
+        max_events=2,
+        timeline_npc=0,
+        pokemon_npc=1,
+        start_advances=5,
+    )
+
+    assert [event.advance for event in events] == [6, 7]
+    assert events[0].event_type == "pokemon"
+    assert events[0].next_interval == pytest.approx(0.785)
+    assert events[1].event_type == "blink"
+    assert events[1].as_dict()["blink_value"] == "1"
 
 
 def test_load_project_xs_config_from_real_submodule_config():

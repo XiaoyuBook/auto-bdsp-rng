@@ -146,6 +146,30 @@ class AdvanceEvent:
 
 
 @dataclass(frozen=True)
+class TimelineEvent:
+    """One planned Project_Xs timeline event."""
+
+    advance: int
+    event_type: str
+    scheduled_time: float
+    rand: int | None = None
+    next_interval: float | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "advance": self.advance,
+            "event_type": self.event_type,
+            "scheduled_time": self.scheduled_time,
+        }
+        if self.rand is not None:
+            payload["rand"] = f"{self.rand:08X}"
+            payload["blink_value"] = f"{self.rand & 0xF:X}"
+        if self.next_interval is not None:
+            payload["next_interval"] = self.next_interval
+        return payload
+
+
+@dataclass(frozen=True)
 class ProjectXsSeedResult:
     """Normalized seed output from Project_Xs recovery."""
 

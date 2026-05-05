@@ -12,6 +12,7 @@ from auto_bdsp_rng.blink_detection.models import (
     ProjectXsTidSidResult,
     ProjectXsTrackingConfig,
     SeedState32,
+    TimelineEvent,
 )
 from auto_bdsp_rng.blink_detection.project_xs import (
     ProjectXsIntegrationError,
@@ -28,6 +29,7 @@ from auto_bdsp_rng.blink_detection.project_xs import (
     save_preview_frame,
     save_project_xs_config,
     track_advances,
+    plan_timeline,
 )
 
 __all__ = [
@@ -43,6 +45,7 @@ __all__ = [
     "ProjectXsTidSidResult",
     "ProjectXsTrackingConfig",
     "SeedState32",
+    "TimelineEvent",
     "advance_seed_state",
     "capture_pokemon_blinks",
     "capture_preview_frame",
@@ -56,4 +59,5 @@ __all__ = [
     "save_preview_frame",
     "save_project_xs_config",
     "track_advances",
+    "plan_timeline",
 ]
