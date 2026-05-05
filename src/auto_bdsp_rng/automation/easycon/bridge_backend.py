@@ -108,6 +108,15 @@ class BridgeEasyConBackend(EasyConBackend):
         return [str(port) for port in ports] if isinstance(ports, list) else []
 
     def status(self) -> EasyConStatus:
+        if self._transport is None and self._bridge_path is None:
+            return self._status
+        try:
+            response = self._request("status")
+        except Exception:
+            self._status = EasyConStatus.FAILED
+            raise
+        self._connected_port = str(response["port"]) if response.get("port") else None
+        self._status = _status_from_bridge(response.get("status"))
         return self._status
 
     def connect(self, port: str) -> None:
@@ -176,3 +185,13 @@ class BridgeEasyConBackend(EasyConBackend):
                 raise RuntimeError("EasyConBridge.exe path is not configured")
             self._transport = JsonLineBridgeTransport(self._bridge_path, log_callback=self._log_callback)
         return self._transport
+
+
+def _status_from_bridge(value: object) -> EasyConStatus:
+    if value == "connected":
+        return EasyConStatus.BRIDGE_CONNECTED
+    if value == "running":
+        return EasyConStatus.RUNNING
+    if value == "disconnected":
+        return EasyConStatus.BRIDGE_DISCONNECTED
+    return EasyConStatus.FAILED

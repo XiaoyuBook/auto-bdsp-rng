@@ -38,6 +38,7 @@ public sealed class JsonLineBridgeServer
         {
             if (string.IsNullOrWhiteSpace(line))
                 continue;
+            line = line.TrimStart('\uFEFF');
 
             BridgeRequest request;
             try

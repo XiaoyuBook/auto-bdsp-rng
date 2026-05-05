@@ -13,6 +13,7 @@ class FakeBridgeTransport:
     def __init__(self) -> None:
         self.commands: list[tuple[str, dict[str, object]]] = []
         self.closed = False
+        self.connected_port: str | None = None
 
     def request(self, command: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
         data = dict(payload or {})
@@ -21,6 +22,17 @@ class FakeBridgeTransport:
             return {"version": "bridge-test"}
         if command == "list_ports":
             return {"ports": ["COM7", "COM9"]}
+        if command == "connect":
+            self.connected_port = str(data["port"])
+            return {"status": "connected", "port": self.connected_port}
+        if command == "disconnect":
+            self.connected_port = None
+            return {"status": "disconnected"}
+        if command == "status":
+            return {
+                "status": "connected" if self.connected_port else "disconnected",
+                "port": self.connected_port,
+            }
         if command == "run_script":
             return {"exit_code": 0, "stdout": f"ran {data['name']}", "stderr": ""}
         return {}
@@ -43,7 +55,7 @@ def test_bridge_backend_reuses_connection_until_explicit_disconnect():
     assert all(result.status == EasyConStatus.COMPLETED for result in results)
     assert {result.port for result in results} == {"COM7"}
     assert results[-1].stdout == "ran script-5.ecs"
-    assert [command for command, _payload in transport.commands] == ["connect", *["run_script"] * 5]
+    assert [command for command, _payload in transport.commands] == ["connect", *["run_script"] * 5, "status"]
 
 
 def test_bridge_backend_requires_connect_before_running_script():
@@ -75,4 +87,15 @@ def test_bridge_backend_disconnect_releases_only_on_explicit_request():
     backend.disconnect()
 
     assert backend.status() == EasyConStatus.BRIDGE_DISCONNECTED
-    assert [command for command, _payload in transport.commands] == ["connect", "run_script", "disconnect"]
+    assert [command for command, _payload in transport.commands] == ["connect", "run_script", "disconnect", "status"]
+
+
+def test_bridge_backend_status_maps_bridge_response():
+    transport = FakeBridgeTransport()
+    backend = BridgeEasyConBackend(transport=transport)
+
+    assert backend.status() == EasyConStatus.BRIDGE_DISCONNECTED
+
+    backend.connect("COM7")
+
+    assert backend.status() == EasyConStatus.BRIDGE_CONNECTED
