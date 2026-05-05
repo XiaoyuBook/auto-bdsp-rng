@@ -4,12 +4,13 @@ import csv
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QAction, QGuiApplication, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QStatusBar,
@@ -34,15 +36,24 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.blink_detection import (
+    BlinkCaptureConfig,
     ProjectXsIntegrationError,
+    ProjectXsTrackingConfig,
     capture_player_blinks,
+    capture_preview_frame,
     load_project_xs_config,
     recover_seed_from_observation,
+    render_eye_preview,
+    save_project_xs_config,
 )
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, State8, StateFilter, StaticGenerator8
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_XS_CONFIGS = PROJECT_ROOT / "third_party" / "Project_Xs_CHN" / "configs"
+DEFAULT_BLINK_COUNT = 40
 
 NATURES = (
     "Hardy",
@@ -90,20 +101,115 @@ RESULT_HEADERS = (
     "Weight",
 )
 
+TEXT = {
+    "en": {
+        "title": "BDSP Static RNG Workbench",
+        "language": "Language",
+        "capture": "Blink capture",
+        "seed": "Seed",
+        "static": "BDSP static target",
+        "profile": "Profile",
+        "filters": "Filters",
+        "preview": "Preview",
+        "config": "Config",
+        "browse": "Browse",
+        "monitor_window": "Monitor Window",
+        "window_prefix": "Window Prefix",
+        "camera": "Camera",
+        "x": "X",
+        "y": "Y",
+        "w": "W",
+        "h": "H",
+        "threshold": "Threshold",
+        "time_delay": "Time Delay",
+        "advance_delay": "Advance Delay",
+        "advance_delay_2": "Advance Delay 2",
+        "npcs": "NPCs",
+        "timeline_npcs": "NPCs during Timeline",
+        "pokemon_npcs": "Pokemon NPCs",
+        "display_percent": "Display Percent",
+        "capture_seed": "Capture Seed",
+        "preview_button": "Preview",
+        "stop_preview": "Stop Preview",
+        "save_config": "Save Config",
+        "raw_screenshot": "Raw Screenshot",
+        "generate": "Generate",
+        "copy": "Copy",
+        "export": "Export CSV",
+        "ready": "Ready",
+        "seed_linked": "Seed[0-1] linked",
+        "no_preview": "Preview is stopped",
+        "capturing": "Capturing 40 blinks...",
+        "seed_captured": "Seed captured",
+        "config_saved": "Config saved",
+        "preview_running": "Preview running",
+        "results": "results",
+    },
+    "zh": {
+        "title": "BDSP 定点乱数工作台",
+        "language": "语言",
+        "capture": "眨眼捕捉",
+        "seed": "Seed",
+        "static": "BDSP 定点目标",
+        "profile": "玩家档案",
+        "filters": "筛选",
+        "preview": "捕获预览",
+        "config": "配置",
+        "browse": "浏览",
+        "monitor_window": "捕捉窗口",
+        "window_prefix": "窗口前缀",
+        "camera": "摄像头",
+        "x": "X",
+        "y": "Y",
+        "w": "W",
+        "h": "H",
+        "threshold": "阈值",
+        "time_delay": "时间延迟",
+        "advance_delay": "Advance 延迟",
+        "advance_delay_2": "Advance 延迟 2",
+        "npcs": "NPC 数",
+        "timeline_npcs": "Timeline NPC 数",
+        "pokemon_npcs": "Pokemon NPC 数",
+        "display_percent": "显示百分比",
+        "capture_seed": "捕捉 Seed",
+        "preview_button": "预览",
+        "stop_preview": "停止预览",
+        "save_config": "保存配置",
+        "raw_screenshot": "原始截图",
+        "generate": "生成",
+        "copy": "复制",
+        "export": "导出 CSV",
+        "ready": "就绪",
+        "seed_linked": "Seed[0-1] 已同步",
+        "no_preview": "预览已停止",
+        "capturing": "正在捕捉 40 次眨眼...",
+        "seed_captured": "Seed 捕捉完成",
+        "config_saved": "配置已保存",
+        "preview_running": "正在预览",
+        "results": "条结果",
+    },
+}
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("auto_bdsp_rng")
-        self.resize(1320, 820)
+        self.resize(1480, 900)
+        self.lang = "zh"
         self._records: tuple[StaticEncounterRecord, ...] = ()
         self._states: list[State8] = []
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setInterval(250)
+        self._preview_timer.timeout.connect(self._update_preview_frame)
         self._build_actions()
         self._build_ui()
         self._apply_theme()
+        self._refresh_config_list()
         self._refresh_encounters()
         self._sync_seed64_from_state32()
-        self.statusBar().showMessage("Ready")
+        self._apply_language()
+        self.statusBar().showMessage(self._text("ready"))
 
     def _build_actions(self) -> None:
         generate = QAction("Generate", self)
@@ -126,60 +232,124 @@ class MainWindow(QMainWindow):
         header.setObjectName("Header")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(16, 10, 16, 10)
-        title = QLabel("BDSP Static RNG Workbench")
-        title.setObjectName("WindowTitle")
-        self.seed_badge = QLabel("Seed[0-1] linked")
+        self.title_label = QLabel()
+        self.title_label.setObjectName("WindowTitle")
+        self.seed_badge = QLabel()
         self.seed_badge.setObjectName("Badge")
-        header_layout.addWidget(title)
+        self.language_label = QLabel()
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("中文", "zh")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.currentIndexChanged.connect(self._change_language)
+        header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.seed_badge)
+        header_layout.addSpacing(16)
+        header_layout.addWidget(self.language_label)
+        header_layout.addWidget(self.language_combo)
         root_layout.addWidget(header)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._build_controls())
-        splitter.addWidget(self._build_results())
-        splitter.setSizes([430, 890])
+        splitter.addWidget(self._build_right_side())
+        splitter.setSizes([520, 960])
         root_layout.addWidget(splitter, 1)
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
 
     def _build_controls(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 8, 0)
         layout.setSpacing(10)
-        layout.addWidget(self._build_blink_group())
-        layout.addWidget(self._build_seed_group())
-        layout.addWidget(self._build_static_group())
-        layout.addWidget(self._build_profile_group())
-        layout.addWidget(self._build_filter_group(), 1)
-        return panel
+        self.capture_group = self._build_blink_group()
+        self.seed_group = self._build_seed_group()
+        self.static_group = self._build_static_group()
+        self.profile_group = self._build_profile_group()
+        self.filter_group = self._build_filter_group()
+        layout.addWidget(self.capture_group)
+        layout.addWidget(self.seed_group)
+        layout.addWidget(self.static_group)
+        layout.addWidget(self.profile_group)
+        layout.addWidget(self.filter_group)
+        layout.addStretch(1)
+        scroll.setWidget(panel)
+        return scroll
 
     def _build_blink_group(self) -> QGroupBox:
-        group = QGroupBox("Blink detection")
+        group = QGroupBox()
         layout = QGridLayout(group)
-        self.config_path = QLineEdit("config_cave.json")
-        browse = QPushButton("Browse")
-        browse.clicked.connect(self._browse_config)
-        self.blink_count = self._spin(1, 999, 40)
-        self.npc_count = self._spin(0, 999, 0)
-        capture = QPushButton("Capture Seed")
-        capture.clicked.connect(self.capture_seed)
+        self.config_label = QLabel()
+        self.config_combo = QComboBox()
+        self.config_combo.setEditable(True)
+        self.config_combo.currentTextChanged.connect(self._load_config_to_form)
+        self.config_combo.currentIndexChanged.connect(lambda _index: self._load_config_to_form(self.config_combo.currentText()))
+        self.browse_button = QPushButton()
+        self.browse_button.clicked.connect(self._browse_config)
+        self.capture_button = QPushButton()
+        self.capture_button.setObjectName("PrimaryButton")
+        self.capture_button.clicked.connect(self.capture_seed)
+        self.preview_button = QPushButton()
+        self.preview_button.clicked.connect(self.toggle_preview)
+        self.save_config_button = QPushButton()
+        self.save_config_button.clicked.connect(self.save_current_config)
+        self.raw_screenshot_button = QPushButton()
+        self.raw_screenshot_button.clicked.connect(self.save_raw_screenshot)
 
-        layout.addWidget(QLabel("Config"), 0, 0)
-        layout.addWidget(self.config_path, 0, 1)
-        layout.addWidget(browse, 0, 2)
-        layout.addWidget(QLabel("Blinks"), 1, 0)
-        layout.addWidget(self.blink_count, 1, 1)
-        layout.addWidget(QLabel("NPC"), 2, 0)
-        layout.addWidget(self.npc_count, 2, 1)
-        layout.addWidget(capture, 2, 2)
+        self.monitor_window = QCheckBox()
+        self.window_prefix = QLineEdit()
+        self.camera = self._spin(0, 99, 0)
+        self.x = self._spin(0, 10000, 0)
+        self.y = self._spin(0, 10000, 0)
+        self.w = self._spin(1, 10000, 40)
+        self.h = self._spin(1, 10000, 40)
+        self.threshold = self._double_spin(0.0, 1.0, 0.9, 2)
+        self.white_delay = self._double_spin(0.0, 999.0, 0.0, 1)
+        self.advance_delay = self._spin(0, 9999, 0)
+        self.advance_delay_2 = self._spin(0, 9999, 0)
+        self.npc_count = self._spin(0, 999, 0)
+        self.timeline_npc = self._spin(0, 999, 0)
+        self.pokemon_npc = self._spin(0, 999, 0)
+        self.display_percent = self._spin(1, 300, 80)
+        self.blink_count = DEFAULT_BLINK_COUNT
+
+        layout.addWidget(self.config_label, 0, 0)
+        layout.addWidget(self.config_combo, 0, 1, 1, 2)
+        layout.addWidget(self.browse_button, 0, 3)
+        layout.addWidget(self.monitor_window, 1, 1)
+        layout.addWidget(self.capture_button, 1, 2)
+        layout.addWidget(self.preview_button, 1, 3)
+        layout.addWidget(QLabel(), 2, 0)
+        layout.addWidget(self.window_prefix, 2, 1, 1, 3)
+        self._add_form_row(layout, 3, "camera", self.camera)
+        self._add_form_row(layout, 4, "x", self.x)
+        self._add_form_row(layout, 5, "y", self.y)
+        self._add_form_row(layout, 6, "w", self.w)
+        self._add_form_row(layout, 7, "h", self.h)
+        self._add_form_row(layout, 8, "threshold", self.threshold)
+        self._add_form_row(layout, 9, "time_delay", self.white_delay)
+        self._add_form_row(layout, 10, "advance_delay", self.advance_delay)
+        self._add_form_row(layout, 11, "advance_delay_2", self.advance_delay_2)
+        self._add_form_row(layout, 12, "npcs", self.npc_count)
+        self._add_form_row(layout, 13, "timeline_npcs", self.timeline_npc)
+        self._add_form_row(layout, 14, "pokemon_npcs", self.pokemon_npc)
+        self._add_form_row(layout, 15, "display_percent", self.display_percent)
+        layout.addWidget(self.save_config_button, 16, 2)
+        layout.addWidget(self.raw_screenshot_button, 16, 3)
         return group
 
+    def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:
+        label = QLabel()
+        label.setProperty("i18n", key)
+        layout.addWidget(label, row, 0)
+        layout.addWidget(widget, row, 1, 1, 3)
+
     def _build_seed_group(self) -> QGroupBox:
-        group = QGroupBox("Seed")
+        group = QGroupBox()
         layout = QGridLayout(group)
         self.seed32_inputs = [QLineEdit(text) for text in ("12345678", "9ABCDEF0", "11111111", "22222222")]
         self.seed64_outputs = [QLineEdit() for _ in range(2)]
@@ -200,7 +370,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_static_group(self) -> QGroupBox:
-        group = QGroupBox("BDSP static target")
+        group = QGroupBox()
         form = QFormLayout(group)
         self.version_combo = QComboBox()
         self.version_combo.addItems([version.value for version in GameVersion])
@@ -230,7 +400,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_profile_group(self) -> QGroupBox:
-        group = QGroupBox("Profile")
+        group = QGroupBox()
         form = QFormLayout(group)
         self.profile_name = QLineEdit("-")
         self.tid = self._spin(0, 65535, 12345)
@@ -258,7 +428,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_filter_group(self) -> QGroupBox:
-        group = QGroupBox("Filters")
+        group = QGroupBox()
         layout = QVBoxLayout(group)
         row = QHBoxLayout()
         self.shiny_filter = QComboBox()
@@ -290,12 +460,12 @@ class MainWindow(QMainWindow):
             item.setCheckState(Qt.CheckState.Checked)
             self.nature_list.addItem(item)
         nature_buttons = QHBoxLayout()
-        all_natures = QPushButton("All natures")
-        all_natures.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Checked))
-        clear_natures = QPushButton("Clear")
-        clear_natures.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Unchecked))
-        nature_buttons.addWidget(all_natures)
-        nature_buttons.addWidget(clear_natures)
+        self.all_natures_button = QPushButton("All natures")
+        self.all_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Checked))
+        self.clear_natures_button = QPushButton("Clear")
+        self.clear_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Unchecked))
+        nature_buttons.addWidget(self.all_natures_button)
+        nature_buttons.addWidget(self.clear_natures_button)
         layout.addWidget(self.nature_list)
         layout.addLayout(nature_buttons)
 
@@ -313,25 +483,41 @@ class MainWindow(QMainWindow):
         layout.addLayout(iv_grid)
         return group
 
-    def _build_results(self) -> QWidget:
+    def _build_right_side(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(10)
+        self.preview_group = QGroupBox()
+        preview_layout = QVBoxLayout(self.preview_group)
+        self.preview_label = QLabel()
+        self.preview_label.setObjectName("Preview")
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(300)
+        preview_layout.addWidget(self.preview_label)
+        layout.addWidget(self.preview_group, 1)
+        layout.addWidget(self._build_results(), 1)
+        return panel
+
+    def _build_results(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         toolbar = QHBoxLayout()
-        self.generate_button = QPushButton("Generate")
+        self.generate_button = QPushButton()
         self.generate_button.setObjectName("PrimaryButton")
         self.generate_button.clicked.connect(self.generate_results)
-        copy_button = QPushButton("Copy")
-        copy_button.clicked.connect(self.copy_results)
-        export_button = QPushButton("Export CSV")
-        export_button.clicked.connect(self.export_results)
+        self.copy_button = QPushButton()
+        self.copy_button.clicked.connect(self.copy_results)
+        self.export_button = QPushButton()
+        self.export_button.clicked.connect(self.export_results)
         self.result_count = QLabel("0 results")
         self.result_count.setObjectName("ResultCount")
         toolbar.addWidget(self.generate_button)
-        toolbar.addWidget(copy_button)
-        toolbar.addWidget(export_button)
+        toolbar.addWidget(self.copy_button)
+        toolbar.addWidget(self.export_button)
         toolbar.addStretch(1)
         toolbar.addWidget(self.result_count)
         layout.addLayout(toolbar)
@@ -370,6 +556,12 @@ class MainWindow(QMainWindow):
                 color: #91E0C3;
                 font-weight: 600;
             }
+            QLabel#Preview {
+                background: #070A0D;
+                border: 1px solid #2D3B3F;
+                border-radius: 4px;
+                color: #6F7D80;
+            }
             QGroupBox {
                 border: 1px solid #2B373A;
                 border-radius: 6px;
@@ -384,7 +576,7 @@ class MainWindow(QMainWindow):
                 padding: 0 4px;
                 color: #D7C17C;
             }
-            QLineEdit, QSpinBox, QComboBox, QListWidget {
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget {
                 background: #0C1014;
                 border: 1px solid #324046;
                 border-radius: 4px;
@@ -436,10 +628,177 @@ class MainWindow(QMainWindow):
         spin.setValue(value)
         return spin
 
+    def _double_spin(self, minimum: float, maximum: float, value: float, decimals: int) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setDecimals(decimals)
+        spin.setSingleStep(0.1)
+        spin.setValue(value)
+        return spin
+
+    def _text(self, key: str) -> str:
+        return TEXT[self.lang][key]
+
+    def _change_language(self) -> None:
+        self.lang = self.language_combo.currentData()
+        self._apply_language()
+
+    def _apply_language(self) -> None:
+        self.title_label.setText(self._text("title"))
+        self.language_label.setText(self._text("language"))
+        self.capture_group.setTitle(self._text("capture"))
+        self.seed_group.setTitle(self._text("seed"))
+        self.static_group.setTitle(self._text("static"))
+        self.profile_group.setTitle(self._text("profile"))
+        self.filter_group.setTitle(self._text("filters"))
+        self.preview_group.setTitle(self._text("preview"))
+        self.config_label.setText(self._text("config"))
+        self.browse_button.setText(self._text("browse"))
+        self.monitor_window.setText(self._text("monitor_window"))
+        self.capture_button.setText(self._text("capture_seed"))
+        self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
+        self.save_config_button.setText(self._text("save_config"))
+        self.raw_screenshot_button.setText(self._text("raw_screenshot"))
+        self.generate_button.setText(self._text("generate"))
+        self.copy_button.setText(self._text("copy"))
+        self.export_button.setText(self._text("export"))
+        self.seed_badge.setText(self._text("seed_linked"))
+        self.preview_label.setText(self._text("no_preview"))
+        self.result_count.setText(f"{len(self._states)} {self._text('results')}")
+        for label in self.findChildren(QLabel):
+            key = label.property("i18n")
+            if key:
+                label.setText(self._text(str(key)))
+
+    def _refresh_config_list(self) -> None:
+        self.config_combo.blockSignals(True)
+        self.config_combo.clear()
+        configs = sorted(PROJECT_XS_CONFIGS.glob("*.json"))
+        for path in configs:
+            self.config_combo.addItem(path.name, str(path))
+        if configs:
+            default = next((index for index, path in enumerate(configs) if path.name == "config_bebe.json"), 0)
+            self.config_combo.setCurrentIndex(default)
+        self.config_combo.blockSignals(False)
+        self._load_config_to_form(self.config_combo.currentText())
+
     def _browse_config(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Project_Xs config", "", "JSON files (*.json);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Project_Xs config", str(PROJECT_XS_CONFIGS), "JSON files (*.json);;All files (*)")
         if path:
-            self.config_path.setText(path)
+            index = self.config_combo.findData(path)
+            if index < 0:
+                self.config_combo.addItem(Path(path).name, path)
+                index = self.config_combo.count() - 1
+            self.config_combo.setCurrentIndex(index)
+
+    def _selected_config_path(self) -> str:
+        data = self.config_combo.currentData()
+        return str(data or self.config_combo.currentText())
+
+    def _load_config_to_form(self, _text: str) -> None:
+        if not hasattr(self, "monitor_window"):
+            return
+        try:
+            config = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
+        except ProjectXsIntegrationError:
+            return
+        roi_x, roi_y, roi_w, roi_h = config.capture.roi
+        self.monitor_window.setChecked(config.capture.monitor_window)
+        self.window_prefix.setText(config.capture.window_prefix)
+        self.camera.setValue(config.capture.camera)
+        self.x.setValue(roi_x)
+        self.y.setValue(roi_y)
+        self.w.setValue(roi_w)
+        self.h.setValue(roi_h)
+        self.threshold.setValue(config.capture.threshold)
+        self.white_delay.setValue(config.white_delay)
+        self.advance_delay.setValue(config.advance_delay)
+        self.advance_delay_2.setValue(config.advance_delay_2)
+        self.npc_count.setValue(config.npc)
+        self.timeline_npc.setValue(config.timeline_npc)
+        self.pokemon_npc.setValue(config.pokemon_npc)
+        self.display_percent.setValue(config.display_percent)
+
+    def _config_from_form(self) -> ProjectXsTrackingConfig:
+        loaded = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
+        capture = BlinkCaptureConfig(
+            eye_image_path=loaded.capture.eye_image_path,
+            roi=(self.x.value(), self.y.value(), self.w.value(), self.h.value()),
+            threshold=self.threshold.value(),
+            blink_count=DEFAULT_BLINK_COUNT,
+            monitor_window=self.monitor_window.isChecked(),
+            window_prefix=self.window_prefix.text(),
+            crop=loaded.capture.crop,
+            camera=self.camera.value(),
+        )
+        return ProjectXsTrackingConfig(
+            source_path=loaded.source_path,
+            capture=capture,
+            white_delay=self.white_delay.value(),
+            advance_delay=self.advance_delay.value(),
+            advance_delay_2=self.advance_delay_2.value(),
+            npc=self.npc_count.value(),
+            pokemon_npc=self.pokemon_npc.value(),
+            timeline_npc=self.timeline_npc.value(),
+            display_percent=self.display_percent.value(),
+        )
+
+    def save_current_config(self) -> None:
+        try:
+            config = self._config_from_form()
+            save_project_xs_config(config, config.source_path)
+        except ProjectXsIntegrationError as exc:
+            self._show_error("Save config failed", exc)
+            return
+        self.statusBar().showMessage(self._text("config_saved"))
+
+    def toggle_preview(self) -> None:
+        if self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+            self.preview_label.setText(self._text("no_preview"))
+            return
+        self._preview_timer.start()
+        self.preview_button.setText(self._text("stop_preview"))
+        self.statusBar().showMessage(self._text("preview_running"))
+
+    def _update_preview_frame(self) -> None:
+        try:
+            config = self._config_from_form().capture
+            frame = capture_preview_frame(config)
+            annotated, preview = render_eye_preview(config, frame)
+            pixmap = self._frame_to_pixmap(annotated)
+        except Exception as exc:
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+            self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+        target = self.preview_label.size()
+        self.preview_label.setPixmap(pixmap.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.statusBar().showMessage(f"{self._text('preview_running')} | score {preview.match_score:.3f}")
+
+    def _frame_to_pixmap(self, frame: object) -> QPixmap:
+        import cv2
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width, channel = rgb.shape
+        image = QImage(rgb.data, width, height, channel * width, QImage.Format.Format_RGB888).copy()
+        return QPixmap.fromImage(image)
+
+    def save_raw_screenshot(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Raw screenshot", "raw_screenshot.png", "PNG files (*.png)")
+        if not path:
+            return
+        try:
+            import cv2
+
+            frame = capture_preview_frame(self._config_from_form().capture)
+            if not cv2.imwrite(path, frame):
+                raise ProjectXsIntegrationError(f"Cannot save raw screenshot: {path}")
+        except Exception as exc:
+            self._show_error("Raw screenshot failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+        self.statusBar().showMessage(f"Saved {path}")
 
     def _refresh_encounters(self) -> None:
         version = self.version_combo.currentText() if hasattr(self, "version_combo") else GameVersion.BDSP.value
@@ -469,7 +828,7 @@ class MainWindow(QMainWindow):
             return
         for output, text in zip(self.seed64_outputs, state.format_seed64_pair()):
             output.setText(text)
-        self.seed_badge.setText("Seed[0-1] linked")
+        self.seed_badge.setText(self._text("seed_linked"))
 
     def _current_seed_pair(self) -> SeedPair64:
         state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
@@ -513,16 +872,18 @@ class MainWindow(QMainWindow):
 
     def capture_seed(self) -> None:
         try:
-            config = load_project_xs_config(self.config_path.text(), blink_count=self.blink_count.value())
+            config = self._config_from_form()
+            self.statusBar().showMessage(self._text("capturing"))
+            QApplication.processEvents()
             observation = capture_player_blinks(config.capture)
-            result = recover_seed_from_observation(observation, npc=self.npc_count.value())
+            result = recover_seed_from_observation(observation, npc=config.npc)
         except ProjectXsIntegrationError as exc:
             self._show_error("Blink capture failed", exc)
             return
         for box, text in zip(self.seed32_inputs, result.state.format_words()):
             box.setText(text)
         self._sync_seed64_from_state32()
-        self.statusBar().showMessage("Seed captured")
+        self.statusBar().showMessage(self._text("seed_captured"))
 
     def generate_results(self) -> None:
         try:
@@ -549,7 +910,7 @@ class MainWindow(QMainWindow):
             return
         self._states = states
         self._populate_table(states)
-        self.statusBar().showMessage(f"Generated {len(states)} result(s)")
+        self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
 
     def _populate_table(self, states: list[State8]) -> None:
         self.table.setRowCount(len(states))
@@ -560,7 +921,7 @@ class MainWindow(QMainWindow):
                 if column == 3 and value != "-":
                     item.setForeground(Qt.GlobalColor.yellow)
                 self.table.setItem(row, column, item)
-        self.result_count.setText(f"{len(states)} results")
+        self.result_count.setText(f"{len(states)} {self._text('results')}")
 
     def _state_row(self, state: State8) -> list[str]:
         shiny = {0: "-", 1: "Star", 2: "Square"}.get(state.shiny, str(state.shiny))

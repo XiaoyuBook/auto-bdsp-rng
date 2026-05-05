@@ -203,6 +203,9 @@ class ProjectXsTrackingConfig:
 
     source_path: Path
     capture: BlinkCaptureConfig
+    white_delay: float = 0.0
+    advance_delay: int = 0
+    advance_delay_2: int = 0
     npc: int = 0
     pokemon_npc: int = 0
     timeline_npc: int = 0
@@ -219,6 +222,9 @@ class ProjectXsTrackingConfig:
             "window_prefix": self.capture.window_prefix,
             "crop": None if self.capture.crop is None else list(self.capture.crop),
             "camera": self.capture.camera,
+            "white_delay": self.white_delay,
+            "advance_delay": self.advance_delay,
+            "advance_delay_2": self.advance_delay_2,
             "npc": self.npc,
             "pokemon_npc": self.pokemon_npc,
             "timeline_npc": self.timeline_npc,
