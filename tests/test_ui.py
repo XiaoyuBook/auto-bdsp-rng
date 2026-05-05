@@ -33,6 +33,13 @@ def test_main_window_generates_static_results(app):
     assert window.table.item(0, 1).text()
 
 
+def test_bdsp_max_advances_matches_pokefinder_limit(app):
+    window = MainWindow()
+
+    assert window.max_advances.maximum() == 1_000_000_000
+    assert window.max_advances.value() == 100_000
+
+
 def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)

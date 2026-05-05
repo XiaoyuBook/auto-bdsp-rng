@@ -788,7 +788,7 @@ class MainWindow(QMainWindow):
             input_box.setMaxLength(16)
             input_box.editingFinished.connect(self._sync_state32_from_bdsp_seed64)
         self.initial_advances = self._spin(0, 10_000_000, 0)
-        self.max_advances = self._spin(0, 100_000, 100)
+        self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.offset = self._spin(0, 1_000_000, 0)
         self.generate_button = QPushButton("生成")
         self.generate_button.clicked.connect(self.generate_results)
