@@ -61,6 +61,7 @@ def test_config_round_trip(tmp_path):
     config_path = tmp_path / "config.json"
     config = EasyConConfig(
         ezcon_path=Path("D:/app/EasyCon/ezcon.exe"),
+        bridge_path=Path("D:/app/EasyCon/EasyConBridge.exe"),
         last_port="COM9",
         mock_enabled=True,
         recent_scripts=(Path("script/BDSP测种.txt"),),

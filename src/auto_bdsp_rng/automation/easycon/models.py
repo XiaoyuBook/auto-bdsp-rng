@@ -21,6 +21,7 @@ class EasyConStatus(str, Enum):
 @dataclass(frozen=True)
 class EasyConConfig:
     ezcon_path: Path | None = None
+    bridge_path: Path | None = None
     last_port: str | None = None
     mock_enabled: bool = False
     recent_scripts: tuple[Path, ...] = ()
@@ -56,6 +57,7 @@ class EasyConRunTask:
     port: str
     ezcon_path: Path | None = None
     mock: bool = False
+    name: str | None = None
 
 
 @dataclass(frozen=True)

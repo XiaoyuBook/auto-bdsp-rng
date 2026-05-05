@@ -19,6 +19,7 @@ def load_config(path: Path = CONFIG_PATH) -> EasyConConfig:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return EasyConConfig(
         ezcon_path=Path(payload["ezcon_path"]) if payload.get("ezcon_path") else None,
+        bridge_path=Path(payload["bridge_path"]) if payload.get("bridge_path") else None,
         last_port=payload.get("last_port") or None,
         mock_enabled=bool(payload.get("mock_enabled", False)),
         recent_scripts=tuple(Path(item) for item in payload.get("recent_scripts", [])),
@@ -30,6 +31,7 @@ def save_config(config: EasyConConfig, path: Path = CONFIG_PATH) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "ezcon_path": str(config.ezcon_path) if config.ezcon_path else None,
+        "bridge_path": str(config.bridge_path) if config.bridge_path else None,
         "last_port": config.last_port,
         "mock_enabled": config.mock_enabled,
         "recent_scripts": [str(item) for item in config.recent_scripts],
