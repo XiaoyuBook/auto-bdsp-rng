@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer, Qt, Signal
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QApplication,
     QSplitter,
     QStatusBar,
     QTextEdit,
@@ -87,6 +89,10 @@ class EasyConPanel(QWidget):
         self.current_script_name = "未命名脚本"
         self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
         self.process: QProcess | None = None
+        self.current_run_started_at: datetime | None = None
+        self.current_run_script_path: Path | None = None
+        self.current_run_port: str | None = None
+        self.stop_requested = False
         self.run_seconds = 0
         self.run_timer = QTimer(self)
         self.run_timer.setInterval(1000)
@@ -233,8 +239,16 @@ class EasyConPanel(QWidget):
         self.log_view.setReadOnly(True)
         self.clear_log_button = QPushButton("清空日志")
         self.clear_log_button.clicked.connect(self.log_view.clear)
+        self.copy_log_button = QPushButton("复制日志")
+        self.copy_log_button.clicked.connect(self.copy_all_logs)
+        self.save_log_button = QPushButton("保存日志")
+        self.save_log_button.clicked.connect(self.save_logs_dialog)
+        log_buttons = QHBoxLayout()
+        log_buttons.addWidget(self.clear_log_button)
+        log_buttons.addWidget(self.copy_log_button)
+        log_buttons.addWidget(self.save_log_button)
         log_layout.addWidget(self.log_view, 1)
-        log_layout.addWidget(self.clear_log_button)
+        log_layout.addLayout(log_buttons)
         layout.addWidget(log_group, 1)
         return panel
 
@@ -387,8 +401,9 @@ class EasyConPanel(QWidget):
             self.run_script()
             return
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            self.stop_requested = True
             self.process.kill()
-            self._finish_run("已中止")
+            self._append_log("warn", "正在停止脚本")
             return
         self.run_script()
 
@@ -411,6 +426,10 @@ class EasyConPanel(QWidget):
         self.process.readyReadStandardError.connect(self._read_stderr)
         self.process.finished.connect(self._process_finished)
         self.process.errorOccurred.connect(self._process_error)
+        self.stop_requested = False
+        self.current_run_started_at = datetime.now()
+        self.current_run_script_path = script_path
+        self.current_run_port = port
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
@@ -424,6 +443,7 @@ class EasyConPanel(QWidget):
             return
         self._sync_parameters_to_editor()
         script_text = self.editor.toPlainText()
+        started_at = datetime.now()
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
@@ -434,7 +454,13 @@ class EasyConPanel(QWidget):
             result = self._ensure_bridge_backend().run_script_text(script_text, self.current_script_name)
         except Exception as exc:
             self._append_log("error", f"Bridge 运行失败: {exc}")
-            self._finish_run("失败")
+            self._finish_run(
+                "失败",
+                exit_code=1,
+                started_at=started_at,
+                script_path=Path(self.current_script_name),
+                port=self.port_combo.currentText(),
+            )
             self.bridge_status = EasyConStatus.FAILED
             self._update_bridge_controls()
             return
@@ -444,7 +470,14 @@ class EasyConPanel(QWidget):
             self._append_log("stderr", result.stderr.rstrip())
         status = "已完成，连接保持" if result.status == EasyConStatus.COMPLETED else "失败"
         self.bridge_status = self._ensure_bridge_backend().status()
-        self._finish_run(status)
+        self._finish_run(
+            status,
+            exit_code=result.exit_code,
+            started_at=result.started_at,
+            ended_at=result.ended_at,
+            script_path=result.script_path,
+            port=result.port,
+        )
         self._update_bridge_controls()
 
     def _read_stdout(self) -> None:
@@ -462,18 +495,38 @@ class EasyConPanel(QWidget):
             self._append_log("stderr", text.rstrip())
 
     def _process_finished(self, exit_code: int, _status) -> None:  # type: ignore[no-untyped-def]
+        if self.stop_requested:
+            self.stop_requested = False
+            self._finish_run("已中止", exit_code=130)
+            return
         status = "已完成" if exit_code == 0 else f"失败，exit code: {exit_code}"
-        self._finish_run(status)
+        self._finish_run(status, exit_code=exit_code)
 
     def _process_error(self, error) -> None:  # type: ignore[no-untyped-def]
         self._append_log("error", f"进程启动失败: {error}")
-        self._finish_run("失败")
+        self._finish_run("失败", exit_code=None)
 
-    def _finish_run(self, status: str) -> None:
+    def _finish_run(
+        self,
+        status: str,
+        exit_code: int | None = None,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        script_path: Path | None = None,
+        port: str | None = None,
+    ) -> None:
+        ended_at = ended_at or datetime.now()
+        started_at = started_at or self.current_run_started_at
+        script_path = script_path or self.current_run_script_path
+        port = port or self.current_run_port
         self.run_timer.stop()
         self.run_button.setText("运行脚本")
         self.easycon_status.showMessage(status)
         self._append_log("info", status)
+        self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
+        self.current_run_started_at = None
+        self.current_run_script_path = None
+        self.current_run_port = None
         self._update_run_enabled()
 
     def _tick_run_timer(self) -> None:
@@ -536,6 +589,49 @@ class EasyConPanel(QWidget):
             self.log_view.append(f'<span style="color:{color}">[{level}] {line}</span>')
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
 
+    def copy_all_logs(self) -> None:
+        QApplication.clipboard().setText(self.log_view.toPlainText())
+        self._append_log("info", "已复制全部日志")
+
+    def save_logs_dialog(self) -> Path | None:
+        default_name = f"easycon_log_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存伊机控日志",
+            default_name,
+            "Text files (*.txt);;All files (*.*)",
+        )
+        if not path:
+            return None
+        output = Path(path)
+        try:
+            output.write_text(self.log_view.toPlainText(), encoding="utf-8")
+        except OSError as exc:
+            self._append_log("error", f"保存日志失败: {exc}")
+            return None
+        self._append_log("info", f"已保存日志: {output}")
+        return output
+
+    def _append_run_summary(
+        self,
+        exit_code: int | None,
+        started_at: datetime | None,
+        ended_at: datetime,
+        script_path: Path | None,
+        port: str | None,
+    ) -> None:
+        if started_at is None:
+            return
+        duration = max(0.0, (ended_at - started_at).total_seconds())
+        self._append_log("info", f"exit code: {exit_code if exit_code is not None else '无'}")
+        self._append_log("info", f"开始时间: {started_at:%Y-%m-%d %H:%M:%S}")
+        self._append_log("info", f"结束时间: {ended_at:%Y-%m-%d %H:%M:%S}")
+        self._append_log("info", f"运行时长: {duration:.2f}s")
+        if script_path is not None:
+            self._append_log("info", f"脚本路径: {script_path}")
+        if port:
+            self._append_log("info", f"串口: {port}")
+
     def toggle_bridge_connection(self) -> None:
         if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
             self.disconnect_bridge()
@@ -559,6 +655,7 @@ class EasyConPanel(QWidget):
             return
         self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
         self._append_log("info", f"已连接伊机控: {port}")
+        self.easycon_status.showMessage("已长期连接")
         self._update_bridge_controls()
         self._update_run_enabled()
 
@@ -570,13 +667,14 @@ class EasyConPanel(QWidget):
             return
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self._append_log("info", "已断开伊机控")
+        self.easycon_status.showMessage("已断开")
         self._update_bridge_controls()
         self._update_run_enabled()
 
     def _ensure_bridge_backend(self) -> BridgeEasyConBackend:
         bridge_path = self._bridge_path_from_ui()
         if self.bridge_backend is None:
-            self.bridge_backend = BridgeEasyConBackend(bridge_path=bridge_path)
+            self.bridge_backend = BridgeEasyConBackend(bridge_path=bridge_path, log_callback=self._append_log)
         return self.bridge_backend
 
     def _bridge_path_from_ui(self) -> Path | None:
@@ -607,7 +705,8 @@ class EasyConPanel(QWidget):
             self.backend_label.setText("单片机: 连接失败")
         elif is_bridge:
             self.connect_button.setText("连接伊机控")
-            self.backend_label.setText("单片机: 未连接")
+            status_text = "未选择串口" if not self.port_combo.currentText() else "未连接"
+            self.backend_label.setText(f"单片机: {status_text}")
         else:
             self.connect_button.setText("连接伊机控")
             self.backend_label.setText("单片机: CLI 诊断模式")

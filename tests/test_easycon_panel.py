@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -44,8 +45,9 @@ def easycon_panel(monkeypatch, tmp_path, app):
 class FakeBridgeBackend:
     instances: list["FakeBridgeBackend"] = []
 
-    def __init__(self, bridge_path=None):
+    def __init__(self, bridge_path=None, log_callback=None):
         self.bridge_path = bridge_path
+        self.log_callback = log_callback
         self.connected_port = None
         self.script_runs: list[tuple[str, str | None]] = []
         self.disconnected = False
@@ -63,6 +65,11 @@ class FakeBridgeBackend:
 
         class Result:
             status = EasyConStatus.COMPLETED
+            exit_code = 0
+            started_at = datetime.now()
+            ended_at = datetime.now()
+            script_path = Path(name or "<bridge-script>")
+            port = "COM7"
             stdout = "bridge stdout"
             stderr = ""
 
@@ -151,3 +158,18 @@ def test_easycon_panel_disconnect_is_explicit(monkeypatch, tmp_path, easycon_pan
     backend = FakeBridgeBackend.instances[-1]
     assert backend.disconnected is True
     assert easycon_panel.bridge_status == EasyConStatus.BRIDGE_DISCONNECTED
+
+
+def test_easycon_panel_copies_and_saves_logs(monkeypatch, tmp_path, easycon_panel):
+    easycon_panel._append_log("info", "第一行日志")
+    easycon_panel.copy_all_logs()
+
+    assert "第一行日志" in QApplication.clipboard().text()
+
+    output = tmp_path / "easycon.log"
+    monkeypatch.setattr(panel_module.QFileDialog, "getSaveFileName", lambda *_args: (str(output), ""))
+
+    saved = easycon_panel.save_logs_dialog()
+
+    assert saved == output
+    assert "第一行日志" in output.read_text(encoding="utf-8")

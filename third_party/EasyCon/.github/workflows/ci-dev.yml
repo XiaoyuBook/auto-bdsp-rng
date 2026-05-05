@@ -1,0 +1,89 @@
+name: CI Develop
+
+on:
+  workflow_run:
+    workflows: ["Auto Fix Format"]
+    types:
+      - completed  # 在工作流完成时触发
+  pull_request:
+    branches: [dev]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**/*.md'
+      - 'LICENSE'
+      - 'README*'
+      - 'CHANGELOG*'
+  push:
+    branches: [dev]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**/*.md'
+      - 'LICENSE'
+      - 'README*'
+      - 'CHANGELOG*'
+  merge_group:
+    branches: [dev]
+    types: [checks_requested]
+
+concurrency:
+  group: ci-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+
+jobs:
+  # ========================================
+  # 1. 代码格式检查
+  # ========================================
+  format:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 检查代码格式
+        run: dotnet format --verbosity diagnostic
+
+  # ========================================
+  # 2. 构建 + 测试 (Debug)
+  # ========================================
+  build-and-test:
+    runs-on: windows-latest
+    needs: format
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: 缓存 NuGet 包
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: 还原 NuGet 包
+        run: dotnet restore
+
+      - name: Build (Debug)
+        run: dotnet build --no-restore --configuration Debug
+
+      - name: 运行 EasyCon 测试
+        shell: cmd
+        run: ci\test.bat Debug

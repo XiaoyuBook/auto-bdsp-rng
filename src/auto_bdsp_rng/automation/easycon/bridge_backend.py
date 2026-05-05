@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from itertools import count
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from auto_bdsp_rng.automation.easycon.backend import EasyConBackend
 from auto_bdsp_rng.automation.easycon.discovery import discover_ezcon
@@ -28,8 +28,9 @@ class BridgeTransport(Protocol):
 class JsonLineBridgeTransport:
     """JSON Lines transport for EasyConBridge.exe stdin/stdout IPC."""
 
-    def __init__(self, bridge_path: Path) -> None:
+    def __init__(self, bridge_path: Path, log_callback: Callable[[str, str], None] | None = None) -> None:
         self._ids = count(1)
+        self._log_callback = log_callback
         self._process = subprocess.Popen(
             [str(bridge_path)],
             stdin=subprocess.PIPE,
@@ -54,6 +55,8 @@ class JsonLineBridgeTransport:
                 raise BridgeProtocolError(stderr.strip() or "Bridge closed stdout")
             response = json.loads(line)
             if response.get("type") == "log":
+                if self._log_callback is not None:
+                    self._log_callback(str(response.get("level") or "info"), str(response.get("message") or ""))
                 continue
             if response.get("id") != request_id:
                 continue
@@ -80,10 +83,12 @@ class BridgeEasyConBackend(EasyConBackend):
         bridge_path: Path | None = None,
         transport: BridgeTransport | None = None,
         installation: EasyConInstallation | None = None,
+        log_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._bridge_path = bridge_path
         self._transport = transport
         self._installation = installation
+        self._log_callback = log_callback
         self._status = EasyConStatus.UNCONFIGURED
         self._connected_port: str | None = None
 
@@ -169,5 +174,5 @@ class BridgeEasyConBackend(EasyConBackend):
         if self._transport is None:
             if self._bridge_path is None:
                 raise RuntimeError("EasyConBridge.exe path is not configured")
-            self._transport = JsonLineBridgeTransport(self._bridge_path)
+            self._transport = JsonLineBridgeTransport(self._bridge_path, log_callback=self._log_callback)
         return self._transport

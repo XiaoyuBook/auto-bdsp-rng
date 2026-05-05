@@ -1,0 +1,90 @@
+name: CI (Main)
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**/*.md'
+      - 'LICENSE'
+      - 'README*'
+      - 'CHANGELOG*'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**/*.md'
+      - 'LICENSE'
+      - 'README*'
+      - 'CHANGELOG*'
+
+concurrency:
+  group: ci-main-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+
+jobs:
+  # ========================================
+  # 1. 代码格式检查（阻断性）
+  # ========================================
+  format:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 检查代码格式
+        run: dotnet format --verify-no-changes --verbosity diagnostic
+
+  # ========================================
+  # 2. 构建 + 测试 (Release)
+  # ========================================
+  build-and-test:
+    runs-on: windows-latest
+    needs: format
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 缓存 NuGet 包
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: 还原 NuGet 包
+        run: dotnet restore
+
+      - name: 运行 EasyCon 测试
+        shell: cmd
+        run: ci\test.bat
+
+      - name: 发布 EasyCon2
+        shell: cmd
+        run: ci\windows-x64.bat
+
+      - name: 上传 EasyCon2 产物
+        uses: actions/upload-artifact@v6
+        with:
+          name: EasyCon2-${{ github.run_number }}
+          path: dist/publish/
+          retention-days: 30

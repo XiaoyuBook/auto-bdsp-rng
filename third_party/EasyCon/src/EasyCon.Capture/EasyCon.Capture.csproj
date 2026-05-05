@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="OpenCvSharp4" />
+		<PackageReference Include="FlashCap" />
+		<PackageReference Include="SixLabors.ImageSharp" />
+
+		<PackageReference Condition="'$(OS)' == 'Windows_NT'" Include="OpenCvSharp4.runtime.win" />
+		<PackageReference Condition="$([MSBuild]::IsOSPlatform('OSX'))" Include="OneWare.OpenCvSharp4.runtime.osx-arm64" />
+		<PackageReference Condition="'$(OS)' == 'Unix' AND !$([MSBuild]::IsOSPlatform('OSX'))" Include="OpenCvSharp4.official.runtime.linux-x64" />
+
+		<PackageReference Include="Tesseract" />
+		<PackageReference Include="Tesseract.Drawing" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Content Include="Tessdata\*.traineddata" Pack="true" PackageCopyToOutput="true" PackagePath="Tessdata">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</Content>
+	</ItemGroup>
+</Project>
