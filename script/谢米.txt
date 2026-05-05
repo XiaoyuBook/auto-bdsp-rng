@@ -1,0 +1,55 @@
+
+#在谢米背后进入地下洞窟，进秘密基地墙边测帧，到闪帧运行脚本
+_闪帧 = 1              #   在这里输入你距离闪帧还差多少，从运行脚本开始
+_自动撞帧 = 1            #  1 是自动撞 ，其他数字是不用
+_等待时间 = 8
+
+# 唤醒设备
+FOR 5
+    A 120
+    100
+NEXT
+
+$1 = _自动撞帧
+$2 = _闪帧
+$2 -= 43
+$3 = _等待时间
+$3 *= 1000
+
+IF $2 < 0
+    $2 = 1
+ENDIF
+IF $1 = 1
+    FOR $2
+        1010
+    NEXT
+ENDIF
+IF $1 = 1
+    FOR
+        WAIT 1010
+        $2 -= 1
+        IF $2 = 0
+            BREAK
+        ENDIF
+    NEXT
+ENDIF
+B 120
+LS DOWN,1200
+WAIT 2700
+Y 200
+WAIT 400
+DOWN 200
+WAIT 200
+FOR 80
+    A 20
+    WAIT 10
+NEXT
+WAIT 1500
+FOR 240
+    A 20
+    WAIT 10
+NEXT
+WAIT $3
+FOR 8
+    A 200
+NEXT

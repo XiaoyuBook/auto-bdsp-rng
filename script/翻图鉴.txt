@@ -1,0 +1,69 @@
+
+_翻几次 = 填入这里
+
+$1 = _翻几次
+$1 -= 1
+#图鉴过帧数和图鉴完成数有关
+
+# 唤醒设备
+FOR 5
+	A 120
+    100
+NEXT
+
+HOME 100
+100
+HOME 100
+1000
+B 200
+200
+B 200
+200
+X 200
+1000
+PLUS 200
+1000
+B 200
+1000
+UP 200
+200
+A 200
+1500
+$2 = 0
+ FOR _翻几次
+        $1 += 1
+        RS RIGHT
+        LS RIGHT
+        WAIT 2200  #翻不完一页就改这里参数
+        DOWN
+        WAIT 150
+        PRINT 已过帧 & $1 & 次
+        $2 += 1
+        IF $2 = 50
+            $2 = 0
+            RS RESET
+            LS RESET
+            LS DOWN,200
+            WAIT 200
+            B 200
+            WAIT 1000
+            A 500
+        ENDIF
+    NEXT
+1000
+RS RESET
+LS RESET
+2000
+B
+2000
+B
+2000
+PLUS
+600
+RIGHT
+600
+A
+200
+HOME 100
+100
+HOME 100
