@@ -58,6 +58,7 @@ def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
     window.max_advances.setValue(30)
+    iv_header_count = len(window._result_headers())
     window.show_stats_check.setChecked(True)
     window.generate_results()
 
@@ -69,7 +70,10 @@ def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     assert window.table.selectionBehavior() == QAbstractItemView.SelectionBehavior.SelectItems
     assert window.table.currentColumn() == height_column
     assert window.table.currentItem().text().startswith("208")
+    assert len(window._result_headers()) == iv_header_count
     assert "HP能力" in window._result_headers()
+    assert "HP" not in window._result_headers()
+    assert window._result_headers()[7:13] == ["HP能力", "攻击能力", "防御能力", "特攻能力", "特防能力", "速度能力"]
 
 
 def test_main_window_exports_txt_from_results(app, monkeypatch, tmp_path):

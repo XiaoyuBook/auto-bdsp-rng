@@ -1177,7 +1177,7 @@ class MainWindow(QMainWindow):
         headers = list(self._base_result_headers())
         if hasattr(self, "show_stats_check") and self.show_stats_check.isChecked():
             stat_headers = STAT_LABELS_ZH if self.lang == "zh" else tuple(f"{label} Stat" for label in IV_LABELS)
-            headers[-1:-1] = stat_headers
+            headers[7:13] = stat_headers
         return headers
 
     def _refresh_result_columns(self) -> None:
@@ -1918,7 +1918,7 @@ class MainWindow(QMainWindow):
             self._characteristic_text(state),
         ]
         if hasattr(self, "show_stats_check") and self.show_stats_check.isChecked():
-            row[-1:-1] = [str(value) for value in self._stat_values(state)]
+            row[7:13] = [str(value) for value in self._stat_values(state)]
         return row
 
     def _table_text(self) -> str:
