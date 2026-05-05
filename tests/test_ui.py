@@ -18,6 +18,8 @@ def app(monkeypatch):
 def test_main_window_generates_static_results(app):
     window = MainWindow()
 
+    assert window.tabs.tabText(window.tabs.currentIndex()) == "BDSP / PokeFinder"
+
     window.max_advances.setValue(2)
     window.generate_results()
 
@@ -39,13 +41,13 @@ def test_main_window_loads_project_xs_config_fields(app):
     index = window.config_combo.findText("config_bebe.json")
     window.config_combo.setCurrentIndex(index)
 
-    assert window.window_prefix.text() == "SysDVR-Client [PID "
+    assert window.window_prefix.text() == "PotPlayer"
     assert window.monitor_window.isChecked() is True
-    assert window.x.value() == 501
-    assert window.y.value() == 366
-    assert window.w.value() == 27
-    assert window.h.value() == 30
-    assert window.threshold.value() == 0.9
+    assert window.x.value() == 516
+    assert window.y.value() == 377
+    assert window.w.value() == 38
+    assert window.h.value() == 53
+    assert window.threshold.value() == 0.7
 
 
 def test_main_window_can_switch_language(app):
