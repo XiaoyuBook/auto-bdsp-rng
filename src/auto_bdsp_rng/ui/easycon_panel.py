@@ -347,6 +347,8 @@ class EasyConPanel(QWidget):
         self.connect_button.clicked.connect(self.toggle_bridge_connection)
         self.disconnect_button = QPushButton("断开连接")
         self.disconnect_button.clicked.connect(self.disconnect_bridge)
+        self.cli_test_button = QPushButton("测试 CLI 运行")
+        self.cli_test_button.clicked.connect(self.run_cli_smoke_test)
         self.mock_check = QCheckBox("mock 模式")
         self.mock_check.setChecked(self.config.mock_enabled)
         self.mock_check.toggled.connect(self._save_config_from_ui)
@@ -369,6 +371,7 @@ class EasyConPanel(QWidget):
         config_layout.addWidget(self.connect_button, 7, 1)
         config_layout.addWidget(self.disconnect_button, 7, 2)
         config_layout.addWidget(self.mock_check, 8, 1, 1, 2)
+        config_layout.addWidget(self.cli_test_button, 9, 1, 1, 2)
         layout.addWidget(config_group)
 
         controller_group = QGroupBox("手柄测试")
@@ -473,7 +476,7 @@ class EasyConPanel(QWidget):
             self._append_log("info", f"已检测到 EasyCon: {self.installation.version}")
         else:
             self.version_label.setText("EasyCon: 未找到")
-            self._append_log("warn", self.installation.error or "未找到 ezcon.exe")
+            self._append_log("warn", _easycon_unavailable_message(self.installation, self.ezcon_path.text().strip()))
         self._save_config_from_ui()
         self._update_run_enabled()
 
@@ -489,6 +492,8 @@ class EasyConPanel(QWidget):
             self.port_combo.setCurrentIndex(0)
         self.port_combo.blockSignals(False)
         self._append_log("info", f"已刷新串口: {', '.join(ports) if ports else '未发现'}")
+        if not ports and not self.mock_check.isChecked():
+            self._append_log("warn", "未发现串口；请选择串口或启用 mock 模式，运行按钮已禁用")
         self._save_config_from_ui()
         self._update_run_enabled()
         self._update_status_labels()
@@ -1155,7 +1160,11 @@ class EasyConPanel(QWidget):
             return
         self._run_inline_cli_script(f"test_{side}_{direction.lower()}", f"{label}\n")
 
-    def _run_inline_cli_script(self, task_name: str, script_text: str) -> None:
+    def run_cli_smoke_test(self) -> None:
+        self._append_log("warn", "测试 CLI 运行会触发一次 CLI 连接，不代表常驻连接验收。")
+        self._run_inline_cli_script("cli_smoke", "WAIT 50\n", task_type="cli_smoke")
+
+    def _run_inline_cli_script(self, task_name: str, script_text: str, task_type: str = "controller") -> None:
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             self._append_log("warn", "已有 CLI 任务执行中，暂不能启动手柄测试")
             return
@@ -1166,7 +1175,7 @@ class EasyConPanel(QWidget):
         if not self.mock_check.isChecked() and not self.port_combo.currentText():
             self._append_log("warn", "请先选择串口；CLI 手柄测试会触发一次连接")
             return
-        script_path = generate_script_file(script_text, f"{task_name}.ecs", GENERATED_DIR, task_type="controller")
+        script_path = generate_script_file(script_text, f"{task_name}.ecs", GENERATED_DIR, task_type=task_type)
         port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
         self.process = QProcess(self)
         self.process.setProgram(str(self.installation.path))
@@ -1270,6 +1279,12 @@ class EasyConPanel(QWidget):
             self.test_rs_reset_button,
         ):
             button.setEnabled(enabled)
+        self.cli_test_button.setEnabled(
+            not self._is_bridge_mode()
+            and self.installation.is_available
+            and self.bridge_status != EasyConStatus.RUNNING
+            and not (self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning)
+        )
 
     def _update_status_labels(self) -> None:
         if not hasattr(self, "connection_state_label"):
@@ -1340,3 +1355,10 @@ def _script_parameter_config_key(path: Path | None) -> str | None:
         return str(resolved)
     except OSError:
         return str(path)
+
+
+def _easycon_unavailable_message(installation: EasyConInstallation, requested_path: str = "") -> str:
+    error = installation.error or ""
+    if requested_path and "does not exist" not in error:
+        return "ezcon 路径可能无效或文件损坏，请重新选择 ezcon.exe。"
+    return "请选择 ezcon.exe 或设置 EASYCON_ROOT。"

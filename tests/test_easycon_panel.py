@@ -212,6 +212,7 @@ def test_easycon_panel_cli_mode_is_not_reported_as_connected(easycon_panel):
     assert easycon_panel.backend_label.text() == "单片机: CLI 过渡后端可用（未长期连接）"
     assert easycon_panel._connection_state_text() == "CLI 可用（未长期连接）"
     assert "CLI 过渡" in easycon_panel.status_backend_label.text()
+    assert easycon_panel.cli_test_button.isEnabled() is True
 
 
 def test_easycon_panel_stops_running_cli_process(monkeypatch, tmp_path, easycon_panel):
@@ -308,6 +309,42 @@ def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_pa
     assert easycon_panel.task_state_label.text() == "任务: 已完成"
 
 
+def test_easycon_panel_runs_cli_smoke_test(monkeypatch, tmp_path, easycon_panel):
+    ezcon = tmp_path / "ezcon.cmd"
+    ezcon.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "if \"%1\"==\"--version\" (echo fake-ezcon-1.0& exit /b 0)",
+                "if \"%1\"==\"run\" (echo cli smoke %2 %3 %4& exit /b 0)",
+                "exit /b 1",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=ezcon, version="fake", source="test"),
+    )
+    easycon_panel.backend_mode.setCurrentIndex(1)
+
+    easycon_panel.run_cli_smoke_test()
+    assert easycon_panel.process is not None
+    assert easycon_panel.process.waitForFinished(2000)
+    app = QApplication.instance()
+    assert app is not None
+    app.processEvents()
+
+    generated = sorted((panel_module.GENERATED_DIR).glob("*cli_smoke*.ecs"))
+    assert generated
+    assert generated[-1].read_text(encoding="utf-8") == "WAIT 50\n"
+    log_text = easycon_panel.log_view.toPlainText()
+    assert "测试 CLI 运行会触发一次 CLI 连接" in log_text
+    assert "cli smoke" in log_text
+
+
 def test_easycon_panel_copies_and_saves_logs(monkeypatch, tmp_path, easycon_panel):
     easycon_panel._append_log("info", "第一行日志")
     easycon_panel.copy_all_logs()
@@ -337,3 +374,62 @@ def test_easycon_panel_persists_and_applies_log_retention(monkeypatch, tmp_path,
     assert "日志 2" in log_text
     assert "日志 4" in log_text
     assert saved_configs[-1].keep_log_lines == 3
+
+
+def test_easycon_panel_reports_missing_ezcon_and_empty_ports(monkeypatch, tmp_path, app):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
+    monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=False))
+    monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=None, error="ezcon.exe not found"),
+    )
+    monkeypatch.setattr(panel_module, "list_ports", lambda _installation: [])
+
+    panel = EasyConPanel()
+
+    assert "请选择 ezcon.exe 或设置 EASYCON_ROOT" in panel.log_view.toPlainText()
+    assert panel.run_button.isEnabled() is False
+
+
+def test_easycon_panel_reports_invalid_ezcon_version(monkeypatch, tmp_path, app):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
+    monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(ezcon_path=Path("D:/bad/ezcon.exe")))
+    monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=None, error="D:/bad/ezcon.exe --version failed"),
+    )
+    monkeypatch.setattr(panel_module, "list_ports", lambda _installation: [])
+
+    panel = EasyConPanel()
+
+    assert "ezcon 路径可能无效或文件损坏" in panel.log_view.toPlainText()
+
+
+def test_easycon_panel_reports_empty_ports_when_mock_disabled(monkeypatch, tmp_path, app):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
+    monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=False))
+    monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=Path("D:/EasyCon/ezcon.exe"), version="1.6.3", source="test"),
+    )
+    monkeypatch.setattr(panel_module, "list_ports", lambda _installation: [])
+
+    panel = EasyConPanel()
+
+    assert "未发现串口；请选择串口或启用 mock 模式，运行按钮已禁用" in panel.log_view.toPlainText()
+    assert panel.run_button.isEnabled() is False
