@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QSize, QProcess, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -164,12 +164,35 @@ class EasyConScriptEditor(QPlainTextEdit):
         event.acceptProposedAction()
 
 
+class BridgeScriptWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, backend: BridgeEasyConBackend, script_text: str, script_name: str) -> None:
+        super().__init__()
+        self.backend = backend
+        self.script_text = script_text
+        self.script_name = script_name
+
+    def run(self) -> None:
+        try:
+            result = self.backend.run_script_text(self.script_text, self.script_name)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
+
+
 class EasyConPanel(QWidget):
+    bridge_log = Signal(str, str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.config = load_config()
         self.installation = EasyConInstallation(path=None, error="未检测")
         self.bridge_backend: BridgeEasyConBackend | None = None
+        self.bridge_run_thread: QThread | None = None
+        self.bridge_run_worker: BridgeScriptWorker | None = None
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self.bridge_connecting = False
         self.current_script_path: Path | None = None
@@ -192,6 +215,7 @@ class EasyConPanel(QWidget):
         self.run_timer = QTimer(self)
         self.run_timer.setInterval(1000)
         self.run_timer.timeout.connect(self._tick_run_timer)
+        self.bridge_log.connect(self._append_log)
 
         self._build_ui()
         self._build_actions()
@@ -678,6 +702,12 @@ class EasyConPanel(QWidget):
             return
         script_text = self.editor.toPlainText()
         started_at = datetime.now()
+        self.stop_requested = False
+        self.current_run_stdout = []
+        self.current_run_stderr = []
+        self.current_run_started_at = started_at
+        self.current_run_script_path = generated_script
+        self.current_run_port = self.port_combo.currentText()
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
@@ -687,35 +717,68 @@ class EasyConPanel(QWidget):
         self.task_state_text = "执行中"
         self._update_bridge_controls()
         self._append_log("info", "通过常驻连接运行脚本")
-        try:
-            result = self._ensure_bridge_backend().run_script_text(script_text, self.current_script_name)
-        except Exception as exc:
-            self._append_log("error", f"Bridge 运行失败: {exc}")
-            self._finish_run(
-                "失败",
-                exit_code=1,
-                started_at=started_at,
-                script_path=generated_script,
-                port=self.port_combo.currentText(),
-            )
-            self.bridge_status = EasyConStatus.FAILED
-            self._update_bridge_controls()
-            return
+        thread = QThread(self)
+        worker = BridgeScriptWorker(self._ensure_bridge_backend(), script_text, self.current_script_name)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._bridge_run_finished)
+        worker.failed.connect(self._bridge_run_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(self._bridge_run_thread_finished)
+        self.bridge_run_thread = thread
+        self.bridge_run_worker = worker
+        thread.start()
+
+    def _bridge_run_finished(self, result: object) -> None:
         if result.stdout:
             self._append_log("stdout", result.stdout.rstrip())
         if result.stderr:
             self._append_log("stderr", result.stderr.rstrip())
-        status = "已完成，连接保持" if result.status == EasyConStatus.COMPLETED else "失败"
-        self.bridge_status = self._ensure_bridge_backend().status()
+        status = (
+            "已中止"
+            if self.stop_requested or result.exit_code == 130
+            else "已完成，连接保持"
+            if result.status == EasyConStatus.COMPLETED
+            else "失败"
+        )
+        self.stop_requested = False
+        try:
+            self.bridge_status = self._ensure_bridge_backend().status()
+        except Exception as exc:
+            self.bridge_status = EasyConStatus.FAILED
+            self._append_log("error", f"Bridge 状态刷新失败: {exc}")
         self._finish_run(
             status,
             exit_code=result.exit_code,
             started_at=result.started_at,
             ended_at=result.ended_at,
-            script_path=generated_script,
+            script_path=self.current_run_script_path,
             port=result.port,
         )
         self._update_bridge_controls()
+
+    def _bridge_run_failed(self, error: str) -> None:
+        self.stop_requested = False
+        self._append_log("error", f"Bridge 运行失败: {error}")
+        self.bridge_status = EasyConStatus.FAILED
+        self._finish_run(
+            "失败",
+            exit_code=1,
+            started_at=self.current_run_started_at,
+            script_path=self.current_run_script_path,
+            port=self.current_run_port,
+        )
+        self._update_bridge_controls()
+
+    def _bridge_run_thread_finished(self) -> None:
+        thread = self.bridge_run_thread
+        self.bridge_run_thread = None
+        self.bridge_run_worker = None
+        if thread is not None:
+            thread.deleteLater()
 
     def stop_bridge_script(self) -> None:
         try:
@@ -723,11 +786,10 @@ class EasyConPanel(QWidget):
         except Exception as exc:
             self._append_log("error", f"停止 Bridge 当前任务失败: {exc}")
             return
-        self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
-        self.task_state_text = "已中止"
-        self._append_log("warn", "已请求停止当前 Bridge 任务，连接保持")
-        self._finish_run("已中止", exit_code=130, port=self.port_combo.currentText())
-        self._update_bridge_controls()
+        self.stop_requested = True
+        self.task_state_text = "正在停止"
+        self._append_log("warn", "已请求停止当前 Bridge 任务，等待脚本退出")
+        self._update_status_labels()
 
     def _read_stdout(self) -> None:
         if self.process is None:
@@ -1075,7 +1137,7 @@ class EasyConPanel(QWidget):
     def _ensure_bridge_backend(self) -> BridgeEasyConBackend:
         bridge_path = self._bridge_path_from_ui()
         if self.bridge_backend is None:
-            self.bridge_backend = BridgeEasyConBackend(bridge_path=bridge_path, log_callback=self._append_log)
+            self.bridge_backend = BridgeEasyConBackend(bridge_path=bridge_path, log_callback=self.bridge_log.emit)
         return self.bridge_backend
 
     def _bridge_path_from_ui(self) -> Path | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +41,17 @@ def easycon_panel(monkeypatch, tmp_path, app):
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
     return EasyConPanel()
+
+
+def process_events_until(predicate, timeout_ms=1000):
+    app = QApplication.instance()
+    assert app is not None
+    deadline = time.monotonic() + timeout_ms / 1000
+    while not predicate() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    app.processEvents()
+    assert predicate()
 
 
 class FakeBridgeBackend:
@@ -213,6 +225,7 @@ def test_easycon_panel_runs_script_text_through_bridge(monkeypatch, tmp_path, ea
 
     easycon_panel.connect_bridge()
     easycon_panel.run_script()
+    process_events_until(lambda: easycon_panel.bridge_run_thread is None)
 
     backend = FakeBridgeBackend.instances[-1]
     assert easycon_panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED

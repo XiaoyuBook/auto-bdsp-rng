@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import queue
 import subprocess
+import threading
 from collections.abc import Mapping
 from datetime import datetime
 from itertools import count
@@ -40,34 +42,75 @@ class JsonLineBridgeTransport:
             encoding="utf-8",
             errors="replace",
         )
+        self._lock = threading.Lock()
+        self._pending: dict[int, queue.Queue[dict[str, object] | BaseException]] = {}
+        self._closed_error: BaseException | None = None
+        self._reader = threading.Thread(target=self._read_loop, name="EasyConBridgeReader", daemon=True)
+        self._reader.start()
 
     def request(self, command: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
         if self._process.stdin is None or self._process.stdout is None:
             raise BridgeProtocolError("Bridge process is not connected")
         request_id = next(self._ids)
         request = {"id": request_id, "command": command, "payload": dict(payload or {})}
-        self._process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-        self._process.stdin.flush()
-        while True:
-            line = self._process.stdout.readline()
-            if not line:
-                stderr = self._process.stderr.read() if self._process.stderr is not None else ""
-                raise BridgeProtocolError(stderr.strip() or "Bridge closed stdout")
-            response = json.loads(line)
-            if response.get("type") == "log":
-                if self._log_callback is not None:
-                    self._log_callback(str(response.get("level") or "info"), str(response.get("message") or ""))
-                continue
-            if response.get("id") != request_id:
-                continue
-            if response.get("ok") is not True:
-                raise BridgeProtocolError(str(response.get("error") or f"Bridge command failed: {command}"))
-            payload_value = response.get("payload")
-            return payload_value if isinstance(payload_value, dict) else {}
+        response_queue: queue.Queue[dict[str, object] | BaseException] = queue.Queue(maxsize=1)
+        with self._lock:
+            if self._closed_error is not None:
+                raise self._closed_error
+            self._pending[request_id] = response_queue
+            try:
+                self._process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+                self._process.stdin.flush()
+            except BaseException:
+                self._pending.pop(request_id, None)
+                raise
+
+        response = response_queue.get()
+        with self._lock:
+            self._pending.pop(request_id, None)
+        if isinstance(response, BaseException):
+            raise response
+        if response.get("ok") is not True:
+            raise BridgeProtocolError(str(response.get("error") or f"Bridge command failed: {command}"))
+        payload_value = response.get("payload")
+        return payload_value if isinstance(payload_value, dict) else {}
 
     def close(self) -> None:
         if self._process.poll() is None:
             self._process.terminate()
+        self._fail_pending(BridgeProtocolError("Bridge transport closed"))
+
+    def _read_loop(self) -> None:
+        try:
+            if self._process.stdout is None:
+                raise BridgeProtocolError("Bridge process is not connected")
+            while True:
+                line = self._process.stdout.readline()
+                if not line:
+                    stderr = self._process.stderr.read() if self._process.stderr is not None else ""
+                    raise BridgeProtocolError(stderr.strip() or "Bridge closed stdout")
+                response = json.loads(line)
+                if response.get("type") == "log":
+                    if self._log_callback is not None:
+                        self._log_callback(str(response.get("level") or "info"), str(response.get("message") or ""))
+                    continue
+                response_id = response.get("id")
+                if not isinstance(response_id, int):
+                    continue
+                with self._lock:
+                    response_queue = self._pending.get(response_id)
+                if response_queue is not None:
+                    response_queue.put(response)
+        except BaseException as exc:
+            self._fail_pending(exc if isinstance(exc, BridgeProtocolError) else BridgeProtocolError(str(exc)))
+
+    def _fail_pending(self, error: BaseException) -> None:
+        with self._lock:
+            self._closed_error = error
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for response_queue in pending:
+            response_queue.put(error)
 
 
 class BridgeEasyConBackend(EasyConBackend):
