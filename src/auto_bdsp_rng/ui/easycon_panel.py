@@ -566,6 +566,7 @@ class EasyConPanel(QWidget):
         self._restore_recent_parameters()
         mode = "模板副本" if self.current_script_is_template else "外部脚本"
         self._append_log("info", f"已加载{mode}: {path.name}")
+        self._remember_recent_script(path)
 
     def _load_script_item(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
@@ -997,6 +998,22 @@ class EasyConPanel(QWidget):
             keep_generated=self.config.keep_generated,
             keep_log_lines=self.log_keep_lines.value() if hasattr(self, "log_keep_lines") else self.config.keep_log_lines,
         )
+        save_config(self.config)
+
+    def _remember_recent_script(self, path: Path) -> None:
+        try:
+            normalized = path.resolve()
+        except OSError:
+            normalized = path
+        recent = [normalized]
+        for item in self.config.recent_scripts:
+            try:
+                existing = item.resolve()
+            except OSError:
+                existing = item
+            if existing != normalized:
+                recent.append(existing)
+        self.config = replace(self.config, recent_scripts=tuple(recent[:10]))
         save_config(self.config)
 
     def _log_retention_changed(self) -> None:

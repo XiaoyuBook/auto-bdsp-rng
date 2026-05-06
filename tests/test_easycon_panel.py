@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QLineEdit, QSpinBox
+from PySide6.QtGui import QTextCursor
 
 import auto_bdsp_rng.ui.easycon_panel as panel_module
 from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConInstallation, EasyConStatus
@@ -138,6 +139,21 @@ def test_easycon_panel_syncs_parameters_and_saves_generated_script(easycon_panel
     assert generated.read_text(encoding="utf-8").startswith("_闪帧 = 123")
     assert source is not None
     assert "_闪帧 = 填入这里" in source.read_text(encoding="utf-8")
+
+
+def test_easycon_panel_loads_external_script_without_adding_to_builtin_list(monkeypatch, tmp_path, easycon_panel):
+    saved_configs: list[EasyConConfig] = []
+    monkeypatch.setattr(panel_module, "save_config", lambda saved: saved_configs.append(saved) or tmp_path / "config.json")
+    external = tmp_path / "外部脚本.ecs"
+    external.write_text("_等待时间 = 9\nA 100\n", encoding="utf-8")
+
+    easycon_panel.load_script(external)
+    easycon_panel.load_script(external)
+
+    assert easycon_panel.script_list.count() == 1
+    assert easycon_panel.script_list.item(0).text() == "玫瑰公园.txt"
+    assert easycon_panel.template_mode_label.text() == "普通脚本"
+    assert saved_configs[-1].recent_scripts == (external.resolve(),)
 
 
 def test_easycon_panel_restores_and_persists_recent_script_parameters(monkeypatch, tmp_path, app):
@@ -443,6 +459,48 @@ def test_easycon_panel_persists_and_applies_log_retention(monkeypatch, tmp_path,
     assert "日志 2" in log_text
     assert "日志 4" in log_text
     assert saved_configs[-1].keep_log_lines == 3
+
+
+def test_easycon_panel_error_log_scrolls_to_last_error(easycon_panel):
+    easycon_panel._append_log("info", "前置日志")
+    easycon_panel.log_view.moveCursor(QTextCursor.MoveOperation.Start)
+
+    easycon_panel._append_log("error", "最后一条错误")
+
+    cursor = easycon_panel.log_view.textCursor()
+    assert cursor.position() == easycon_panel.log_view.document().characterCount() - 1
+    assert easycon_panel.log_view.toPlainText().endswith("[error] 最后一条错误")
+
+
+def test_easycon_panel_records_script_print_output_from_cli(monkeypatch, tmp_path, easycon_panel):
+    ezcon = tmp_path / "ezcon.cmd"
+    ezcon.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "if \"%1\"==\"--version\" (echo fake-ezcon-1.0& exit /b 0)",
+                "if \"%1\"==\"run\" (echo PRINT hello& exit /b 0)",
+                "exit /b 1",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=ezcon, version="fake", source="test"),
+    )
+    easycon_panel.backend_mode.setCurrentIndex(1)
+    easycon_panel.run_cli_smoke_test()
+    assert easycon_panel.process is not None
+    assert easycon_panel.process.waitForFinished(2000)
+    app = QApplication.instance()
+    assert app is not None
+    app.processEvents()
+
+    log_text = easycon_panel.log_view.toPlainText()
+    assert "[stdout] PRINT hello" in log_text
 
 
 def test_easycon_panel_reports_missing_ezcon_and_empty_ports(monkeypatch, tmp_path, app):
