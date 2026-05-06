@@ -25,6 +25,7 @@ class EasyConConfig:
     last_port: str | None = None
     mock_enabled: bool = False
     recent_scripts: tuple[Path, ...] = ()
+    script_parameters: dict[str, dict[str, str]] = field(default_factory=dict)
     keep_generated: int = 20
 
 

@@ -23,6 +23,11 @@ def load_config(path: Path = CONFIG_PATH) -> EasyConConfig:
         last_port=payload.get("last_port") or None,
         mock_enabled=bool(payload.get("mock_enabled", False)),
         recent_scripts=tuple(Path(item) for item in payload.get("recent_scripts", [])),
+        script_parameters={
+            str(script): {str(name): str(value) for name, value in values.items()}
+            for script, values in payload.get("script_parameters", {}).items()
+            if isinstance(values, dict)
+        },
         keep_generated=int(payload.get("keep_generated", 20)),
     )
 
@@ -35,6 +40,7 @@ def save_config(config: EasyConConfig, path: Path = CONFIG_PATH) -> Path:
         "last_port": config.last_port,
         "mock_enabled": config.mock_enabled,
         "recent_scripts": [str(item) for item in config.recent_scripts],
+        "script_parameters": config.script_parameters,
         "keep_generated": config.keep_generated,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -140,6 +140,43 @@ def test_easycon_panel_syncs_parameters_and_saves_generated_script(easycon_panel
     assert "_闪帧 = 填入这里" in source.read_text(encoding="utf-8")
 
 
+def test_easycon_panel_restores_and_persists_recent_script_parameters(monkeypatch, tmp_path, app):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    generated_dir = script_dir / ".generated"
+    (script_dir / "玫瑰公园.txt").write_text(
+        "_闪帧 = 填入这里  # 目标差值\n_等待时间 = 8\nA 100\n",
+        encoding="utf-8",
+    )
+    saved_configs: list[EasyConConfig] = []
+    config = EasyConConfig(
+        mock_enabled=True,
+        script_parameters={"script/玫瑰公园.txt": {"_闪帧": "456", "_等待时间": "9"}},
+    )
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "GENERATED_DIR", generated_dir)
+    monkeypatch.setattr(panel_module, "load_config", lambda: config)
+    monkeypatch.setattr(panel_module, "save_config", lambda saved: saved_configs.append(saved) or tmp_path / "config.json")
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=Path("D:/EasyCon/ezcon.exe"), version="1.6.3", source="test"),
+    )
+    monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
+    panel = EasyConPanel()
+
+    panel._load_script_item(panel.script_list.item(0))
+
+    assert "_闪帧 = 456  # 目标差值" in panel.editor.toPlainText()
+    assert "_等待时间 = 9" in panel.editor.toPlainText()
+
+    blink_input = panel.parameter_widgets["_闪帧"]
+    assert isinstance(blink_input, QLineEdit)
+    blink_input.setText("789")
+
+    assert saved_configs[-1].script_parameters["script/玫瑰公园.txt"]["_闪帧"] == "789"
+
+
 def test_easycon_panel_restores_template_defaults_and_locates_invalid_line(easycon_panel):
     easycon_panel._load_script_item(easycon_panel.script_list.item(0))
     blink_input = easycon_panel.parameter_widgets["_闪帧"]

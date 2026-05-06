@@ -526,6 +526,7 @@ class EasyConPanel(QWidget):
         self._update_template_mode_label()
         self.editor.setPlainText(text)
         self._rescan_parameters()
+        self._restore_recent_parameters()
         mode = "模板副本" if self.current_script_is_template else "外部脚本"
         self._append_log("info", f"已加载{mode}: {path.name}")
 
@@ -585,6 +586,7 @@ class EasyConPanel(QWidget):
         self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), values))
         self.editor.setTextCursor(cursor)
         self.editor.blockSignals(False)
+        self._save_current_parameters()
         self._update_run_enabled()
 
     def save_generated_script(self) -> Path | None:
@@ -637,6 +639,7 @@ class EasyConPanel(QWidget):
         self.editor.setTextCursor(cursor)
         self.editor.blockSignals(False)
         self._rescan_parameters()
+        self._save_current_parameters()
         self._append_log("info", "已恢复模板默认值")
 
     def toggle_run(self) -> None:
@@ -953,8 +956,47 @@ class EasyConPanel(QWidget):
             last_port=self.port_combo.currentText() or self.config.last_port,
             mock_enabled=self.mock_check.isChecked(),
             recent_scripts=self.config.recent_scripts,
+            script_parameters=self.config.script_parameters,
             keep_generated=self.config.keep_generated,
         )
+        save_config(self.config)
+
+    def _restore_recent_parameters(self) -> None:
+        key = _script_parameter_config_key(self.current_script_path)
+        if key is None:
+            return
+        values = self.config.script_parameters.get(key)
+        if not values:
+            return
+        restored = False
+        for name, value in values.items():
+            widget = self.parameter_widgets.get(name)
+            if widget is None:
+                continue
+            if isinstance(widget, QSpinBox):
+                try:
+                    widget.setValue(int(value))
+                except ValueError:
+                    continue
+            else:
+                widget.setText(value)
+            restored = True
+        if restored:
+            self._append_log("info", "已恢复该脚本上次使用的参数")
+
+    def _save_current_parameters(self) -> None:
+        key = _script_parameter_config_key(self.current_script_path)
+        if key is None or not self.parameter_widgets:
+            return
+        values = {
+            name: str(widget.value() if isinstance(widget, QSpinBox) else widget.text())
+            for name, widget in self.parameter_widgets.items()
+        }
+        script_parameters = {script: dict(parameters) for script, parameters in self.config.script_parameters.items()}
+        if script_parameters.get(key) == values:
+            return
+        script_parameters[key] = values
+        self.config = replace(self.config, script_parameters=script_parameters)
         save_config(self.config)
 
     def _append_log(self, level: str, message: str) -> None:
@@ -1271,3 +1313,16 @@ def _is_builtin_template(path: Path) -> bool:
     except OSError:
         return False
     return resolved.is_relative_to(script_root) and not resolved.is_relative_to(generated_root)
+
+
+def _script_parameter_config_key(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        resolved = path.resolve()
+        script_root = SCRIPT_DIR.resolve()
+        if resolved.is_relative_to(script_root):
+            return f"script/{resolved.relative_to(script_root).as_posix()}"
+        return str(resolved)
+    except OSError:
+        return str(path)
