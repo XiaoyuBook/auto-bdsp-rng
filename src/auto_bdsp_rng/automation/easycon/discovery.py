@@ -29,6 +29,7 @@ def load_config(path: Path = CONFIG_PATH) -> EasyConConfig:
             if isinstance(values, dict)
         },
         keep_generated=int(payload.get("keep_generated", 20)),
+        keep_log_lines=max(1, int(payload.get("keep_log_lines", 1000))),
     )
 
 
@@ -42,6 +43,7 @@ def save_config(config: EasyConConfig, path: Path = CONFIG_PATH) -> Path:
         "recent_scripts": [str(item) for item in config.recent_scripts],
         "script_parameters": config.script_parameters,
         "keep_generated": config.keep_generated,
+        "keep_log_lines": config.keep_log_lines,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path

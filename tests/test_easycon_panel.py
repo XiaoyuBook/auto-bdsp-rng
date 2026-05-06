@@ -321,3 +321,19 @@ def test_easycon_panel_copies_and_saves_logs(monkeypatch, tmp_path, easycon_pane
 
     assert saved == output
     assert "第一行日志" in output.read_text(encoding="utf-8")
+
+
+def test_easycon_panel_persists_and_applies_log_retention(monkeypatch, tmp_path, easycon_panel):
+    saved_configs: list[EasyConConfig] = []
+    monkeypatch.setattr(panel_module, "save_config", lambda saved: saved_configs.append(saved) or tmp_path / "config.json")
+
+    easycon_panel.log_keep_lines.setValue(3)
+    for index in range(5):
+        easycon_panel._append_log("info", f"日志 {index}")
+
+    log_text = easycon_panel.log_view.toPlainText()
+    assert "日志 0" not in log_text
+    assert "日志 1" not in log_text
+    assert "日志 2" in log_text
+    assert "日志 4" in log_text
+    assert saved_configs[-1].keep_log_lines == 3

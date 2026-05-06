@@ -421,6 +421,13 @@ class EasyConPanel(QWidget):
         self.log_view = QTextEdit()
         self.log_view.setObjectName("EasyConLog")
         self.log_view.setReadOnly(True)
+        self.log_view.document().setMaximumBlockCount(self.config.keep_log_lines)
+        self.log_keep_lines = QSpinBox()
+        self.log_keep_lines.setRange(1, 100_000)
+        self.log_keep_lines.setValue(self.config.keep_log_lines)
+        self.log_keep_lines.setSuffix(" 行")
+        self.log_keep_lines.setToolTip("日志区最多保留的行数")
+        self.log_keep_lines.valueChanged.connect(self._log_retention_changed)
         self.clear_log_button = QPushButton("清空日志")
         self.clear_log_button.clicked.connect(self.log_view.clear)
         self.copy_log_button = QPushButton("复制日志")
@@ -428,6 +435,8 @@ class EasyConPanel(QWidget):
         self.save_log_button = QPushButton("保存日志")
         self.save_log_button.clicked.connect(self.save_logs_dialog)
         log_buttons = QHBoxLayout()
+        log_buttons.addWidget(QLabel("保留"))
+        log_buttons.addWidget(self.log_keep_lines)
         log_buttons.addWidget(self.clear_log_button)
         log_buttons.addWidget(self.copy_log_button)
         log_buttons.addWidget(self.save_log_button)
@@ -958,8 +967,13 @@ class EasyConPanel(QWidget):
             recent_scripts=self.config.recent_scripts,
             script_parameters=self.config.script_parameters,
             keep_generated=self.config.keep_generated,
+            keep_log_lines=self.log_keep_lines.value() if hasattr(self, "log_keep_lines") else self.config.keep_log_lines,
         )
         save_config(self.config)
+
+    def _log_retention_changed(self) -> None:
+        self.log_view.document().setMaximumBlockCount(self.log_keep_lines.value())
+        self._save_config_from_ui()
 
     def _restore_recent_parameters(self) -> None:
         key = _script_parameter_config_key(self.current_script_path)
