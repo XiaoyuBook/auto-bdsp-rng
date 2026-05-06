@@ -343,6 +343,8 @@ class EasyConPanel(QWidget):
         self.port_combo.currentIndexChanged.connect(self._port_changed)
         self.refresh_ports_button = QPushButton("刷新串口")
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
+        self.auto_select_port_button = QPushButton("自动选择串口")
+        self.auto_select_port_button.clicked.connect(self.auto_select_port)
         self.connect_button = QPushButton("连接伊机控")
         self.connect_button.clicked.connect(self.toggle_bridge_connection)
         self.disconnect_button = QPushButton("断开连接")
@@ -368,10 +370,11 @@ class EasyConPanel(QWidget):
         config_layout.addWidget(QLabel("串口"), 6, 0)
         config_layout.addWidget(self.port_combo, 6, 1)
         config_layout.addWidget(self.refresh_ports_button, 6, 2)
-        config_layout.addWidget(self.connect_button, 7, 1)
-        config_layout.addWidget(self.disconnect_button, 7, 2)
-        config_layout.addWidget(self.mock_check, 8, 1, 1, 2)
-        config_layout.addWidget(self.cli_test_button, 9, 1, 1, 2)
+        config_layout.addWidget(self.auto_select_port_button, 7, 1, 1, 2)
+        config_layout.addWidget(self.connect_button, 8, 1)
+        config_layout.addWidget(self.disconnect_button, 8, 2)
+        config_layout.addWidget(self.mock_check, 9, 1, 1, 2)
+        config_layout.addWidget(self.cli_test_button, 10, 1, 1, 2)
         layout.addWidget(config_group)
 
         controller_group = QGroupBox("手柄测试")
@@ -481,15 +484,13 @@ class EasyConPanel(QWidget):
         self._update_run_enabled()
 
     def refresh_ports(self) -> None:
-        current = self.config.last_port
         ports = list_ports(self.installation) if self.installation.is_available else []
         self.port_combo.blockSignals(True)
         self.port_combo.clear()
         self.port_combo.addItems(ports)
-        if current and current in ports:
-            self.port_combo.setCurrentText(current)
-        elif len(ports) == 1:
-            self.port_combo.setCurrentIndex(0)
+        selected = self._select_preferred_port(ports)
+        if selected is not None:
+            self.port_combo.setCurrentText(selected)
         self.port_combo.blockSignals(False)
         self._append_log("info", f"已刷新串口: {', '.join(ports) if ports else '未发现'}")
         if not ports and not self.mock_check.isChecked():
@@ -497,6 +498,28 @@ class EasyConPanel(QWidget):
         self._save_config_from_ui()
         self._update_run_enabled()
         self._update_status_labels()
+
+    def auto_select_port(self) -> None:
+        ports = [self.port_combo.itemText(index) for index in range(self.port_combo.count())]
+        selected = self._select_preferred_port(ports)
+        if selected is None:
+            self._append_log("warn", "未发现可自动选择的串口，请刷新串口或启用 mock 模式")
+            self._update_run_enabled()
+            return
+        self.port_combo.setCurrentText(selected)
+        self._append_log("info", f"已自动选择串口: {selected}")
+        self._save_config_from_ui()
+        self._update_run_enabled()
+        self._update_status_labels()
+
+    def _select_preferred_port(self, ports: list[str]) -> str | None:
+        if self.config.last_port in ports:
+            return self.config.last_port
+        if len(ports) == 1:
+            return ports[0]
+        if self.port_combo.currentText() in ports:
+            return self.port_combo.currentText()
+        return None
 
     def choose_ezcon(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择 ezcon.exe", "", "EasyCon CLI (ezcon.exe);;All files (*.*)")
@@ -1232,6 +1255,7 @@ class EasyConPanel(QWidget):
         self.bridge_path.setEnabled(is_bridge)
         self.browse_bridge_button.setEnabled(is_bridge)
         self.mock_check.setEnabled(not is_bridge)
+        self.auto_select_port_button.setEnabled(bool(self.port_combo.count()))
         if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
             self.connect_button.setText("断开连接")
             self.toolbar_connect_button.setText("断开连接")
