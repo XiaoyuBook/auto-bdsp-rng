@@ -9,4 +9,7 @@ public interface IEasyConSession : IDisposable
     ScriptRunResult RunScript(string scriptText, string name, CancellationToken token);
     void Press(string button, int durationMs);
     void Stick(string side, string direction, int? durationMs);
+    void KeyDown(string button);
+    void KeyUp(string button);
+    void StickDirection(string side, string direction, bool down);
 }

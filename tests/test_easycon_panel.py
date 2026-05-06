@@ -8,8 +8,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QSpinBox
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QKeyEvent, QTextCursor
 
 import auto_bdsp_rng.ui.easycon_panel as panel_module
 from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConInstallation, EasyConStatus
@@ -65,6 +66,8 @@ class FakeBridgeBackend:
         self.script_runs: list[tuple[str, str | None]] = []
         self.presses: list[tuple[str, int]] = []
         self.sticks: list[tuple[str, str | int, int | None]] = []
+        self.key_events: list[tuple[str, str]] = []
+        self.stick_events: list[tuple[str, str, bool]] = []
         self.stopped = False
         self.disconnected = False
         FakeBridgeBackend.instances.append(self)
@@ -102,6 +105,15 @@ class FakeBridgeBackend:
 
     def stick(self, side, direction, duration_ms):
         self.sticks.append((side, direction, duration_ms))
+
+    def key_down(self, button):
+        self.key_events.append(("down", button))
+
+    def key_up(self, button):
+        self.key_events.append(("up", button))
+
+    def stick_direction(self, side, direction, down):
+        self.stick_events.append((side, direction, down))
 
 
 def test_easycon_panel_lists_builtin_scripts(easycon_panel):
@@ -348,6 +360,80 @@ def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_pa
     assert backend.presses == [("A", 100)]
     assert backend.sticks == [("left", "RESET", 100)]
     assert easycon_panel.task_state_label.text() == "任务: 已完成"
+
+
+def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch, tmp_path, easycon_panel):
+    FakeBridgeBackend.instances.clear()
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    easycon_panel.bridge_path.setText(str(bridge))
+    easycon_panel.connect_bridge()
+
+    easycon_panel.keyboard_controller_check.setChecked(True)
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier),
+    )
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier),
+    )
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_W, Qt.KeyboardModifier.NoModifier),
+    )
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_W, Qt.KeyboardModifier.NoModifier),
+    )
+
+    backend = FakeBridgeBackend.instances[-1]
+    assert backend.key_events == [("down", "A"), ("up", "A")]
+    assert backend.stick_events == [("left", "Up", True), ("left", "Up", False)]
+    assert "键盘虚拟手柄已启用" in easycon_panel.log_view.toPlainText()
+
+
+def test_easycon_panel_escape_disables_keyboard_virtual_controller(monkeypatch, tmp_path, easycon_panel):
+    FakeBridgeBackend.instances.clear()
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    easycon_panel.bridge_path.setText(str(bridge))
+    easycon_panel.connect_bridge()
+
+    easycon_panel.keyboard_controller_check.setChecked(True)
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
+    )
+
+    assert easycon_panel.keyboard_controller_check.isChecked() is False
+    assert easycon_panel.virtual_controller_enabled is False
+
+
+def test_easycon_panel_keyboard_virtual_controller_releases_on_app_deactivate(monkeypatch, tmp_path, easycon_panel):
+    FakeBridgeBackend.instances.clear()
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    easycon_panel.bridge_path.setText(str(bridge))
+    easycon_panel.connect_bridge()
+
+    easycon_panel.keyboard_controller_check.setChecked(True)
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier),
+    )
+    QApplication.sendEvent(QApplication.instance(), QEvent(QEvent.Type.ApplicationDeactivate))
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier),
+    )
+
+    backend = FakeBridgeBackend.instances[-1]
+    assert backend.key_events == [("down", "A"), ("up", "A")]
+    assert easycon_panel.virtual_controller_keys == {}
 
 
 def test_easycon_panel_runs_cli_smoke_test(monkeypatch, tmp_path, easycon_panel):

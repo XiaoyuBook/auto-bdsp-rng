@@ -169,6 +169,52 @@ Contract:
 - Sends the stick action through the already-open connection.
 - Does not start a CLI process.
 
+### key_down
+
+Request payload:
+
+```json
+{"button":"A"}
+```
+
+Contract:
+
+- Sends a button press-down event through the already-open connection.
+- The button remains pressed until the matching `key_up` request.
+- Used by the keyboard virtual controller.
+- Does not start a CLI process.
+
+### key_up
+
+Request payload:
+
+```json
+{"button":"A"}
+```
+
+Contract:
+
+- Sends a button release event through the already-open connection.
+- Used by the keyboard virtual controller.
+- Does not start a CLI process.
+
+### stick_direction
+
+Request payload:
+
+```json
+{"side":"left","direction":"Up","down":true}
+```
+
+Contract:
+
+- Sends a directional stick or D-pad down/up event through the already-open connection.
+- `side` accepts `left`, `right`, or `hat`.
+- `direction` accepts `Up`, `Down`, `Left`, or `Right`.
+- `down=true` presses the direction; `down=false` releases it.
+- Used by the keyboard virtual controller.
+- Does not start a CLI process.
+
 ## Acceptance Scenario
 
 1. Start `EasyConBridge.exe`.
@@ -179,7 +225,8 @@ Contract:
 6. Confirm the serial port is never closed or reopened between runs.
 7. Confirm no reset is required between runs.
 8. Send `press(A, 100)` and confirm it uses the same connection.
-9. Send `disconnect` and confirm the port is released.
+9. Enable the keyboard virtual controller and confirm key press/release maps to `key_down`, `key_up`, and `stick_direction` on the same connection.
+10. Send `disconnect` and confirm the port is released.
 
 Minimum automated smoke test:
 

@@ -35,7 +35,7 @@ class FakeBridgeTransport:
             }
         if command == "run_script":
             return {"exit_code": 0, "stdout": f"ran {data['name']}", "stderr": ""}
-        if command in {"press", "stick", "stop"}:
+        if command in {"press", "stick", "stop", "key_down", "key_up", "stick_direction"}:
             return {"status": "connected"}
         return {}
 
@@ -119,4 +119,22 @@ def test_bridge_backend_press_stick_and_stop_use_bridge_session():
         "stick",
         "stop",
         "status",
+    ]
+
+
+def test_bridge_backend_virtual_controller_uses_down_up_commands():
+    transport = FakeBridgeTransport()
+    backend = BridgeEasyConBackend(transport=transport)
+
+    backend.connect("COM7")
+    backend.key_down("A")
+    backend.key_up("A")
+    backend.stick_direction("left", "Up", True)
+    backend.stick_direction("left", "Up", False)
+
+    assert transport.commands[-4:] == [
+        ("key_down", {"button": "A"}),
+        ("key_up", {"button": "A"}),
+        ("stick_direction", {"side": "left", "direction": "Up", "down": True}),
+        ("stick_direction", {"side": "left", "direction": "Up", "down": False}),
     ]

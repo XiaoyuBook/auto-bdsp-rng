@@ -98,6 +98,35 @@ public sealed class EasyConSession : IEasyConSession
         RunScript(script, $"stick-{side}", CancellationToken.None);
     }
 
+    public void KeyDown(string button)
+    {
+        EnsureConnected();
+        _switch!.Down(ECKeyUtil.Button(ParseSwitchButton(button)));
+        _log($"key down {button}");
+    }
+
+    public void KeyUp(string button)
+    {
+        EnsureConnected();
+        _switch!.Up(ECKeyUtil.Button(ParseSwitchButton(button)));
+        _log($"key up {button}");
+    }
+
+    public void StickDirection(string side, string direction, bool down)
+    {
+        EnsureConnected();
+        var dkey = ParseDirectionKey(direction);
+        if (side.Equals("left", StringComparison.OrdinalIgnoreCase) || side.Equals("LS", StringComparison.OrdinalIgnoreCase))
+            _switch!.LeftDirection(dkey, down);
+        else if (side.Equals("right", StringComparison.OrdinalIgnoreCase) || side.Equals("RS", StringComparison.OrdinalIgnoreCase))
+            _switch!.RightDirection(dkey, down);
+        else if (side.Equals("hat", StringComparison.OrdinalIgnoreCase) || side.Equals("dpad", StringComparison.OrdinalIgnoreCase))
+            _switch!.HatDirection(dkey, down);
+        else
+            throw new InvalidOperationException($"unknown stick side: {side}");
+        _log($"{side} {direction} {(down ? "down" : "up")}");
+    }
+
     public void Dispose()
     {
         Disconnect();
@@ -107,5 +136,24 @@ public sealed class EasyConSession : IEasyConSession
     {
         if (!IsConnected)
             throw new InvalidOperationException("bridge is not connected");
+    }
+
+    private static SwitchButton ParseSwitchButton(string button)
+    {
+        if (Enum.TryParse<SwitchButton>(button, ignoreCase: true, out var parsed))
+            return parsed;
+        throw new InvalidOperationException($"unknown button: {button}");
+    }
+
+    private static DirectionKey ParseDirectionKey(string direction)
+    {
+        return direction.ToUpperInvariant() switch
+        {
+            "UP" or "TOP" => DirectionKey.Up,
+            "DOWN" or "BOTTOM" => DirectionKey.Down,
+            "LEFT" => DirectionKey.Left,
+            "RIGHT" => DirectionKey.Right,
+            _ => throw new InvalidOperationException($"unknown direction: {direction}"),
+        };
     }
 }

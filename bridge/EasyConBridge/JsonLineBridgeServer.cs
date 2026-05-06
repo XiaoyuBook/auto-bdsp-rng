@@ -112,6 +112,18 @@ public sealed class JsonLineBridgeServer
                     RequiredString(payload, "direction"),
                     OptionalInt(payload, "duration_ms"));
                 return new { status = "connected" };
+            case "key_down":
+                _session.KeyDown(RequiredString(payload, "button"));
+                return new { status = "connected" };
+            case "key_up":
+                _session.KeyUp(RequiredString(payload, "button"));
+                return new { status = "connected" };
+            case "stick_direction":
+                _session.StickDirection(
+                    RequiredString(payload, "side"),
+                    RequiredString(payload, "direction"),
+                    RequiredBool(payload, "down"));
+                return new { status = "connected" };
             default:
                 throw new InvalidOperationException($"unknown command: {command}");
         }
@@ -210,5 +222,14 @@ public sealed class JsonLineBridgeServer
             && value.TryGetInt32(out var parsed)
             ? parsed
             : null;
+    }
+
+    private static bool RequiredBool(JsonElement payload, string name)
+    {
+        if (payload.ValueKind == JsonValueKind.Object
+            && payload.TryGetProperty(name, out var value)
+            && (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False))
+            return value.GetBoolean();
+        throw new InvalidOperationException($"missing payload field: {name}");
     }
 }

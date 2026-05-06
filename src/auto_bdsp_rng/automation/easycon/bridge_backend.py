@@ -214,6 +214,15 @@ class BridgeEasyConBackend(EasyConBackend):
     def stick(self, side: str, direction: str | int, duration_ms: int | None) -> None:
         self._request("stick", {"side": side, "direction": direction, "duration_ms": duration_ms})
 
+    def key_down(self, button: str) -> None:
+        self._request("key_down", {"button": button})
+
+    def key_up(self, button: str) -> None:
+        self._request("key_up", {"button": button})
+
+    def stick_direction(self, side: str, direction: str, down: bool) -> None:
+        self._request("stick_direction", {"side": side, "direction": direction, "down": down})
+
     def close(self) -> None:
         if self._transport is not None:
             self._transport.close()

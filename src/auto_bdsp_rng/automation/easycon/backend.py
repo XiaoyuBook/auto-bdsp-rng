@@ -47,3 +47,12 @@ class EasyConBackend(ABC):
 
     def stick(self, side: str, direction: str | int, duration_ms: int | None) -> None:
         raise NotImplementedError("Backend does not support direct stick actions")
+
+    def key_down(self, button: str) -> None:
+        raise NotImplementedError("Backend does not support virtual controller key down")
+
+    def key_up(self, button: str) -> None:
+        raise NotImplementedError("Backend does not support virtual controller key up")
+
+    def stick_direction(self, side: str, direction: str, down: bool) -> None:
+        raise NotImplementedError("Backend does not support virtual controller stick directions")

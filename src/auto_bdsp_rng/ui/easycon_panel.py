@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -57,6 +57,34 @@ from auto_bdsp_rng.automation.easycon import (
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = PROJECT_ROOT / "script"
 GENERATED_DIR = SCRIPT_DIR / ".generated"
+
+KEYBOARD_VPAD_BUTTONS = {
+    Qt.Key.Key_L: "A",
+    Qt.Key.Key_K: "B",
+    Qt.Key.Key_I: "X",
+    Qt.Key.Key_J: "Y",
+    Qt.Key.Key_G: "L",
+    Qt.Key.Key_T: "R",
+    Qt.Key.Key_F: "ZL",
+    Qt.Key.Key_R: "ZR",
+    Qt.Key.Key_Plus: "PLUS",
+    Qt.Key.Key_Equal: "PLUS",
+    Qt.Key.Key_Minus: "MINUS",
+    Qt.Key.Key_Z: "CAPTURE",
+    Qt.Key.Key_C: "HOME",
+    Qt.Key.Key_Q: "LCLICK",
+    Qt.Key.Key_E: "RCLICK",
+}
+KEYBOARD_VPAD_DIRECTIONS = {
+    Qt.Key.Key_W: ("left", "Up"),
+    Qt.Key.Key_S: ("left", "Down"),
+    Qt.Key.Key_A: ("left", "Left"),
+    Qt.Key.Key_D: ("left", "Right"),
+    Qt.Key.Key_Up: ("right", "Up"),
+    Qt.Key.Key_Down: ("right", "Down"),
+    Qt.Key.Key_Left: ("right", "Left"),
+    Qt.Key.Key_Right: ("right", "Right"),
+}
 
 
 class LineNumberArea(QWidget):
@@ -203,6 +231,8 @@ class EasyConPanel(QWidget):
         self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
         self.parameter_defaults: dict[str, str] = {}
         self.parameter_lines: dict[str, int] = {}
+        self.virtual_controller_enabled = False
+        self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
         self.process: QProcess | None = None
         self.current_run_started_at: datetime | None = None
         self.current_run_script_path: Path | None = None
@@ -401,6 +431,12 @@ class EasyConPanel(QWidget):
         controller_layout.addWidget(self.test_home_button, 1, 2)
         controller_layout.addWidget(self.test_ls_reset_button, 2, 0, 1, 2)
         controller_layout.addWidget(self.test_rs_reset_button, 2, 2)
+        self.keyboard_controller_check = QCheckBox("键盘虚拟手柄")
+        self.keyboard_controller_check.toggled.connect(self.set_keyboard_controller_enabled)
+        self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆，Esc=退出")
+        self.keyboard_mapping_label.setObjectName("Hint")
+        controller_layout.addWidget(self.keyboard_controller_check, 3, 0, 1, 3)
+        controller_layout.addWidget(self.keyboard_mapping_label, 4, 0, 1, 3)
         layout.addWidget(controller_group)
 
         param_group = QGroupBox("脚本参数")
@@ -1148,6 +1184,8 @@ class EasyConPanel(QWidget):
         self._update_run_enabled()
 
     def disconnect_bridge(self) -> None:
+        if self.virtual_controller_enabled:
+            self.keyboard_controller_check.setChecked(False)
         try:
             self._ensure_bridge_backend().disconnect()
         except Exception as exc:
@@ -1199,6 +1237,86 @@ class EasyConPanel(QWidget):
             self._update_status_labels()
             return
         self._run_inline_cli_script(f"test_{side}_{direction.lower()}", f"{label}\n")
+
+    def set_keyboard_controller_enabled(self, enabled: bool) -> None:
+        if enabled:
+            if not self._is_bridge_mode() or self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+                self.keyboard_controller_check.blockSignals(True)
+                self.keyboard_controller_check.setChecked(False)
+                self.keyboard_controller_check.blockSignals(False)
+                self._append_log("warn", "请先使用常驻 Bridge 连接伊机控，再启用键盘虚拟手柄")
+                return
+            QApplication.instance().installEventFilter(self)
+            self.virtual_controller_enabled = True
+            self._append_log("info", "键盘虚拟手柄已启用")
+            self.setFocus()
+            return
+        self._release_virtual_controller_keys()
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        self.virtual_controller_enabled = False
+        self._append_log("info", "键盘虚拟手柄已关闭")
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if not self.virtual_controller_enabled:
+            return super().eventFilter(watched, event)
+        if event.type() == QEvent.Type.KeyPress:
+            if event.isAutoRepeat():  # type: ignore[attr-defined]
+                return True
+            return self._handle_virtual_controller_key(event.key(), down=True)  # type: ignore[attr-defined]
+        if event.type() == QEvent.Type.KeyRelease:
+            if event.isAutoRepeat():  # type: ignore[attr-defined]
+                return True
+            return self._handle_virtual_controller_key(event.key(), down=False)  # type: ignore[attr-defined]
+        if event.type() in (QEvent.Type.ApplicationDeactivate, QEvent.Type.WindowDeactivate):
+            self._release_virtual_controller_keys()
+        return super().eventFilter(watched, event)
+
+    def _handle_virtual_controller_key(self, key: int, down: bool) -> bool:
+        if key == Qt.Key.Key_Escape:
+            self.keyboard_controller_check.setChecked(False)
+            return True
+        if down and key in self.virtual_controller_keys:
+            return True
+        action = _keyboard_virtual_controller_action(key)
+        if action is None:
+            return False
+        if not down and key not in self.virtual_controller_keys:
+            return True
+        kind, value, direction = action
+        try:
+            if kind == "button":
+                if down:
+                    self._ensure_bridge_backend().key_down(value)
+                    self.virtual_controller_keys[key] = action
+                else:
+                    self._ensure_bridge_backend().key_up(value)
+                    self.virtual_controller_keys.pop(key, None)
+            elif direction is not None:
+                self._ensure_bridge_backend().stick_direction(value, direction, down)
+                if down:
+                    self.virtual_controller_keys[key] = action
+                else:
+                    self.virtual_controller_keys.pop(key, None)
+        except Exception as exc:
+            self.bridge_status = EasyConStatus.FAILED
+            self._append_log("error", f"键盘虚拟手柄发送失败: {exc}")
+            self.keyboard_controller_check.setChecked(False)
+        return True
+
+    def _release_virtual_controller_keys(self) -> None:
+        for key, action in list(self.virtual_controller_keys.items()):
+            kind, value, direction = action
+            try:
+                if kind == "button":
+                    self._ensure_bridge_backend().key_up(value)
+                elif direction is not None:
+                    self._ensure_bridge_backend().stick_direction(value, direction, False)
+            except Exception as exc:
+                self._append_log("error", f"释放键盘虚拟手柄按键失败: {exc}")
+            finally:
+                self.virtual_controller_keys.pop(key, None)
 
     def run_cli_smoke_test(self) -> None:
         self._append_log("warn", "测试 CLI 运行会触发一次 CLI 连接，不代表常驻连接验收。")
@@ -1320,6 +1438,7 @@ class EasyConPanel(QWidget):
             self.test_rs_reset_button,
         ):
             button.setEnabled(enabled)
+        self.keyboard_controller_check.setEnabled(self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED)
         self.cli_test_button.setEnabled(
             not self._is_bridge_mode()
             and self.installation.is_available
@@ -1403,3 +1522,14 @@ def _easycon_unavailable_message(installation: EasyConInstallation, requested_pa
     if requested_path and "does not exist" not in error:
         return "ezcon 路径可能无效或文件损坏，请重新选择 ezcon.exe。"
     return "请选择 ezcon.exe 或设置 EASYCON_ROOT。"
+
+
+def _keyboard_virtual_controller_action(key: int) -> tuple[str, str, str | None] | None:
+    button = KEYBOARD_VPAD_BUTTONS.get(Qt.Key(key))
+    if button is not None:
+        return ("button", button, None)
+    direction = KEYBOARD_VPAD_DIRECTIONS.get(Qt.Key(key))
+    if direction is not None:
+        side, value = direction
+        return ("stick", side, value)
+    return None

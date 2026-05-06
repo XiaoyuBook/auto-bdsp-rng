@@ -82,6 +82,27 @@ public sealed class FakeEasyConSession : IEasyConSession, IPersistentSessionDiag
         _log(durationMs is null ? $"stick {side} {direction}" : $"stick {side} {direction} {durationMs.Value}");
     }
 
+    public void KeyDown(string button)
+    {
+        EnsureConnected();
+        ActionCount++;
+        _log($"key down {button}");
+    }
+
+    public void KeyUp(string button)
+    {
+        EnsureConnected();
+        ActionCount++;
+        _log($"key up {button}");
+    }
+
+    public void StickDirection(string side, string direction, bool down)
+    {
+        EnsureConnected();
+        ActionCount++;
+        _log($"{side} {direction} {(down ? "down" : "up")}");
+    }
+
     public void Dispose()
     {
         Disconnect();
