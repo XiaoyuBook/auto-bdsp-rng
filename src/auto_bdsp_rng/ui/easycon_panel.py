@@ -295,21 +295,6 @@ class EasyConPanel(QWidget):
         layout.setSpacing(0)
         self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 12px; }}")
 
-        layout.addWidget(self._build_menu_bar())
-
-        # 标题行: "伊机控 EasyCon v1.6.3  QQ群:946057081"
-        title_bar = QFrame()
-        title_bar.setStyleSheet(
-            f"QFrame {{ background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER}; }}"
-        )
-        title_layout = QHBoxLayout(title_bar)
-        title_layout.setContentsMargins(10, 4, 10, 4)
-        title_label = QLabel("伊机控 EasyCon v1.6.3  QQ群:946057081")
-        title_label.setStyleSheet("font-size: 11px; color: #555;")
-        title_layout.addWidget(title_label)
-        title_layout.addStretch()
-        layout.addWidget(title_bar)
-
         # 主内容区
         content = QWidget()
         content.setStyleSheet(f"background: {self.CLR_BG};")
@@ -545,38 +530,19 @@ class EasyConPanel(QWidget):
             f" QPushButton:hover {{ background: {self.CLR_PANEL_BG}; }}"
         )
 
-        for text in ("远程运行", "远程停止", "编译烧录", "清除烧录"):
-            btn = QPushButton(text)
-            btn.setStyleSheet(btn_style)
-            layout.addWidget(btn)
+        new_btn = QPushButton("新建")
+        new_btn.setStyleSheet(btn_style)
+        layout.addWidget(new_btn)
 
-        layout.addSpacing(6)
+        self.open_button = QPushButton("打开")
+        self.open_button.setStyleSheet(btn_style)
+        self.open_button.clicked.connect(self.open_script_dialog)
+        layout.addWidget(self.open_button)
 
-        # 固件分组
-        firmware_group = QGroupBox("固件")
-        firmware_group.setStyleSheet(
-            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
-            f" background: {self.CLR_BG}; }}"
-            f" QGroupBox::title {{ subcontrol-origin: margin; left: 6px; padding: 0 4px; }}"
-        )
-        firmware_layout = QVBoxLayout(firmware_group)
-        firmware_layout.setContentsMargins(6, 4, 6, 6)
-        fw_combo = QComboBox()
-        fw_combo.addItem("Leonardo")
-        fw_combo.setStyleSheet(
-            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; }}"
-        )
-        firmware_layout.addWidget(fw_combo)
-        gen_btn = QPushButton("生成")
-        gen_btn.setStyleSheet(btn_style)
-        firmware_layout.addWidget(gen_btn)
-        layout.addWidget(firmware_group)
-
-        layout.addSpacing(6)
-
-        syntax_btn = QPushButton("脚本语法")
-        syntax_btn.setStyleSheet(btn_style)
-        layout.addWidget(syntax_btn)
+        self.save_generated_button = QPushButton("保存")
+        self.save_generated_button.setStyleSheet(btn_style)
+        self.save_generated_button.clicked.connect(self.save_generated_script)
+        layout.addWidget(self.save_generated_button)
 
         layout.addStretch()
         return area
@@ -665,10 +631,6 @@ class EasyConPanel(QWidget):
         self.mock_check.toggled.connect(self._save_config_from_ui)
         self.cli_test_button = QPushButton("测试 CLI 运行")
         self.cli_test_button.clicked.connect(self.run_cli_smoke_test)
-        self.open_button = QPushButton("打开脚本")
-        self.open_button.clicked.connect(self.open_script_dialog)
-        self.save_generated_button = QPushButton("保存临时脚本")
-        self.save_generated_button.clicked.connect(self.save_generated_script)
         self.save_original_button = QPushButton("保存到原文件")
         self.save_original_button.clicked.connect(self.save_to_original_script)
         self.detect_button = QPushButton("检测 EasyCon")
