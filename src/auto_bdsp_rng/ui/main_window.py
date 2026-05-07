@@ -516,8 +516,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("auto_bdsp_rng")
-        self.setMinimumSize(1600, 900)
-        self.resize(1600, 950)
+        self.setMinimumSize(1150, 900)
+        self.resize(1480, 950)
         self.lang = "zh"
         self._profile_version = GameVersion.BD
         self._active_record: StaticEncounterRecord | None = None
@@ -649,11 +649,11 @@ class MainWindow(QMainWindow):
         mid_row = QHBoxLayout()
         mid_row.setSpacing(10)
         self.rng_info_group = self._build_rng_info_group()
-        self.rng_info_group.setMinimumWidth(330)
+        self.rng_info_group.setMinimumWidth(250)
         self.static_group = self._build_static_group()
-        self.static_group.setMinimumWidth(390)
+        self.static_group.setMinimumWidth(290)
         self.filter_group = self._build_filter_group()
-        self.filter_group.setMinimumWidth(760)
+        self.filter_group.setMinimumWidth(620)
         mid_row.addWidget(self.rng_info_group)
         mid_row.addWidget(self.static_group)
         mid_row.addWidget(self.filter_group, 1)
@@ -895,7 +895,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Offset"), 5, 0)
         layout.addWidget(self.offset, 5, 1)
         layout.addWidget(self.generate_button, 6, 0, 1, 2)
-        group.setMinimumWidth(260)
+        group.setMinimumWidth(250)
         return group
 
     def _build_static_group(self) -> QGroupBox:
@@ -933,7 +933,7 @@ class MainWindow(QMainWindow):
         for row, (label, widget) in enumerate(rows):
             layout.addWidget(QLabel(label), row, 0)
             layout.addWidget(widget, row, 1)
-        group.setMinimumWidth(300)
+        group.setMinimumWidth(290)
         return group
 
     def _build_profile_group(self) -> QGroupBox:
@@ -1067,7 +1067,7 @@ class MainWindow(QMainWindow):
         outer.setSpacing(28)
 
         css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
-        css_ctrl = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 80px; }"
+        css_ctrl = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 64px; }"
         css_combo = "QComboBox { min-height: 30px; max-height: 30px; min-width: 180px; }"
         css_cb = "font-size: 12px; spacing: 6px; border: 0; background: transparent;"
 
@@ -1087,10 +1087,10 @@ class MainWindow(QMainWindow):
             lbl.setFixedWidth(50)
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             min_spin = self._spin(0, 31, 0)
-            min_spin.setFixedWidth(80)
+            min_spin.setFixedWidth(68)
             min_spin.setStyleSheet(css_ctrl)
             max_spin = self._spin(0, 31, 31)
-            max_spin.setFixedWidth(80)
+            max_spin.setFixedWidth(68)
             max_spin.setStyleSheet(css_ctrl)
             self.iv_min.append(min_spin)
             self.iv_max.append(max_spin)
@@ -1108,7 +1108,7 @@ class MainWindow(QMainWindow):
         self.iv_calculator_button = QPushButton("个体值计算器")
         self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
         self.iv_calculator_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
-        self.iv_calculator_button.setFixedWidth(260)
+        self.iv_calculator_button.setFixedWidth(230)
         left_col.addWidget(self.iv_calculator_button)
 
         left_col.addStretch()
