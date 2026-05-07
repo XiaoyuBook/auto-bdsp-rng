@@ -877,8 +877,11 @@ class MainWindow(QMainWindow):
             input_box.setMaxLength(16)
             input_box.editingFinished.connect(self._sync_state32_from_bdsp_seed64)
         self.initial_advances = self._spin(0, 10_000_000, 0)
+        self.initial_advances.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
+        self.max_advances.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.offset = self._spin(0, 1_000_000, 0)
+        self.offset.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.generate_button = QPushButton("生成")
         self.generate_button.clicked.connect(self.generate_results)
 
@@ -912,7 +915,8 @@ class MainWindow(QMainWindow):
         self.encounter_combo = QComboBox()
         self.encounter_combo.currentIndexChanged.connect(self._update_encounter_details)
         self.level_display = self._spin(1, 100, 1)
-        self.level_display.setEnabled(False)
+        self.level_display.setReadOnly(True)
+        self.level_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.template_ability_display = QComboBox()
         self.template_ability_display.addItems(["0", "1", "隐藏", "0/1", "任意"])
         self.template_ability_display.setEnabled(False)
@@ -920,7 +924,8 @@ class MainWindow(QMainWindow):
         self.template_shiny_display.addItems(["随机", "锁闪"])
         self.template_shiny_display.setEnabled(False)
         self.iv_count_display = self._spin(0, 6, 0)
-        self.iv_count_display.setEnabled(False)
+        self.iv_count_display.setReadOnly(True)
+        self.iv_count_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         rows = (
             ("分类", self.category_combo),
