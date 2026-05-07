@@ -532,6 +532,7 @@ class EasyConPanel(QWidget):
 
         new_btn = QPushButton("新建")
         new_btn.setStyleSheet(btn_style)
+        new_btn.clicked.connect(self.new_script)
         layout.addWidget(new_btn)
 
         self.open_button = QPushButton("打开")
@@ -539,10 +540,10 @@ class EasyConPanel(QWidget):
         self.open_button.clicked.connect(self.open_script_dialog)
         layout.addWidget(self.open_button)
 
-        self.save_generated_button = QPushButton("保存")
-        self.save_generated_button.setStyleSheet(btn_style)
-        self.save_generated_button.clicked.connect(self.save_generated_script)
-        layout.addWidget(self.save_generated_button)
+        self.save_button = QPushButton("保存")
+        self.save_button.setStyleSheet(btn_style)
+        self.save_button.clicked.connect(self.save_script)
+        layout.addWidget(self.save_button)
 
         layout.addStretch()
         return area
@@ -556,9 +557,8 @@ class EasyConPanel(QWidget):
         outer.setContentsMargins(6, 4, 6, 4)
         outer.setSpacing(6)
 
-        outer.addWidget(self._build_serial_column(), 33)
-        outer.addWidget(self._build_video_column(), 33)
-        outer.addWidget(self._build_vpad_column(), 33)
+        outer.addWidget(self._build_serial_column(), 50)
+        outer.addWidget(self._build_vpad_column(), 50)
         return panel
 
     def _build_serial_column(self) -> QWidget:
@@ -663,42 +663,6 @@ class EasyConPanel(QWidget):
         self.restore_defaults_button = QPushButton("恢复模板默认值")
         self.restore_defaults_button.clicked.connect(self.restore_template_defaults)
 
-    def _build_video_column(self) -> QWidget:
-        group = QGroupBox("视频源")
-        group.setStyleSheet(
-            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
-            f" background: {self.CLR_PANEL_BG}; }}"
-            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
-        )
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(8, 4, 8, 8)
-        layout.setSpacing(4)
-
-        btn_style = (
-            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            f" border-radius: 2px; padding: 4px 10px; font-size: 11px; }}"
-            f" QPushButton:hover {{ background: #e8e6e1; }}"
-        )
-        combo_style = (
-            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
-        )
-
-        video_combo = QComboBox()
-        video_combo.addItem("(USB Video, 0)")
-        video_combo.setStyleSheet(combo_style)
-        layout.addWidget(video_combo)
-
-        connect_video_btn = QPushButton("连接视频源")
-        connect_video_btn.setStyleSheet(btn_style)
-        layout.addWidget(connect_video_btn)
-
-        search_console_btn = QPushButton("搜图控制台")
-        search_console_btn.setStyleSheet(btn_style)
-        layout.addWidget(search_console_btn)
-
-        layout.addStretch()
-        return group
-
     def _build_vpad_column(self) -> QWidget:
         group = QGroupBox("虚拟手柄")
         group.setStyleSheet(
@@ -779,15 +743,11 @@ class EasyConPanel(QWidget):
 
         self.status_easycon_label = QLabel("LOG")
         self.status_controller_label = QLabel("单片机未连接")
-        self.status_capture_label = QLabel("采集卡未连接")
-        self.status_labels_label = QLabel("标签: 0")
         self.status_backend_label = QLabel("后端: 常驻连接")
 
         for label in (
             self.status_easycon_label,
             self.status_controller_label,
-            self.status_capture_label,
-            self.status_labels_label,
             self.status_backend_label,
         ):
             label.setStyleSheet(
@@ -811,8 +771,7 @@ class EasyConPanel(QWidget):
         if self.installation.path is not None:
             self.ezcon_path.setText(str(self.installation.path))
         if self.installation.is_available:
-            self.version_label.setText(f"EasyCon: {self.installation.version} ({self.installation.source})")
-            self._append_log("info", f"已检测到 EasyCon: {self.installation.version}")
+            self.version_label.setText(f"EasyCon: {self.installation.source}")
         else:
             self.version_label.setText("EasyCon: 未找到")
             self._append_log("warn", _easycon_unavailable_message(self.installation, self.ezcon_path.text().strip()))
@@ -962,6 +921,63 @@ class EasyConPanel(QWidget):
         self.editor.blockSignals(False)
         self._save_current_parameters()
         self._update_run_enabled()
+
+    def new_script(self) -> None:
+        self.current_script_path = None
+        self.current_script_name = "未命名文档.txt"
+        self.current_script_is_template = False
+        self.current_script_newline = "\n"
+        self.template_script_text = ""
+        self.script_name_label.setText(" 未命名文档.txt")
+        self._update_template_mode_label()
+        self.editor.setPlainText("")
+        self._rescan_parameters()
+        self._append_log("info", "已新建空白脚本")
+
+    def save_script(self) -> Path | None:
+        if not self.editor.toPlainText().strip():
+            self._append_log("warn", "没有可保存的脚本内容")
+            return None
+        self._sync_parameters_to_editor()
+        if self.current_script_path is not None and not self.current_script_is_template:
+            # 已有文件路径且非模板，直接保存
+            try:
+                self.current_script_path.write_text(
+                    self.editor.toPlainText(),
+                    encoding="utf-8",
+                    newline=self.current_script_newline,
+                )
+            except OSError as exc:
+                self._append_log("error", f"保存脚本失败: {exc}")
+                return None
+            self.template_script_text = self.editor.toPlainText()
+            self._append_log("info", f"已保存: {self.current_script_path.name}")
+            return self.current_script_path
+        # 新文件或模板文件，弹出保存对话框
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存脚本", str(SCRIPT_DIR), "EasyCon scripts (*.txt *.ecs)"
+        )
+        if not path:
+            return None
+        output = Path(path)
+        try:
+            output.write_text(
+                self.editor.toPlainText(),
+                encoding="utf-8",
+                newline=self.current_script_newline,
+            )
+        except OSError as exc:
+            self._append_log("error", f"保存脚本失败: {exc}")
+            return None
+        self.current_script_path = output
+        self.current_script_name = output.name
+        self.current_script_is_template = _is_builtin_template(output)
+        self.template_script_text = self.editor.toPlainText()
+        self.script_name_label.setText(f" {output.name}")
+        self._update_template_mode_label()
+        self._remember_recent_script(output)
+        self._append_log("info", f"已保存: {output.name}")
+        return output
 
     def save_generated_script(self) -> Path | None:
         if not self.editor.toPlainText().strip():
@@ -1751,9 +1767,7 @@ class EasyConPanel(QWidget):
             return
         connection_text = self._connection_state_text()
         backend_text = "常驻连接" if self._is_bridge_mode() else "CLI 过渡"
-        easycon_text = (
-            f"EasyCon {self.installation.version}" if self.installation.is_available and self.installation.version else "LOG"
-        )
+        easycon_text = "LOG"
         self.connection_state_label.setText(f"连接: {connection_text}")
         self.task_state_label.setText(f"任务: {self.task_state_text}")
         self.status_easycon_label.setText(easycon_text)
