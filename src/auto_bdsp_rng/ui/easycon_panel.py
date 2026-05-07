@@ -41,7 +41,6 @@ from auto_bdsp_rng.automation.easycon import (
     EasyConConfig,
     EasyConInstallation,
     EasyConStatus,
-    apply_parameter_values,
     classify_cli_failure,
     cli_connection_notice,
     detect_newline_style,
@@ -50,7 +49,6 @@ from auto_bdsp_rng.automation.easycon import (
     generate_script_file,
     list_ports,
     load_config,
-    parse_script_parameters,
     prune_generated_scripts,
     save_config,
     scan_builtin_scripts,
@@ -396,9 +394,6 @@ class EasyConPanel(QWidget):
         self.current_script_name = "未命名脚本"
         self.current_script_newline = "\n"
         self._saved_editor_text = ""
-        self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
-        self.parameter_defaults: dict[str, str] = {}
-        self.parameter_lines: dict[str, int] = {}
         self.virtual_controller_enabled = False
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
         self.key_mapping: dict[str, int] = dict(DEFAULT_KEY_MAPPING)
@@ -819,16 +814,6 @@ class EasyConPanel(QWidget):
         self.script_list = QListWidget()
         self.script_list.itemDoubleClicked.connect(self._load_script_item)
 
-        # 参数面板
-        self.parameter_scroll = QScrollArea()
-        self.parameter_scroll.setWidgetResizable(True)
-        self.parameter_panel = QWidget()
-        self.parameter_form = QFormLayout(self.parameter_panel)
-        self.parameter_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.parameter_scroll.setWidget(self.parameter_panel)
-        self.rescan_button = QPushButton("重新扫描参数")
-        self.rescan_button.clicked.connect(self._rescan_parameters)
-
 
     def _build_vpad_column(self) -> QWidget:
         group = QGroupBox("虚拟手柄")
@@ -1023,8 +1008,6 @@ class EasyConPanel(QWidget):
         self._saved_editor_text = text
         self.script_name_label.setText(path.name)
         self.editor.setPlainText(text)
-        self._rescan_parameters()
-        self._restore_recent_parameters()
         self._append_log("info", f"已加载脚本: {path.name}")
         self._remember_recent_script(path)
 
@@ -1033,60 +1016,6 @@ class EasyConPanel(QWidget):
         if isinstance(path, Path):
             self.load_script(path)
 
-    def _rescan_parameters(self) -> None:
-        while self.parameter_form.rowCount():
-            self.parameter_form.removeRow(0)
-        self.parameter_widgets.clear()
-        self.parameter_defaults.clear()
-        self.parameter_lines.clear()
-        for parameter in parse_script_parameters(self.editor.toPlainText()):
-            if parameter.is_integer:
-                widget = QSpinBox()
-                widget.setRange(-1_000_000_000, 1_000_000_000)
-                if parameter.value.strip().lstrip("+-").isdigit():
-                    widget.setValue(int(parameter.value))
-                widget.valueChanged.connect(self._sync_parameters_to_editor)
-            else:
-                widget = QLineEdit("" if parameter.required else parameter.value)
-                widget.textChanged.connect(self._sync_parameters_to_editor)
-                if parameter.required:
-                    widget.setPlaceholderText("填入这里（必填）")
-            if parameter.comment:
-                widget.setToolTip(parameter.comment)
-            self.parameter_widgets[parameter.name] = widget
-            self.parameter_defaults[parameter.name] = parameter.default
-            self.parameter_lines[parameter.name] = parameter.line_index + 1
-            label = f"{parameter.name}{' *' if parameter.required else ''}"
-            field = QWidget()
-            field_layout = QHBoxLayout(field)
-            field_layout.setContentsMargins(0, 0, 0, 0)
-            field_layout.addWidget(widget, 1)
-            default_label = QLabel(f"默认: {parameter.default}")
-            default_label.setObjectName("Hint")
-            if parameter.comment:
-                default_label.setToolTip(parameter.comment)
-            field_layout.addWidget(default_label)
-            self.parameter_form.addRow(label, field)
-        if not self.parameter_widgets:
-            self.parameter_form.addRow("参数", QLabel("未发现脚本参数"))
-
-        self._update_run_enabled()
-
-    def _sync_parameters_to_editor(self) -> None:
-        if not self.parameter_widgets:
-            return
-        values = {
-            name: widget.value() if isinstance(widget, QSpinBox) else widget.text()
-            for name, widget in self.parameter_widgets.items()
-        }
-        cursor = self.editor.textCursor()
-        self.editor.blockSignals(True)
-        self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), values))
-        self.editor.setTextCursor(cursor)
-        self.editor.blockSignals(False)
-        self._save_current_parameters()
-        self._update_run_enabled()
-
     def new_script(self) -> None:
         self.current_script_path = None
         self.current_script_name = "未命名文档.txt"
@@ -1094,7 +1023,6 @@ class EasyConPanel(QWidget):
         self.script_name_label.setText(" 未命名文档.txt")
         self._saved_editor_text = ""
         self.editor.setPlainText("")
-        self._rescan_parameters()
         self._append_log("info", "已新建空白脚本")
 
     def save_script(self) -> Path | None:
@@ -1145,7 +1073,6 @@ class EasyConPanel(QWidget):
         if not self.editor.toPlainText().strip():
             self._append_log("warn", "没有可保存的脚本内容")
             return None
-        self._sync_parameters_to_editor()
         try:
             path = generate_script_file(
                 self.editor.toPlainText(),
@@ -1179,8 +1106,6 @@ class EasyConPanel(QWidget):
             self.run_script_via_bridge()
             return
         self.detect_easycon()
-        if not self._validate_parameters_for_run(focus=True):
-            return
         if not self._can_run():
             self._append_log("warn", "配置未完成，无法运行脚本")
             return
@@ -1215,12 +1140,9 @@ class EasyConPanel(QWidget):
         if self.bridge_status == EasyConStatus.RUNNING:
             self.stop_bridge_script()
             return
-        if not self._validate_parameters_for_run(focus=True):
-            return
         if not self._can_run():
             self._append_log("warn", "请先连接伊机控，再运行脚本")
             return
-        self._sync_parameters_to_editor()
         generated_script = self.save_generated_script()
         if generated_script is None:
             return
@@ -1413,36 +1335,9 @@ class EasyConPanel(QWidget):
             return False
         if not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
             return False
-        if self._first_invalid_required_parameter() is not None:
-            return False
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             return False
         return True
-
-    def _first_invalid_required_parameter(self) -> str | None:
-        for name, widget in self.parameter_widgets.items():
-            if (
-                isinstance(widget, QLineEdit)
-                and widget.placeholderText().startswith("填入这里")
-                and not widget.text().strip()
-            ):
-                return name
-        return None
-
-    def _validate_parameters_for_run(self, focus: bool = False) -> bool:
-        invalid = self._first_invalid_required_parameter()
-        if invalid is None:
-            return True
-        line = self.parameter_lines.get(invalid)
-        if line is not None:
-            self.editor.go_to_line(line)
-            self._append_log("error", f"参数 {invalid} 未填写，已定位到第 {line} 行")
-        else:
-            self._append_log("error", f"参数 {invalid} 未填写")
-        widget = self.parameter_widgets.get(invalid)
-        if focus and widget is not None:
-            widget.setFocus()
-        return False
 
     def _on_editor_changed(self) -> None:
         self._update_run_enabled()
@@ -1506,44 +1401,6 @@ class EasyConPanel(QWidget):
     def _log_retention_changed(self) -> None:
         self.log_view.document().setMaximumBlockCount(self.log_keep_lines.value())
         self._save_config_from_ui()
-
-    def _restore_recent_parameters(self) -> None:
-        key = _script_parameter_config_key(self.current_script_path)
-        if key is None:
-            return
-        values = self.config.script_parameters.get(key)
-        if not values:
-            return
-        restored = False
-        for name, value in values.items():
-            widget = self.parameter_widgets.get(name)
-            if widget is None:
-                continue
-            if isinstance(widget, QSpinBox):
-                try:
-                    widget.setValue(int(value))
-                except ValueError:
-                    continue
-            else:
-                widget.setText(value)
-            restored = True
-        if restored:
-            self._append_log("info", "已恢复该脚本上次使用的参数")
-
-    def _save_current_parameters(self) -> None:
-        key = _script_parameter_config_key(self.current_script_path)
-        if key is None or not self.parameter_widgets:
-            return
-        values = {
-            name: str(widget.value() if isinstance(widget, QSpinBox) else widget.text())
-            for name, widget in self.parameter_widgets.items()
-        }
-        script_parameters = {script: dict(parameters) for script, parameters in self.config.script_parameters.items()}
-        if script_parameters.get(key) == values:
-            return
-        script_parameters[key] = values
-        self.config = replace(self.config, script_parameters=script_parameters)
-        save_config(self.config)
 
     def _append_log(self, level: str, message: str) -> None:
         color = {
@@ -1952,19 +1809,6 @@ def _first_supported_drop(mime_data) -> Path | None:  # type: ignore[no-untyped-
 
 
 
-
-
-def _script_parameter_config_key(path: Path | None) -> str | None:
-    if path is None:
-        return None
-    try:
-        resolved = path.resolve()
-        script_root = SCRIPT_DIR.resolve()
-        if resolved.is_relative_to(script_root):
-            return f"script/{resolved.relative_to(script_root).as_posix()}"
-        return str(resolved)
-    except OSError:
-        return str(path)
 
 
 def _easycon_unavailable_message(installation: EasyConInstallation, requested_path: str = "") -> str:
