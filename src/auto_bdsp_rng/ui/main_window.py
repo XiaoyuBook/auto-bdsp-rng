@@ -623,7 +623,6 @@ class MainWindow(QMainWindow):
 
         # 右侧：状态条（紧凑） + 预览（下部）
         self.status_group = self._build_project_status_group()
-        self.status_group.setMaximumHeight(100)
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -663,26 +662,40 @@ class MainWindow(QMainWindow):
 
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox()
-        layout = QGridLayout(group)
+        group.setMaximumHeight(80)
+        layout = QVBoxLayout(group)
+        layout.setSpacing(4)
+
+        # 第一行：Progress / Advances / Timer
+        row1 = QHBoxLayout()
         self.progress_label = QLabel("Progress:")
         self.progress_value = QLabel("0/0")
         self.advances_label = QLabel("Advances:")
         self.advances_value = QLabel("0")
         self.timer_label = QLabel("Timer:")
         self.timer_value = QLabel("0")
+        row1.addWidget(self.progress_label)
+        row1.addWidget(self.progress_value)
+        row1.addSpacing(12)
+        row1.addWidget(self.advances_label)
+        row1.addWidget(self.advances_value)
+        row1.addSpacing(12)
+        row1.addWidget(self.timer_label)
+        row1.addWidget(self.timer_value)
+        row1.addStretch()
+        layout.addLayout(row1)
+
+        # 第二行：X to advance + Advance 按钮
+        row2 = QHBoxLayout()
         self.x_to_advance_label = QLabel("X to advance:")
         self.x_to_advance = self._spin(0, 10_000_000, 165)
         self.advance_button = QPushButton("Advance")
         self.advance_button.clicked.connect(self.advance_current_seed)
-        layout.addWidget(self.progress_label, 0, 0)
-        layout.addWidget(self.progress_value, 0, 1)
-        layout.addWidget(self.advances_label, 1, 0)
-        layout.addWidget(self.advances_value, 1, 1)
-        layout.addWidget(self.timer_label, 2, 0)
-        layout.addWidget(self.timer_value, 2, 1)
-        layout.addWidget(self.x_to_advance_label, 3, 0)
-        layout.addWidget(self.x_to_advance, 3, 1)
-        layout.addWidget(self.advance_button, 4, 1)
+        row2.addWidget(self.x_to_advance_label)
+        row2.addWidget(self.x_to_advance)
+        row2.addWidget(self.advance_button)
+        row2.addStretch()
+        layout.addLayout(row2)
         return group
 
     def _build_controls(self) -> QWidget:
