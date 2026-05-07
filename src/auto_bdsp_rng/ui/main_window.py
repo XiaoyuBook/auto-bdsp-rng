@@ -1134,8 +1134,6 @@ class MainWindow(QMainWindow):
         rows = [
             ("特性", self.ability_filter, "性别", self.gender_filter),
             ("异色", self.shiny_filter, "性格", self.nature_combo),
-            ("Height", self.height_min, self.height_max, None, None),
-            ("Weight", self.weight_min, self.weight_max, None, None),
         ]
         for r, cols in enumerate(rows):
             lbl1 = QLabel(cols[0])
@@ -1143,12 +1141,23 @@ class MainWindow(QMainWindow):
             lbl1.setFixedWidth(40)
             right.addWidget(lbl1, r, 0)
             right.addWidget(cols[1], r, 1)
-            if cols[2] is not None:
-                lbl2 = QLabel(str(cols[2]))
-                lbl2.setStyleSheet(css_label)
-                lbl2.setFixedWidth(40)
-                right.addWidget(lbl2, r, 2)
-                right.addWidget(cols[3], r, 3)
+            lbl2 = QLabel(str(cols[2]))
+            lbl2.setStyleSheet(css_label)
+            lbl2.setFixedWidth(40)
+            right.addWidget(lbl2, r, 2)
+            right.addWidget(cols[3], r, 3)
+
+        # Height / Weight 特殊行：标签 + 两个输入框
+        for r, (label, w1, w2) in enumerate([
+            ("Height", self.height_min, self.height_max),
+            ("Weight", self.weight_min, self.weight_max),
+        ], start=2):
+            lbl = QLabel(label)
+            lbl.setStyleSheet(css_label)
+            lbl.setFixedWidth(40)
+            right.addWidget(lbl, r, 0)
+            right.addWidget(w1, r, 1)
+            right.addWidget(w2, r, 3)
 
         # 底部复选框行
         cb_row = QHBoxLayout()
