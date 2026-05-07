@@ -2551,6 +2551,9 @@ class _IVCalculatorDialog(QDialog):
         r1.addWidget(self._game_combo)
         r1.addWidget(QLabel("宝可梦"))
         self._pokemon_combo = QComboBox()
+        self._pokemon_combo.setEditable(True)
+        self._pokemon_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._pokemon_combo.completer().setFilterMode(Qt.MatchFlag.MatchContains)
         self._pokemon_combo.currentIndexChanged.connect(self._on_pokemon_changed)
         r1.addWidget(self._pokemon_combo)
         r1.addStretch()
@@ -2656,12 +2659,12 @@ class _IVCalculatorDialog(QDialog):
         self._next_level_label = None
         rl.addWidget(QLabel("下一级"), 6, 1)
         self._next_level_label = QLabel("-")
-        self._next_level_label.setStyleSheet("font-weight: 600; color: #23936b;")
+        self._next_level_label.setStyleSheet("font-weight: 600; color: #1a1a1a;")
         rl.addWidget(self._next_level_label, 6, 2)
         for i, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
             rl.addWidget(QLabel(label), i, 0)
             val = QLabel("-")
-            val.setStyleSheet("font-weight: 600; color: #23936b;")
+            val.setStyleSheet("font-weight: 600; color: #1a1a1a;")
             self._result_labels[label] = val
             rl.addWidget(val, i, 1)
         right.addWidget(result_group, 1)
@@ -2693,10 +2696,19 @@ class _IVCalculatorDialog(QDialog):
         self._rows -= 1
 
     def _on_game_changed(self):
+        # 从 PokeFinder 资源加载中文宝可梦名称
+        species_names = {}
+        names_path = Path(__file__).resolve().parents[3] / "third_party" / "PokeFinder" / "Core" / "Resources" / "i18n" / "zh" / "species_zh.txt"
+        if names_path.exists():
+            with open(names_path, encoding="utf-8-sig") as f:
+                for i, line in enumerate(f, start=1):
+                    name = line.strip()
+                    if name:
+                        species_names[i] = name
         specie_list = []
         for idx, info in enumerate(self._species_table):
             if info.present:
-                name = POKEMON_LABELS_ZH.get(str(info.species), f"#{info.species}")
+                name = species_names.get(info.species, f"#{info.species}")
                 specie_list.append((name, idx))
         self._pokemon_combo.blockSignals(True)
         self._pokemon_combo.clear()
