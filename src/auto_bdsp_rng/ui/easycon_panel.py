@@ -573,6 +573,7 @@ class EasyConPanel(QWidget):
 
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.log_view.setStyleSheet(
             f"""
             QTextEdit {{
@@ -1100,7 +1101,6 @@ class EasyConPanel(QWidget):
         if not self.editor.toPlainText().strip():
             self._append_log("warn", "没有可保存的脚本内容")
             return None
-        self._sync_parameters_to_editor()
         if self.current_script_path is not None:
             # 已有文件路径，直接覆盖保存
             try:
@@ -1134,12 +1134,9 @@ class EasyConPanel(QWidget):
             return None
         self.current_script_path = output
         self.current_script_name = output.name
-        self.current_script_is_template = _is_builtin_template(output)
-        self.template_script_text = self.editor.toPlainText()
         self._saved_editor_text = self.editor.toPlainText()
         self.script_name_label.setText(f" {output.name}")
         self._update_dirty_indicator()
-        self._update_template_mode_label()
         self._remember_recent_script(output)
         self._append_log("info", f"已保存: {output.name}")
         return output
