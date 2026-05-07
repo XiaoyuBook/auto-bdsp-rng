@@ -8,3 +8,8 @@ dist/
 script/.generated/
 bridge/**/bin/
 bridge/**/obj/
+# 会话规划文件（不上传 git）
+task_plan.md
+findings.md
+progress.md
+docs/superpowers/

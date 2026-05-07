@@ -337,6 +337,9 @@ class EasyConPanel(QWidget):
         self.addAction(run)
 
     def _build_left_panel(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 8, 0)
@@ -485,7 +488,8 @@ class EasyConPanel(QWidget):
         log_layout.addWidget(self.log_view, 1)
         log_layout.addLayout(log_buttons)
         layout.addWidget(log_group, 1)
-        return panel
+        scroll.setWidget(panel)
+        return scroll
 
     def _build_editor_panel(self) -> QWidget:
         panel = QWidget()
