@@ -342,7 +342,7 @@ TEXT = {
         "filters": "筛选",
         "preview": "捕获预览",
         "project_xs": "Seed 捕捉",
-        "bdsp_search": "BDSP / PokeFinder",
+        "bdsp_search": "定点数据区",
         "easycon": "伊机控",
         "status": "状态",
         "config": "配置",
@@ -619,12 +619,19 @@ class MainWindow(QMainWindow):
         self.capture_group = self._build_blink_group()
         self.seed_group = self._build_seed_group()
         left_layout.addWidget(self.status_group)
-        left_layout.addWidget(self.capture_group)
         left_layout.addWidget(self.seed_group)
         left_layout.addStretch(1)
 
+        # 右侧：眨眼捕捉配置（顶部） + 预览（下部）
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(self.capture_group)
+        right_layout.addWidget(self._build_preview_panel(), 1)
+
         splitter.addWidget(left)
-        splitter.addWidget(self._build_preview_panel())
+        splitter.addWidget(right)
         splitter.setSizes([430, 1050])
         return splitter
 
