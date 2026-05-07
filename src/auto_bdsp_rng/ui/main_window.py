@@ -2513,6 +2513,8 @@ def _compute_next_level(base_stats, ivs, level, nature):
 class _IVCalculatorDialog(QDialog):
     """个体值计算器 — 基于 PokeFinder IVChecker 算法"""
 
+    _SPECIES_NAMES: dict[int, str] | None = None
+
     def __init__(self, species_table, parent=None):
         super().__init__(parent)
         self._species_table = species_table
@@ -2520,50 +2522,84 @@ class _IVCalculatorDialog(QDialog):
         self._entry_grid = None
 
         self.setWindowTitle("个体值计算器")
-        self.setMinimumSize(900, 600)
-        self.resize(950, 680)
+        self.setMinimumSize(860, 580)
+        self.resize(900, 620)
         self.setStyleSheet("background: #f2f1ee;")
 
         self._build_ui()
         self._add_entry()
         self._on_game_changed()
 
+    @classmethod
+    def _load_species_names(cls):
+        if cls._SPECIES_NAMES is not None:
+            return cls._SPECIES_NAMES
+        cls._SPECIES_NAMES = {}
+        names_path = Path(__file__).resolve().parents[3] / "third_party" / "PokeFinder" / "Core" / "Resources" / "i18n" / "zh" / "species_zh.txt"
+        if names_path.exists():
+            with open(names_path, encoding="utf-8-sig") as f:
+                for i, line in enumerate(f, start=1):
+                    name = line.strip()
+                    if name:
+                        cls._SPECIES_NAMES[i] = name
+        return cls._SPECIES_NAMES
+
     def _build_ui(self):
         main = QHBoxLayout(self)
-        main.setContentsMargins(12, 12, 12, 12)
-        main.setSpacing(16)
+        main.setContentsMargins(16, 16, 16, 16)
+        main.setSpacing(14)
 
-        # ── 左侧：设置 + 输入行 ──
+        css_ctrl = "QComboBox, QLineEdit { min-height: 32px; max-height: 32px; }"
+        css_btn = (
+            "QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
+            " background: #ffffff; border: 1px solid #c8c6c0; border-radius: 3px; color: #1a1a1a;"
+            " font-size: 12px; }"
+            " QPushButton:hover { background: #e8e6e1; }"
+        )
+        css_primary = (
+            "QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
+            " background: #159a6a; border: 1px solid #12845b; border-radius: 3px; color: #ffffff;"
+            " font-size: 12px; font-weight: 700; }"
+            " QPushButton:hover { background: #12845b; }"
+        )
+        css_entry = "QLineEdit { min-height: 32px; max-height: 32px; max-width: 75px; }"
+
+        # ── 左侧 ──
         left = QVBoxLayout()
         left.setSpacing(10)
 
+        # 设置分组
         settings = QGroupBox("设置")
         sl = QVBoxLayout(settings)
         sl.setSpacing(8)
 
-        # 第一行：游戏 + 宝可梦
+        # 第一行
         r1 = QHBoxLayout()
-        r1.setSpacing(8)
+        r1.setSpacing(10)
         r1.addWidget(QLabel("游戏"))
         self._game_combo = QComboBox()
+        self._game_combo.setFixedWidth(200)
         self._game_combo.addItem("晶灿钻石/明亮珍珠", "BDSP")
         self._game_combo.currentIndexChanged.connect(self._on_game_changed)
         r1.addWidget(self._game_combo)
         r1.addWidget(QLabel("宝可梦"))
         self._pokemon_combo = QComboBox()
         self._pokemon_combo.setEditable(True)
+        self._pokemon_combo.setFixedWidth(170)
         self._pokemon_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self._pokemon_combo.completer().setFilterMode(Qt.MatchFlag.MatchContains)
+        self._pokemon_combo.installEventFilter(self)
         self._pokemon_combo.currentIndexChanged.connect(self._on_pokemon_changed)
         r1.addWidget(self._pokemon_combo)
         r1.addStretch()
         sl.addLayout(r1)
 
-        # 第二行：个性 + 觉醒力量 + 性格
+        # 第二行
         r2 = QHBoxLayout()
-        r2.setSpacing(8)
+        r2.setSpacing(10)
         r2.addWidget(QLabel("个性"))
         self._char_combo = QComboBox()
+        self._char_combo.setFixedWidth(150)
         self._char_combo.addItem("无", 255)
         chars = ["非常喜欢吃", "经常打瞌睡", "经常午睡", "经常乱扔东西", "喜欢放松",
                  "以力气自豪", "喜欢打闹", "有点易怒", "喜欢打架", "血气方刚",
@@ -2576,6 +2612,7 @@ class _IVCalculatorDialog(QDialog):
         r2.addWidget(self._char_combo)
         r2.addWidget(QLabel("觉醒力量"))
         self._hp_combo = QComboBox()
+        self._hp_combo.setFixedWidth(150)
         self._hp_combo.addItem("无", 255)
         hp_types = ["格斗", "飞行", "毒", "地面", "岩石", "虫", "幽灵", "钢",
                     "火", "水", "草", "电", "超能力", "冰", "龙", "恶"]
@@ -2584,6 +2621,7 @@ class _IVCalculatorDialog(QDialog):
         r2.addWidget(self._hp_combo)
         r2.addWidget(QLabel("性格"))
         self._nature_combo = QComboBox()
+        self._nature_combo.setFixedWidth(150)
         self._nature_combo.addItem("无", 255)
         for i, n in enumerate(NATURES_ZH):
             self._nature_combo.addItem(n, i)
@@ -2591,32 +2629,36 @@ class _IVCalculatorDialog(QDialog):
         r2.addStretch()
         sl.addLayout(r2)
 
-        # 第三行：按钮
+        # 第三行：操作按钮
         r3 = QHBoxLayout()
-        r3.setSpacing(8)
+        r3.setSpacing(10)
         add_btn = QPushButton("新增行")
+        add_btn.setStyleSheet(css_btn)
         add_btn.clicked.connect(self._add_entry)
         r3.addWidget(add_btn)
         del_btn = QPushButton("删除行")
+        del_btn.setStyleSheet(css_btn)
         del_btn.clicked.connect(self._remove_entry)
         r3.addWidget(del_btn)
         calc_btn = QPushButton("计算")
-        calc_btn.setObjectName("PrimaryButton")
+        calc_btn.setStyleSheet(css_primary)
         calc_btn.clicked.connect(self._calculate)
         r3.addWidget(calc_btn)
         r3.addStretch()
         sl.addLayout(r3)
         left.addWidget(settings)
 
-        # 输入表
+        # 能力值输入
         input_group = QGroupBox("能力值输入")
         ivl = QVBoxLayout(input_group)
-        # 表头
+        ivl.setSpacing(6)
+
         hdr = QHBoxLayout()
-        hdr.setSpacing(4)
-        for h in ("等级", "HP", "攻击", "防御", "特攻", "特防", "速度"):
+        hdr.setSpacing(6)
+        widths = [70, 75, 75, 75, 75, 75, 75]
+        for h, w in zip(("等级", "HP", "攻击", "防御", "特攻", "特防", "速度"), widths):
             lbl = QLabel(h)
-            lbl.setFixedWidth(64)
+            lbl.setFixedWidth(w)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("font-weight: 700;")
             hdr.addWidget(lbl)
@@ -2625,66 +2667,88 @@ class _IVCalculatorDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(300)
+        scroll.setMaximumHeight(240)
         self._entry_container = QWidget()
         self._entry_grid = QGridLayout(self._entry_container)
-        self._entry_grid.setContentsMargins(0, 0, 0, 0)
+        self._entry_grid.setContentsMargins(0, 4, 0, 0)
         self._entry_grid.setSpacing(4)
         scroll.setWidget(self._entry_container)
         ivl.addWidget(scroll)
         left.addWidget(input_group, 1)
-        main.addLayout(left, 3)
+        main.addLayout(left, 7)
 
-        # ── 右侧：种族值 + 计算结果 ──
+        # ── 右侧 ──
         right = QVBoxLayout()
         right.setSpacing(10)
 
         base_group = QGroupBox("种族值")
         bl = QGridLayout(base_group)
-        bl.setSpacing(6)
+        bl.setVerticalSpacing(8)
+        bl.setHorizontalSpacing(10)
         self._base_labels = {}
         for i, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
-            bl.addWidget(QLabel(label), i, 0)
+            lbl = QLabel(label)
+            lbl.setFixedWidth(40)
+            bl.addWidget(lbl, i, 0)
             val = QLabel("-")
             val.setStyleSheet("font-weight: 600;")
             val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._base_labels[label] = val
             bl.addWidget(val, i, 1)
-        right.addWidget(base_group)
+        bl.setRowStretch(6, 1)
+        right.addWidget(base_group, 2)
 
         result_group = QGroupBox("计算结果")
         rl = QGridLayout(result_group)
-        rl.setSpacing(6)
+        rl.setVerticalSpacing(8)
+        rl.setHorizontalSpacing(10)
         self._result_labels = {}
         self._next_level_label = None
-        rl.addWidget(QLabel("下一级"), 6, 1)
-        self._next_level_label = QLabel("-")
-        self._next_level_label.setStyleSheet("font-weight: 600; color: #1a1a1a;")
-        rl.addWidget(self._next_level_label, 6, 2)
         for i, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
-            rl.addWidget(QLabel(label), i, 0)
+            lbl = QLabel(label)
+            lbl.setFixedWidth(40)
+            rl.addWidget(lbl, i, 0)
             val = QLabel("-")
             val.setStyleSheet("font-weight: 600; color: #1a1a1a;")
             self._result_labels[label] = val
             rl.addWidget(val, i, 1)
-        right.addWidget(result_group, 1)
+        rl.addWidget(QLabel("下一级"), 6, 0)
+        self._next_level_label = QLabel("-")
+        self._next_level_label.setStyleSheet("font-weight: 600; color: #1a1a1a;")
+        self._next_level_label.setWordWrap(True)
+        rl.addWidget(self._next_level_label, 6, 1)
+        rl.setRowStretch(7, 1)
+        right.addWidget(result_group, 3)
 
-        # Close button
         close_btn = QPushButton("关闭")
+        close_btn.setStyleSheet(
+            "QPushButton { min-height: 36px; max-height: 36px;"
+            " background: #ffffff; border: 1px solid #c8c6c0; border-radius: 3px; color: #1a1a1a; }"
+            " QPushButton:hover { background: #e8e6e1; }"
+        )
         close_btn.clicked.connect(self.close)
         right.addWidget(close_btn)
 
-        main.addLayout(right, 1)
+        main.addLayout(right, 3)
 
     def _add_entry(self):
         self._rows += 1
         r = self._rows
-        for col, default in enumerate([1, 0, 0, 0, 0, 0, 0]):
-            w = QLineEdit(str(default))
-            w.setFixedWidth(64)
-            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            w.setValidator(QIntValidator(0, 999 if col == 0 else 9999))
-            self._entry_grid.addWidget(w, r, col)
+        defaults = [1, 0, 0, 0, 0, 0, 0]
+        widths = [70, 75, 75, 75, 75, 75, 75]
+        for col, (default, w) in enumerate(zip(defaults, widths)):
+            wgt = QLineEdit(str(default))
+            wgt.setFixedWidth(w)
+            wgt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            wgt.setValidator(QIntValidator(0, 999 if col == 0 else 9999))
+            self._entry_grid.addWidget(wgt, r, col)
+
+    def eventFilter(self, obj, event):
+        if obj is self._pokemon_combo and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._pokemon_combo.completer().popup().hide()
+                return True
+        return super().eventFilter(obj, event)
 
     def _remove_entry(self):
         if self._rows <= 1:
@@ -2696,18 +2760,10 @@ class _IVCalculatorDialog(QDialog):
         self._rows -= 1
 
     def _on_game_changed(self):
-        # 从 PokeFinder 资源加载中文宝可梦名称
-        species_names = {}
-        names_path = Path(__file__).resolve().parents[3] / "third_party" / "PokeFinder" / "Core" / "Resources" / "i18n" / "zh" / "species_zh.txt"
-        if names_path.exists():
-            with open(names_path, encoding="utf-8-sig") as f:
-                for i, line in enumerate(f, start=1):
-                    name = line.strip()
-                    if name:
-                        species_names[i] = name
+        species_names = self._load_species_names()
         specie_list = []
         for idx, info in enumerate(self._species_table):
-            if info.present:
+            if idx > 0 and info.present:
                 name = species_names.get(info.species, f"#{info.species}")
                 specie_list.append((name, idx))
         self._pokemon_combo.blockSignals(True)
