@@ -2746,7 +2746,9 @@ class _IVCalculatorDialog(QDialog):
     def eventFilter(self, obj, event):
         if obj is self._pokemon_combo and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                self._pokemon_combo.completer().popup().hide()
+                popup = self._pokemon_combo.completer().popup()
+                if popup is not None:
+                    popup.hide()
                 return True
         return super().eventFilter(obj, event)
 
