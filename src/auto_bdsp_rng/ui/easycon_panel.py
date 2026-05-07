@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QTextCursor, QTextFormat
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -233,96 +233,42 @@ class BridgeScriptWorker(QObject):
         self.finished.emit(result)
 
 
-class _ControllerPanel(QWidget):
-    """绘制 Switch Pro 手柄轮廓的面板"""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFixedSize(760, 460)
-
-    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # 手柄主体
-        body = QColor("#3c3c3c")
-        p.setBrush(body)
-        p.setPen(Qt.PenStyle.NoPen)
-
-        # 左握把
-        left_grip = QPainter()
-        # 右握把
-        p.drawRoundedRect(20, 60, 100, 360, 40, 40)
-        p.drawRoundedRect(640, 60, 100, 360, 40, 40)
-        # 中间连接体
-        p.drawRoundedRect(80, 30, 600, 95, 20, 20)
-        # 主体长方形
-        p.drawRoundedRect(50, 55, 660, 60, 15, 15)
-        p.drawRoundedRect(30, 100, 700, 320, 50, 50)
-
-        # 握把内侧暗色
-        darker = QColor("#2a2a2a")
-        p.setBrush(darker)
-        p.drawRoundedRect(70, 80, 30, 320, 15, 15)
-        p.drawRoundedRect(660, 80, 30, 320, 15, 15)
-
-        # 左摇杆底座圆
-        p.setBrush(QColor("#4a4a4a"))
-        p.drawEllipse(120, 210, 80, 80)
-        p.setBrush(QColor("#555"))
-        p.drawEllipse(132, 222, 56, 56)
-
-        # 右摇杆底座圆
-        p.setBrush(QColor("#4a4a4a"))
-        p.drawEllipse(545, 310, 80, 80)
-        p.setBrush(QColor("#555"))
-        p.drawEllipse(557, 322, 56, 56)
-
-        # 十字键底座
-        p.setBrush(QColor("#4a4a4a"))
-        p.drawRoundedRect(340, 260, 48, 120, 8, 8)
-        p.drawRoundedRect(310, 290, 108, 48, 8, 8)
-
-        # 十字键中心圆
-        p.setBrush(QColor("#555"))
-        p.drawEllipse(356, 306, 16, 16)
-
-        p.end()
-
-
 class KeyMappingDialog(QDialog):
-    """按键映射对话框 — 手柄图形 + 按键位置可点击绑定"""
+    """按键映射对话框 — 手柄背景图 + 可点击按键位置绑定"""
 
+    _IMG_W, _IMG_H = 786, 786
+
+    # 基于 786x786 手柄图片的按键像素位置 (x, y, w, h, name, label)
     _BTN_POSITIONS: list[tuple[int, int, int, int, str, str]] = [
-        # (x, y, w, h, 内部名称, 显示标签)
-        # 左肩
-        (180, 35, 68, 32, "L", "L"), (265, 22, 68, 32, "ZL", "ZL"),
-        # 右肩
-        (515, 35, 68, 32, "R", "R"), (430, 22, 68, 32, "ZR", "ZR"),
-        # 功能区
-        (340, 55, 50, 30, "Minus", "－"), (370, 55, 50, 30, "Capture", "□"),
-        (420, 55, 50, 30, "Home", "◎"), (465, 55, 50, 30, "Plus", "＋"),
+        # 左肩 (手柄左上)
+        (190,  36, 62, 30, "L", "L"), (278, 14, 62, 30, "ZL", "ZL"),
+        # 右肩 (手柄右上)
+        (534,  36, 62, 30, "R", "R"), (446, 14, 62, 30, "ZR", "ZR"),
+        # 功能区 (顶部中间)
+        (342, 48, 44, 26, "Minus", "－"), (372, 48, 44, 26, "Capture", "□"),
+        (416, 48, 44, 26, "Home", "◎"), (460, 48, 44, 26, "Plus", "＋"),
         # 左摇杆方向
-        (137, 178, 48, 48, "LSUp", "LS↑"), (137, 270, 48, 48, "LSDown", "LS↓"),
-        (70, 224, 48, 48, "LSLeft", "LS←"), (204, 224, 48, 48, "LSRight", "LS→"),
+        (135, 175, 46, 46, "LSUp", "LS↑"), (135, 265, 46, 46, "LSDown", "LS↓"),
+        (68, 220, 46, 46, "LSLeft", "LS←"), (202, 220, 46, 46, "LSRight", "LS→"),
         # 左摇杆按下
-        (140, 224, 40, 40, "LClick", "🔘"),
-        # 十字键
-        (410, 260, 46, 40, "Up", "↑"), (410, 340, 46, 40, "Down", "↓"),
-        (371, 300, 46, 40, "Left", "←"), (449, 300, 46, 40, "Right", "→"),
+        (135, 220, 46, 46, "LClick", "🔘"),
+        # 十字键 (左区中间)
+        (394, 255, 40, 36, "Up", "↑"), (394, 325, 40, 36, "Down", "↓"),
+        (358, 290, 40, 36, "Left", "←"), (430, 290, 40, 36, "Right", "→"),
         # 右摇杆方向
-        (557, 275, 48, 48, "RSUp", "RS↑"), (557, 367, 48, 48, "RSDown", "RS↓"),
-        (490, 321, 48, 48, "RSLeft", "RS←"), (624, 321, 48, 48, "RSRight", "RS→"),
+        (548, 272, 46, 46, "RSUp", "RS↑"), (548, 362, 46, 46, "RSDown", "RS↓"),
+        (483, 317, 46, 46, "RSLeft", "RS←"), (613, 317, 46, 46, "RSRight", "RS→"),
         # 右摇杆按下
-        (560, 321, 40, 40, "RClick", "🔘"),
-        # ABXY
-        (695, 250, 44, 44, "X", "X"), (645, 298, 44, 44, "Y", "Y"),
-        (745, 298, 44, 44, "A", "A"), (695, 346, 44, 44, "B", "B"),
+        (548, 317, 46, 46, "RClick", "🔘"),
+        # ABXY (右区)
+        (688, 242, 42, 42, "X", "X"), (640, 286, 42, 42, "Y", "Y"),
+        (736, 286, 42, 42, "A", "A"), (688, 330, 42, 42, "B", "B"),
     ]
 
     def __init__(self, mapping: dict[str, int], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("按键设置")
-        self.setFixedSize(800, 620)
+        self.setFixedSize(820, 660)
         self.setStyleSheet("background: #f2f1ee;")
         self._mapping = dict(mapping)
         self._active_name: str | None = None
@@ -332,24 +278,29 @@ class KeyMappingDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         hint = QLabel("点击手柄上的按键位置，然后按下键盘按键进行绑定。按 Esc 可清除当前绑定。")
-        hint.setStyleSheet("font-size: 12px; padding: 4px 8px; color: #555;")
+        hint.setStyleSheet("font-size: 12px; padding: 2px 8px; color: #555;")
         layout.addWidget(hint)
 
-        # 手柄面板（带背景图）
-        panel = _ControllerPanel(self)
-        panel.setStyleSheet("background: transparent;")
+        # 手柄图片背景面板
+        bg_path = str(Path(__file__).resolve().parent / "controller_bg.png")
+        panel = QLabel()
+        panel.setFixedSize(self._IMG_W, self._IMG_H)
+        panel.setPixmap(QPixmap(bg_path).scaled(
+            self._IMG_W, self._IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        ))
+        panel.setScaledContents(False)
 
         btn_style = (
             "QPushButton {"
-            "  background: rgba(80,80,80,180); color: #e0e0e0;"
-            "  border: 1px solid #666; border-radius: 6px;"
+            "  background: rgba(60,60,60,160); color: #ddd;"
+            "  border: 1px solid rgba(150,150,150,120); border-radius: 4px;"
             "  font-size: 10px; font-weight: 700;"
             "}"
             " QPushButton:checked { background: #D7C17C; color: #1a1a1a; border-color: #8a7a4a; }"
-            " QPushButton:hover { background: rgba(100,100,100,200); }"
+            " QPushButton:hover { background: rgba(120,120,120,180); }"
         )
 
         for x, y, w, h, name, label in self._BTN_POSITIONS:
@@ -366,7 +317,7 @@ class KeyMappingDialog(QDialog):
 
         # 选中按键的信息提示
         self._active_label = QLabel("")
-        self._active_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #D7C17C; padding: 4px;")
+        self._active_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #8a7a4a; padding: 2px;")
         self._active_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._active_label)
 
@@ -385,8 +336,7 @@ class KeyMappingDialog(QDialog):
         cancel_btn = QPushButton("取消")
         cancel_btn.setFixedSize(140, 38)
         cancel_btn.setStyleSheet(
-            "QPushButton { background: #fff; border: 1px solid #aaa; border-radius: 3px;"
-            " font-size: 14px; }"
+            "QPushButton { background: #fff; border: 1px solid #aaa; border-radius: 3px; font-size: 14px; }"
             " QPushButton:hover { background: #e8e6e1; }"
         )
         cancel_btn.clicked.connect(self.reject)
