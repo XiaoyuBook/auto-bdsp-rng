@@ -282,7 +282,7 @@ TEXT = {
         "filters": "Filters",
         "preview": "Preview",
         "project_xs": "Seed 捕捉",
-        "bdsp_search": "BDSP / PokeFinder",
+        "bdsp_search": "定点数据区",
         "easycon": "EasyCon",
         "status": "Status",
         "config": "Config",
@@ -771,11 +771,12 @@ class MainWindow(QMainWindow):
     def _build_seed_group(self) -> QGroupBox:
         group = QGroupBox()
         layout = QGridLayout(group)
-        self.seed32_inputs = [QLineEdit(text) for text in ("12345678", "9ABCDEF0", "11111111", "22222222")]
+        self.seed32_inputs = [QLineEdit() for _ in range(4)]
+        for box in self.seed32_inputs:
+            box.setReadOnly(True)
+            box.setMaxLength(8)
+            box.setPlaceholderText("—")
         self.seed64_outputs = [QLineEdit() for _ in range(2)]
-        for input_box in self.seed32_inputs:
-            input_box.setMaxLength(8)
-            input_box.editingFinished.connect(self._sync_seed64_from_state32)
         for output in self.seed64_outputs:
             output.setReadOnly(True)
             output.setObjectName("Readonly")
@@ -798,7 +799,7 @@ class MainWindow(QMainWindow):
         self.lead_combo.addItem("同步：勤奋", int(Lead.SYNCHRONIZE_START))
         self.lead_combo.addItem("迷人之躯 ♀", int(Lead.CUTE_CHARM_F))
         self.lead_combo.addItem("迷人之躯 ♂", int(Lead.CUTE_CHARM_M))
-        self.bdsp_seed64_inputs = [QLineEdit(text) for text in ("123456789ABCDEF0", "1111111122222222")]
+        self.bdsp_seed64_inputs = [QLineEdit() for _ in range(2)]
         for input_box in self.bdsp_seed64_inputs:
             input_box.setMaxLength(16)
             input_box.editingFinished.connect(self._sync_state32_from_bdsp_seed64)
