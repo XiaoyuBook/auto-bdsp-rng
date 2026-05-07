@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QIntValidator, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -517,8 +516,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("auto_bdsp_rng")
-        self.setMinimumSize(960, 640)
-        self.resize(1480, 900)
+        self.setMinimumSize(1600, 900)
+        self.resize(1600, 950)
         self.lang = "zh"
         self._profile_version = GameVersion.BD
         self._active_record: StaticEncounterRecord | None = None
@@ -650,10 +649,11 @@ class MainWindow(QMainWindow):
         mid_row = QHBoxLayout()
         mid_row.setSpacing(10)
         self.rng_info_group = self._build_rng_info_group()
-        self.rng_info_group.setFixedWidth(260)
+        self.rng_info_group.setMinimumWidth(330)
         self.static_group = self._build_static_group()
-        self.static_group.setFixedWidth(320)
+        self.static_group.setMinimumWidth(390)
         self.filter_group = self._build_filter_group()
+        self.filter_group.setMinimumWidth(760)
         mid_row.addWidget(self.rng_info_group)
         mid_row.addWidget(self.static_group)
         mid_row.addWidget(self.filter_group, 1)
@@ -679,7 +679,7 @@ class MainWindow(QMainWindow):
         # 控件统一样式
         stat_label_css = "font-size: 12px; color: #666; border: 0; background: transparent;"
         stat_value_css = "font-size: 12px; font-weight: 600; color: #1a1a1a; border: 0; background: transparent;"
-        spin_css = "QSpinBox { min-height: 30px; max-height: 30px; min-width: 140px; }"
+        spin_css = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 140px; }"
         btn_css = (
             "QPushButton { min-height: 30px; max-height: 30px;"
             " min-width: 86px; max-width: 100px; padding: 0 14px; }"
@@ -1067,7 +1067,7 @@ class MainWindow(QMainWindow):
         outer.setSpacing(28)
 
         css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
-        css_ctrl = "QSpinBox { min-height: 30px; max-height: 30px; min-width: 80px; }"
+        css_ctrl = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 80px; }"
         css_combo = "QComboBox { min-height: 30px; max-height: 30px; min-width: 180px; }"
         css_cb = "font-size: 12px; spacing: 6px; border: 0; background: transparent;"
 
@@ -1078,8 +1078,8 @@ class MainWindow(QMainWindow):
         iv_grid = QGridLayout()
         iv_grid.setVerticalSpacing(7)
         iv_grid.setHorizontalSpacing(6)
-        self.iv_min: list[QSpinBox] = []
-        self.iv_max: list[QSpinBox] = []
+        self.iv_min: list[QLineEdit] = []
+        self.iv_max: list[QLineEdit] = []
         iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
         for row, label in enumerate(iv_labels):
             lbl = QLabel(label)
@@ -1384,7 +1384,7 @@ class MainWindow(QMainWindow):
                 padding: 0 4px;
                 color: #23936b;
             }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget {
+            QLineEdit, QDoubleSpinBox, QComboBox, QListWidget {
                 background: #ffffff;
                 border: 1px solid #c8c6c0;
                 border-radius: 4px;
@@ -1470,11 +1470,11 @@ class MainWindow(QMainWindow):
             """
         )
 
-    def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
-        spin = QSpinBox()
-        spin.setRange(minimum, maximum)
-        spin.setValue(value)
-        return spin
+    def _spin(self, minimum: int, maximum: int, value: int) -> QLineEdit:
+        w = QLineEdit(str(value))
+        w.setValidator(QIntValidator(minimum, maximum))
+        w.setAlignment(Qt.AlignmentFlag.AlignRight)
+        return w
 
     def _double_spin(self, minimum: float, maximum: float, value: float, decimals: int) -> QDoubleSpinBox:
         spin = QDoubleSpinBox()
@@ -1548,8 +1548,8 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.profile_name.setText(name.text() or "-")
-        self.tid.setText(str(tid.value()))
-        self.sid.setText(str(sid.value()))
+        self.tid.setText(str(int(tid.text() or 0)))
+        self.sid.setText(str(int(sid.text() or 0)))
         self.national_dex.setChecked(national_dex.isChecked())
         self.shiny_charm.setChecked(shiny_charm.isChecked())
         self.oval_charm.setChecked(oval_charm.isChecked())
@@ -1639,43 +1639,43 @@ class MainWindow(QMainWindow):
         roi_x, roi_y, roi_w, roi_h = config.capture.roi
         self.monitor_window.setChecked(config.capture.monitor_window)
         self.window_prefix.setText(config.capture.window_prefix)
-        self.camera.setValue(config.capture.camera)
-        self.x.setValue(roi_x)
-        self.y.setValue(roi_y)
-        self.w.setValue(roi_w)
-        self.h.setValue(roi_h)
+        self.camera.setText(str(config.capture.camera))
+        self.x.setText(str(roi_x))
+        self.y.setText(str(roi_y))
+        self.w.setText(str(roi_w))
+        self.h.setText(str(roi_h))
         self.threshold.setValue(config.capture.threshold)
         self.white_delay.setValue(config.white_delay)
-        self.advance_delay.setValue(config.advance_delay)
-        self.advance_delay_2.setValue(config.advance_delay_2)
-        self.npc_count.setValue(config.npc)
-        self.timeline_npc.setValue(config.timeline_npc)
-        self.pokemon_npc.setValue(config.pokemon_npc)
-        self.display_percent.setValue(config.display_percent)
+        self.advance_delay.setText(str(config.advance_delay))
+        self.advance_delay_2.setText(str(config.advance_delay_2))
+        self.npc_count.setText(str(config.npc))
+        self.timeline_npc.setText(str(config.timeline_npc))
+        self.pokemon_npc.setText(str(config.pokemon_npc))
+        self.display_percent.setText(str(config.display_percent))
         self._eye_image_path = config.capture.eye_image_path
 
     def _config_from_form(self) -> ProjectXsTrackingConfig:
         loaded = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
         capture = BlinkCaptureConfig(
             eye_image_path=self._eye_image_path or loaded.capture.eye_image_path,
-            roi=(self.x.value(), self.y.value(), self.w.value(), self.h.value()),
+            roi=(int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0)),
             threshold=self.threshold.value(),
             blink_count=DEFAULT_BLINK_COUNT,
             monitor_window=self.monitor_window.isChecked(),
             window_prefix=self.window_prefix.text(),
             crop=loaded.capture.crop,
-            camera=self.camera.value(),
+            camera=int(self.camera.text() or 0),
         )
         return ProjectXsTrackingConfig(
             source_path=loaded.source_path,
             capture=capture,
             white_delay=self.white_delay.value(),
-            advance_delay=self.advance_delay.value(),
-            advance_delay_2=self.advance_delay_2.value(),
-            npc=self.npc_count.value(),
-            pokemon_npc=self.pokemon_npc.value(),
-            timeline_npc=self.timeline_npc.value(),
-            display_percent=self.display_percent.value(),
+            advance_delay=int(self.advance_delay.text() or 0),
+            advance_delay_2=int(self.advance_delay_2.text() or 0),
+            npc=int(self.npc_count.text() or 0),
+            pokemon_npc=int(self.pokemon_npc.text() or 0),
+            timeline_npc=int(self.timeline_npc.text() or 0),
+            display_percent=int(self.display_percent.text() or 0),
         )
 
     def save_current_config(self) -> None:
@@ -1704,7 +1704,7 @@ class MainWindow(QMainWindow):
     def start_roi_selection(self) -> None:
         if self._is_capturing():
             return
-        self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         self._begin_preview_selection("roi")
         self.statusBar().showMessage(self._text("roi_selecting"))
 
@@ -1739,7 +1739,7 @@ class MainWindow(QMainWindow):
             self.apply_selected_roi(roi)
 
     def apply_selected_roi(self, roi: object) -> None:
-        old_roi = self._roi_before_selection or (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        old_roi = self._roi_before_selection or (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
         try:
             import cv2
@@ -1801,16 +1801,16 @@ class MainWindow(QMainWindow):
             return
         self._eye_image_path = output_path
         self._selection_mode = "roi"
-        self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         self._display_frame(self._latest_preview_frame if self._latest_preview_frame is not None else frame)
         self.preview_label.set_selection_enabled(True)
         self.statusBar().showMessage(f"{self._text('eye_captured_select_roi')}: {output_path}")
 
     def _set_roi_values(self, roi: tuple[int, int, int, int]) -> None:
-        self.x.setValue(roi[0])
-        self.y.setValue(roi[1])
-        self.w.setValue(roi[2])
-        self.h.setValue(roi[3])
+        self.x.setText(str(roi[0]))
+        self.y.setText(str(roi[1]))
+        self.w.setText(str(roi[2]))
+        self.h.setText(str(roi[3]))
 
     def _update_preview_frame(self) -> None:
         try:
@@ -1891,9 +1891,9 @@ class MainWindow(QMainWindow):
             return
         template = record.template
         if hasattr(self, "level_display"):
-            self.level_display.setValue(template.level)
+            self.level_display.setText(str(template.level))
         if hasattr(self, "iv_count_display"):
-            self.iv_count_display.setValue(template.iv_count)
+            self.iv_count_display.setText(str(template.iv_count))
         if hasattr(self, "template_ability_display"):
             ability_text = {0: "0", 1: "1", 2: "隐藏", 255: "0/1"}.get(template.ability, "任意")
             index = self.template_ability_display.findText(ability_text)
@@ -1950,7 +1950,7 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("个体值计算器" if self.lang == "zh" else "IV Calculator")
         layout = QGridLayout(dialog)
         labels = ("HP", "攻击", "防御", "特攻", "特防", "速度") if self.lang == "zh" else IV_LABELS
-        ivs = state.ivs if state is not None else tuple(spin.value() for spin in self.iv_min)
+        ivs = state.ivs if state is not None else tuple(int(spin.text() or 0) for spin in self.iv_min)
         for index, (label, value) in enumerate(zip(labels, ivs)):
             layout.addWidget(QLabel(label), index, 0)
             spin = self._spin(0, 31, value)
@@ -2029,15 +2029,15 @@ class MainWindow(QMainWindow):
             natures = tuple(index == nature_index for index in range(len(NATURES)))
         return (
             StateFilter.from_iv_ranges(
-                [spin.value() for spin in self.iv_min],
-                [spin.value() for spin in self.iv_max],
+                [int(spin.text() or 0) for spin in self.iv_min],
+                [int(spin.text() or 0) for spin in self.iv_max],
                 ability=self.ability_filter.currentData(),
                 gender=self.gender_filter.currentData(),
                 shiny=shiny_value,
-                height_min=self.height_min.value() if hasattr(self, "height_min") else 0,
-                height_max=self.height_max.value() if hasattr(self, "height_max") else 255,
-                weight_min=self.weight_min.value() if hasattr(self, "weight_min") else 0,
-                weight_max=self.weight_max.value() if hasattr(self, "weight_max") else 255,
+                height_min=int(self.height_min.text() or 0) if hasattr(self, "height_min") else 0,
+                height_max=int(self.height_max.text() or 0) if hasattr(self, "height_max") else 255,
+                weight_min=int(self.weight_min.text() or 0) if hasattr(self, "weight_min") else 0,
+                weight_max=int(self.weight_max.text() or 0) if hasattr(self, "weight_max") else 255,
                 skip=self.skip_filter.isChecked() if hasattr(self, "skip_filter") else False,
                 natures=natures,
             ),
@@ -2058,7 +2058,7 @@ class MainWindow(QMainWindow):
         self.advances_value.setText(str(self._tracked_advances))
 
     def advance_current_seed(self) -> None:
-        advances = self.x_to_advance.value()
+        advances = int(self.x_to_advance.text() or 0)
         if advances <= 0:
             return
         try:
@@ -2202,7 +2202,7 @@ class MainWindow(QMainWindow):
                     observation,
                     npc=config.npc,
                     search_min=0,
-                    search_max=max(100_000, self.max_advances.value() if hasattr(self, "max_advances") else 100_000),
+                    search_max=max(100_000, int(self.max_advances.text() or 0) if hasattr(self, "max_advances") else 100_000),
                 )
             except Exception as exc:  # pragma: no cover - exercised through UI polling
                 self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
@@ -2246,7 +2246,7 @@ class MainWindow(QMainWindow):
             box.setText(text)
         self.progress_value.setText(f"{DEFAULT_BLINK_COUNT}/{DEFAULT_BLINK_COUNT}")
         self._sync_seed64_from_state32()
-        self._advance_step = self.npc_count.value() + 1
+        self._advance_step = int(self.npc_count.text() or 0) + 1
         self._tracked_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
         self.advances_value.setText("0")
         self.timer_value.setText("0")
@@ -2267,9 +2267,9 @@ class MainWindow(QMainWindow):
             self._active_record = record
             template = replace(record.template, version=self._profile_version.value)
             generator = StaticGenerator8(
-                self.initial_advances.value(),
-                self.max_advances.value(),
-                self.offset.value(),
+                int(self.initial_advances.text() or 0),
+                int(self.max_advances.text() or 0),
+                int(self.offset.text() or 0),
                 self.lead_combo.currentData(),
                 template,
                 self._current_profile(),
