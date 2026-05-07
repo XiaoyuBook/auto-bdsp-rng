@@ -615,19 +615,20 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 8, 0)
         left_layout.setSpacing(10)
-        self.status_group = self._build_project_status_group()
         self.capture_group = self._build_blink_group()
         self.seed_group = self._build_seed_group()
-        left_layout.addWidget(self.status_group)
+        left_layout.addWidget(self.capture_group)
         left_layout.addWidget(self.seed_group)
         left_layout.addStretch(1)
 
-        # 右侧：眨眼捕捉配置（顶部） + 预览（下部）
+        # 右侧：状态条（紧凑） + 预览（下部）
+        self.status_group = self._build_project_status_group()
+        self.status_group.setMaximumHeight(100)
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(6)
-        right_layout.addWidget(self.capture_group)
+        right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
 
         splitter.addWidget(left)
