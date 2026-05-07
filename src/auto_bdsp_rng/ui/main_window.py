@@ -517,7 +517,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("auto_bdsp_rng")
         self.setMinimumSize(1150, 900)
-        self.resize(1480, 950)
+        self.resize(1150, 900)
         self.lang = "zh"
         self._profile_version = GameVersion.BD
         self._active_record: StaticEncounterRecord | None = None
