@@ -5,10 +5,11 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -60,33 +61,52 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = PROJECT_ROOT / "script"
 GENERATED_DIR = SCRIPT_DIR / ".generated"
 
-KEYBOARD_VPAD_BUTTONS = {
-    Qt.Key.Key_L: "A",
-    Qt.Key.Key_K: "B",
-    Qt.Key.Key_I: "X",
-    Qt.Key.Key_J: "Y",
-    Qt.Key.Key_G: "L",
-    Qt.Key.Key_T: "R",
-    Qt.Key.Key_F: "ZL",
-    Qt.Key.Key_R: "ZR",
-    Qt.Key.Key_Plus: "PLUS",
-    Qt.Key.Key_Equal: "PLUS",
-    Qt.Key.Key_Minus: "MINUS",
-    Qt.Key.Key_Z: "CAPTURE",
-    Qt.Key.Key_C: "HOME",
-    Qt.Key.Key_Q: "LCLICK",
-    Qt.Key.Key_E: "RCLICK",
+# ── 可配置按键映射 ──────────────────────────────────
+
+DEFAULT_KEY_MAPPING = {
+    "A": Qt.Key.Key_L, "B": Qt.Key.Key_K, "X": Qt.Key.Key_I, "Y": Qt.Key.Key_J,
+    "L": Qt.Key.Key_G, "R": Qt.Key.Key_T, "ZL": Qt.Key.Key_F, "ZR": Qt.Key.Key_R,
+    "Plus": Qt.Key.Key_Plus, "Minus": Qt.Key.Key_Minus,
+    "Capture": Qt.Key.Key_Z, "Home": Qt.Key.Key_C,
+    "LClick": Qt.Key.Key_Q, "RClick": Qt.Key.Key_E,
+    "Up": 0, "Down": 0, "Left": 0, "Right": 0,
+    "UpLeft": 0, "DownLeft": 0, "UpRight": 0, "DownRight": 0,
+    "LSUp": Qt.Key.Key_W, "LSDown": Qt.Key.Key_S, "LSLeft": Qt.Key.Key_A, "LSRight": Qt.Key.Key_D,
+    "RSUp": Qt.Key.Key_Up, "RSDown": Qt.Key.Key_Down, "RSLeft": Qt.Key.Key_Left, "RSRight": Qt.Key.Key_Right,
 }
-KEYBOARD_VPAD_DIRECTIONS = {
-    Qt.Key.Key_W: ("left", "Up"),
-    Qt.Key.Key_S: ("left", "Down"),
-    Qt.Key.Key_A: ("left", "Left"),
-    Qt.Key.Key_D: ("left", "Right"),
-    Qt.Key.Key_Up: ("right", "Up"),
-    Qt.Key.Key_Down: ("right", "Down"),
-    Qt.Key.Key_Left: ("right", "Left"),
-    Qt.Key.Key_Right: ("right", "Right"),
-}
+
+_KEY_TO_QT = {int(v): k for k, v in Qt.Key.__dict__.items() if isinstance(v, int) and not k.startswith("_")}
+
+def _qt_key_name(key: int) -> str:
+    if key == 0:
+        return ""
+    name = _KEY_TO_QT.get(key, "")
+    if name.startswith("Key_"):
+        name = name[4:]
+    return name
+
+def _resolve_vpad_button(key: int, mapping: dict[str, int]) -> tuple[str, str, str] | None:
+    """返回 (kind, side/direction) 或 None — kind 为 'button' 或 'stick'"""
+    # 先查方向按键 (stick)
+    stick_map = {
+        "LSUp": ("left", "Up"), "LSDown": ("left", "Down"),
+        "LSLeft": ("left", "Left"), "LSRight": ("left", "Right"),
+        "RSUp": ("right", "Up"), "RSDown": ("right", "Down"),
+        "RSLeft": ("right", "Left"), "RSRight": ("right", "Right"),
+        "Up": ("hat", "Up"), "Down": ("hat", "Down"),
+        "Left": ("hat", "Left"), "Right": ("hat", "Right"),
+        "UpLeft": ("hat", "UpLeft"), "DownLeft": ("hat", "DownLeft"),
+        "UpRight": ("hat", "UpRight"), "DownRight": ("hat", "DownRight"),
+    }
+    for name, stick_info in stick_map.items():
+        if mapping.get(name, 0) == key:
+            return ("stick", stick_info[0], stick_info[1])
+    # 再查普通按键
+    button_names = ["A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus", "Capture", "Home", "LClick", "RClick"]
+    for name in button_names:
+        if mapping.get(name, 0) == key:
+            return ("button", name, None)
+    return None
 
 
 class LineNumberArea(QWidget):
@@ -213,6 +233,130 @@ class BridgeScriptWorker(QObject):
         self.finished.emit(result)
 
 
+class KeyMappingDialog(QDialog):
+    """按键映射对话框 — 点击手柄按钮位置，然后按键盘按键来绑定"""
+
+    BTN_STYLE = (
+        "QPushButton { background: #e8e6e1; border: 1px solid #aaa; border-radius: 4px;"
+        " font-size: 10px; padding: 2px; }"
+        " QPushButton:checked { background: #D7C17C; border-color: #8a7a4a; }"
+    )
+
+    def __init__(self, mapping: dict[str, int], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("按键设置")
+        self.setFixedSize(780, 550)
+        self.setStyleSheet("background: #f2f1ee;")
+        self._mapping = dict(mapping)
+        self._active_name: str | None = None
+        self._buttons: dict[str, QPushButton] = {}
+        self._build_ui()
+        self._load_mapping()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # 提示标签
+        hint = QLabel("点击手柄按钮，然后按下键盘按键进行绑定。按 Esc 清除绑定。")
+        hint.setStyleSheet("font-size: 12px; padding: 8px; color: #555;")
+        layout.addWidget(hint)
+
+        # 手柄面板
+        panel = QWidget()
+        panel.setFixedSize(760, 400)
+        panel.setStyleSheet("background: #f2f1ee;")
+
+        # 按键位置定义 (x, y, width, height, name, label)
+        positions = [
+            # 左肩 L / ZL
+            (180, 20, 70, 36, "L", "L"), (280, 20, 70, 36, "ZL", "ZL"),
+            # 右肩 R / ZR
+            (510, 20, 70, 36, "R", "R"), (410, 20, 70, 36, "ZR", "ZR"),
+            # 左摇杆
+            (130, 210, 55, 55, "LSUp", "LS↑"), (130, 290, 55, 55, "LSDown", "LS↓"),
+            (55, 250, 55, 55, "LSLeft", "LS←"), (205, 250, 55, 55, "LSRight", "LS→"),
+            # 十字键
+            (340, 260, 40, 40, "Up", "↑"), (340, 340, 40, 40, "Down", "↓"),
+            (300, 300, 40, 40, "Left", "←"), (380, 300, 40, 40, "Right", "→"),
+            (300, 260, 40, 40, "UpLeft", "↖"), (380, 260, 40, 40, "UpRight", "↗"),
+            (300, 340, 40, 40, "DownLeft", "↙"), (380, 340, 40, 40, "DownRight", "↘"),
+            # Minus / Plus
+            (360, 100, 55, 35, "Minus", "-"), (460, 100, 55, 35, "Plus", "+"),
+            # Capture / Home
+            (420, 200, 60, 35, "Capture", "Capture"), (520, 200, 60, 35, "Home", "Home"),
+            # LClick / RClick
+            (160, 160, 60, 35, "LClick", "LClick"), (550, 160, 60, 35, "RClick", "RClick"),
+            # 右摇杆
+            (530, 300, 55, 55, "RSUp", "RS↑"), (530, 380, 55, 55, "RSDown", "RS↓"),
+            (455, 340, 55, 55, "RSLeft", "RS←"), (605, 340, 55, 55, "RSRight", "RS→"),
+            # ABXY
+            (680, 230, 50, 50, "X", "X"), (630, 280, 50, 50, "Y", "Y"),
+            (730, 280, 50, 50, "A", "A"), (680, 330, 50, 50, "B", "B"),
+        ]
+
+        for x, y, w, h, name, label in positions:
+            btn = QPushButton(label, panel)
+            btn.setCheckable(True)
+            btn.setGeometry(x, y, w, h)
+            btn.setStyleSheet(self.BTN_STYLE)
+            btn.clicked.connect(lambda checked, n=name: self._select_button(n))
+            self._buttons[name] = btn
+
+        layout.addWidget(panel)
+
+        # 底部按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        ok_btn = QPushButton("确定")
+        ok_btn.setStyleSheet(
+            "QPushButton { background: #23936b; color: white; border: 0; border-radius: 3px;"
+            " padding: 8px 40px; font-size: 14px; }"
+            " QPushButton:hover { background: #1e7d5a; }"
+        )
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
+
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet(
+            "QPushButton { background: #fff; border: 1px solid #aaa; border-radius: 3px;"
+            " padding: 8px 40px; font-size: 14px; }"
+            " QPushButton:hover { background: #e8e6e1; }"
+        )
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+    def _select_button(self, name: str) -> None:
+        self._active_name = name
+        for n, btn in self._buttons.items():
+            btn.setChecked(n == name)
+
+    def _load_mapping(self) -> None:
+        for name, key in self._mapping.items():
+            btn = self._buttons.get(name)
+            if btn is not None:
+                key_name = _qt_key_name(key)
+                btn.setText(key_name if key_name else btn.property("label") or name)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._active_name is None:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            key = 0
+        self._mapping[self._active_name] = key
+        btn = self._buttons[self._active_name]
+        key_name = _qt_key_name(key)
+        btn.setText(key_name if key_name else btn.property("label") or self._active_name)
+        btn.setChecked(False)
+        self._active_name = None
+
+    def get_mapping(self) -> dict[str, int]:
+        return dict(self._mapping)
+
+
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
 
@@ -235,6 +379,7 @@ class EasyConPanel(QWidget):
         self.parameter_lines: dict[str, int] = {}
         self.virtual_controller_enabled = False
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
+        self.key_mapping: dict[str, int] = dict(DEFAULT_KEY_MAPPING)
         self.process: QProcess | None = None
         self.current_run_started_at: datetime | None = None
         self.current_run_script_path: Path | None = None
@@ -695,6 +840,7 @@ class EasyConPanel(QWidget):
 
         mapping_btn = QPushButton("按键映射")
         mapping_btn.setStyleSheet(btn_style)
+        mapping_btn.clicked.connect(self.open_key_mapping)
         layout.addWidget(mapping_btn, 1, 0, 1, 1)
 
         help_btn = QPushButton("帮助")
@@ -1554,6 +1700,16 @@ class EasyConPanel(QWidget):
             return
         self._run_inline_cli_script(f"test_{side}_{direction.lower()}", f"{label}\n")
 
+    def open_key_mapping(self) -> None:
+        dialog = KeyMappingDialog(self.key_mapping, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.key_mapping = dialog.get_mapping()
+        self._append_log("info", "按键映射已更新")
+        # 如果虚拟手柄已启用，先关闭再重新启用以应用新映射
+        if self.virtual_controller_enabled:
+            self.keyboard_controller_check.setChecked(False)
+
     def set_keyboard_controller_enabled(self, enabled: bool) -> None:
         if enabled:
             if not self._is_bridge_mode() or self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
@@ -1595,7 +1751,7 @@ class EasyConPanel(QWidget):
             return True
         if down and key in self.virtual_controller_keys:
             return True
-        action = _keyboard_virtual_controller_action(key)
+        action = _resolve_vpad_button(key, self.key_mapping)
         if action is None:
             return False
         if not down and key not in self.virtual_controller_keys:
@@ -1834,14 +1990,3 @@ def _easycon_unavailable_message(installation: EasyConInstallation, requested_pa
     if requested_path and "does not exist" not in error:
         return "ezcon 路径可能无效或文件损坏，请重新选择 ezcon.exe。"
     return "请选择 ezcon.exe 或设置 EASYCON_ROOT。"
-
-
-def _keyboard_virtual_controller_action(key: int) -> tuple[str, str, str | None] | None:
-    button = KEYBOARD_VPAD_BUTTONS.get(Qt.Key(key))
-    if button is not None:
-        return ("button", button, None)
-    direction = KEYBOARD_VPAD_DIRECTIONS.get(Qt.Key(key))
-    if direction is not None:
-        side, value = direction
-        return ("stick", side, value)
-    return None
