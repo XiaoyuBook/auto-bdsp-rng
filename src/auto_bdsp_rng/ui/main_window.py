@@ -938,28 +938,30 @@ class MainWindow(QMainWindow):
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
-        group.setMaximumHeight(170)
+        group.setMaximumHeight(130)
 
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(16, 12, 16, 12)
-        outer.setSpacing(20)
+        outer.setContentsMargins(16, 10, 16, 10)
+        outer.setSpacing(24)
 
         css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
-        css_ctrl = "QLineEdit, QSpinBox, QComboBox { min-height: 30px; max-height: 30px; }"
+        css_ctrl = ("QSpinBox { min-height: 32px; max-height: 32px; min-width: 160px; }")
+        css_line = "QLineEdit { min-height: 32px; max-height: 32px; min-width: 160px; border: 1px solid #c8c6c0; background: #e8e6e1; color: #1a1a1a; }"
+        css_cb = "QCheckBox { font-size: 12px; spacing: 6px; border: 0; background: transparent; }"
 
         # ── 左列：存档选择 ──
         left = QVBoxLayout()
-        left.setSpacing(8)
+        left.setSpacing(6)
 
         row1 = QHBoxLayout()
-        row1.setSpacing(6)
+        row1.setSpacing(8)
         lbl = QLabel("存档信息")
         lbl.setStyleSheet(css_label)
-        lbl.setFixedWidth(52)
+        lbl.setFixedWidth(58)
         self.profile_name = QLineEdit("-")
         self.profile_name.setPlaceholderText("存档信息")
         self.profile_name.setFixedWidth(180)
-        self.profile_name.setStyleSheet(css_ctrl)
+        self.profile_name.setStyleSheet("QLineEdit { min-height: 32px; max-height: 32px; }")
         row1.addWidget(lbl)
         row1.addWidget(self.profile_name)
         row1.addStretch()
@@ -967,18 +969,13 @@ class MainWindow(QMainWindow):
 
         self.profile_manager_button = QPushButton("存档信息管理")
         self.profile_manager_button.setFixedWidth(180)
-        self.profile_manager_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
+        self.profile_manager_button.setStyleSheet("QPushButton { min-height: 32px; max-height: 32px; }")
         self.profile_manager_button.clicked.connect(self.open_profile_manager)
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(58, 0, 0, 0)
-        btn_row.addWidget(self.profile_manager_button)
-        btn_row.addStretch()
-        left.addLayout(btn_row)
-
+        left.addWidget(self.profile_manager_button)
         left.addStretch()
         outer.addLayout(left)
 
-        # ── 竖线分隔 ──
+        # ── 竖线 ──
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.Shape.VLine)
         sep1.setStyleSheet("color: #c8c6c0;")
@@ -987,31 +984,32 @@ class MainWindow(QMainWindow):
 
         # ── 中列：TID / SID / TSV ──
         self.tid = self._spin(0, 65535, 12345)
+        self.tid.setStyleSheet(css_ctrl)
         self.sid = self._spin(0, 65535, 54321)
+        self.sid.setStyleSheet(css_ctrl)
         self.tsv = QLineEdit()
         self.tsv.setReadOnly(True)
-        self.tsv.setStyleSheet(css_ctrl)
+        self.tsv.setStyleSheet(css_line)
         self.tid.valueChanged.connect(self._update_tsv)
         self.sid.valueChanged.connect(self._update_tsv)
         self._update_tsv()
 
         mid = QGridLayout()
-        mid.setVerticalSpacing(8)
-        mid.setHorizontalSpacing(6)
+        mid.setVerticalSpacing(6)
+        mid.setHorizontalSpacing(8)
         for row, (label_text, widget) in enumerate([
             ("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)
         ]):
             lbl = QLabel(label_text)
             lbl.setStyleSheet(css_label)
-            lbl.setFixedWidth(32)
+            lbl.setFixedWidth(36)
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            widget.setMinimumWidth(150)
-            widget.setStyleSheet(css_ctrl)
+            widget.setMinimumWidth(160)
             mid.addWidget(lbl, row, 0)
             mid.addWidget(widget, row, 1)
         outer.addLayout(mid)
 
-        # ── 竖线分隔 ──
+        # ── 竖线 ──
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.VLine)
         sep2.setStyleSheet("color: #c8c6c0;")
@@ -1023,10 +1021,10 @@ class MainWindow(QMainWindow):
         right.setSpacing(8)
 
         game_row = QHBoxLayout()
-        game_row.setSpacing(6)
+        game_row.setSpacing(8)
         game_lbl = QLabel("游戏")
         game_lbl.setStyleSheet(css_label)
-        game_lbl.setFixedWidth(32)
+        game_lbl.setFixedWidth(36)
         self.profile_game_value = QLabel(self._game_label(self._profile_version))
         self.profile_game_value.setStyleSheet("font-size: 12px; font-weight: 600; border: 0; background: transparent;")
         game_row.addWidget(game_lbl)
@@ -1037,9 +1035,18 @@ class MainWindow(QMainWindow):
         self.national_dex = QCheckBox("全国图鉴")
         self.shiny_charm = QCheckBox("闪耀护符")
         self.oval_charm = QCheckBox("圆形护符")
+
+        charms_row1 = QHBoxLayout()
+        charms_row1.setSpacing(20)
+        charms_row1.addWidget(self.national_dex)
+        charms_row1.addWidget(self.shiny_charm)
+        charms_row1.addStretch()
+        right.addLayout(charms_row1)
+
+        right.addWidget(self.oval_charm)
+
         for cb in (self.national_dex, self.shiny_charm, self.oval_charm):
-            cb.setStyleSheet("font-size: 12px; spacing: 6px; border: 0; background: transparent;")
-            right.addWidget(cb)
+            cb.setStyleSheet(css_cb)
 
         right.addStretch()
         outer.addLayout(right)
@@ -1049,135 +1056,172 @@ class MainWindow(QMainWindow):
 
     def _build_filter_group(self) -> QGroupBox:
         group = QGroupBox("筛选项")
+        group.setMaximumHeight(340)
+
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(10, 8, 10, 8)
-        outer.setSpacing(16)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(28)
 
         css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
-        css_ctrl = "QLineEdit, QSpinBox, QComboBox { min-height: 28px; max-height: 28px; }"
+        css_ctrl = "QSpinBox { min-height: 30px; max-height: 30px; min-width: 80px; }"
+        css_combo = "QComboBox { min-height: 30px; max-height: 30px; min-width: 180px; }"
         css_cb = "font-size: 12px; spacing: 6px; border: 0; background: transparent;"
 
-        # ── 左列：IV 范围 ──
+        # ── 左列：IV 范围 + 底部按钮 ──
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+
         iv_grid = QGridLayout()
-        iv_grid.setVerticalSpacing(5)
-        iv_grid.setHorizontalSpacing(4)
+        iv_grid.setVerticalSpacing(7)
+        iv_grid.setHorizontalSpacing(6)
         self.iv_min: list[QSpinBox] = []
         self.iv_max: list[QSpinBox] = []
         iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
         for row, label in enumerate(iv_labels):
             lbl = QLabel(label)
             lbl.setStyleSheet(css_label)
-            lbl.setFixedWidth(32)
+            lbl.setFixedWidth(50)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             min_spin = self._spin(0, 31, 0)
-            min_spin.setFixedWidth(50)
+            min_spin.setFixedWidth(80)
             min_spin.setStyleSheet(css_ctrl)
             max_spin = self._spin(0, 31, 31)
-            max_spin.setFixedWidth(50)
+            max_spin.setFixedWidth(80)
             max_spin.setStyleSheet(css_ctrl)
             self.iv_min.append(min_spin)
             self.iv_max.append(max_spin)
             iv_grid.addWidget(lbl, row, 0)
             iv_grid.addWidget(min_spin, row, 1)
             iv_grid.addWidget(max_spin, row, 2)
-        outer.addLayout(iv_grid)
+        left_col.addLayout(iv_grid)
 
+        # checkbox + 按钮
+        self.show_stats_check = QCheckBox("显示能力值")
+        self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
+        self.show_stats_check.setStyleSheet(css_cb)
+        left_col.addWidget(self.show_stats_check)
+
+        self.iv_calculator_button = QPushButton("个体值计算器")
+        self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
+        self.iv_calculator_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
+        self.iv_calculator_button.setFixedWidth(260)
+        left_col.addWidget(self.iv_calculator_button)
+
+        left_col.addStretch()
+        outer.addLayout(left_col)
+
+        # ── 竖线分隔 ──
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.VLine)
         sep.setStyleSheet("color: #c8c6c0;")
+        sep.setMinimumHeight(260)
         outer.addWidget(sep)
 
-        # ── 右列：筛选条件 ──
-        right = QGridLayout()
-        right.setVerticalSpacing(5)
-        right.setHorizontalSpacing(6)
-        right.setContentsMargins(0, 0, 0, 0)
+        # ── 右列：筛选条件 + 底部复选框 ──
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
 
-        # 特性 / 性别
+        right = QGridLayout()
+        right.setVerticalSpacing(7)
+        right.setHorizontalSpacing(8)
+
+        # 特性
         self.ability_filter = QComboBox()
         self.ability_filter.addItem("任意", 255)
         self.ability_filter.addItem("0", 0)
         self.ability_filter.addItem("1", 1)
         self.ability_filter.addItem("隐藏", 2)
-        self.ability_filter.setStyleSheet(css_ctrl)
+        self.ability_filter.setStyleSheet(css_combo)
+        lbl = QLabel("特性")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 0, 0)
+        right.addWidget(self.ability_filter, 0, 1)
+
+        # 性别
         self.gender_filter = QComboBox()
         self.gender_filter.addItem("任意", 255)
         self.gender_filter.addItem("雄性", 0)
         self.gender_filter.addItem("雌性", 1)
         self.gender_filter.addItem("无性别", 2)
-        self.gender_filter.setStyleSheet(css_ctrl)
+        self.gender_filter.setStyleSheet(css_combo)
+        lbl = QLabel("性别")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 1, 0)
+        right.addWidget(self.gender_filter, 1, 1)
+
+        # Height
+        self.height_min = self._spin(0, 255, 0)
+        self.height_min.setFixedWidth(80)
+        self.height_min.setStyleSheet(css_ctrl)
+        self.height_max = self._spin(0, 255, 255)
+        self.height_max.setFixedWidth(80)
+        self.height_max.setStyleSheet(css_ctrl)
+        lbl = QLabel("Height")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 2, 0)
+        ht = QHBoxLayout()
+        ht.setSpacing(6)
+        ht.addWidget(self.height_min)
+        ht.addWidget(self.height_max)
+        ht.addStretch()
+        right.addLayout(ht, 2, 1)
+
+        # 性格
+        self.nature_combo = QComboBox()
+        self.nature_combo.addItem("任意", -1)
+        for index, nature in enumerate(NATURES_ZH):
+            self.nature_combo.addItem(nature, index)
+        self.nature_combo.setStyleSheet(css_combo)
+        lbl = QLabel("性格")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 3, 0)
+        right.addWidget(self.nature_combo, 3, 1)
+
+        # 异色
         self.shiny_filter = QComboBox()
         self.shiny_filter.addItem("任意", "any")
         self.shiny_filter.addItem("异色", "shiny")
         self.shiny_filter.addItem("Star", "star")
         self.shiny_filter.addItem("Square", "square")
         self.shiny_filter.addItem("非异色", "none")
-        self.shiny_filter.setStyleSheet(css_ctrl)
-        self.nature_combo = QComboBox()
-        self.nature_combo.addItem("任意", -1)
-        for index, nature in enumerate(NATURES_ZH):
-            self.nature_combo.addItem(nature, index)
-        self.nature_combo.setStyleSheet(css_ctrl)
+        self.shiny_filter.setStyleSheet(css_combo)
+        lbl = QLabel("异色")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 4, 0)
+        right.addWidget(self.shiny_filter, 4, 1)
 
-        self.height_min = self._spin(0, 255, 0)
-        self.height_min.setFixedWidth(60)
-        self.height_min.setStyleSheet(css_ctrl)
-        self.height_max = self._spin(0, 255, 255)
-        self.height_max.setFixedWidth(60)
-        self.height_max.setStyleSheet(css_ctrl)
+        # Weight
         self.weight_min = self._spin(0, 255, 0)
-        self.weight_min.setFixedWidth(60)
+        self.weight_min.setFixedWidth(80)
         self.weight_min.setStyleSheet(css_ctrl)
         self.weight_max = self._spin(0, 255, 255)
-        self.weight_max.setFixedWidth(60)
+        self.weight_max.setFixedWidth(80)
         self.weight_max.setStyleSheet(css_ctrl)
+        lbl = QLabel("Weight")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 5, 0)
+        wt = QHBoxLayout()
+        wt.setSpacing(6)
+        wt.addWidget(self.weight_min)
+        wt.addWidget(self.weight_max)
+        wt.addStretch()
+        right.addLayout(wt, 5, 1)
 
-        rows = [
-            ("特性", self.ability_filter, "性别", self.gender_filter),
-            ("异色", self.shiny_filter, "性格", self.nature_combo),
-        ]
-        for r, cols in enumerate(rows):
-            lbl1 = QLabel(cols[0])
-            lbl1.setStyleSheet(css_label)
-            lbl1.setFixedWidth(40)
-            right.addWidget(lbl1, r, 0)
-            right.addWidget(cols[1], r, 1)
-            lbl2 = QLabel(str(cols[2]))
-            lbl2.setStyleSheet(css_label)
-            lbl2.setFixedWidth(40)
-            right.addWidget(lbl2, r, 2)
-            right.addWidget(cols[3], r, 3)
+        right_col.addLayout(right)
 
-        # Height / Weight 特殊行：标签 + 两个输入框
-        for r, (label, w1, w2) in enumerate([
-            ("Height", self.height_min, self.height_max),
-            ("Weight", self.weight_min, self.weight_max),
-        ], start=2):
-            lbl = QLabel(label)
-            lbl.setStyleSheet(css_label)
-            lbl.setFixedWidth(40)
-            right.addWidget(lbl, r, 0)
-            right.addWidget(w1, r, 1)
-            right.addWidget(w2, r, 3)
-
-        # 底部复选框行
-        cb_row = QHBoxLayout()
-        cb_row.setSpacing(16)
-        self.show_stats_check = QCheckBox("显示能力值")
-        self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
+        # 取消筛选
         self.skip_filter = QCheckBox("取消筛选")
-        self.iv_calculator_button = QPushButton("个体值计算器")
-        self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
-        self.iv_calculator_button.setStyleSheet("QPushButton { min-height: 28px; max-height: 28px; padding: 0 12px; }")
-        for cb in (self.show_stats_check, self.skip_filter):
-            cb.setStyleSheet(css_cb)
-        cb_row.addWidget(self.show_stats_check)
-        cb_row.addWidget(self.skip_filter)
-        cb_row.addWidget(self.iv_calculator_button)
-        cb_row.addStretch()
-        right.addLayout(cb_row, 4, 0, 1, 4)
+        self.skip_filter.setStyleSheet(css_cb)
+        right_col.addWidget(self.skip_filter)
 
-        right.setColumnStretch(3, 1)
-        outer.addLayout(right, 1)
+        right_col.addStretch()
+        outer.addLayout(right_col, 1)
 
         # 保留旧控件引用（隐藏）
         self.nature_list = QListWidget()
