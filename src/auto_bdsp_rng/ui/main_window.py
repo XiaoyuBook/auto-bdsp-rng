@@ -1322,6 +1322,11 @@ class MainWindow(QMainWindow):
                 font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
                 font-size: 12px;
             }
+            QLabel {
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
             QFrame#Header {
                 background: #ffffff;
                 border: 1px solid #c8c6c0;
