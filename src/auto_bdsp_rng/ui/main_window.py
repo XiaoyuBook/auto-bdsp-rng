@@ -672,7 +672,7 @@ class MainWindow(QMainWindow):
         # 控件统一样式
         stat_label_css = "font-size: 12px; color: #666; border: 0; background: transparent;"
         stat_value_css = "font-size: 12px; font-weight: 600; color: #1a1a1a; border: 0; background: transparent;"
-        spin_css = "QSpinBox { min-height: 30px; max-height: 30px; min-width: 120px; }"
+        spin_css = "QSpinBox { min-height: 30px; max-height: 30px; min-width: 140px; }"
         btn_css = (
             "QPushButton { min-height: 30px; max-height: 30px;"
             " min-width: 86px; max-width: 100px; padding: 0 14px; }"
