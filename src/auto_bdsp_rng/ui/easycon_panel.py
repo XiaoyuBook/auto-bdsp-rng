@@ -397,6 +397,7 @@ class EasyConPanel(QWidget):
         self.current_script_is_template = False
         self.current_script_newline = "\n"
         self.template_script_text = ""
+        self._saved_editor_text = ""
         self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
         self.parameter_defaults: dict[str, str] = {}
         self.parameter_lines: dict[str, int] = {}
@@ -418,6 +419,11 @@ class EasyConPanel(QWidget):
         self.bridge_log.connect(self._append_log)
 
         self._build_ui()
+        # Ctrl+S 快捷键
+        save_action = QAction("保存", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_script)
+        self.addAction(save_action)
         self._refresh_script_list()
         self.detect_easycon()
         self.refresh_ports()
@@ -509,7 +515,7 @@ class EasyConPanel(QWidget):
 
         save_action = QAction("保存", self)
         save_action.setShortcut("Ctrl+S")
-        save_action.triggered.connect(self.save_generated_script)
+        save_action.triggered.connect(self.save_script)
         file_menu.addAction(save_action)
 
         file_menu.addSeparator()
@@ -665,7 +671,7 @@ class EasyConPanel(QWidget):
         editor_frame_layout.setContentsMargins(0, 0, 0, 0)
         self.editor = EasyConScriptEditor()
         self.editor.fileDropped.connect(self.load_script)
-        self.editor.textChanged.connect(self._update_run_enabled)
+        self.editor.textChanged.connect(self._on_editor_changed)
         self.editor.setStyleSheet(
             f"""
             QPlainTextEdit {{
@@ -1023,6 +1029,7 @@ class EasyConPanel(QWidget):
         self.current_script_is_template = _is_builtin_template(path)
         self.current_script_newline = detect_newline_style(text)
         self.template_script_text = text
+        self._saved_editor_text = text
         self.script_name_label.setText(path.name)
         self._update_template_mode_label()
         self.editor.setPlainText(text)
@@ -1098,6 +1105,7 @@ class EasyConPanel(QWidget):
         self.current_script_newline = "\n"
         self.template_script_text = ""
         self.script_name_label.setText(" 未命名文档.txt")
+        self._saved_editor_text = ""
         self._update_template_mode_label()
         self.editor.setPlainText("")
         self._rescan_parameters()
@@ -1120,6 +1128,8 @@ class EasyConPanel(QWidget):
                 self._append_log("error", f"保存脚本失败: {exc}")
                 return None
             self.template_script_text = self.editor.toPlainText()
+            self._saved_editor_text = self.editor.toPlainText()
+            self._update_dirty_indicator()
             self._append_log("info", f"已保存: {self.current_script_path.name}")
             return self.current_script_path
         # 新文件或模板文件，弹出保存对话框
@@ -1142,7 +1152,9 @@ class EasyConPanel(QWidget):
         self.current_script_name = output.name
         self.current_script_is_template = _is_builtin_template(output)
         self.template_script_text = self.editor.toPlainText()
+        self._saved_editor_text = self.editor.toPlainText()
         self.script_name_label.setText(f" {output.name}")
+        self._update_dirty_indicator()
         self._update_template_mode_label()
         self._remember_recent_script(output)
         self._append_log("info", f"已保存: {output.name}")
@@ -1181,8 +1193,10 @@ class EasyConPanel(QWidget):
             self._append_log("error", f"保存到原文件失败: {exc}")
             return None
         self.template_script_text = self.editor.toPlainText()
+        self._saved_editor_text = self.editor.toPlainText()
         self.current_script_is_template = _is_builtin_template(self.current_script_path)
         self._update_template_mode_label()
+        self._update_dirty_indicator()
         self._append_log("info", f"已保存到原文件: {self.current_script_path.name}")
         return self.current_script_path
 
@@ -1481,6 +1495,22 @@ class EasyConPanel(QWidget):
         if focus and widget is not None:
             widget.setFocus()
         return False
+
+    def _on_editor_changed(self) -> None:
+        self._update_run_enabled()
+        self._update_dirty_indicator()
+
+    def _update_dirty_indicator(self) -> None:
+        if not hasattr(self, "script_name_label"):
+            return
+        current = self.editor.toPlainText()
+        dirty = current != self._saved_editor_text
+        name = self.current_script_name
+        if dirty and not name.startswith("*"):
+            name = "*" + name
+        elif not dirty and name.startswith("*"):
+            name = name[1:]
+        self.script_name_label.setText(f" {name}")
 
     def _update_run_enabled(self) -> None:
         if hasattr(self, "run_button"):
