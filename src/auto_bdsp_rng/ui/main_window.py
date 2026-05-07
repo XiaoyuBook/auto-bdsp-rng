@@ -938,14 +938,25 @@ class MainWindow(QMainWindow):
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
-        group.setMaximumHeight(130)
+        group.setMinimumHeight(150)
+        group.setMaximumHeight(155)
 
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(16, 10, 16, 10)
+        outer.setContentsMargins(16, 12, 16, 12)
         outer.setSpacing(24)
+        outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
         css_cb = "QCheckBox { font-size: 12px; spacing: 6px; border: 0; background: transparent; }"
+
+        input_css = (
+            "QLineEdit {"
+            " min-height: 30px; max-height: 30px; min-width: 220px; max-width: 220px;"
+            " background: #ffffff; color: #1a1a1a;"
+            " border: 1px solid #c8c8c8; border-radius: 2px;"
+            " padding-left: 8px;"
+            "}"
+        )
 
         # ── 左列：存档选择 ──
         left = QVBoxLayout()
@@ -959,7 +970,7 @@ class MainWindow(QMainWindow):
         self.profile_name = QLineEdit("-")
         self.profile_name.setPlaceholderText("存档信息")
         self.profile_name.setFixedWidth(180)
-        self.profile_name.setStyleSheet("QLineEdit { min-height: 32px; max-height: 32px; }")
+        self.profile_name.setStyleSheet(input_css)
         row1.addWidget(lbl)
         row1.addWidget(self.profile_name)
         row1.addStretch()
@@ -967,7 +978,7 @@ class MainWindow(QMainWindow):
 
         self.profile_manager_button = QPushButton("存档信息管理")
         self.profile_manager_button.setFixedWidth(180)
-        self.profile_manager_button.setStyleSheet("QPushButton { min-height: 32px; max-height: 32px; }")
+        self.profile_manager_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
         self.profile_manager_button.clicked.connect(self.open_profile_manager)
         left.addWidget(self.profile_manager_button)
         left.addStretch()
@@ -977,59 +988,38 @@ class MainWindow(QMainWindow):
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.Shape.VLine)
         sep1.setStyleSheet("color: #c8c6c0;")
-        sep1.setFixedHeight(112)
+        sep1.setFixedHeight(120)
         outer.addWidget(sep1)
 
-        # ── 中列：TID / SID / TSV (固定尺寸表单) ──
-        input_css = (
-            "min-height: 32px; max-height: 32px; min-width: 270px; max-width: 270px;"
-            " background: #ffffff; color: #1a1a1a;"
-            " border: 1px solid #c8c6c0; border-radius: 3px;"
-        )
-        # SpinBox 额外去掉内部按钮过大问题
-        spin_css = input_css + (
-            " QSpinBox::up-button { width: 26px; }"
-            " QSpinBox::down-button { width: 26px; }"
-        )
-
-        self.tid = self._spin(0, 65535, 12345)
-        self.tid.setStyleSheet(spin_css)
-        self.sid = self._spin(0, 65535, 54321)
-        self.sid.setStyleSheet(spin_css)
-        self.tsv = QLineEdit()
+        # ── 中列：TID / SID / TSV — 三行纯文本框 ──
+        self.tid = QLineEdit("12345")
+        self.tid.setStyleSheet(input_css)
+        self.sid = QLineEdit("54321")
+        self.sid.setStyleSheet(input_css)
+        self.tsv = QLineEdit("58376")
         self.tsv.setReadOnly(True)
         self.tsv.setStyleSheet(input_css)
-        self.tid.valueChanged.connect(self._update_tsv)
-        self.sid.valueChanged.connect(self._update_tsv)
-        self._update_tsv()
+        self.tid.editingFinished.connect(self._update_tsv)
+        self.sid.editingFinished.connect(self._update_tsv)
 
-        mid_panel = QWidget()
-        mid_panel.setFixedSize(340, 112)
-        mid = QGridLayout(mid_panel)
-        mid.setContentsMargins(0, 0, 0, 0)
+        mid = QGridLayout()
         mid.setVerticalSpacing(8)
         mid.setHorizontalSpacing(4)
-        mid.setRowMinimumHeight(0, 32)
-        mid.setRowMinimumHeight(1, 32)
-        mid.setRowMinimumHeight(2, 32)
-        for row, (label_text, widget) in enumerate([
-            ("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)
-        ]):
+        for row, (label_text, widget) in enumerate([("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)]):
             lbl = QLabel(label_text)
             lbl.setStyleSheet(css_label)
-            lbl.setFixedWidth(42)
-            lbl.setFixedHeight(32)
+            lbl.setFixedSize(42, 30)
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            widget.setFixedSize(270, 32)
+            widget.setFixedSize(220, 30)
             mid.addWidget(lbl, row, 0)
             mid.addWidget(widget, row, 1)
-        outer.addWidget(mid_panel)
+        outer.addLayout(mid)
 
         # ── 竖线 ──
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.VLine)
         sep2.setStyleSheet("color: #c8c6c0;")
-        sep2.setFixedHeight(112)
+        sep2.setFixedHeight(120)
         outer.addWidget(sep2)
 
         # ── 右列：游戏与护符 ──
@@ -1058,7 +1048,6 @@ class MainWindow(QMainWindow):
         charms_row1.addWidget(self.shiny_charm)
         charms_row1.addStretch()
         right.addLayout(charms_row1)
-
         right.addWidget(self.oval_charm)
 
         for cb in (self.national_dex, self.shiny_charm, self.oval_charm):
@@ -1066,7 +1055,6 @@ class MainWindow(QMainWindow):
 
         right.addStretch()
         outer.addLayout(right)
-
         outer.addStretch()
         return group
 
@@ -1527,8 +1515,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
         name = QLineEdit(self.profile_name.text())
-        tid = self._spin(0, 65535, self.tid.value())
-        sid = self._spin(0, 65535, self.sid.value())
+        tid = self._spin(0, 65535, int(self.tid.text() or 0))
+        sid = self._spin(0, 65535, int(self.sid.text() or 0))
         version = QComboBox()
         for game_version in (GameVersion.BD, GameVersion.SP):
             version.addItem(self._game_label(game_version), game_version.value)
@@ -1555,8 +1543,8 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.profile_name.setText(name.text() or "-")
-        self.tid.setValue(tid.value())
-        self.sid.setValue(sid.value())
+        self.tid.setText(str(tid.value()))
+        self.sid.setText(str(sid.value()))
         self.national_dex.setChecked(national_dex.isChecked())
         self.shiny_charm.setChecked(shiny_charm.isChecked())
         self.oval_charm.setChecked(oval_charm.isChecked())
@@ -1909,7 +1897,7 @@ class MainWindow(QMainWindow):
             self.template_shiny_display.setCurrentText("锁闪" if template.shiny == Shiny.NEVER else "随机")
 
     def _update_tsv(self) -> None:
-        self.tsv.setText(str(self.tid.value() ^ self.sid.value()))
+        self.tsv.setText(str(int(self.tid.text() or 0) ^ int(self.sid.text() or 0)))
 
     def _set_all_natures(self, state: Qt.CheckState) -> None:
         for row in range(self.nature_list.count()):
@@ -2013,8 +2001,8 @@ class MainWindow(QMainWindow):
         return Profile8(
             name=self.profile_name.text() or "-",
             version=self._profile_version.value,
-            tid=self.tid.value(),
-            sid=self.sid.value(),
+            tid=int(self.tid.text() or 0),
+            sid=int(self.sid.text() or 0),
             national_dex=self.national_dex.isChecked(),
             shiny_charm=self.shiny_charm.isChecked(),
             oval_charm=self.oval_charm.isChecked(),
