@@ -931,43 +931,113 @@ class MainWindow(QMainWindow):
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
-        layout = QGridLayout(group)
+        group.setMaximumHeight(170)
+
+        outer = QHBoxLayout(group)
+        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setSpacing(20)
+
+        css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
+        css_ctrl = "QLineEdit, QSpinBox, QComboBox { min-height: 30px; max-height: 30px; }"
+
+        # ── 左列：存档选择 ──
+        left = QVBoxLayout()
+        left.setSpacing(8)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+        lbl = QLabel("存档信息")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(52)
         self.profile_name = QLineEdit("-")
         self.profile_name.setPlaceholderText("存档信息")
+        self.profile_name.setFixedWidth(180)
+        self.profile_name.setStyleSheet(css_ctrl)
+        row1.addWidget(lbl)
+        row1.addWidget(self.profile_name)
+        row1.addStretch()
+        left.addLayout(row1)
+
+        self.profile_manager_button = QPushButton("存档信息管理")
+        self.profile_manager_button.setFixedWidth(180)
+        self.profile_manager_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
+        self.profile_manager_button.clicked.connect(self.open_profile_manager)
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(58, 0, 0, 0)
+        btn_row.addWidget(self.profile_manager_button)
+        btn_row.addStretch()
+        left.addLayout(btn_row)
+
+        left.addStretch()
+        outer.addLayout(left)
+
+        # ── 竖线分隔 ──
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setStyleSheet("color: #c8c6c0;")
+        sep1.setFixedHeight(90)
+        outer.addWidget(sep1)
+
+        # ── 中列：TID / SID / TSV ──
         self.tid = self._spin(0, 65535, 12345)
         self.sid = self._spin(0, 65535, 54321)
         self.tsv = QLineEdit()
         self.tsv.setReadOnly(True)
-        self.national_dex = QCheckBox("全国图鉴")
-        self.shiny_charm = QCheckBox("闪耀护符")
-        self.oval_charm = QCheckBox("圆形护符")
+        self.tsv.setStyleSheet(css_ctrl)
         self.tid.valueChanged.connect(self._update_tsv)
         self.sid.valueChanged.connect(self._update_tsv)
         self._update_tsv()
 
-        self.profile_manager_button = QPushButton("存档信息管理")
-        self.profile_manager_button.clicked.connect(self.open_profile_manager)
-        self.profile_game_value = QLabel(self._game_label(self._profile_version))
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setFrameShadow(QFrame.Shadow.Sunken)
+        mid = QGridLayout()
+        mid.setVerticalSpacing(8)
+        mid.setHorizontalSpacing(6)
+        for row, (label_text, widget) in enumerate([
+            ("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)
+        ]):
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(css_label)
+            lbl.setFixedWidth(32)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            widget.setMinimumWidth(150)
+            widget.setStyleSheet(css_ctrl)
+            mid.addWidget(lbl, row, 0)
+            mid.addWidget(widget, row, 1)
+        outer.addLayout(mid)
 
-        layout.addWidget(QLabel("存档信息"), 0, 0)
-        layout.addWidget(self.profile_name, 0, 1)
-        layout.addWidget(self.profile_manager_button, 1, 1)
-        layout.addWidget(QLabel("TID"), 0, 2)
-        layout.addWidget(self.tid, 0, 3)
-        layout.addWidget(QLabel("SID"), 1, 2)
-        layout.addWidget(self.sid, 1, 3)
-        layout.addWidget(QLabel("TSV"), 2, 2)
-        layout.addWidget(self.tsv, 2, 3)
-        layout.addWidget(divider, 0, 4, 3, 1)
-        layout.addWidget(QLabel("游戏"), 0, 5)
-        layout.addWidget(self.profile_game_value, 0, 6)
-        layout.addWidget(self.national_dex, 1, 5)
-        layout.addWidget(self.shiny_charm, 1, 6)
-        layout.addWidget(self.oval_charm, 2, 5)
-        layout.setColumnStretch(6, 1)
+        # ── 竖线分隔 ──
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setStyleSheet("color: #c8c6c0;")
+        sep2.setFixedHeight(90)
+        outer.addWidget(sep2)
+
+        # ── 右列：游戏与护符 ──
+        right = QVBoxLayout()
+        right.setSpacing(8)
+
+        game_row = QHBoxLayout()
+        game_row.setSpacing(6)
+        game_lbl = QLabel("游戏")
+        game_lbl.setStyleSheet(css_label)
+        game_lbl.setFixedWidth(32)
+        self.profile_game_value = QLabel(self._game_label(self._profile_version))
+        self.profile_game_value.setStyleSheet("font-size: 12px; font-weight: 600; border: 0; background: transparent;")
+        game_row.addWidget(game_lbl)
+        game_row.addWidget(self.profile_game_value)
+        game_row.addStretch()
+        right.addLayout(game_row)
+
+        self.national_dex = QCheckBox("全国图鉴")
+        self.shiny_charm = QCheckBox("闪耀护符")
+        self.oval_charm = QCheckBox("圆形护符")
+        for cb in (self.national_dex, self.shiny_charm, self.oval_charm):
+            cb.setStyleSheet("font-size: 12px; spacing: 6px; border: 0; background: transparent;")
+            right.addWidget(cb)
+
+        right.addStretch()
+        outer.addLayout(right)
+
+        outer.addStretch()
         return group
 
     def _build_filter_group(self) -> QGroupBox:
