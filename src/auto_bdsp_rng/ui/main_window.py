@@ -945,8 +945,6 @@ class MainWindow(QMainWindow):
         outer.setSpacing(24)
 
         css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
-        css_ctrl = ("QSpinBox { min-height: 32px; max-height: 32px; min-width: 160px; }")
-        css_line = "QLineEdit { min-height: 32px; max-height: 32px; min-width: 160px; border: 1px solid #c8c6c0; background: #e8e6e1; color: #1a1a1a; }"
         css_cb = "QCheckBox { font-size: 12px; spacing: 6px; border: 0; background: transparent; }"
 
         # ── 左列：存档选择 ──
@@ -979,41 +977,59 @@ class MainWindow(QMainWindow):
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.Shape.VLine)
         sep1.setStyleSheet("color: #c8c6c0;")
-        sep1.setFixedHeight(90)
+        sep1.setFixedHeight(112)
         outer.addWidget(sep1)
 
-        # ── 中列：TID / SID / TSV ──
+        # ── 中列：TID / SID / TSV (固定尺寸表单) ──
+        input_css = (
+            "min-height: 32px; max-height: 32px; min-width: 270px; max-width: 270px;"
+            " background: #ffffff; color: #1a1a1a;"
+            " border: 1px solid #c8c6c0; border-radius: 3px;"
+        )
+        # SpinBox 额外去掉内部按钮过大问题
+        spin_css = input_css + (
+            " QSpinBox::up-button { width: 26px; }"
+            " QSpinBox::down-button { width: 26px; }"
+        )
+
         self.tid = self._spin(0, 65535, 12345)
-        self.tid.setStyleSheet(css_ctrl)
+        self.tid.setStyleSheet(spin_css)
         self.sid = self._spin(0, 65535, 54321)
-        self.sid.setStyleSheet(css_ctrl)
+        self.sid.setStyleSheet(spin_css)
         self.tsv = QLineEdit()
         self.tsv.setReadOnly(True)
-        self.tsv.setStyleSheet(css_line)
+        self.tsv.setStyleSheet(input_css)
         self.tid.valueChanged.connect(self._update_tsv)
         self.sid.valueChanged.connect(self._update_tsv)
         self._update_tsv()
 
-        mid = QGridLayout()
-        mid.setVerticalSpacing(6)
-        mid.setHorizontalSpacing(8)
+        mid_panel = QWidget()
+        mid_panel.setFixedSize(340, 112)
+        mid = QGridLayout(mid_panel)
+        mid.setContentsMargins(0, 0, 0, 0)
+        mid.setVerticalSpacing(8)
+        mid.setHorizontalSpacing(4)
+        mid.setRowMinimumHeight(0, 32)
+        mid.setRowMinimumHeight(1, 32)
+        mid.setRowMinimumHeight(2, 32)
         for row, (label_text, widget) in enumerate([
             ("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)
         ]):
             lbl = QLabel(label_text)
             lbl.setStyleSheet(css_label)
-            lbl.setFixedWidth(36)
+            lbl.setFixedWidth(42)
+            lbl.setFixedHeight(32)
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            widget.setMinimumWidth(160)
+            widget.setFixedSize(270, 32)
             mid.addWidget(lbl, row, 0)
             mid.addWidget(widget, row, 1)
-        outer.addLayout(mid)
+        outer.addWidget(mid_panel)
 
         # ── 竖线 ──
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.VLine)
         sep2.setStyleSheet("color: #c8c6c0;")
-        sep2.setFixedHeight(90)
+        sep2.setFixedHeight(112)
         outer.addWidget(sep2)
 
         # ── 右列：游戏与护符 ──
