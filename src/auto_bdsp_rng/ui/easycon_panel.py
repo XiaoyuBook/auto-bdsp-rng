@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
+    QMenuBar,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -248,26 +250,421 @@ class EasyConPanel(QWidget):
         self.bridge_log.connect(self._append_log)
 
         self._build_ui()
-        self._build_actions()
         self._refresh_script_list()
         self.detect_easycon()
         self.refresh_ports()
         self._update_run_enabled()
 
+    # ── 浅色主题颜色常量 ──────────────────────────────────
+    CLR_BG = "#f2f1ee"
+    CLR_PANEL_BG = "#e8e6e1"
+    CLR_BORDER = "#c8c6c0"
+    CLR_TEXT = "#1a1a1a"
+    CLR_HINT = "#767676"
+    CLR_LOG_BG = "#282826"
+    CLR_LOG_TEXT = "#e7ece9"
+    CLR_RUN_BTN = "#23936b"
+    CLR_WHITE = "#ffffff"
+    CLR_TIMER_BG = "#1a1a1a"
+    CLR_TIMER_TEXT = "#ffffff"
+    CLR_STATUSBAR_BG = "#e8e6e1"
+
+    def _easycon_light_button(self, text: str, fixed_width: int = 0) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {self.CLR_WHITE};
+                border: 1px solid {self.CLR_BORDER};
+                border-radius: 3px;
+                padding: 4px 12px;
+                color: {self.CLR_TEXT};
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ background: #e8e6e1; }}
+            QPushButton:pressed {{ background: #d4d2cc; }}
+            """
+        )
+        if fixed_width:
+            btn.setFixedWidth(fixed_width)
+        return btn
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(0)
+        self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 12px; }}")
 
-        toolbar = QFrame()
-        toolbar.setObjectName("EasyConToolbar")
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(10, 8, 10, 8)
-        toolbar_layout.setSpacing(8)
-        self.script_name_label = QLabel("未命名脚本")
-        self.script_name_label.setObjectName("Badge")
-        self.template_mode_label = QLabel("普通脚本")
-        self.template_mode_label.setObjectName("Badge")
+        layout.addWidget(self._build_menu_bar())
+
+        # 标题行: "伊机控 EasyCon v1.6.3  QQ群:946057081"
+        title_bar = QFrame()
+        title_bar.setStyleSheet(
+            f"QFrame {{ background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER}; }}"
+        )
+        title_layout = QHBoxLayout(title_bar)
+        title_layout.setContentsMargins(10, 4, 10, 4)
+        title_label = QLabel("伊机控 EasyCon v1.6.3  QQ群:946057081")
+        title_label.setStyleSheet("font-size: 11px; color: #555;")
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+        layout.addWidget(title_bar)
+
+        # 主内容区
+        content = QWidget()
+        content.setStyleSheet(f"background: {self.CLR_BG};")
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(6, 6, 6, 6)
+        content_layout.setSpacing(6)
+
+        content_layout.addWidget(self._build_log_area(), 42)
+        content_layout.addWidget(self._build_editor_area(), 55)
+        content_layout.addWidget(self._build_right_buttons(), 0)
+
+        layout.addWidget(content, 1)
+
+        # 底部三栏
+        layout.addWidget(self._build_bottom_panel())
+
+        # 状态栏
+        layout.addWidget(self._build_bottom_status())
+
+    # ── 菜单栏 ──────────────────────────────────────────
+
+    def _build_menu_bar(self) -> QMenuBar:
+        menubar = QMenuBar()
+        menubar.setStyleSheet(
+            f"""
+            QMenuBar {{ background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER}; padding: 2px 6px; }}
+            QMenuBar::item {{ padding: 3px 10px; color: {self.CLR_TEXT}; }}
+            QMenuBar::item:selected {{ background: {self.CLR_PANEL_BG}; }}
+            QMenu {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; }}
+            QMenu::item {{ padding: 4px 28px 4px 12px; }}
+            QMenu::item:selected {{ background: {self.CLR_PANEL_BG}; }}
+            """
+        )
+
+        file_menu = menubar.addMenu("文件")
+        new_action = QAction("新建", self)
+        new_action.setShortcut("Ctrl+N")
+        file_menu.addAction(new_action)
+
+        open_action = QAction("打开", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self.open_script_dialog)
+        file_menu.addAction(open_action)
+
+        save_action = QAction("保存", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_generated_script)
+        file_menu.addAction(save_action)
+
+        file_menu.addSeparator()
+        exit_action = QAction("退出", self)
+        file_menu.addAction(exit_action)
+
+        script_menu = menubar.addMenu("脚本")
+        run_menu_action = QAction("运行", self)
+        run_menu_action.setShortcut("F5")
+        run_menu_action.triggered.connect(self.toggle_run)
+        script_menu.addAction(run_menu_action)
+
+        stop_action = QAction("停止", self)
+        stop_action.triggered.connect(lambda: self.stop_bridge_script() if self._is_bridge_mode() else None)
+        script_menu.addAction(stop_action)
+
+        compile_action = QAction("编译", self)
+        script_menu.addAction(compile_action)
+
+        format_action = QAction("格式化", self)
+        script_menu.addAction(format_action)
+
+        menubar.addMenu("搜图")
+        menubar.addMenu("设置")
+        menubar.addMenu("ESP32")
+        menubar.addMenu("画图")
+
+        help_menu = menubar.addMenu("帮助")
+        about_action = QAction("关于", self)
+        help_menu.addAction(about_action)
+
+        return menubar
+
+    # ── 左区：输出日志 + 计时 + 运行 ─────────────────────
+
+    def _build_log_area(self) -> QWidget:
+        area = QWidget()
+        area.setStyleSheet(f"background: {self.CLR_BG};")
+        layout = QVBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # 日志区标题
+        log_header = QLabel("输出")
+        log_header.setStyleSheet(
+            f"font-weight: 700; font-size: 12px; padding: 2px 4px; border: 0; background: {self.CLR_BG};"
+        )
+        layout.addWidget(log_header)
+
+        # 黑色日志面板
+        log_panel = QFrame()
+        log_panel.setStyleSheet(
+            f"QFrame {{ background: {self.CLR_LOG_BG}; border: 1px solid {self.CLR_BORDER}; border-radius: 0; }}"
+        )
+        log_panel_layout = QVBoxLayout(log_panel)
+        log_panel_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.log_view = QTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setStyleSheet(
+            f"""
+            QTextEdit {{
+                background: {self.CLR_LOG_BG};
+                color: {self.CLR_LOG_TEXT};
+                border: 0;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                font-size: 11px;
+            }}
+            """
+        )
+        self.log_view.document().setMaximumBlockCount(self.config.keep_log_lines)
+        log_panel_layout.addWidget(self.log_view)
+        layout.addWidget(log_panel, 1)
+
+        # 计时 + 运行按钮（横向排列）
+        action_row = QWidget()
+        action_row.setStyleSheet(f"background: {self.CLR_BG};")
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 3, 0, 0)
+        action_layout.setSpacing(4)
+
+        self.elapsed_label = QLabel("00:00:00")
+        self.elapsed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.elapsed_label.setMinimumHeight(70)
+        self.elapsed_label.setStyleSheet(
+            f"""
+            QLabel {{
+                background: {self.CLR_TIMER_BG};
+                color: {self.CLR_TIMER_TEXT};
+                font-size: 28px;
+                font-weight: 700;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                border: 0;
+            }}
+            """
+        )
+        action_layout.addWidget(self.elapsed_label, 5)
+
+        self.run_button = QPushButton("运行脚本")
+        self.run_button.setMinimumHeight(70)
+        self.run_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.run_button.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {self.CLR_RUN_BTN};
+                color: white;
+                font-size: 16px;
+                font-weight: 700;
+                border: 0;
+                border-radius: 0;
+            }}
+            QPushButton:hover {{ background: #1e7d5a; }}
+            QPushButton:pressed {{ background: #186b4c; }}
+            QPushButton:disabled {{ background: #a0a0a0; }}
+            """
+        )
+        self.run_button.clicked.connect(self.toggle_run)
+        action_layout.addWidget(self.run_button, 5)
+
+        layout.addWidget(action_row)
+        return area
+
+    # ── 中区：脚本编辑器 ────────────────────────────────
+
+    def _build_editor_area(self) -> QWidget:
+        area = QWidget()
+        area.setStyleSheet(f"background: {self.CLR_BG};")
+        layout = QVBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # 编辑器标题行
+        editor_header = QWidget()
+        editor_header.setStyleSheet(f"background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER};")
+        editor_header_layout = QHBoxLayout(editor_header)
+        editor_header_layout.setContentsMargins(8, 3, 8, 3)
+        self.script_name_label = QLabel(" 未命名脚本")
+        self.script_name_label.setStyleSheet(f"font-size: 12px; color: {self.CLR_TEXT}; border: 0; background: transparent;")
+        editor_header_layout.addWidget(self.script_name_label)
+        editor_header_layout.addStretch()
+
+        self.template_mode_label = QLabel("")
+        self.template_mode_label.setStyleSheet(f"font-size: 11px; color: {self.CLR_HINT}; border: 0; background: transparent;")
+        editor_header_layout.addWidget(self.template_mode_label)
+        layout.addWidget(editor_header)
+
+        # 编辑器本体（白色背景）
+        editor_frame = QFrame()
+        editor_frame.setStyleSheet(
+            f"QFrame {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; border-top: 0; }}"
+        )
+        editor_frame_layout = QVBoxLayout(editor_frame)
+        editor_frame_layout.setContentsMargins(0, 0, 0, 0)
+        self.editor = EasyConScriptEditor()
+        self.editor.fileDropped.connect(self.load_script)
+        self.editor.textChanged.connect(self._update_run_enabled)
+        self.editor.setStyleSheet(
+            f"""
+            QPlainTextEdit {{
+                background: {self.CLR_WHITE};
+                color: {self.CLR_TEXT};
+                border: 0;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                font-size: 13px;
+                selection-background-color: #c8e0d0;
+            }}
+            """
+        )
+        editor_frame_layout.addWidget(self.editor, 1)
+        layout.addWidget(editor_frame, 1)
+        return area
+
+    # ── 右区：操作按钮 ──────────────────────────────────
+
+    def _build_right_buttons(self) -> QWidget:
+        area = QWidget()
+        area.setFixedWidth(130)
+        area.setStyleSheet(f"background: {self.CLR_BG};")
+        layout = QVBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        btn_style = (
+            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" border-radius: 2px; padding: 6px 8px; font-size: 12px; }}"
+            f" QPushButton:hover {{ background: {self.CLR_PANEL_BG}; }}"
+        )
+
+        for text in ("远程运行", "远程停止", "编译烧录", "清除烧录"):
+            btn = QPushButton(text)
+            btn.setStyleSheet(btn_style)
+            layout.addWidget(btn)
+
+        layout.addSpacing(6)
+
+        # 固件分组
+        firmware_group = QGroupBox("固件")
+        firmware_group.setStyleSheet(
+            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
+            f" background: {self.CLR_BG}; }}"
+            f" QGroupBox::title {{ subcontrol-origin: margin; left: 6px; padding: 0 4px; }}"
+        )
+        firmware_layout = QVBoxLayout(firmware_group)
+        firmware_layout.setContentsMargins(6, 4, 6, 6)
+        fw_combo = QComboBox()
+        fw_combo.addItem("Leonardo")
+        fw_combo.setStyleSheet(
+            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; }}"
+        )
+        firmware_layout.addWidget(fw_combo)
+        gen_btn = QPushButton("生成")
+        gen_btn.setStyleSheet(btn_style)
+        firmware_layout.addWidget(gen_btn)
+        layout.addWidget(firmware_group)
+
+        layout.addSpacing(6)
+
+        syntax_btn = QPushButton("脚本语法")
+        syntax_btn.setStyleSheet(btn_style)
+        layout.addWidget(syntax_btn)
+
+        layout.addStretch()
+        return area
+
+    # ── 底部三栏 ────────────────────────────────────────
+
+    def _build_bottom_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setStyleSheet(f"background: {self.CLR_PANEL_BG}; border-top: 1px solid {self.CLR_BORDER};")
+        outer = QHBoxLayout(panel)
+        outer.setContentsMargins(6, 4, 6, 4)
+        outer.setSpacing(6)
+
+        outer.addWidget(self._build_serial_column(), 33)
+        outer.addWidget(self._build_video_column(), 33)
+        outer.addWidget(self._build_vpad_column(), 33)
+        return panel
+
+    def _build_serial_column(self) -> QWidget:
+        group = QGroupBox("串口连接")
+        group.setStyleSheet(
+            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
+            f" background: {self.CLR_PANEL_BG}; }}"
+            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
+        )
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(4)
+
+        btn_style = (
+            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" border-radius: 2px; padding: 4px 10px; font-size: 11px; }}"
+            f" QPushButton:hover {{ background: #e8e6e1; }}"
+        )
+        combo_style = (
+            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
+        )
+
+        self.connect_button = QPushButton("自动连接(推荐)")
+        self.connect_button.setStyleSheet(btn_style)
+        self.connect_button.clicked.connect(self.toggle_bridge_connection)
+        layout.addWidget(self.connect_button)
+
+        serial_row = QHBoxLayout()
+        self.port_combo = QComboBox()
+        self.port_combo.setEditable(True)
+        self.port_combo.setCurrentText("下拉选择串口")
+        self.port_combo.setStyleSheet(combo_style)
+        self.port_combo.currentIndexChanged.connect(self._port_changed)
+        serial_row.addWidget(self.port_combo, 1)
+
+        self.disconnect_button = QPushButton("手动连接")
+        self.disconnect_button.setStyleSheet(btn_style)
+        self.disconnect_button.clicked.connect(self.connect_bridge)
+        serial_row.addWidget(self.disconnect_button)
+        layout.addLayout(serial_row)
+
+        # 隐藏的后端配置（保留原有控件，用户可通过设置菜单访问）
+        self._hidden_config_widgets()
+        return group
+
+    def _hidden_config_widgets(self) -> None:
+        """创建隐藏的配置控件，保留原有业务逻辑所需的所有属性"""
+        self.ezcon_path = QLineEdit(str(self.config.ezcon_path or ""))
+        self.ezcon_path.setVisible(False)
+        self.bridge_path = QLineEdit(str(self.config.bridge_path or ""))
+        self.bridge_path.setVisible(False)
+        self.browse_ezcon_button = QPushButton()
+        self.browse_ezcon_button.clicked.connect(self.choose_ezcon)
+        self.browse_bridge_button = QPushButton()
+        self.browse_bridge_button.clicked.connect(self.choose_bridge)
+        self.version_label = QLabel("EasyCon: 未检测")
+        self.backend_mode = QComboBox()
+        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
+        self.backend_mode.addItem("CLI 诊断", "cli")
+        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
+        self.backend_label = QLabel("单片机: 未连接")
+        self.connection_state_label = QLabel("连接: 未检测")
+        self.task_state_label = QLabel("任务: 未检测")
+        self.refresh_ports_button = QPushButton("刷新串口")
+        self.refresh_ports_button.clicked.connect(self.refresh_ports)
+        self.auto_select_port_button = QPushButton("自动选择串口")
+        self.auto_select_port_button.clicked.connect(self.auto_select_port)
+        self.mock_check = QCheckBox("mock 模式")
+        self.mock_check.setChecked(self.config.mock_enabled)
+        self.mock_check.toggled.connect(self._save_config_from_ui)
+        self.cli_test_button = QPushButton("测试 CLI 运行")
+        self.cli_test_button.clicked.connect(self.run_cli_smoke_test)
         self.open_button = QPushButton("打开脚本")
         self.open_button.clicked.connect(self.open_script_dialog)
         self.save_generated_button = QPushButton("保存临时脚本")
@@ -278,172 +675,21 @@ class EasyConPanel(QWidget):
         self.detect_button.clicked.connect(self.detect_easycon)
         self.toolbar_connect_button = QPushButton("连接伊机控")
         self.toolbar_connect_button.clicked.connect(self.toggle_bridge_connection)
-        self.run_button = QPushButton("运行脚本")
-        self.run_button.setObjectName("PrimaryButton")
-        self.run_button.clicked.connect(self.toggle_run)
-        self.elapsed_label = QLabel("00:00:00")
-        self.elapsed_label.setObjectName("Badge")
-        toolbar_layout.addWidget(QLabel("伊机控"))
-        toolbar_layout.addWidget(self.script_name_label, 1)
-        toolbar_layout.addWidget(self.template_mode_label)
-        toolbar_layout.addWidget(self.open_button)
-        toolbar_layout.addWidget(self.save_generated_button)
-        toolbar_layout.addWidget(self.save_original_button)
-        toolbar_layout.addWidget(self.detect_button)
-        toolbar_layout.addWidget(self.toolbar_connect_button)
-        toolbar_layout.addWidget(self.elapsed_label)
-        toolbar_layout.addWidget(self.run_button)
-        layout.addWidget(toolbar)
+        self.clear_log_button = QPushButton("清空日志")
+        self.clear_log_button.clicked.connect(self.log_view.clear)
+        self.copy_log_button = QPushButton("复制日志")
+        self.copy_log_button.clicked.connect(self.copy_all_logs)
+        self.save_log_button = QPushButton("保存日志")
+        self.save_log_button.clicked.connect(self.save_logs_dialog)
+        self.log_keep_lines = QSpinBox()
+        self.log_keep_lines.setValue(self.config.keep_log_lines)
+        self.log_keep_lines.valueChanged.connect(self._log_retention_changed)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_left_panel())
-        splitter.addWidget(self._build_editor_panel())
-        splitter.setSizes([430, 1000])
-        layout.addWidget(splitter, 1)
-
-        self.easycon_status = QStatusBar()
-        self.easycon_status.setSizeGripEnabled(False)
-        self.status_easycon_label = QLabel("EasyCon: 未检测")
-        self.status_controller_label = QLabel("单片机: 未检测")
-        self.status_capture_label = QLabel("采集卡: 不使用")
-        self.status_labels_label = QLabel("标签: 0")
-        self.status_backend_label = QLabel("后端: 常驻连接")
-        for label in (
-            self.status_easycon_label,
-            self.status_controller_label,
-            self.status_capture_label,
-            self.status_labels_label,
-            self.status_backend_label,
-        ):
-            label.setObjectName("Badge")
-            self.easycon_status.addPermanentWidget(label)
-        layout.addWidget(self.easycon_status)
-
-    def _build_actions(self) -> None:
-        save = QAction("Save generated script", self)
-        save.setShortcut("Ctrl+S")
-        save.triggered.connect(self.save_generated_script)
-        self.addAction(save)
-
-        open_action = QAction("Open EasyCon script", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self.open_script_dialog)
-        self.addAction(open_action)
-
-        run = QAction("Run EasyCon script", self)
-        run.setShortcut("F5")
-        run.triggered.connect(self.toggle_run)
-        self.addAction(run)
-
-    def _build_left_panel(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 8, 0)
-        layout.setSpacing(8)
-
-        script_group = QGroupBox("内置脚本")
-        script_layout = QVBoxLayout(script_group)
+        # 脚本列表（保留，通过菜单访问）
         self.script_list = QListWidget()
         self.script_list.itemDoubleClicked.connect(self._load_script_item)
-        script_layout.addWidget(self.script_list)
-        layout.addWidget(script_group, 1)
 
-        config_group = QGroupBox("连接配置")
-        config_layout = QGridLayout(config_group)
-        self.ezcon_path = QLineEdit(str(self.config.ezcon_path or ""))
-        self.ezcon_path.setPlaceholderText("请选择 ezcon.exe 或设置 EASYCON_ROOT")
-        self.browse_ezcon_button = QPushButton("选择")
-        self.browse_ezcon_button.clicked.connect(self.choose_ezcon)
-        self.bridge_path = QLineEdit(str(self.config.bridge_path or ""))
-        self.bridge_path.setPlaceholderText("请选择 EasyConBridge.exe")
-        self.browse_bridge_button = QPushButton("选择")
-        self.browse_bridge_button.clicked.connect(self.choose_bridge)
-        self.version_label = QLabel("EasyCon: 未检测")
-        self.backend_mode = QComboBox()
-        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
-        self.backend_mode.addItem("CLI 诊断", "cli")
-        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
-        self.backend_label = QLabel("单片机: 未连接")
-        self.connection_state_label = QLabel("连接: 未检测")
-        self.connection_state_label.setObjectName("Badge")
-        self.task_state_label = QLabel("任务: 未检测")
-        self.task_state_label.setObjectName("Badge")
-        self.port_combo = QComboBox()
-        self.port_combo.currentIndexChanged.connect(self._port_changed)
-        self.refresh_ports_button = QPushButton("刷新串口")
-        self.refresh_ports_button.clicked.connect(self.refresh_ports)
-        self.auto_select_port_button = QPushButton("自动选择串口")
-        self.auto_select_port_button.clicked.connect(self.auto_select_port)
-        self.connect_button = QPushButton("连接伊机控")
-        self.connect_button.clicked.connect(self.toggle_bridge_connection)
-        self.disconnect_button = QPushButton("断开连接")
-        self.disconnect_button.clicked.connect(self.disconnect_bridge)
-        self.cli_test_button = QPushButton("测试 CLI 运行")
-        self.cli_test_button.clicked.connect(self.run_cli_smoke_test)
-        self.mock_check = QCheckBox("mock 模式")
-        self.mock_check.setChecked(self.config.mock_enabled)
-        self.mock_check.toggled.connect(self._save_config_from_ui)
-        config_layout.addWidget(QLabel("ezcon"), 0, 0)
-        config_layout.addWidget(self.ezcon_path, 0, 1)
-        config_layout.addWidget(self.browse_ezcon_button, 0, 2)
-        config_layout.addWidget(QLabel("Bridge"), 1, 0)
-        config_layout.addWidget(self.bridge_path, 1, 1)
-        config_layout.addWidget(self.browse_bridge_button, 1, 2)
-        config_layout.addWidget(self.version_label, 2, 0, 1, 3)
-        config_layout.addWidget(QLabel("后端"), 3, 0)
-        config_layout.addWidget(self.backend_mode, 3, 1, 1, 2)
-        config_layout.addWidget(self.backend_label, 4, 0, 1, 3)
-        config_layout.addWidget(QLabel("状态"), 5, 0)
-        config_layout.addWidget(self.connection_state_label, 5, 1)
-        config_layout.addWidget(self.task_state_label, 5, 2)
-        config_layout.addWidget(QLabel("串口"), 6, 0)
-        config_layout.addWidget(self.port_combo, 6, 1)
-        config_layout.addWidget(self.refresh_ports_button, 6, 2)
-        config_layout.addWidget(self.auto_select_port_button, 7, 1, 1, 2)
-        config_layout.addWidget(self.connect_button, 8, 1)
-        config_layout.addWidget(self.disconnect_button, 8, 2)
-        config_layout.addWidget(self.mock_check, 9, 1, 1, 2)
-        config_layout.addWidget(self.cli_test_button, 10, 1, 1, 2)
-        layout.addWidget(config_group)
-
-        controller_group = QGroupBox("手柄测试")
-        controller_layout = QGridLayout(controller_group)
-        self.controller_duration = QSpinBox()
-        self.controller_duration.setRange(20, 5000)
-        self.controller_duration.setSingleStep(20)
-        self.controller_duration.setValue(100)
-        self.controller_duration.setSuffix(" ms")
-        self.test_a_button = QPushButton("A")
-        self.test_b_button = QPushButton("B")
-        self.test_home_button = QPushButton("HOME")
-        self.test_ls_reset_button = QPushButton("LS RESET")
-        self.test_rs_reset_button = QPushButton("RS RESET")
-        self.test_a_button.clicked.connect(lambda: self.send_controller_press("A"))
-        self.test_b_button.clicked.connect(lambda: self.send_controller_press("B"))
-        self.test_home_button.clicked.connect(lambda: self.send_controller_press("HOME"))
-        self.test_ls_reset_button.clicked.connect(lambda: self.send_controller_stick("left", "RESET"))
-        self.test_rs_reset_button.clicked.connect(lambda: self.send_controller_stick("right", "RESET"))
-        controller_layout.addWidget(QLabel("时长"), 0, 0)
-        controller_layout.addWidget(self.controller_duration, 0, 1, 1, 2)
-        controller_layout.addWidget(self.test_a_button, 1, 0)
-        controller_layout.addWidget(self.test_b_button, 1, 1)
-        controller_layout.addWidget(self.test_home_button, 1, 2)
-        controller_layout.addWidget(self.test_ls_reset_button, 2, 0, 1, 2)
-        controller_layout.addWidget(self.test_rs_reset_button, 2, 2)
-        self.keyboard_controller_check = QCheckBox("键盘虚拟手柄")
-        self.keyboard_controller_check.toggled.connect(self.set_keyboard_controller_enabled)
-        self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆，Esc=退出")
-        self.keyboard_mapping_label.setObjectName("Hint")
-        controller_layout.addWidget(self.keyboard_controller_check, 3, 0, 1, 3)
-        controller_layout.addWidget(self.keyboard_mapping_label, 4, 0, 1, 3)
-        layout.addWidget(controller_group)
-
-        param_group = QGroupBox("脚本参数")
-        param_layout = QVBoxLayout(param_group)
+        # 参数面板
         self.parameter_scroll = QScrollArea()
         self.parameter_scroll.setWidgetResizable(True)
         self.parameter_panel = QWidget()
@@ -454,52 +700,140 @@ class EasyConPanel(QWidget):
         self.rescan_button.clicked.connect(self._rescan_parameters)
         self.restore_defaults_button = QPushButton("恢复模板默认值")
         self.restore_defaults_button.clicked.connect(self.restore_template_defaults)
-        param_buttons = QHBoxLayout()
-        param_buttons.addWidget(self.rescan_button)
-        param_buttons.addWidget(self.restore_defaults_button)
-        param_layout.addWidget(self.parameter_scroll)
-        param_layout.addLayout(param_buttons)
-        layout.addWidget(param_group, 1)
 
-        log_group = QGroupBox("输出日志")
-        log_layout = QVBoxLayout(log_group)
-        self.log_view = QTextEdit()
-        self.log_view.setObjectName("EasyConLog")
-        self.log_view.setReadOnly(True)
-        self.log_view.document().setMaximumBlockCount(self.config.keep_log_lines)
-        self.log_keep_lines = QSpinBox()
-        self.log_keep_lines.setRange(1, 100_000)
-        self.log_keep_lines.setValue(self.config.keep_log_lines)
-        self.log_keep_lines.setSuffix(" 行")
-        self.log_keep_lines.setToolTip("日志区最多保留的行数")
-        self.log_keep_lines.valueChanged.connect(self._log_retention_changed)
-        self.clear_log_button = QPushButton("清空日志")
-        self.clear_log_button.clicked.connect(self.log_view.clear)
-        self.copy_log_button = QPushButton("复制日志")
-        self.copy_log_button.clicked.connect(self.copy_all_logs)
-        self.save_log_button = QPushButton("保存日志")
-        self.save_log_button.clicked.connect(self.save_logs_dialog)
-        log_buttons = QHBoxLayout()
-        log_buttons.addWidget(QLabel("保留"))
-        log_buttons.addWidget(self.log_keep_lines)
-        log_buttons.addWidget(self.clear_log_button)
-        log_buttons.addWidget(self.copy_log_button)
-        log_buttons.addWidget(self.save_log_button)
-        log_layout.addWidget(self.log_view, 1)
-        log_layout.addLayout(log_buttons)
-        layout.addWidget(log_group, 1)
-        scroll.setWidget(panel)
-        return scroll
+    def _build_video_column(self) -> QWidget:
+        group = QGroupBox("视频源")
+        group.setStyleSheet(
+            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
+            f" background: {self.CLR_PANEL_BG}; }}"
+            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
+        )
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(4)
 
-    def _build_editor_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.editor = EasyConScriptEditor()
-        self.editor.fileDropped.connect(self.load_script)
-        self.editor.textChanged.connect(self._update_run_enabled)
-        layout.addWidget(self.editor, 1)
-        return panel
+        btn_style = (
+            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" border-radius: 2px; padding: 4px 10px; font-size: 11px; }}"
+            f" QPushButton:hover {{ background: #e8e6e1; }}"
+        )
+        combo_style = (
+            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
+        )
+
+        video_combo = QComboBox()
+        video_combo.addItem("(USB Video, 0)")
+        video_combo.setStyleSheet(combo_style)
+        layout.addWidget(video_combo)
+
+        connect_video_btn = QPushButton("连接视频源")
+        connect_video_btn.setStyleSheet(btn_style)
+        layout.addWidget(connect_video_btn)
+
+        search_console_btn = QPushButton("搜图控制台")
+        search_console_btn.setStyleSheet(btn_style)
+        layout.addWidget(search_console_btn)
+
+        layout.addStretch()
+        return group
+
+    def _build_vpad_column(self) -> QWidget:
+        group = QGroupBox("虚拟手柄")
+        group.setStyleSheet(
+            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
+            f" background: {self.CLR_PANEL_BG}; }}"
+            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
+        )
+        layout = QGridLayout(group)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(4)
+
+        btn_style = (
+            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" border-radius: 2px; padding: 4px 8px; font-size: 11px; }}"
+            f" QPushButton:hover {{ background: #e8e6e1; }}"
+        )
+        combo_style = (
+            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
+        )
+
+        vpad_combo = QComboBox()
+        vpad_combo.addItem("键盘")
+        vpad_combo.setStyleSheet(combo_style)
+        layout.addWidget(vpad_combo, 0, 0, 1, 1)
+
+        self.keyboard_controller_check = QCheckBox("连接")
+        self.keyboard_controller_check.setStyleSheet(f"font-size: 11px; background: transparent;")
+        self.keyboard_controller_check.toggled.connect(self.set_keyboard_controller_enabled)
+        layout.addWidget(self.keyboard_controller_check, 0, 1, 1, 1)
+
+        mapping_btn = QPushButton("按键映射")
+        mapping_btn.setStyleSheet(btn_style)
+        layout.addWidget(mapping_btn, 1, 0, 1, 1)
+
+        help_btn = QPushButton("帮助")
+        help_btn.setStyleSheet(btn_style)
+        layout.addWidget(help_btn, 1, 1, 1, 1)
+
+        record_btn = QPushButton("录制脚本")
+        record_btn.setStyleSheet(btn_style)
+        layout.addWidget(record_btn, 2, 0, 1, 1)
+
+        pause_btn = QPushButton("暂停录制")
+        pause_btn.setStyleSheet(btn_style)
+        layout.addWidget(pause_btn, 2, 1, 1, 1)
+
+        # 手柄测试按钮（保留原有功能）
+        self.controller_duration = QSpinBox()
+        self.controller_duration.setRange(20, 5000)
+        self.controller_duration.setValue(100)
+        self.test_a_button = QPushButton("A")
+        self.test_a_button.clicked.connect(lambda: self.send_controller_press("A"))
+        self.test_b_button = QPushButton("B")
+        self.test_b_button.clicked.connect(lambda: self.send_controller_press("B"))
+        self.test_home_button = QPushButton("HOME")
+        self.test_home_button.clicked.connect(lambda: self.send_controller_press("HOME"))
+        self.test_ls_reset_button = QPushButton("LS RESET")
+        self.test_ls_reset_button.clicked.connect(lambda: self.send_controller_stick("left", "RESET"))
+        self.test_rs_reset_button = QPushButton("RS RESET")
+        self.test_rs_reset_button.clicked.connect(lambda: self.send_controller_stick("right", "RESET"))
+
+        self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆")
+        self.keyboard_mapping_label.setStyleSheet(f"font-size: 10px; color: {self.CLR_HINT}; background: transparent;")
+
+        return group
+
+    # ── 底部状态栏 ──────────────────────────────────────
+
+    def _build_bottom_status(self) -> QStatusBar:
+        self.easycon_status = QStatusBar()
+        self.easycon_status.setSizeGripEnabled(False)
+        self.easycon_status.setStyleSheet(
+            f"""
+            QStatusBar {{ background: {self.CLR_STATUSBAR_BG}; border-top: 1px solid {self.CLR_BORDER}; padding: 2px 8px; }}
+            QStatusBar::item {{ border: 0; }}
+            """
+        )
+
+        self.status_easycon_label = QLabel("LOG")
+        self.status_controller_label = QLabel("单片机未连接")
+        self.status_capture_label = QLabel("采集卡未连接")
+        self.status_labels_label = QLabel("标签: 0")
+        self.status_backend_label = QLabel("后端: 常驻连接")
+
+        for label in (
+            self.status_easycon_label,
+            self.status_controller_label,
+            self.status_capture_label,
+            self.status_labels_label,
+            self.status_backend_label,
+        ):
+            label.setStyleSheet(
+                f"font-size: 11px; color: {self.CLR_HINT}; padding: 0 10px; border: 0; background: transparent;"
+            )
+            self.easycon_status.addPermanentWidget(label)
+
+        return self.easycon_status
 
     def _refresh_script_list(self) -> None:
         self.script_list.clear()
@@ -1456,14 +1790,12 @@ class EasyConPanel(QWidget):
         connection_text = self._connection_state_text()
         backend_text = "常驻连接" if self._is_bridge_mode() else "CLI 过渡"
         easycon_text = (
-            f"EasyCon: {self.installation.version}"
-            if self.installation.is_available and self.installation.version
-            else "EasyCon: 未检测"
+            f"EasyCon {self.installation.version}" if self.installation.is_available and self.installation.version else "LOG"
         )
         self.connection_state_label.setText(f"连接: {connection_text}")
         self.task_state_label.setText(f"任务: {self.task_state_text}")
         self.status_easycon_label.setText(easycon_text)
-        self.status_controller_label.setText(f"单片机: {connection_text}")
+        self.status_controller_label.setText(f"单片机{'已连接' if connection_text == '已长期连接' else '未连接'}")
         self.status_backend_label.setText(f"后端: {backend_text}")
 
     def _connection_state_text(self) -> str:
