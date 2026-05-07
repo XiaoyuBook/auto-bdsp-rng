@@ -1944,24 +1944,396 @@ class MainWindow(QMainWindow):
         return (hp, *values)
 
     def open_iv_calculator(self) -> None:
-        row = self.table.currentRow() if hasattr(self, "table") else -1
-        state = self._states[row] if 0 <= row < len(self._states) else None
-        dialog = QDialog(self)
-        dialog.setWindowTitle("个体值计算器" if self.lang == "zh" else "IV Calculator")
-        layout = QGridLayout(dialog)
-        labels = ("HP", "攻击", "防御", "特攻", "特防", "速度") if self.lang == "zh" else IV_LABELS
-        ivs = state.ivs if state is not None else tuple(int(spin.text() or 0) for spin in self.iv_min)
-        for index, (label, value) in enumerate(zip(labels, ivs)):
-            layout.addWidget(QLabel(label), index, 0)
-            spin = self._spin(0, 31, value)
-            layout.addWidget(spin, index, 1)
-        if state is not None:
-            layout.addWidget(QLabel("个性" if self.lang == "zh" else "Characteristic"), 6, 0)
-            layout.addWidget(QLabel(self._characteristic_text(state)), 6, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons, 7, 0, 1, 2)
+        from auto_bdsp_rng.data import load_species_info, get_species_info
+
+        species_table = load_species_info()
+        dialog = _IVCalculatorDialog(species_table, self)
         dialog.exec()
+
+
+def _compute_iv_range(base_stats, stats, levels, nature, characteristic, hidden_power):
+    """基于 PokeFinder IVChecker 算法计算个体值范围"""
+    iv_order = [0, 1, 2, 5, 3, 4]
+    labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+
+    def _calc_single(bs, st, lv, nat, charac):
+        min_ivs = [31] * 6
+        max_ivs = [0] * 6
+        for i in range(6):
+            for iv in range(32):
+                if nat != 255:
+                    increased, decreased = NATURE_MODIFIERS[nat]
+                    base = ((2 * bs[i] + iv) * lv) // 100 + 5
+                    if i == 0:
+                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                    if i == increased:
+                        base = (base * 110) // 100
+                    elif i == decreased:
+                        base = (base * 90) // 100
+                    if base == st[i]:
+                        min_ivs[i] = min(iv, min_ivs[i])
+                        max_ivs[i] = max(iv, max_ivs[i])
+                else:
+                    if i == 0:
+                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                    else:
+                        base = ((2 * bs[i] + iv) * lv) // 100 + 5
+                    if base == st[i] or (i != 0 and (int(base * 0.9) == st[i] or int(base * 1.1) == st[i])):
+                        min_ivs[i] = min(iv, min_ivs[i])
+                        max_ivs[i] = max(iv, max_ivs[i])
+
+        possible = [[] for _ in range(6)]
+        char_high = 31
+        char_idx = -1
+        if charac != 255:
+            char_idx = iv_order[charac // 5]
+            result = charac % 5
+            for iv_val in range(min_ivs[char_idx], max_ivs[char_idx] + 1):
+                if (iv_val % 5) == result:
+                    if all(iv_val >= min_ivs[j] for j in range(6)):
+                        possible[char_idx].append(iv_val)
+                        char_high = iv_val
+        for i in range(6):
+            if i == char_idx:
+                continue
+            for iv_val in range(min_ivs[i], min(max_ivs[i], char_high) + 1):
+                possible[i].append(iv_val)
+        return possible
+
+    result = None
+    for idx in range(len(stats)):
+        current = _calc_single(base_stats, stats[idx], levels[idx], nature, characteristic)
+        if result is None:
+            result = current
+        else:
+            for j in range(6):
+                result[j] = sorted(set(result[j]) & set(current[j]))
+
+    if hidden_power != 255 and result is not None:
+        parity = [[] for _ in range(6)]
+        for i in range(6):
+            has_even = any(v % 2 == 0 for v in result[i])
+            has_odd = any(v % 2 == 1 for v in result[i])
+            if has_even:
+                parity[i].append(0)
+            if has_odd:
+                parity[i].append(1)
+        temp = [[] for _ in range(6)]
+        for hp in parity[0]:
+            for atk in parity[1]:
+                for def_ in parity[2]:
+                    for spa in parity[3]:
+                        for spd in parity[4]:
+                            for spe in parity[5]:
+                                t = ((hp + 2 * atk + 4 * def_ + 16 * spa + 32 * spd + 8 * spe) * 15) // 63
+                                if t == hidden_power:
+                                    for j, p in enumerate([hp, atk, def_, spa, spd, spe]):
+                                        temp[j].extend(v for v in result[j] if v % 2 == p)
+        for i in range(6):
+            result[i] = sorted(set(temp[i]))
+
+    return result if result else [[] for _ in range(6)]
+
+
+def _format_iv_range(ivs):
+    if not ivs:
+        return "无效"
+    if len(ivs) == 1:
+        return str(ivs[0])
+    parts = []
+    start = ivs[0]
+    for i in range(1, len(ivs)):
+        if ivs[i] != ivs[i - 1] + 1:
+            if start == ivs[i - 1]:
+                parts.append(str(start))
+            else:
+                parts.append(f"{start}-{ivs[i - 1]}")
+            start = ivs[i]
+    if start == ivs[-1]:
+        parts.append(str(start))
+    else:
+        parts.append(f"{start}-{ivs[-1]}")
+    return ", ".join(parts)
+
+
+def _compute_stat(base, iv, lv, nature, stat_index):
+    if stat_index == 0:
+        s = ((2 * base + iv) * lv) // 100 + lv + 10
+    else:
+        s = ((2 * base + iv) * lv) // 100 + 5
+    if nature != 255:
+        increased, decreased = NATURE_MODIFIERS[nature]
+        if stat_index == increased:
+            s = (s * 110) // 100
+        elif stat_index == decreased:
+            s = (s * 90) // 100
+    return s
+
+
+def _compute_next_level(base_stats, ivs, level, nature):
+    labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+    result = [level] * 6
+    for i in range(6):
+        if len(ivs[i]) < 2:
+            continue
+        for lv in range(level + 1, 101):
+            found = False
+            for j in range(1, len(ivs[i])):
+                prev = _compute_stat(base_stats[i], ivs[i][j - 1], lv, nature, i)
+                curr = _compute_stat(base_stats[i], ivs[i][j], lv, nature, i)
+                if prev < curr:
+                    result[i] = lv
+                    found = True
+                    break
+            if found:
+                break
+    return result
+
+
+class _IVCalculatorDialog(QDialog):
+    """个体值计算器 — 基于 PokeFinder IVChecker 算法"""
+
+    def __init__(self, species_table, parent=None):
+        super().__init__(parent)
+        self._species_table = species_table
+        self._rows = 0
+        self._entry_grid = None
+
+        self.setWindowTitle("个体值计算器")
+        self.setMinimumSize(900, 600)
+        self.resize(950, 680)
+        self.setStyleSheet("background: #f2f1ee;")
+
+        self._build_ui()
+        self._add_entry()
+        self._on_game_changed()
+
+    def _build_ui(self):
+        main = QHBoxLayout(self)
+        main.setContentsMargins(12, 12, 12, 12)
+        main.setSpacing(16)
+
+        # ── 左侧：设置 + 输入行 ──
+        left = QVBoxLayout()
+        left.setSpacing(10)
+
+        settings = QGroupBox("设置")
+        sl = QVBoxLayout(settings)
+        sl.setSpacing(8)
+
+        # 第一行：游戏 + 宝可梦
+        r1 = QHBoxLayout()
+        r1.setSpacing(8)
+        r1.addWidget(QLabel("游戏"))
+        self._game_combo = QComboBox()
+        self._game_combo.addItem("晶灿钻石/明亮珍珠", "BDSP")
+        self._game_combo.currentIndexChanged.connect(self._on_game_changed)
+        r1.addWidget(self._game_combo)
+        r1.addWidget(QLabel("宝可梦"))
+        self._pokemon_combo = QComboBox()
+        self._pokemon_combo.currentIndexChanged.connect(self._on_pokemon_changed)
+        r1.addWidget(self._pokemon_combo)
+        r1.addStretch()
+        sl.addLayout(r1)
+
+        # 第二行：个性 + 觉醒力量 + 性格
+        r2 = QHBoxLayout()
+        r2.setSpacing(8)
+        r2.addWidget(QLabel("个性"))
+        self._char_combo = QComboBox()
+        self._char_combo.addItem("无", 255)
+        chars = ["非常喜欢吃", "经常打瞌睡", "经常午睡", "经常乱扔东西", "喜欢放松",
+                 "以力气自豪", "喜欢打闹", "有点易怒", "喜欢打架", "血气方刚",
+                 "身体强壮", "能忍耐", "抗打能力强", "不屈不挠", "毅力十足",
+                 "好奇心强", "爱恶作剧", "考虑周到", "经常思考", "非常讲究",
+                 "意志坚强", "有点固执", "讨厌输", "有点爱逞强", "忍耐力强",
+                 "喜欢跑步", "警觉性高", "冲动", "有点轻浮", "逃得快"]
+        for i, c in enumerate(chars):
+            self._char_combo.addItem(c, i)
+        r2.addWidget(self._char_combo)
+        r2.addWidget(QLabel("觉醒力量"))
+        self._hp_combo = QComboBox()
+        self._hp_combo.addItem("无", 255)
+        hp_types = ["格斗", "飞行", "毒", "地面", "岩石", "虫", "幽灵", "钢",
+                    "火", "水", "草", "电", "超能力", "冰", "龙", "恶"]
+        for i, t in enumerate(hp_types):
+            self._hp_combo.addItem(t, i)
+        r2.addWidget(self._hp_combo)
+        r2.addWidget(QLabel("性格"))
+        self._nature_combo = QComboBox()
+        self._nature_combo.addItem("无", 255)
+        for i, n in enumerate(NATURES_ZH):
+            self._nature_combo.addItem(n, i)
+        r2.addWidget(self._nature_combo)
+        r2.addStretch()
+        sl.addLayout(r2)
+
+        # 第三行：按钮
+        r3 = QHBoxLayout()
+        r3.setSpacing(8)
+        add_btn = QPushButton("新增行")
+        add_btn.clicked.connect(self._add_entry)
+        r3.addWidget(add_btn)
+        del_btn = QPushButton("删除行")
+        del_btn.clicked.connect(self._remove_entry)
+        r3.addWidget(del_btn)
+        calc_btn = QPushButton("计算")
+        calc_btn.setObjectName("PrimaryButton")
+        calc_btn.clicked.connect(self._calculate)
+        r3.addWidget(calc_btn)
+        r3.addStretch()
+        sl.addLayout(r3)
+        left.addWidget(settings)
+
+        # 输入表
+        input_group = QGroupBox("能力值输入")
+        ivl = QVBoxLayout(input_group)
+        # 表头
+        hdr = QHBoxLayout()
+        hdr.setSpacing(4)
+        for h in ("等级", "HP", "攻击", "防御", "特攻", "特防", "速度"):
+            lbl = QLabel(h)
+            lbl.setFixedWidth(64)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("font-weight: 700;")
+            hdr.addWidget(lbl)
+        hdr.addStretch()
+        ivl.addLayout(hdr)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(300)
+        self._entry_container = QWidget()
+        self._entry_grid = QGridLayout(self._entry_container)
+        self._entry_grid.setContentsMargins(0, 0, 0, 0)
+        self._entry_grid.setSpacing(4)
+        scroll.setWidget(self._entry_container)
+        ivl.addWidget(scroll)
+        left.addWidget(input_group, 1)
+        main.addLayout(left, 3)
+
+        # ── 右侧：种族值 + 计算结果 ──
+        right = QVBoxLayout()
+        right.setSpacing(10)
+
+        base_group = QGroupBox("种族值")
+        bl = QGridLayout(base_group)
+        bl.setSpacing(6)
+        self._base_labels = {}
+        for i, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
+            bl.addWidget(QLabel(label), i, 0)
+            val = QLabel("-")
+            val.setStyleSheet("font-weight: 600;")
+            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._base_labels[label] = val
+            bl.addWidget(val, i, 1)
+        right.addWidget(base_group)
+
+        result_group = QGroupBox("计算结果")
+        rl = QGridLayout(result_group)
+        rl.setSpacing(6)
+        self._result_labels = {}
+        self._next_level_label = None
+        rl.addWidget(QLabel("下一级"), 6, 1)
+        self._next_level_label = QLabel("-")
+        self._next_level_label.setStyleSheet("font-weight: 600; color: #23936b;")
+        rl.addWidget(self._next_level_label, 6, 2)
+        for i, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
+            rl.addWidget(QLabel(label), i, 0)
+            val = QLabel("-")
+            val.setStyleSheet("font-weight: 600; color: #23936b;")
+            self._result_labels[label] = val
+            rl.addWidget(val, i, 1)
+        right.addWidget(result_group, 1)
+
+        # Close button
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.close)
+        right.addWidget(close_btn)
+
+        main.addLayout(right, 1)
+
+    def _add_entry(self):
+        self._rows += 1
+        r = self._rows
+        for col, default in enumerate([1, 0, 0, 0, 0, 0, 0]):
+            w = QLineEdit(str(default))
+            w.setFixedWidth(64)
+            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            w.setValidator(QIntValidator(0, 999 if col == 0 else 9999))
+            self._entry_grid.addWidget(w, r, col)
+
+    def _remove_entry(self):
+        if self._rows <= 1:
+            return
+        for col in range(7):
+            item = self._entry_grid.itemAtPosition(self._rows, col)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._rows -= 1
+
+    def _on_game_changed(self):
+        specie_list = []
+        for idx, info in enumerate(self._species_table):
+            if info.present:
+                name = POKEMON_LABELS_ZH.get(str(info.species), f"#{info.species}")
+                specie_list.append((name, idx))
+        self._pokemon_combo.blockSignals(True)
+        self._pokemon_combo.clear()
+        for name, idx in specie_list:
+            self._pokemon_combo.addItem(name, idx)
+        self._pokemon_combo.blockSignals(False)
+        if self._pokemon_combo.count() > 0:
+            self._on_pokemon_changed()
+
+    def _on_pokemon_changed(self):
+        idx = self._pokemon_combo.currentData()
+        if idx is None:
+            return
+        info = self._species_table[idx]
+        stat_names = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+        for i, name in enumerate(stat_names):
+            self._base_labels[name].setText(str(info.stats[i]))
+
+    def _calculate(self):
+        base_stats = [0] * 6
+        species_idx = self._pokemon_combo.currentData()
+        if species_idx is not None:
+            info = self._species_table[species_idx]
+            base_stats = list(info.stats)
+
+        stats = []
+        levels = []
+        for row in range(1, self._rows + 1):
+            row_stats = []
+            for col in range(7):
+                item = self._entry_grid.itemAtPosition(row, col)
+                if item and item.widget():
+                    val = int(item.widget().text() or 0)
+                else:
+                    val = 0
+                if col == 0:
+                    levels.append(val if val > 0 else 1)
+                else:
+                    row_stats.append(val)
+            if len(row_stats) == 6:
+                stats.append(row_stats)
+
+        if not stats:
+            return
+
+        nature = self._nature_combo.currentData()
+        characteristic = self._char_combo.currentData()
+        hidden_power = self._hp_combo.currentData()
+
+        ivs = _compute_iv_range(base_stats, stats, levels, nature, characteristic, hidden_power)
+
+        stat_names = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+        for i, name in enumerate(stat_names):
+            self._result_labels[name].setText(_format_iv_range(ivs[i]))
+
+        next_levels = _compute_next_level(base_stats, ivs, levels[-1], nature)
+        self._next_level_label.setText(", ".join(str(l) for l in next_levels))
 
     def _sync_seed64_from_state32(self) -> None:
         try:
