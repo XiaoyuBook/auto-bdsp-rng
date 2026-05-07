@@ -661,41 +661,86 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
-        group = QGroupBox()
-        group.setMaximumHeight(80)
-        layout = QVBoxLayout(group)
-        layout.setSpacing(4)
+        group = QGroupBox("状态")
+        group.setMaximumHeight(95)
 
-        # 第一行：Progress / Advances / Timer
-        row1 = QHBoxLayout()
+        outer = QVBoxLayout(group)
+        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setSpacing(0)
+        outer.addStretch()
+
+        # 控件统一样式
+        stat_label_css = "font-size: 12px; color: #666; border: 0; background: transparent;"
+        stat_value_css = "font-size: 12px; font-weight: 600; color: #1a1a1a; border: 0; background: transparent;"
+        spin_css = "QSpinBox { min-height: 30px; max-height: 30px; min-width: 120px; }"
+        btn_css = (
+            "QPushButton { min-height: 30px; max-height: 30px;"
+            " min-width: 86px; max-width: 100px; padding: 0 14px; }"
+        )
+
+        row = QHBoxLayout()
+        row.setSpacing(28)
+        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        # Progress
         self.progress_label = QLabel("Progress:")
+        self.progress_label.setStyleSheet(stat_label_css)
         self.progress_value = QLabel("0/0")
-        self.advances_label = QLabel("Advances:")
-        self.advances_value = QLabel("0")
-        self.timer_label = QLabel("Timer:")
-        self.timer_value = QLabel("0")
-        row1.addWidget(self.progress_label)
-        row1.addWidget(self.progress_value)
-        row1.addSpacing(12)
-        row1.addWidget(self.advances_label)
-        row1.addWidget(self.advances_value)
-        row1.addSpacing(12)
-        row1.addWidget(self.timer_label)
-        row1.addWidget(self.timer_value)
-        row1.addStretch()
-        layout.addLayout(row1)
+        self.progress_value.setStyleSheet(stat_value_css)
+        pg = QHBoxLayout()
+        pg.setSpacing(4)
+        pg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        pg.addWidget(self.progress_label)
+        pg.addWidget(self.progress_value)
+        row.addLayout(pg)
 
-        # 第二行：X to advance + Advance 按钮
-        row2 = QHBoxLayout()
+        # Advances
+        self.advances_label = QLabel("Advances:")
+        self.advances_label.setStyleSheet(stat_label_css)
+        self.advances_value = QLabel("0")
+        self.advances_value.setStyleSheet(stat_value_css)
+        ag = QHBoxLayout()
+        ag.setSpacing(4)
+        ag.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        ag.addWidget(self.advances_label)
+        ag.addWidget(self.advances_value)
+        row.addLayout(ag)
+
+        # Timer
+        self.timer_label = QLabel("Timer:")
+        self.timer_label.setStyleSheet(stat_label_css)
+        self.timer_value = QLabel("0")
+        self.timer_value.setStyleSheet(stat_value_css)
+        tg = QHBoxLayout()
+        tg.setSpacing(4)
+        tg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        tg.addWidget(self.timer_label)
+        tg.addWidget(self.timer_value)
+        row.addLayout(tg)
+
+        # 分隔
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #c8c6c0;")
+        sep.setFixedHeight(22)
+        row.addWidget(sep)
+        row.setSpacing(12)
+
+        # X to advance
         self.x_to_advance_label = QLabel("X to advance:")
+        self.x_to_advance_label.setStyleSheet(stat_label_css)
         self.x_to_advance = self._spin(0, 10_000_000, 165)
+        self.x_to_advance.setStyleSheet(spin_css)
         self.advance_button = QPushButton("Advance")
+        self.advance_button.setStyleSheet(btn_css)
         self.advance_button.clicked.connect(self.advance_current_seed)
-        row2.addWidget(self.x_to_advance_label)
-        row2.addWidget(self.x_to_advance)
-        row2.addWidget(self.advance_button)
-        row2.addStretch()
-        layout.addLayout(row2)
+        row.addWidget(self.x_to_advance_label)
+        row.addWidget(self.x_to_advance)
+        row.addWidget(self.advance_button)
+
+        row.addStretch()
+        outer.addLayout(row)
+        outer.addStretch()
         return group
 
     def _build_controls(self) -> QWidget:
