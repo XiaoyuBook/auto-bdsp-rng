@@ -394,9 +394,7 @@ class EasyConPanel(QWidget):
         self.bridge_connecting = False
         self.current_script_path: Path | None = None
         self.current_script_name = "未命名脚本"
-        self.current_script_is_template = False
         self.current_script_newline = "\n"
-        self.template_script_text = ""
         self._saved_editor_text = ""
         self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
         self.parameter_defaults: dict[str, str] = {}
@@ -657,9 +655,6 @@ class EasyConPanel(QWidget):
         editor_header_layout.addWidget(self.script_name_label)
         editor_header_layout.addStretch()
 
-        self.template_mode_label = QLabel("")
-        self.template_mode_label.setStyleSheet(f"font-size: 11px; color: {self.CLR_HINT}; border: 0; background: transparent;")
-        editor_header_layout.addWidget(self.template_mode_label)
         layout.addWidget(editor_header)
 
         # 编辑器本体（白色背景）
@@ -805,8 +800,6 @@ class EasyConPanel(QWidget):
         self.mock_check.toggled.connect(self._save_config_from_ui)
         self.cli_test_button = QPushButton("测试 CLI 运行")
         self.cli_test_button.clicked.connect(self.run_cli_smoke_test)
-        self.save_original_button = QPushButton("保存到原文件")
-        self.save_original_button.clicked.connect(self.save_to_original_script)
         self.detect_button = QPushButton("检测 EasyCon")
         self.detect_button.clicked.connect(self.detect_easycon)
         self.toolbar_connect_button = QPushButton("连接伊机控")
@@ -834,8 +827,7 @@ class EasyConPanel(QWidget):
         self.parameter_scroll.setWidget(self.parameter_panel)
         self.rescan_button = QPushButton("重新扫描参数")
         self.rescan_button.clicked.connect(self._rescan_parameters)
-        self.restore_defaults_button = QPushButton("恢复模板默认值")
-        self.restore_defaults_button.clicked.connect(self.restore_template_defaults)
+
 
     def _build_vpad_column(self) -> QWidget:
         group = QGroupBox("虚拟手柄")
@@ -1026,17 +1018,13 @@ class EasyConPanel(QWidget):
             return
         self.current_script_path = path
         self.current_script_name = path.name
-        self.current_script_is_template = _is_builtin_template(path)
         self.current_script_newline = detect_newline_style(text)
-        self.template_script_text = text
         self._saved_editor_text = text
         self.script_name_label.setText(path.name)
-        self._update_template_mode_label()
         self.editor.setPlainText(text)
         self._rescan_parameters()
         self._restore_recent_parameters()
-        mode = "模板副本" if self.current_script_is_template else "外部脚本"
-        self._append_log("info", f"已加载{mode}: {path.name}")
+        self._append_log("info", f"已加载脚本: {path.name}")
         self._remember_recent_script(path)
 
     def _load_script_item(self, item: QListWidgetItem) -> None:
@@ -1080,7 +1068,7 @@ class EasyConPanel(QWidget):
             self.parameter_form.addRow(label, field)
         if not self.parameter_widgets:
             self.parameter_form.addRow("参数", QLabel("未发现脚本参数"))
-        self.restore_defaults_button.setEnabled(bool(self.parameter_widgets))
+
         self._update_run_enabled()
 
     def _sync_parameters_to_editor(self) -> None:
@@ -1101,12 +1089,9 @@ class EasyConPanel(QWidget):
     def new_script(self) -> None:
         self.current_script_path = None
         self.current_script_name = "未命名文档.txt"
-        self.current_script_is_template = False
         self.current_script_newline = "\n"
-        self.template_script_text = ""
         self.script_name_label.setText(" 未命名文档.txt")
         self._saved_editor_text = ""
-        self._update_template_mode_label()
         self.editor.setPlainText("")
         self._rescan_parameters()
         self._append_log("info", "已新建空白脚本")
@@ -1116,8 +1101,8 @@ class EasyConPanel(QWidget):
             self._append_log("warn", "没有可保存的脚本内容")
             return None
         self._sync_parameters_to_editor()
-        if self.current_script_path is not None and not self.current_script_is_template:
-            # 已有文件路径且非模板，直接保存
+        if self.current_script_path is not None:
+            # 已有文件路径，直接覆盖保存
             try:
                 self.current_script_path.write_text(
                     self.editor.toPlainText(),
@@ -1127,12 +1112,11 @@ class EasyConPanel(QWidget):
             except OSError as exc:
                 self._append_log("error", f"保存脚本失败: {exc}")
                 return None
-            self.template_script_text = self.editor.toPlainText()
             self._saved_editor_text = self.editor.toPlainText()
             self._update_dirty_indicator()
             self._append_log("info", f"已保存: {self.current_script_path.name}")
             return self.current_script_path
-        # 新文件或模板文件，弹出保存对话框
+        # 新文件，弹出保存对话框
         path, _ = QFileDialog.getSaveFileName(
             self, "保存脚本", str(SCRIPT_DIR), "EasyCon scripts (*.txt *.ecs)"
         )
@@ -1178,42 +1162,9 @@ class EasyConPanel(QWidget):
         self._append_log("info", f"已保存临时脚本: {path.name}")
         return path
 
-    def save_to_original_script(self) -> Path | None:
-        if self.current_script_path is None:
-            self._append_log("warn", "当前脚本没有原文件路径")
-            return None
-        self._sync_parameters_to_editor()
-        try:
-            self.current_script_path.write_text(
-                self.editor.toPlainText(),
-                encoding="utf-8",
-                newline=self.current_script_newline,
-            )
-        except OSError as exc:
-            self._append_log("error", f"保存到原文件失败: {exc}")
-            return None
-        self.template_script_text = self.editor.toPlainText()
-        self._saved_editor_text = self.editor.toPlainText()
-        self.current_script_is_template = _is_builtin_template(self.current_script_path)
-        self._update_template_mode_label()
-        self._update_dirty_indicator()
-        self._append_log("info", f"已保存到原文件: {self.current_script_path.name}")
-        return self.current_script_path
 
-    def restore_template_defaults(self) -> None:
-        source_text = self.template_script_text or self.editor.toPlainText()
-        defaults = {parameter.name: parameter.default for parameter in parse_script_parameters(source_text)}
-        if not defaults:
-            self._append_log("warn", "当前脚本没有可恢复的模板默认值")
-            return
-        cursor = self.editor.textCursor()
-        self.editor.blockSignals(True)
-        self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), defaults))
-        self.editor.setTextCursor(cursor)
-        self.editor.blockSignals(False)
-        self._rescan_parameters()
-        self._save_current_parameters()
-        self._append_log("info", "已恢复模板默认值")
+
+
 
     def toggle_run(self) -> None:
         if self._is_bridge_mode():
@@ -1515,24 +1466,12 @@ class EasyConPanel(QWidget):
     def _update_run_enabled(self) -> None:
         if hasattr(self, "run_button"):
             self.run_button.setEnabled(self._can_run())
-        if hasattr(self, "save_original_button"):
-            self.save_original_button.setEnabled(self.current_script_path is not None)
         if hasattr(self, "connect_button"):
             self._update_bridge_controls()
         if hasattr(self, "connection_state_label"):
             self._update_status_labels()
 
-    def _update_template_mode_label(self) -> None:
-        if not hasattr(self, "template_mode_label"):
-            return
-        if self.current_script_is_template:
-            self.template_mode_label.setText("模板副本")
-            self.template_mode_label.setToolTip("来自 script 目录，运行和 Ctrl+S 只保存临时副本，不覆盖原模板。")
-            self.save_original_button.setEnabled(True)
-            return
-        self.template_mode_label.setText("普通脚本")
-        self.template_mode_label.setToolTip("")
-        self.save_original_button.setEnabled(self.current_script_path is not None)
+
 
     def _save_config_from_ui(self) -> None:
         if not hasattr(self, "ezcon_path"):
@@ -2015,14 +1954,7 @@ def _first_supported_drop(mime_data) -> Path | None:  # type: ignore[no-untyped-
     return None
 
 
-def _is_builtin_template(path: Path) -> bool:
-    try:
-        resolved = path.resolve()
-        script_root = SCRIPT_DIR.resolve()
-        generated_root = GENERATED_DIR.resolve()
-    except OSError:
-        return False
-    return resolved.is_relative_to(script_root) and not resolved.is_relative_to(generated_root)
+
 
 
 def _script_parameter_config_key(path: Path | None) -> str | None:
