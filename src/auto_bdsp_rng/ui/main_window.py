@@ -637,27 +637,34 @@ class MainWindow(QMainWindow):
 
     def _build_bdsp_tab(self) -> QWidget:
         panel = QWidget()
-        layout = QGridLayout(panel)
+        layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(10)
+        layout.setSpacing(8)
 
+        # ── 顶部：存档信息 ──
         self.profile_group = self._build_profile_group()
-        self.rng_info_group = self._build_rng_info_group()
-        self.static_group = self._build_static_group()
-        self.filter_group = self._build_filter_group()
-        self.results_panel = self._build_results()
+        self.profile_group.setMaximumHeight(120)
+        layout.addWidget(self.profile_group)
 
-        layout.addWidget(self.profile_group, 0, 0, 1, 3)
-        layout.addWidget(self.rng_info_group, 1, 0)
-        layout.addWidget(self.static_group, 1, 1)
-        layout.addWidget(self.filter_group, 1, 2)
-        layout.addWidget(self.results_panel, 2, 0, 1, 3)
-        layout.setRowMinimumHeight(1, 320)
-        layout.setColumnStretch(0, 0)
-        layout.setColumnStretch(1, 0)
-        layout.setColumnStretch(2, 1)
-        layout.setRowStretch(2, 1)
+        # ── 中部：乱数信息 / 设置 / 筛选项 ──
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(10)
+        self.rng_info_group = self._build_rng_info_group()
+        self.rng_info_group.setFixedWidth(260)
+        self.static_group = self._build_static_group()
+        self.static_group.setFixedWidth(320)
+        self.filter_group = self._build_filter_group()
+        mid_row.addWidget(self.rng_info_group)
+        mid_row.addWidget(self.static_group)
+        mid_row.addWidget(self.filter_group, 1)
+        mid_widget = QWidget()
+        mid_widget.setLayout(mid_row)
+        mid_widget.setMaximumHeight(360)
+        layout.addWidget(mid_widget)
+
+        # ── 下部：结果表格（主区域） ──
+        self.results_panel = self._build_results()
+        layout.addWidget(self.results_panel, 1)
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
@@ -1041,87 +1048,141 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_filter_group(self) -> QGroupBox:
-        group = QGroupBox()
-        layout = QGridLayout(group)
+        group = QGroupBox("筛选项")
+        outer = QHBoxLayout(group)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(16)
+
+        css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
+        css_ctrl = "QLineEdit, QSpinBox, QComboBox { min-height: 28px; max-height: 28px; }"
+        css_cb = "font-size: 12px; spacing: 6px; border: 0; background: transparent;"
+
+        # ── 左列：IV 范围 ──
+        iv_grid = QGridLayout()
+        iv_grid.setVerticalSpacing(5)
+        iv_grid.setHorizontalSpacing(4)
+        self.iv_min: list[QSpinBox] = []
+        self.iv_max: list[QSpinBox] = []
+        iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+        for row, label in enumerate(iv_labels):
+            lbl = QLabel(label)
+            lbl.setStyleSheet(css_label)
+            lbl.setFixedWidth(32)
+            min_spin = self._spin(0, 31, 0)
+            min_spin.setFixedWidth(50)
+            min_spin.setStyleSheet(css_ctrl)
+            max_spin = self._spin(0, 31, 31)
+            max_spin.setFixedWidth(50)
+            max_spin.setStyleSheet(css_ctrl)
+            self.iv_min.append(min_spin)
+            self.iv_max.append(max_spin)
+            iv_grid.addWidget(lbl, row, 0)
+            iv_grid.addWidget(min_spin, row, 1)
+            iv_grid.addWidget(max_spin, row, 2)
+        outer.addLayout(iv_grid)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #c8c6c0;")
+        outer.addWidget(sep)
+
+        # ── 右列：筛选条件 ──
+        right = QGridLayout()
+        right.setVerticalSpacing(5)
+        right.setHorizontalSpacing(6)
+        right.setContentsMargins(0, 0, 0, 0)
+
+        # 特性 / 性别
+        self.ability_filter = QComboBox()
+        self.ability_filter.addItem("任意", 255)
+        self.ability_filter.addItem("0", 0)
+        self.ability_filter.addItem("1", 1)
+        self.ability_filter.addItem("隐藏", 2)
+        self.ability_filter.setStyleSheet(css_ctrl)
+        self.gender_filter = QComboBox()
+        self.gender_filter.addItem("任意", 255)
+        self.gender_filter.addItem("雄性", 0)
+        self.gender_filter.addItem("雌性", 1)
+        self.gender_filter.addItem("无性别", 2)
+        self.gender_filter.setStyleSheet(css_ctrl)
         self.shiny_filter = QComboBox()
         self.shiny_filter.addItem("任意", "any")
         self.shiny_filter.addItem("异色", "shiny")
         self.shiny_filter.addItem("Star", "star")
         self.shiny_filter.addItem("Square", "square")
         self.shiny_filter.addItem("非异色", "none")
-        self.ability_filter = QComboBox()
-        self.ability_filter.addItem("任意", 255)
-        self.ability_filter.addItem("0", 0)
-        self.ability_filter.addItem("1", 1)
-        self.ability_filter.addItem("隐藏", 2)
-        self.gender_filter = QComboBox()
-        self.gender_filter.addItem("任意", 255)
-        self.gender_filter.addItem("雄性", 0)
-        self.gender_filter.addItem("雌性", 1)
-        self.gender_filter.addItem("无性别", 2)
+        self.shiny_filter.setStyleSheet(css_ctrl)
         self.nature_combo = QComboBox()
         self.nature_combo.addItem("任意", -1)
         for index, nature in enumerate(NATURES_ZH):
             self.nature_combo.addItem(nature, index)
+        self.nature_combo.setStyleSheet(css_ctrl)
+
         self.height_min = self._spin(0, 255, 0)
+        self.height_min.setFixedWidth(60)
+        self.height_min.setStyleSheet(css_ctrl)
         self.height_max = self._spin(0, 255, 255)
+        self.height_max.setFixedWidth(60)
+        self.height_max.setStyleSheet(css_ctrl)
         self.weight_min = self._spin(0, 255, 0)
+        self.weight_min.setFixedWidth(60)
+        self.weight_min.setStyleSheet(css_ctrl)
         self.weight_max = self._spin(0, 255, 255)
-        self.skip_filter = QCheckBox("取消筛选")
+        self.weight_max.setFixedWidth(60)
+        self.weight_max.setStyleSheet(css_ctrl)
+
+        rows = [
+            ("特性", self.ability_filter, "性别", self.gender_filter),
+            ("异色", self.shiny_filter, "性格", self.nature_combo),
+            ("Height", self.height_min, self.height_max, None, None),
+            ("Weight", self.weight_min, self.weight_max, None, None),
+        ]
+        for r, cols in enumerate(rows):
+            lbl1 = QLabel(cols[0])
+            lbl1.setStyleSheet(css_label)
+            lbl1.setFixedWidth(40)
+            right.addWidget(lbl1, r, 0)
+            right.addWidget(cols[1], r, 1)
+            if cols[2] is not None:
+                lbl2 = QLabel(str(cols[2]))
+                lbl2.setStyleSheet(css_label)
+                lbl2.setFixedWidth(40)
+                right.addWidget(lbl2, r, 2)
+                right.addWidget(cols[3], r, 3)
+
+        # 底部复选框行
+        cb_row = QHBoxLayout()
+        cb_row.setSpacing(16)
         self.show_stats_check = QCheckBox("显示能力值")
         self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
+        self.skip_filter = QCheckBox("取消筛选")
         self.iv_calculator_button = QPushButton("个体值计算器")
         self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
+        self.iv_calculator_button.setStyleSheet("QPushButton { min-height: 28px; max-height: 28px; padding: 0 12px; }")
+        for cb in (self.show_stats_check, self.skip_filter):
+            cb.setStyleSheet(css_cb)
+        cb_row.addWidget(self.show_stats_check)
+        cb_row.addWidget(self.skip_filter)
+        cb_row.addWidget(self.iv_calculator_button)
+        cb_row.addStretch()
+        right.addLayout(cb_row, 4, 0, 1, 4)
 
+        right.setColumnStretch(3, 1)
+        outer.addLayout(right, 1)
+
+        # 保留旧控件引用（隐藏）
         self.nature_list = QListWidget()
         self.nature_list.setVisible(False)
-        self.nature_list.setMaximumHeight(126)
         for nature in NATURES:
             item = QListWidgetItem(nature)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)
             self.nature_list.addItem(item)
-        nature_buttons = QHBoxLayout()
         self.all_natures_button = QPushButton("All natures")
         self.all_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Checked))
         self.clear_natures_button = QPushButton("Clear")
         self.clear_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Unchecked))
-        self.all_natures_button.setVisible(False)
-        self.clear_natures_button.setVisible(False)
 
-        iv_grid = QGridLayout()
-        self.iv_min: list[QSpinBox] = []
-        self.iv_max: list[QSpinBox] = []
-        iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
-        for row, label in enumerate(iv_labels):
-            min_spin = self._spin(0, 31, 0)
-            max_spin = self._spin(0, 31, 31)
-            self.iv_min.append(min_spin)
-            self.iv_max.append(max_spin)
-            iv_grid.addWidget(QLabel(label), row, 0)
-            iv_grid.addWidget(min_spin, row, 1)
-            iv_grid.addWidget(max_spin, row, 2)
-        left = QWidget()
-        left.setLayout(iv_grid)
-        layout.addWidget(left, 0, 0, 6, 3)
-        layout.addWidget(QLabel("特性"), 0, 4)
-        layout.addWidget(self.ability_filter, 0, 5, 1, 2)
-        layout.addWidget(QLabel("性别"), 1, 4)
-        layout.addWidget(self.gender_filter, 1, 5, 1, 2)
-        layout.addWidget(QLabel("Height"), 2, 4)
-        layout.addWidget(self.height_min, 2, 5)
-        layout.addWidget(self.height_max, 2, 6)
-        layout.addWidget(QLabel("性格"), 3, 4)
-        layout.addWidget(self.nature_combo, 3, 5, 1, 2)
-        layout.addWidget(QLabel("异色"), 4, 4)
-        layout.addWidget(self.shiny_filter, 4, 5, 1, 2)
-        layout.addWidget(QLabel("Weight"), 5, 4)
-        layout.addWidget(self.weight_min, 5, 5)
-        layout.addWidget(self.weight_max, 5, 6)
-        layout.addWidget(self.show_stats_check, 6, 0, 1, 3)
-        layout.addWidget(self.iv_calculator_button, 7, 0, 1, 3)
-        layout.addWidget(self.skip_filter, 6, 4, 1, 3)
-        layout.setColumnStretch(3, 1)
         return group
 
     def _build_right_side(self) -> QWidget:
@@ -1158,14 +1219,19 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         toolbar = QHBoxLayout()
-        self.generate_button = QPushButton()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        btn_css = "QPushButton { min-height: 30px; max-height: 30px; padding: 0 14px; }"
+        self.generate_button = QPushButton("生成")
+        self.generate_button.setStyleSheet(btn_css)
         self.generate_button.setObjectName("PrimaryButton")
         self.generate_button.clicked.connect(self.generate_results)
-        self.copy_button = QPushButton()
+        self.copy_button = QPushButton("复制")
+        self.copy_button.setStyleSheet(btn_css)
         self.copy_button.clicked.connect(self.copy_results)
-        self.export_button = QPushButton()
+        self.export_button = QPushButton("导出 CSV")
+        self.export_button.setStyleSheet(btn_css)
         self.export_button.clicked.connect(self.export_results)
-        self.result_count = QLabel("0 results")
+        self.result_count = QLabel("0 条结果")
         self.result_count.setObjectName("ResultCount")
         toolbar.addWidget(self.generate_button)
         toolbar.addWidget(self.copy_button)
