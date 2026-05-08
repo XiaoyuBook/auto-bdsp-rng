@@ -1766,6 +1766,16 @@ class MainWindow(QMainWindow):
             self.preview_button.setText(self._text("stop_preview"))
         self._resume_preview_after_capture = False
 
+    def _ensure_preview_frame_before_capture(self) -> bool:
+        if self._latest_preview_frame is not None:
+            return True
+        if not self._preview_timer.isActive():
+            self._preview_timer.start()
+            self.preview_button.setText(self._text("stop_preview"))
+            self.statusBar().showMessage(self._text("preview_running"))
+        self._update_preview_frame()
+        return self._latest_preview_frame is not None
+
     def start_roi_selection(self) -> None:
         if self._is_capturing():
             return
@@ -2101,13 +2111,7 @@ class MainWindow(QMainWindow):
         return self._capture_thread is not None and self._capture_thread.is_alive()
 
     def _ensure_preview_for_auto_rng(self) -> bool:
-        if self._preview_timer.isActive():
-            return True
-        self._preview_timer.start()
-        self.preview_button.setText(self._text("stop_preview"))
-        self.statusBar().showMessage(self._text("preview_running"))
-        self._update_preview_frame()
-        return self._preview_timer.isActive()
+        return self._ensure_preview_frame_before_capture()
 
     def _start_auto_rng(self, config: AutoRngConfig) -> None:
         if not self._ensure_preview_for_auto_rng():
@@ -2288,6 +2292,8 @@ class MainWindow(QMainWindow):
         except ProjectXsIntegrationError as exc:
             self._show_error("Blink capture failed", exc)
             return
+        if not self._ensure_preview_frame_before_capture():
+            return
 
         self._pause_preview_for_capture()
         self.preview_button.setEnabled(False)
@@ -2354,6 +2360,8 @@ class MainWindow(QMainWindow):
             current_state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
         except Exception as exc:
             self._show_error("Reidentify failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+        if not self._ensure_preview_frame_before_capture():
             return
 
         self._pause_preview_for_capture()
