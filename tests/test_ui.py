@@ -9,7 +9,7 @@ pytest.importorskip("PySide6")
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGroupBox
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
@@ -231,10 +231,30 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     assert config.hit_script_path == tmp_path / "谢米.txt"
     assert config.fixed_delay == 1200
     assert config.max_wait_frames == 300
-    assert config.reseed_threshold_frames == 990_000
-    assert config.min_final_flash_frames == 5
-    assert not hasattr(panel, "reseed_threshold_frames")
-    assert not hasattr(panel, "min_final_flash_frames")
+    assert config.reseed_threshold_frames == panel.reseed_threshold_frames.value()
+    assert config.min_final_flash_frames == panel.min_final_flash_frames.value()
+
+
+def test_auto_rng_panel_has_editable_target_form_and_no_old_main_regions(app):
+    panel = AutoRngPanel()
+    group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
+
+    assert "定点目标 / 存档信息 / 个体筛选" not in group_titles
+    assert "候选结果" not in group_titles
+    assert "目标精灵设置" in group_titles
+    assert not hasattr(panel, "candidate_table")
+    assert not hasattr(panel, "search_target_summary")
+
+    target_form = panel.target_form
+    assert target_form.category_combo.count() > 0
+    assert target_form.encounter_combo.count() > 0
+    assert target_form.iv_min[0].value() == 0
+    assert target_form.iv_max[0].value() == 31
+    assert target_form.height_min.value() == 0
+    assert target_form.height_max.value() == 255
+    assert target_form.shiny_filter.findText("Square") >= 0
+    assert panel.parameter_preview.isVisible() is False
+    assert panel.log_view.isReadOnly() is True
 
 
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
@@ -333,14 +353,45 @@ def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
     window.tabs.setCurrentWidget(window.bdsp_tab)
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
-    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, max_advances=2))
 
     candidates = services.search_candidates(AutoRngSeedResult(seed=window._current_seed_pair()))
 
     assert [state.advances for state in candidates] == [0, 1, 2]
-    assert window.auto_rng_tab.search_target_summary.text() != "-"
-    assert window.auto_rng_tab.search_seed_summary.text() == "123456789ABCDEF0 1111111122222222"
-    assert window.auto_rng_tab.search_max_advances_summary.text() == "2"
+    assert "搜索目标" in window.auto_rng_tab.log_view.toPlainText()
+
+
+def test_main_window_auto_rng_services_search_uses_auto_target_form(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
+    window.auto_rng_tab.max_advances.setValue(9)
+    target_form = window.auto_rng_tab.target_form
+    target_form.category_combo.setCurrentIndex(target_form.category_combo.findData("mythics"))
+    target_form.encounter_combo.setCurrentIndex(target_form.encounter_combo.findText("谢米 [幻兽]"))
+    target_form.iv_count_display.setValue(3)
+    target_form.height_min.setValue(0)
+    target_form.height_max.setValue(0)
+    target_form.shiny_filter.setCurrentIndex(target_form.shiny_filter.findText("Square"))
+    captured = []
+
+    def fake_generate(criteria):
+        captured.append(criteria)
+        return []
+
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", fake_generate)
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, max_advances=9))
+
+    services.search_candidates(AutoRngSeedResult(seed=window._current_seed_pair()))
+
+    assert len(captured) == 1
+    criteria = captured[0]
+    assert criteria.record.description == "Shaymin"
+    assert criteria.record.template.iv_count == 3
+    assert criteria.max_advances == 9
+    assert criteria.shiny_mode == "square"
+    assert criteria.state_filter.height_min == 0
+    assert criteria.state_filter.height_max == 0
 
 
 def test_main_window_auto_rng_capture_service_uses_project_xs(app, tmp_path, monkeypatch):

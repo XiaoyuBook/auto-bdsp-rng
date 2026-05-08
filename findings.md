@@ -58,3 +58,10 @@
 - AutoRngPanel 第一版不复制完整 BDSP 筛选表单，改为启动时展示实际采用的 BDSP 搜索快照：定点目标、存档、筛选摘要、Seed、最大帧数，避免两套 UI 数据源漂移。
 - MainWindow 自动 RNG 服务工厂已接入 Project_Xs capture/reidentify 与 EasyCon Bridge `run_script_text()` / `stop_current_script()`；真机可用性仍需硬件环境验证。
 - EasyConPanel 需要保留参数模板兼容层；全量测试覆盖参数控件、必填校验、默认恢复、参数持久化和 Bridge 运行前参数替换。
+
+## 2026-05-08 UI Layout Correction Findings
+- 用户澄清“参考定点数据区”不是同步/摘要 BDSP 页状态，而是把定点数据区“设置 + 筛选项”控件搬到自动页，作为独立可编辑的“目标精灵设置”。
+- 自动页旧实现中的脚本参数预览、`定点目标 / 存档信息 / 个体筛选` 摘要、`候选结果` 主表占用了错误的主空间。
+- 新的 `StaticTargetForm` 位于 `src/auto_bdsp_rng/ui/static_target_form.py`，自动页单独持有该表单实例。
+- `MainWindow._build_auto_rng_services()` 现在从 `auto_rng_tab.target_form` 读取记录、IV/Height/Weight/性格/性别/特性/异色筛选，搜索结果仍由 runner 默认锁定最低 advances。
+- 脚本目录和校验信息改为写入自动页日志，不再显示为左侧主区域内的大文本摘要。

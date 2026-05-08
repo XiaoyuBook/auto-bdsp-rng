@@ -607,6 +607,7 @@ class MainWindow(QMainWindow):
         self.easycon_tab = EasyConPanel()
         self.auto_rng_tab = AutoRngPanel()
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
+        self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
@@ -2052,10 +2053,9 @@ class MainWindow(QMainWindow):
 
     def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
         tracking_config = self._config_from_form()
-        record = self.encounter_combo.currentData()
-        if record is None:
-            raise ValueError("Select a static encounter")
-        state_filter, shiny_mode = self._current_filter()
+        self.auto_rng_tab.target_form.set_version(self._profile_version)
+        record = self.auto_rng_tab.target_form.selected_record()
+        state_filter, shiny_mode = self.auto_rng_tab.target_form.current_filter()
         try:
             initial_seed = self._current_seed_pair()
         except ValueError:
@@ -2065,10 +2065,10 @@ class MainWindow(QMainWindow):
             profile=self._current_profile(),
             record=record,
             state_filter=state_filter,
-            initial_advances=int(self.initial_advances.text() or 0),
-            max_advances=int(self.max_advances.text() or config.max_advances),
-            offset=int(self.offset.text() or 0),
-            lead=self.lead_combo.currentData(),
+            initial_advances=0,
+            max_advances=config.max_advances,
+            offset=0,
+            lead=Lead.NONE,
             shiny_mode=shiny_mode,
         )
         self._update_auto_rng_search_summary(search_criteria)
@@ -2136,7 +2136,13 @@ class MainWindow(QMainWindow):
             )
 
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
-            return generate_static_candidates(replace(search_criteria, seed=seed_pair_from_result(seed_result)))
+            candidates = generate_static_candidates(replace(search_criteria, seed=seed_pair_from_result(seed_result)))
+            locked = candidates[0].advances if candidates else None
+            if locked is None:
+                self.auto_rng_tab.add_log("找到 0 个候选")
+            else:
+                self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，锁定最低帧 Adv={locked}")
+            return candidates
 
         def run_script_text_service(script_text: str, name: str) -> object:
             if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
@@ -2159,18 +2165,19 @@ class MainWindow(QMainWindow):
         )
 
     def _update_auto_rng_search_summary(self, criteria: StaticSearchCriteria) -> None:
-        target_text = self.encounter_combo.currentText() or getattr(criteria.record, "species", "-")
+        target_text = self.auto_rng_tab.target_form.summary_text()
         profile_text = (
             f"{criteria.profile.name} / TID {criteria.profile.tid} / SID {criteria.profile.sid} / "
             f"{GAME_LABELS_EN.get(self._profile_version, self._profile_version.value)}"
         )
         iv_text = ", ".join(
-            f"{label} {low.text() or 0}-{high.text() or 0}"
-            for label, low, high in zip(IV_LABELS, self.iv_min, self.iv_max)
+            f"{label} {low}-{high}"
+            for label, low, high in zip(IV_LABELS, criteria.state_filter.iv_min, criteria.state_filter.iv_max)
         )
         filter_text = (
-            f"shiny={criteria.shiny_mode}; ability={self.ability_filter.currentText()}; "
-            f"gender={self.gender_filter.currentText()}; nature={self.nature_combo.currentText()}; {iv_text}"
+            f"shiny={criteria.shiny_mode}; ability={criteria.state_filter.ability}; "
+            f"gender={criteria.state_filter.gender}; Height {criteria.state_filter.height_min}-{criteria.state_filter.height_max}; "
+            f"Weight {criteria.state_filter.weight_min}-{criteria.state_filter.weight_max}; {iv_text}"
         )
         self.auto_rng_tab.set_search_context_summary(
             target=target_text,

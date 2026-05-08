@@ -165,3 +165,28 @@
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
 | UI and runner tests after parameter simplification | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py -q` | all pass | 35 passed | pass |
+
+### UI Layout Correction
+- **Status:** complete
+- Actions taken:
+  - 使用 superpowers 与 planning-with-files 跟踪本轮自动页布局修正。
+  - 先写失败测试，覆盖删除旧摘要/候选主区域、自动页拥有完整可编辑目标表单、自动搜索使用自动页目标表单。
+  - 新增 `src/auto_bdsp_rng/ui/static_target_form.py`，提供独立的“设置 + 筛选项”控件：分类、宝可梦、等级、特性、异色、IV Count、IV 范围、特性/性别/性格/异色筛选、Height/Weight、显示能力值、个体值计算器、取消筛选。
+  - 更新 `AutoRngPanel`：左侧为自动策略、脚本、日志；右侧为运行摘要和目标精灵设置；旧脚本摘要主区域、旧目标摘要和候选结果主表均不再占 UI 主布局。
+  - 更新 `MainWindow._build_auto_rng_services()`：自动流程从 `auto_rng_tab.target_form` 生成 `StaticSearchCriteria`，不再从 BDSP 定点数据区读取目标/筛选条件。
+  - 候选数量与最低帧锁定结果写入日志，例如 `找到 N 个候选，锁定最低帧 Adv=xxxx`。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `src/auto_bdsp_rng/ui/main_window.py`
+  - `src/auto_bdsp_rng/ui/static_target_form.py`
+  - `tests/test_ui.py`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| TDD red test for auto target form | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_panel_has_editable_target_form or auto_rng_services_search_uses_auto_target_form"` | fail before implementation | 2 failed | pass |
+| targeted UI/auto RNG tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_panel_has_editable_target_form or auto_rng_services_search_uses_auto_target_form or auto_rng_services_search_with_bdsp_snapshot or auto_rng_panel_emits_config"` | all pass | 4 passed | pass |
+| broader UI/runner/script tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py` | all pass | 42 passed | pass |
+| full test suite | `.venv\Scripts\python.exe -m pytest` | all pass | 173 passed | pass |

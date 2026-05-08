@@ -77,3 +77,24 @@ Phase 7: Verification & Delivery
 ## Notes
 - 当前工作树只有 `third_party/Project_Xs_CHN` submodule 显示未暂存改动；不属于本轮变更，不处理。
 - 继续实现时遵循 TDD：先补 mock runner 测试，再写状态机代码。
+
+## 2026-05-08 UI Layout Correction
+
+### Goal
+按用户澄清修正“自动定点乱数”页：删除错误摘要/候选主区域，新增独立完整的“目标精灵设置”，自动流程使用自动页自己的目标与筛选条件。
+
+### Checklist
+- [x] 使用 superpowers 与 planning-with-files
+- [x] 写失败测试保护布局与自动搜索数据源
+- [x] 删除脚本信息/校验摘要主区域
+- [x] 删除 `定点目标 / 存档信息 / 个体筛选` 摘要框
+- [x] 删除候选结果主表
+- [x] 左侧移动为自动策略、脚本、日志
+- [x] 右侧保留运行摘要并加入目标精灵设置
+- [x] 自动搜索读取自动页独立目标表单
+- [x] 日志记录搜索候选数量和最低帧锁定结果
+- [x] 跑全量测试
+
+### Verification
+- `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_panel_has_editable_target_form or auto_rng_services_search_uses_auto_target_form"` 先失败，确认测试覆盖旧错误。
+- `.venv\Scripts\python.exe -m pytest` 通过：173 passed。

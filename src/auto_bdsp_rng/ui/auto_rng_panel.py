@@ -15,8 +15,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +30,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     validate_auto_scripts,
 )
+from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -69,6 +68,7 @@ class AutoRngWorker(QObject):
 class AutoRngPanel(QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
+    ivCalculatorRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None, script_dir: Path = SCRIPT_DIR) -> None:
         super().__init__(parent)
@@ -124,8 +124,7 @@ class AutoRngPanel(QWidget):
         layout.setContentsMargins(0, 0, 8, 0)
         layout.addWidget(self._build_strategy_group())
         layout.addWidget(self._build_script_group())
-        layout.addWidget(self._build_target_group())
-        layout.addStretch(1)
+        layout.addWidget(self._build_log_group(), 1)
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
@@ -134,9 +133,13 @@ class AutoRngPanel(QWidget):
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
+        self.reseed_threshold_frames = self._spin(0, 1_000_000_000, 990_000)
+        self.min_final_flash_frames = self._spin(0, 1_000_000_000, 5)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待帧数", self.max_wait_frames)
+        form.addRow("重新测 seed 阈值", self.reseed_threshold_frames)
+        form.addRow("最小 final flash frames", self.min_final_flash_frames)
         return group
 
     def _build_script_group(self) -> QGroupBox:
@@ -152,6 +155,7 @@ class AutoRngPanel(QWidget):
         self.parameter_preview = QPlainTextEdit()
         self.parameter_preview.setReadOnly(True)
         self.parameter_preview.setMaximumHeight(130)
+        self.parameter_preview.setVisible(False)
         layout.addWidget(QLabel("测种脚本"), 0, 0)
         layout.addWidget(self.seed_script_combo, 0, 1)
         layout.addWidget(QLabel("过帧脚本"), 1, 0)
@@ -160,31 +164,6 @@ class AutoRngPanel(QWidget):
         layout.addWidget(self.hit_script_combo, 2, 1)
         layout.addWidget(self.refresh_scripts_button, 3, 0)
         layout.addWidget(self.preview_button, 3, 1)
-        layout.addWidget(self.parameter_preview, 4, 0, 1, 2)
-        return group
-
-    def _build_target_group(self) -> QGroupBox:
-        group = QGroupBox("定点目标 / 存档信息 / 个体筛选")
-        form = QFormLayout(group)
-        self.search_target_summary = QLabel("-")
-        self.search_profile_summary = QLabel("-")
-        self.search_filter_summary = QLabel("-")
-        self.search_seed_summary = QLabel("-")
-        self.search_max_advances_summary = QLabel("-")
-        for label in (
-            self.search_target_summary,
-            self.search_profile_summary,
-            self.search_filter_summary,
-            self.search_seed_summary,
-            self.search_max_advances_summary,
-        ):
-            label.setWordWrap(True)
-            label.setObjectName("Badge")
-        form.addRow("定点目标", self.search_target_summary)
-        form.addRow("存档信息", self.search_profile_summary)
-        form.addRow("个体筛选", self.search_filter_summary)
-        form.addRow("Seed", self.search_seed_summary)
-        form.addRow("最大帧数", self.search_max_advances_summary)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
@@ -192,8 +171,7 @@ class AutoRngPanel(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._build_summary_group())
-        layout.addWidget(self._build_candidates_group(), 1)
-        layout.addWidget(self._build_log_group(), 1)
+        layout.addWidget(self._build_target_form_group(), 1)
         return panel
 
     def _build_summary_group(self) -> QGroupBox:
@@ -219,13 +197,12 @@ class AutoRngPanel(QWidget):
             grid.addWidget(label, row // 2, (row % 2) * 2 + 1)
         return group
 
-    def _build_candidates_group(self) -> QGroupBox:
-        group = QGroupBox("候选结果")
+    def _build_target_form_group(self) -> QGroupBox:
+        group = QGroupBox("目标精灵设置")
         layout = QVBoxLayout(group)
-        self.candidate_table = QTableWidget(0, 5)
-        self.candidate_table.setHorizontalHeaderLabels(["锁定", "Adv", "PID", "Shiny", "Nature"])
-        self.candidate_table.verticalHeader().setVisible(False)
-        layout.addWidget(self.candidate_table)
+        self.target_form = StaticTargetForm(self)
+        self.target_form.iv_calculator_button.clicked.connect(self.ivCalculatorRequested.emit)
+        layout.addWidget(self.target_form)
         return group
 
     def _build_log_group(self) -> QGroupBox:
@@ -262,6 +239,8 @@ class AutoRngPanel(QWidget):
         else:
             lines.append("校验: 通过")
         self.parameter_preview.setPlainText("\n".join(lines))
+        if hasattr(self, "log_view"):
+            self.add_log("\n".join(lines))
 
     def set_phase_text(self, text: str) -> None:
         self.status_badge.setText(text)
@@ -287,11 +266,10 @@ class AutoRngPanel(QWidget):
         self.log_view.appendPlainText(message)
 
     def set_candidates(self, rows: list[list[str]], locked_index: int | None = None) -> None:
-        self.candidate_table.setRowCount(len(rows))
-        for row_index, row in enumerate(rows):
-            values = [("当前锁定" if row_index == locked_index else ""), *row]
-            for column, value in enumerate(values[: self.candidate_table.columnCount()]):
-                self.candidate_table.setItem(row_index, column, QTableWidgetItem(value))
+        locked_text = ""
+        if locked_index is not None and 0 <= locked_index < len(rows):
+            locked_text = f"，锁定 {rows[locked_index]}"
+        self.add_log(f"候选结果 {len(rows)} 个{locked_text}")
 
     def set_search_context_summary(
         self,
@@ -302,11 +280,17 @@ class AutoRngPanel(QWidget):
         seed: str,
         max_advances: int,
     ) -> None:
-        self.search_target_summary.setText(target or "-")
-        self.search_profile_summary.setText(profile or "-")
-        self.search_filter_summary.setText(filters or "-")
-        self.search_seed_summary.setText(seed or "-")
-        self.search_max_advances_summary.setText(str(max_advances))
+        self.add_log(
+            "\n".join(
+                (
+                    f"搜索目标: {target or '-'}",
+                    f"存档信息: {profile or '-'}",
+                    f"个体筛选: {filters or '-'}",
+                    f"Seed: {seed or '-'}",
+                    f"最大帧数: {max_advances}",
+                )
+            )
+        )
 
     def _start_clicked(self) -> None:
         self.update_parameter_preview()
@@ -334,6 +318,8 @@ class AutoRngPanel(QWidget):
             loop_mode=str(self.mode_combo.currentData()),
             loop_count=self.loop_count.value(),
             max_advances=self.max_advances.value(),
+            reseed_threshold_frames=self.reseed_threshold_frames.value(),
+            min_final_flash_frames=self.min_final_flash_frames.value(),
         )
 
     def run_with_runner(self, runner: object) -> None:
