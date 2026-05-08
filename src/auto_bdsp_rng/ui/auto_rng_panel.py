@@ -169,10 +169,26 @@ class AutoRngPanel(QWidget):
 
     def _build_target_group(self) -> QGroupBox:
         group = QGroupBox("定点目标 / 存档信息 / 个体筛选")
-        layout = QVBoxLayout(group)
-        label = QLabel("第一版复用 BDSP 定点搜索服务；筛选项接入在 runner 真机联调前继续补齐。")
-        label.setWordWrap(True)
-        layout.addWidget(label)
+        form = QFormLayout(group)
+        self.search_target_summary = QLabel("-")
+        self.search_profile_summary = QLabel("-")
+        self.search_filter_summary = QLabel("-")
+        self.search_seed_summary = QLabel("-")
+        self.search_max_advances_summary = QLabel("-")
+        for label in (
+            self.search_target_summary,
+            self.search_profile_summary,
+            self.search_filter_summary,
+            self.search_seed_summary,
+            self.search_max_advances_summary,
+        ):
+            label.setWordWrap(True)
+            label.setObjectName("Badge")
+        form.addRow("定点目标", self.search_target_summary)
+        form.addRow("存档信息", self.search_profile_summary)
+        form.addRow("个体筛选", self.search_filter_summary)
+        form.addRow("Seed", self.search_seed_summary)
+        form.addRow("最大帧数", self.search_max_advances_summary)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
@@ -280,6 +296,21 @@ class AutoRngPanel(QWidget):
             values = [("当前锁定" if row_index == locked_index else ""), *row]
             for column, value in enumerate(values[: self.candidate_table.columnCount()]):
                 self.candidate_table.setItem(row_index, column, QTableWidgetItem(value))
+
+    def set_search_context_summary(
+        self,
+        *,
+        target: str,
+        profile: str,
+        filters: str,
+        seed: str,
+        max_advances: int,
+    ) -> None:
+        self.search_target_summary.setText(target or "-")
+        self.search_profile_summary.setText(profile or "-")
+        self.search_filter_summary.setText(filters or "-")
+        self.search_seed_summary.setText(seed or "-")
+        self.search_max_advances_summary.setText(str(max_advances))
 
     def _start_clicked(self) -> None:
         self.update_parameter_preview()

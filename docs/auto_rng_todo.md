@@ -38,8 +38,8 @@
 ## 4. 自动流程 Runner
 
 - [x] 新增 runner 状态机：`Idle -> CaptureSeed -> SearchTarget -> DecideAdvance -> RunAdvanceScript/Reidentify/CaptureSeed/RunHitScript -> LoopCheck`。
-- [ ] CaptureSeed 阶段复用 Project_Xs 捕捉与 `recover_seed_from_observation()`。
-- [ ] Reidentify 阶段复用 `reidentify_seed_from_observation()`。
+- [x] CaptureSeed 阶段复用 Project_Xs 捕捉与 `recover_seed_from_observation()`。
+- [x] Reidentify 阶段复用 `reidentify_seed_from_observation()`。
 - [x] 过帧后若请求过帧量 `> 1_000_000`，下一步走 CaptureSeed。
 - [x] 过帧后若请求过帧量 `<= 1_000_000`，下一步走 Reidentify。
 - [x] SearchTarget 无结果时运行测种脚本，然后回到 CaptureSeed。
@@ -50,7 +50,7 @@
 - [x] `remaining_to_trigger <= 0` 时判定错过目标，不运行撞闪。
 - [x] `remaining_to_trigger <= max_wait_frames` 时进入 FinalCalibrate，不直接运行撞闪脚本。
 - [x] `remaining_to_trigger > max_wait_frames` 时运行过帧脚本。
-- [ ] FinalCalibrate 执行最终 reidentify 或最终 capture seed。
+- [x] FinalCalibrate 执行最终 reidentify 或最终 capture seed。
 - [x] FinalCalibrate 记录 `current_advances_at_ref` 和 `ref_time`。
 - [x] FinalCalibrate 在提交撞闪脚本前用时间差计算 `live_current_advances`。
 - [x] FinalCalibrate 计算 `flash_frames = trigger_advances - live_current_advances`。
@@ -65,7 +65,7 @@
 - [x] 在 `MainWindow` 的 `QTabWidget` 中新增第四个 Tab。
 - [x] 新建 `AutoRngPanel`，不要把自动流程直接塞进 `MainWindow`。
 - [x] 顶部操作栏：循环模式、循环次数、开始、暂停、停止、状态徽标。
-- [ ] 左侧配置区：目标、存档、Seed/最大帧、筛选项。
+- [x] 左侧配置区：目标、存档、Seed/最大帧、筛选项。
 - [x] 中间策略区：fixed delay、最大等待帧数、重新测 seed 阈值。
 - [x] 中间脚本区：测种脚本、过帧脚本、撞闪脚本、刷新脚本、参数预览。
 - [x] 右侧运行摘要：当前循环、阶段、seed、锁定目标、当前帧、剩余帧。
@@ -97,6 +97,11 @@
 - [x] UI 测试：开始时发出完整 `AutoRngConfig`。
 - [x] UI 测试：`AutoRngProgress` 通过面板入口更新摘要和日志。
 - [x] UI 测试：`AutoRngWorker` 通过 Qt Signal 发出 progress/log/finished。
+- [x] UI 测试：MainWindow 启动自动流程时创建 `AutoRngRunner` 并交给 `AutoRngPanel.run_with_runner()`。
+- [x] UI 测试：MainWindow 自动 RNG search service 使用 BDSP 当前搜索快照。
+- [x] UI 测试：自动页展示启动时实际采用的 BDSP 搜索上下文摘要。
+- [x] UI 测试：MainWindow 自动 RNG Project_Xs capture/reidentify 适配可通过 mock 测试。
+- [x] UI 测试：MainWindow 自动 RNG EasyCon Bridge `run_script_text()` 适配可通过 mock 测试。
 
 ## 7. 风险与后续问题
 

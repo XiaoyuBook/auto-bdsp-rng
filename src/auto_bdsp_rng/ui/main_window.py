@@ -55,7 +55,10 @@ from auto_bdsp_rng.blink_detection import (
     render_eye_preview,
     save_project_xs_config,
 )
+from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
+from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
+from auto_bdsp_rng.automation.easycon import EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
@@ -603,6 +606,7 @@ class MainWindow(QMainWindow):
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel()
         self.auto_rng_tab = AutoRngPanel()
+        self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
@@ -2041,6 +2045,140 @@ class MainWindow(QMainWindow):
 
     def _is_capturing(self) -> bool:
         return self._capture_thread is not None and self._capture_thread.is_alive()
+
+    def _start_auto_rng(self, config: AutoRngConfig) -> None:
+        services = self._build_auto_rng_services(config)
+        self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services))
+
+    def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
+        tracking_config = self._config_from_form()
+        record = self.encounter_combo.currentData()
+        if record is None:
+            raise ValueError("Select a static encounter")
+        state_filter, shiny_mode = self._current_filter()
+        try:
+            initial_seed = self._current_seed_pair()
+        except ValueError:
+            initial_seed = SeedPair64(0, 0)
+        search_criteria = StaticSearchCriteria(
+            seed=initial_seed,
+            profile=self._current_profile(),
+            record=record,
+            state_filter=state_filter,
+            initial_advances=int(self.initial_advances.text() or 0),
+            max_advances=int(self.max_advances.text() or config.max_advances),
+            offset=int(self.offset.text() or 0),
+            lead=self.lead_combo.currentData(),
+            shiny_mode=shiny_mode,
+        )
+        self._update_auto_rng_search_summary(search_criteria)
+
+        def seed_pair_from_result(seed_result: AutoRngSeedResult) -> SeedPair64:
+            seed = seed_result.seed
+            if isinstance(seed, SeedPair64):
+                return seed
+            if isinstance(seed, SeedState32):
+                return seed.to_seed_pair64()
+            to_seed_pair64 = getattr(seed, "to_seed_pair64", None)
+            if callable(to_seed_pair64):
+                return to_seed_pair64()
+            raise TypeError("Auto RNG seed result must contain SeedPair64 or SeedState32")
+
+        def state32_from_result(seed_result: AutoRngSeedResult) -> SeedState32:
+            seed = seed_result.seed
+            if isinstance(seed, SeedState32):
+                return seed
+            if isinstance(seed, SeedPair64):
+                return seed.to_state32()
+            to_state32 = getattr(seed, "to_state32", None)
+            if callable(to_state32):
+                return to_state32()
+            raise TypeError("Auto RNG seed result must contain SeedPair64 or SeedState32")
+
+        def capture_seed_service() -> AutoRngSeedResult:
+            self._capture_cancel.clear()
+            observation = capture_player_blinks(
+                tracking_config.capture,
+                should_stop=self._capture_cancel.is_set,
+                show_window=False,
+            )
+            result = recover_seed_from_observation(observation, npc=tracking_config.npc)
+            elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
+            elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
+            if elapsed_advances:
+                result = replace(result, state=advance_seed_state(result.state, elapsed_advances).state)
+            return AutoRngSeedResult(
+                seed=result.state,
+                current_advances=0,
+                npc=tracking_config.npc,
+                seed_text=" ".join(result.state.format_seed64_pair()),
+            )
+
+        def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
+            self._capture_cancel.clear()
+            observation = capture_player_blinks(
+                tracking_config.capture,
+                should_stop=self._capture_cancel.is_set,
+                show_window=False,
+            )
+            result = reidentify_seed_from_observation(
+                state32_from_result(seed_result),
+                observation,
+                npc=tracking_config.npc,
+                search_min=0,
+                search_max=max(100_000, config.max_advances, search_criteria.max_advances),
+            )
+            return AutoRngSeedResult(
+                seed=result.state,
+                current_advances=result.advances,
+                npc=tracking_config.npc,
+                seed_text=" ".join(result.state.format_seed64_pair()),
+            )
+
+        def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
+            return generate_static_candidates(replace(search_criteria, seed=seed_pair_from_result(seed_result)))
+
+        def run_script_text_service(script_text: str, name: str) -> object:
+            if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+                raise RuntimeError("请先连接伊机控 Bridge")
+            return self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+
+        def stop_current_script_service() -> None:
+            self._capture_cancel.set()
+            try:
+                self.easycon_tab._ensure_bridge_backend().stop_current_script()
+            except Exception:
+                pass
+
+        return AutoRngServices(
+            capture_seed=capture_seed_service,
+            reidentify=reidentify_service,
+            search_candidates=search_candidates_service,
+            run_script_text=run_script_text_service,
+            stop_current_script=stop_current_script_service,
+        )
+
+    def _update_auto_rng_search_summary(self, criteria: StaticSearchCriteria) -> None:
+        target_text = self.encounter_combo.currentText() or getattr(criteria.record, "species", "-")
+        profile_text = (
+            f"{criteria.profile.name} / TID {criteria.profile.tid} / SID {criteria.profile.sid} / "
+            f"{GAME_LABELS_EN.get(self._profile_version, self._profile_version.value)}"
+        )
+        iv_text = ", ".join(
+            f"{label} {low.text() or 0}-{high.text() or 0}"
+            for label, low, high in zip(IV_LABELS, self.iv_min, self.iv_max)
+        )
+        filter_text = (
+            f"shiny={criteria.shiny_mode}; ability={self.ability_filter.currentText()}; "
+            f"gender={self.gender_filter.currentText()}; nature={self.nature_combo.currentText()}; {iv_text}"
+        )
+        self.auto_rng_tab.set_search_context_summary(
+            target=target_text,
+            profile=profile_text,
+            filters=filter_text,
+            seed=" ".join(criteria.seed.format_seeds()),
+            max_advances=criteria.max_advances,
+        )
 
     def _stop_advance_tracking(self) -> None:
         self._advance_timer.stop()

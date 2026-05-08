@@ -54,3 +54,7 @@
 
 ## Visual/Browser Findings
 - 本轮暂未使用浏览器或截图。
+## Implementation Findings
+- AutoRngPanel 第一版不复制完整 BDSP 筛选表单，改为启动时展示实际采用的 BDSP 搜索快照：定点目标、存档、筛选摘要、Seed、最大帧数，避免两套 UI 数据源漂移。
+- MainWindow 自动 RNG 服务工厂已接入 Project_Xs capture/reidentify 与 EasyCon Bridge `run_script_text()` / `stop_current_script()`；真机可用性仍需硬件环境验证。
+- EasyConPanel 需要保留参数模板兼容层；全量测试覆盖参数控件、必填校验、默认恢复、参数持久化和 Bridge 运行前参数替换。

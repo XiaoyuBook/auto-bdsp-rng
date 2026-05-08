@@ -117,3 +117,31 @@
 | auto RNG targeted tests after worker | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_scripts.py tests\automation\test_auto_rng_runner.py tests\test_ui.py -q` | all pass | 35 passed | pass |
 | runner state machine tests | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -q` | all pass | 14 passed | pass |
 | full test suite after current runner work | `.venv\Scripts\python.exe -m pytest -q` | identify residual failures | 156 passed, 8 EasyConPanel test failures | known unrelated baseline mismatch |
+
+### Phase 6: UI 与真实接口接线
+- **Status:** in progress
+- Actions taken:
+  - 在 `MainWindow` 中连接 `AutoRngPanel.startRequested`，启动时创建 `AutoRngRunner` 并交给 `AutoRngPanel.run_with_runner()`。
+  - 新增 `MainWindow._build_auto_rng_services()`，启动时快照当前 Project_Xs 配置、BDSP 定点目标、存档、筛选、最大帧数、offset、lead。
+  - 接入 Project_Xs capture：调用 `capture_player_blinks()` 与 `recover_seed_from_observation()`，并保留现有根据耗时推进 seed 的处理。
+  - 接入 Project_Xs reidentify：调用 `reidentify_seed_from_observation()`，支持从 `SeedPair64` 或 `SeedState32` 转换当前状态。
+  - 接入 EasyCon Bridge：自动流程通过 `_ensure_bridge_backend().run_script_text()` 执行临时脚本文本，通过 `stop_current_script()` 停止当前脚本，并用 `_capture_cancel` 停止 Project_Xs 捕捉。
+  - 增加 UI mock 测试，覆盖 MainWindow 启动 runner、BDSP 搜索快照、Project_Xs capture/reidentify 适配、EasyCon Bridge run_script_text 适配。
+  - 恢复 EasyConPanel 参数模板兼容能力，包含参数控件、必填校验、模板默认恢复、参数持久化和 Bridge 运行前参数替换，以消除全量测试中的既有失败。
+  - AutoRngPanel 左侧配置区改为展示启动时实际采用的 BDSP 搜索上下文摘要：定点目标、存档信息、筛选摘要、Seed、最大帧数。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/main_window.py`
+  - `src/auto_bdsp_rng/ui/easycon_panel.py`
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `tests/test_ui.py`
+  - `docs/auto_rng_todo.md`
+  - `task_plan.md`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| UI tests after MainWindow wiring | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -q` | all pass | 21 passed | pass |
+| auto RNG targeted tests after MainWindow wiring | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_scripts.py tests\automation\test_auto_rng_runner.py tests\test_ui.py -q` | all pass | 40 passed | pass |
+| EasyConPanel compatibility tests | `.venv\Scripts\python.exe -m pytest tests\test_easycon_panel.py -q` | all pass | 25 passed | pass |
+| auto RNG + EasyConPanel targeted tests | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_scripts.py tests\automation\test_auto_rng_runner.py tests\test_ui.py tests\test_easycon_panel.py -q` | all pass | 65 passed | pass |
+| full test suite after wiring and compatibility fixes | `.venv\Scripts\python.exe -m pytest -q` | all pass | 171 passed | pass |

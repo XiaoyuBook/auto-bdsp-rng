@@ -4,7 +4,7 @@
 实现 `自动定点乱数` 页面与服务层，把 Project_Xs 测 seed、BDSP 定点搜索、EasyCon 过帧脚本、最终 reidentify / capture seed 与撞闪脚本串成可测试、可停止、可观察的自动流程。
 
 ## Current Phase
-Phase 5: Runner 状态机与 mock 集成
+Phase 7: Verification & Delivery
 
 ## Phases
 
@@ -44,18 +44,18 @@ Phase 5: Runner 状态机与 mock 集成
 - **Status:** complete
 
 ### Phase 6: UI 与真实接口接线
-- [ ] `AutoRngPanel` 收集真实搜索条件，而不是占位说明
+- [x] `AutoRngPanel` 收集真实搜索条件，而不是占位说明
 - [x] 通过 QThread/Signal 驱动 runner，避免 UI 线程执行长流程
-- [ ] 接入 Project_Xs capture/reidentify 封装
-- [ ] 接入 EasyCon Bridge `run_script_text()` 与 `stop_current_script()`
-- **Status:** in_progress
+- [x] 接入 Project_Xs capture/reidentify 封装
+- [x] 接入 EasyCon Bridge `run_script_text()` 与 `stop_current_script()`
+- **Status:** complete
 
 ### Phase 7: Verification & Delivery
-- [ ] 跑自动 RNG 目标测试
-- [ ] 跑可用的全量测试并记录已知无关失败
-- [ ] 更新 TODO、progress 和 findings
-- [ ] 输出剩余真机验证项与建议提交信息
-- **Status:** pending
+- [x] 跑自动 RNG 目标测试
+- [x] 跑可用的全量测试并记录已知无关失败
+- [x] 更新 TODO、progress 和 findings
+- [x] 输出剩余真机验证项与建议提交信息
+- **Status:** complete
 
 ## Key Decisions
 | Decision | Rationale |

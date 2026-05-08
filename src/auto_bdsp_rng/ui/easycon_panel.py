@@ -46,9 +46,11 @@ from auto_bdsp_rng.automation.easycon import (
     detect_newline_style,
     discover_ezcon,
     extract_compile_error_line,
+    apply_parameter_values,
     generate_script_file,
     list_ports,
     load_config,
+    parse_script_parameters,
     prune_generated_scripts,
     save_config,
     scan_builtin_scripts,
@@ -384,6 +386,7 @@ class EasyConPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.config = load_config()
+        self._preferred_last_port = self.config.last_port
         self.installation = EasyConInstallation(path=None, error="未检测")
         self.bridge_backend: BridgeEasyConBackend | None = None
         self.bridge_run_thread: QThread | None = None
@@ -394,6 +397,10 @@ class EasyConPanel(QWidget):
         self.current_script_name = "未命名脚本"
         self.current_script_newline = "\n"
         self._saved_editor_text = ""
+        self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
+        self.parameter_defaults: dict[str, str] = {}
+        self._parameter_line_indices: dict[str, int] = {}
+        self._syncing_parameters = False
         self.virtual_controller_enabled = False
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
         self.key_mapping: dict[str, int] = dict(DEFAULT_KEY_MAPPING)
@@ -646,9 +653,12 @@ class EasyConPanel(QWidget):
         editor_header.setStyleSheet(f"background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER};")
         editor_header_layout = QHBoxLayout(editor_header)
         editor_header_layout.setContentsMargins(8, 3, 8, 3)
-        self.script_name_label = QLabel(" 未命名脚本")
+        self.script_name_label = QLabel("未命名脚本")
         self.script_name_label.setStyleSheet(f"font-size: 12px; color: {self.CLR_TEXT}; border: 0; background: transparent;")
         editor_header_layout.addWidget(self.script_name_label)
+        self.template_mode_label = QLabel("普通脚本")
+        self.template_mode_label.setStyleSheet(f"font-size: 12px; color: {self.CLR_HINT}; border: 0; background: transparent;")
+        editor_header_layout.addWidget(self.template_mode_label)
         editor_header_layout.addStretch()
 
         layout.addWidget(editor_header)
@@ -955,12 +965,15 @@ class EasyConPanel(QWidget):
             self._update_run_enabled()
             return
         self.port_combo.setCurrentText(selected)
+        self._preferred_last_port = selected
         self._append_log("info", f"已自动选择串口: {selected}")
         self._save_config_from_ui()
         self._update_run_enabled()
         self._update_status_labels()
 
     def _select_preferred_port(self, ports: list[str]) -> str | None:
+        if self._preferred_last_port in ports:
+            return self._preferred_last_port
         if self.config.last_port in ports:
             return self.config.last_port
         if len(ports) == 1:
@@ -1002,12 +1015,23 @@ class EasyConPanel(QWidget):
         except UnicodeDecodeError:
             QMessageBox.warning(self, "脚本编码不明确", "脚本不是 UTF-8 编码，暂不加载以避免乱码。")
             return
+        parameters = parse_script_parameters(text)
+        self.parameter_defaults = {parameter.name: parameter.default for parameter in parameters}
+        saved_values = self.config.script_parameters.get(self._script_config_key(path), {})
+        if saved_values:
+            text = apply_parameter_values(text, saved_values)
+            parameters = parse_script_parameters(text)
         self.current_script_path = path
         self.current_script_name = path.name
         self.current_script_newline = detect_newline_style(text)
         self._saved_editor_text = text
         self.script_name_label.setText(path.name)
+        self._syncing_parameters = True
         self.editor.setPlainText(text)
+        self._syncing_parameters = False
+        self._rebuild_parameter_widgets(parameters)
+        self.template_mode_label.setText("模板副本" if any(value == "填入这里" for value in self.parameter_defaults.values()) else "普通脚本")
+        self._update_run_enabled()
         self._append_log("info", f"已加载脚本: {path.name}")
         self._remember_recent_script(path)
 
@@ -1020,7 +1044,7 @@ class EasyConPanel(QWidget):
         self.current_script_path = None
         self.current_script_name = "未命名文档.txt"
         self.current_script_newline = "\n"
-        self.script_name_label.setText(" 未命名文档.txt")
+        self.script_name_label.setText("未命名文档.txt")
         self._saved_editor_text = ""
         self.editor.setPlainText("")
         self._append_log("info", "已新建空白脚本")
@@ -1063,11 +1087,90 @@ class EasyConPanel(QWidget):
         self.current_script_path = output
         self.current_script_name = output.name
         self._saved_editor_text = self.editor.toPlainText()
-        self.script_name_label.setText(f" {output.name}")
+        self.script_name_label.setText(output.name)
         self._update_dirty_indicator()
         self._remember_recent_script(output)
         self._append_log("info", f"已保存: {output.name}")
         return output
+
+    def _rebuild_parameter_widgets(self, parameters) -> None:
+        self.parameter_widgets = {}
+        self._parameter_line_indices = {}
+        for parameter in parameters:
+            self._parameter_line_indices[parameter.name] = parameter.line_index
+            default_value = self.parameter_defaults.get(parameter.name, parameter.default)
+            if default_value.isdigit():
+                widget = QSpinBox()
+                widget.setRange(0, 1_000_000_000)
+                widget.setValue(int(parameter.value) if parameter.value.isdigit() else int(default_value))
+                widget.valueChanged.connect(lambda _value, name=parameter.name: self._parameter_value_changed(name))
+            else:
+                widget = QLineEdit(parameter.value)
+                widget.textChanged.connect(lambda _text, name=parameter.name: self._parameter_value_changed(name))
+            self.parameter_widgets[parameter.name] = widget
+
+    def _parameter_value_changed(self, name: str) -> None:
+        if self._syncing_parameters:
+            return
+        widget = self.parameter_widgets.get(name)
+        if widget is None:
+            return
+        value = str(widget.value()) if isinstance(widget, QSpinBox) else widget.text()
+        self._syncing_parameters = True
+        self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), {name: value}))
+        self._syncing_parameters = False
+        self._persist_parameter_value(name, value)
+        self._update_run_enabled()
+        self._update_dirty_indicator()
+
+    def _persist_parameter_value(self, name: str, value: str) -> None:
+        if self.current_script_path is None:
+            return
+        key = self._script_config_key(self.current_script_path)
+        script_parameters = {item_key: dict(values) for item_key, values in self.config.script_parameters.items()}
+        script_parameters.setdefault(key, {})[name] = value
+        self.config = replace(self.config, script_parameters=script_parameters)
+        save_config(self.config)
+
+    def _script_config_key(self, path: Path) -> str:
+        try:
+            if path.resolve().parent == SCRIPT_DIR.resolve():
+                return f"script/{path.name}"
+        except OSError:
+            pass
+        try:
+            return path.resolve().as_posix()
+        except OSError:
+            return path.as_posix()
+
+    def restore_template_defaults(self) -> None:
+        if not self.parameter_defaults:
+            return
+        self._syncing_parameters = True
+        self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), self.parameter_defaults))
+        parameters = parse_script_parameters(self.editor.toPlainText())
+        for parameter in parameters:
+            widget = self.parameter_widgets.get(parameter.name)
+            if isinstance(widget, QSpinBox):
+                widget.setValue(int(parameter.value) if parameter.value.isdigit() else 0)
+            elif isinstance(widget, QLineEdit):
+                widget.setText(parameter.value)
+        self._syncing_parameters = False
+        self._update_run_enabled()
+        self._update_dirty_indicator()
+
+    def _validate_parameters_for_run(self, *, focus: bool = False) -> bool:
+        for parameter in parse_script_parameters(self.editor.toPlainText()):
+            if not parameter.required:
+                continue
+            if focus:
+                block = self.editor.document().findBlockByNumber(parameter.line_index)
+                cursor = QTextCursor(block)
+                self.editor.setTextCursor(cursor)
+                self.editor.setFocus()
+                self._append_log("error", f"第 {parameter.line_index + 1} 行参数 {parameter.name} 需要填写")
+            return False
+        return True
 
     def save_generated_script(self) -> Path | None:
         if not self.editor.toPlainText().strip():
@@ -1333,6 +1436,8 @@ class EasyConPanel(QWidget):
             return False
         if not self.editor.toPlainText().strip():
             return False
+        if not self._validate_parameters_for_run(focus=False):
+            return False
         if not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
             return False
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
@@ -1353,7 +1458,7 @@ class EasyConPanel(QWidget):
             name = "*" + name
         elif not dirty and name.startswith("*"):
             name = name[1:]
-        self.script_name_label.setText(f" {name}")
+        self.script_name_label.setText(name)
 
     def _update_run_enabled(self) -> None:
         if hasattr(self, "run_button"):

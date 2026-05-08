@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -9,8 +11,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog
 
-from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngTarget
+from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
+from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
+from auto_bdsp_rng.automation.easycon import EasyConStatus
+from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui import MainWindow
+import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
 
 
@@ -292,6 +298,102 @@ def test_auto_rng_worker_emits_progress_and_finished(app):
     assert logs == ["完成"]
     assert finished == [progress]
     assert runner.stopped is True
+
+
+def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "谢米.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text("_目标帧数 = 100\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 100\n", encoding="utf-8")
+    config = AutoRngConfig(
+        script_dir=tmp_path,
+        seed_script_path=seed_script,
+        advance_script_path=advance_script,
+        hit_script_path=hit_script,
+    )
+    started: list[AutoRngRunner] = []
+    monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
+
+    window._start_auto_rng(config)
+
+    assert len(started) == 1
+    assert isinstance(started[0], AutoRngRunner)
+    assert started[0].config == config
+
+
+def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    candidates = services.search_candidates(AutoRngSeedResult(seed=window._current_seed_pair()))
+
+    assert [state.advances for state in candidates] == [0, 1, 2]
+    assert window.auto_rng_tab.search_target_summary.text() != "-"
+    assert window.auto_rng_tab.search_seed_summary.text() == "123456789ABCDEF0 1111111122222222"
+    assert window.auto_rng_tab.search_max_advances_summary.text() == "2"
+
+
+def test_main_window_auto_rng_capture_service_uses_project_xs(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
+    observation = SimpleNamespace(offset_time=100.0)
+    monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 100.0)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", lambda *_args, **_kwargs: observation)
+    monkeypatch.setattr(
+        main_window_module,
+        "recover_seed_from_observation",
+        lambda actual_observation, npc: SimpleNamespace(state=seed_state, advances=0),
+    )
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    result = services.capture_seed()
+
+    assert result.seed == seed_state
+    assert result.current_advances == 0
+    assert result.seed_text == "1111111122222222 3333333344444444"
+
+
+def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    calls: list[SeedState32] = []
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", lambda *_args, **_kwargs: SimpleNamespace(offset_time=0.0))
+
+    def fake_reidentify(current_state, _observation, **_kwargs):
+        calls.append(current_state)
+        return SimpleNamespace(state=seed_state, advances=42)
+
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation", fake_reidentify)
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    result = services.reidentify(AutoRngSeedResult(seed=SeedPair64(0x1111111122222222, 0x3333333344444444)))
+
+    assert calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
+    assert result.seed == seed_state
+    assert result.current_advances == 42
+
+
+def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    calls: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def run_script_text(self, script_text: str, name: str) -> str:
+            calls.append((script_text, name))
+            return "ok"
+
+    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    assert services.run_script_text("A 100", "hit.txt") == "ok"
+    assert calls == [("A 100", "hit.txt")]
 
 
 def test_main_window_applies_selected_roi(app, monkeypatch):
