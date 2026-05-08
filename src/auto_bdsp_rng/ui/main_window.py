@@ -2146,6 +2146,7 @@ class MainWindow(QMainWindow):
         for box, text in zip(self.seed32_inputs, state.format_words()):
             box.setText(text)
         self._sync_seed64_from_state32()
+        self._start_auto_advance_tracking(seed_result)
         self._sync_bdsp_data_from_auto_rng(state.to_seed_pair64())
 
     def _state32_from_auto_seed_result(self, seed_result: AutoRngSeedResult) -> SeedState32:
@@ -2158,6 +2159,18 @@ class MainWindow(QMainWindow):
         if callable(to_state32):
             return to_state32()
         raise TypeError("Auto RNG seed result must contain SeedPair64 or SeedState32")
+
+    def _start_auto_advance_tracking(self, seed_result: AutoRngSeedResult) -> None:
+        measured_at = seed_result.measured_at
+        elapsed_advances = 0
+        if measured_at is not None:
+            elapsed_seconds = max(0.0, time.monotonic() - measured_at)
+            elapsed_advances = int(elapsed_seconds / 1.018) * (seed_result.npc + 1)
+        self._advance_step = seed_result.npc + 1
+        self._tracked_advances = seed_result.current_advances + elapsed_advances
+        self.advances_value.setText(str(self._tracked_advances))
+        self.timer_value.setText("0")
+        self._advance_timer.start()
 
     def _sync_bdsp_data_from_auto_rng(self, seed: SeedPair64) -> None:
         form = self.auto_rng_tab.target_form

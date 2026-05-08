@@ -167,7 +167,7 @@ def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
 
     assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
     assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
-    assert window.advances_value.text() == "42"
+    assert int(window.advances_value.text()) >= 42
     assert capture_counts == [7]
     assert window.result_count.text() == "3 条结果"
 
@@ -789,11 +789,14 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
 
     result = services.reidentify(AutoRngSeedResult(seed=SeedPair64(0x1111111122222222, 0x3333333344444444)))
+    QApplication.processEvents()
 
     assert calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
     assert result.seed == seed_state
     assert result.current_advances == 42
     assert capture_counts == [7]
+    assert int(window.advances_value.text()) >= 42
+    assert window._advance_timer.isActive()
 
 
 def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monkeypatch):
