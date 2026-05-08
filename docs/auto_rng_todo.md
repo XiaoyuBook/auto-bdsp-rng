@@ -8,8 +8,8 @@
 - [x] 确认过帧脚本 `_目标帧数` 填 `remaining_to_trigger`，不额外扣脚本内部预留值。
 - [x] 确认撞闪脚本 `_闪帧` 填最终实时校准后的 `flash_frames`，不是旧的 `remaining_to_trigger`。
 - [x] 确认默认 `max_wait_frames = 300`。
-- [x] 确认默认 `reseed_threshold_frames = 1_000_000`。
-- [x] 确认默认 `min_final_flash_frames = 30` 或 `50`。
+- [x] 确认内置 `reseed_threshold_frames = 990_000`，不在 UI 展示。
+- [x] 确认内置 `min_final_flash_frames = 5`，不在 UI 展示。
 
 ## 1. 数据模型
 
@@ -40,8 +40,8 @@
 - [x] 新增 runner 状态机：`Idle -> CaptureSeed -> SearchTarget -> DecideAdvance -> RunAdvanceScript/Reidentify/CaptureSeed/RunHitScript -> LoopCheck`。
 - [x] CaptureSeed 阶段复用 Project_Xs 捕捉与 `recover_seed_from_observation()`。
 - [x] Reidentify 阶段复用 `reidentify_seed_from_observation()`。
-- [x] 过帧后若请求过帧量 `> 1_000_000`，下一步走 CaptureSeed。
-- [x] 过帧后若请求过帧量 `<= 1_000_000`，下一步走 Reidentify。
+- [x] 过帧后若请求过帧量 `> 990_000`，下一步走 CaptureSeed。
+- [x] 过帧后若请求过帧量 `<= 990_000`，下一步走 Reidentify。
 - [x] SearchTarget 无结果时运行测种脚本，然后回到 CaptureSeed。
 - [x] SearchTarget 有结果时锁定最低帧目标。
 - [x] DecideAdvance 计算 `trigger_advances = raw_target_advances - fixed_delay`。
@@ -66,7 +66,7 @@
 - [x] 新建 `AutoRngPanel`，不要把自动流程直接塞进 `MainWindow`。
 - [x] 顶部操作栏：循环模式、循环次数、开始、暂停、停止、状态徽标。
 - [x] 左侧配置区：目标、存档、Seed/最大帧、筛选项。
-- [x] 中间策略区：fixed delay、最大等待帧数、重新测 seed 阈值。
+- [x] 中间策略区：delay、最大等待帧数；重新测 seed 阈值和最终安全帧改为内部常量。
 - [x] 中间脚本区：测种脚本、过帧脚本、撞闪脚本、刷新脚本、参数预览。
 - [x] 右侧运行摘要：当前循环、阶段、seed、锁定目标、当前帧、剩余帧。
 - [x] 右侧运行摘要显示 delay、trigger advances、final flash frames。
@@ -86,8 +86,8 @@
 - [x] 单元测试：`flash_frames <= 0` 时不运行撞闪。
 - [x] 单元测试：`flash_frames < min_final_flash_frames` 时不运行撞闪。
 - [x] 单元测试：无候选时决策为运行测种脚本。
-- [x] 单元测试：过帧请求超过 1,000,000 后下一步为重新捕获 seed。
-- [x] 单元测试：过帧请求不超过 1,000,000 后下一步为 reidentify。
+- [x] 单元测试：过帧请求超过 990,000 后下一步为重新捕获 seed。
+- [x] 单元测试：过帧请求不超过 990,000 后下一步为 reidentify。
 - [x] 单元测试：runner 无候选时运行测种脚本并回到 CaptureSeed。
 - [x] 单元测试：runner 过帧脚本填 `_目标帧数` 后按阈值进入 reidentify。
 - [x] 单元测试：runner FinalCalibrate 后填 `_闪帧` 并运行撞闪脚本。

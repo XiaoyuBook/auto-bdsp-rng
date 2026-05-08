@@ -231,6 +231,10 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     assert config.hit_script_path == tmp_path / "谢米.txt"
     assert config.fixed_delay == 1200
     assert config.max_wait_frames == 300
+    assert config.reseed_threshold_frames == 990_000
+    assert config.min_final_flash_frames == 5
+    assert not hasattr(panel, "reseed_threshold_frames")
+    assert not hasattr(panel, "min_final_flash_frames")
 
 
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):

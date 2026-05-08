@@ -134,13 +134,9 @@ class AutoRngPanel(QWidget):
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
-        self.reseed_threshold_frames = self._spin(1, 1_000_000_000, 1_000_000)
-        self.min_final_flash_frames = self._spin(1, 1_000_000, 30)
         form.addRow("最大帧数", self.max_advances)
-        form.addRow("fixed delay", self.fixed_delay)
-        form.addRow("max_wait_frames", self.max_wait_frames)
-        form.addRow("reseed_threshold_frames", self.reseed_threshold_frames)
-        form.addRow("min_final_flash_frames", self.min_final_flash_frames)
+        form.addRow("delay", self.fixed_delay)
+        form.addRow("最大等待帧数", self.max_wait_frames)
         return group
 
     def _build_script_group(self) -> QGroupBox:
@@ -209,7 +205,7 @@ class AutoRngPanel(QWidget):
             ("seed", "summary_seed"),
             ("锁定目标", "summary_target"),
             ("raw target", "summary_raw"),
-            ("fixed delay", "summary_delay"),
+            ("delay", "summary_delay"),
             ("trigger advances", "summary_trigger"),
             ("current advances", "summary_current"),
             ("remaining_to_trigger", "summary_remaining"),
@@ -335,8 +331,6 @@ class AutoRngPanel(QWidget):
             hit_script_path=self._selected_path(self.hit_script_combo),
             fixed_delay=self.fixed_delay.value(),
             max_wait_frames=self.max_wait_frames.value(),
-            reseed_threshold_frames=self.reseed_threshold_frames.value(),
-            min_final_flash_frames=self.min_final_flash_frames.value(),
             loop_mode=str(self.mode_combo.currentData()),
             loop_count=self.loop_count.value(),
             max_advances=self.max_advances.value(),

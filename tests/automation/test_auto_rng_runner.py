@@ -117,14 +117,14 @@ def test_no_candidates_decides_to_run_seed_script():
 
 
 def test_advance_request_above_threshold_recaptures_seed():
-    decision = decide_after_advance_script(1_000_001, reseed_threshold_frames=1_000_000)
+    decision = decide_after_advance_script(990_001, reseed_threshold_frames=990_000)
 
     assert decision.kind == AutoRngDecisionKind.CAPTURE_SEED
     assert decision.phase == AutoRngPhase.CAPTURE_SEED
 
 
 def test_advance_request_at_threshold_reidentifies():
-    decision = decide_after_advance_script(1_000_000, reseed_threshold_frames=1_000_000)
+    decision = decide_after_advance_script(990_000, reseed_threshold_frames=990_000)
 
     assert decision.kind == AutoRngDecisionKind.REIDENTIFY
     assert decision.phase == AutoRngPhase.REIDENTIFY
@@ -184,7 +184,6 @@ def test_runner_runs_advance_script_then_reidentifies_when_request_is_within_thr
             hit_script_path=hit_script,
             fixed_delay=100,
             max_wait_frames=300,
-            reseed_threshold_frames=1_000_000,
         ),
         services=services,
     )

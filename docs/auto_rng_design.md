@@ -19,8 +19,8 @@
 | `remaining_to_trigger` | 距离运行撞闪脚本还剩多少帧，`trigger_advances - current_advances` | 300 |
 | `flash_frames` | 撞闪脚本真正开始执行瞬间，距离目标触发点还剩多少帧 | 298 |
 | `max_wait_frames` | 最大等待帧数；剩余帧数小于等于它时，不再调用过帧脚本 | 300 |
-| `reseed_threshold_frames` | 单次过帧超过该值后不用 reidentify，改为重新捕获 seed | 默认 1,000,000 |
-| `min_final_flash_frames` | 最终撞闪前的最小安全剩余帧；太近则放弃本目标 | 默认 30 或 50 |
+| `reseed_threshold_frames` | 单次过帧超过该值后不用 reidentify，改为重新捕获 seed | 内置 990,000，不在 UI 展示 |
+| `min_final_flash_frames` | 最终撞闪前的最小安全剩余帧；太近则放弃本目标 | 内置 5，不在 UI 展示 |
 
 关键规则：
 - 搜索目标时，按当前 seed 和筛选条件生成结果。
@@ -120,7 +120,8 @@ flash_frames = trigger_advances - live_current_advances
 - 最大帧数范围：默认可沿用用户填写，支持到 1,000,000,000。
 - 固定 delay：默认 100，可手动改。
 - 最大等待帧数：默认 300，可手动改。
-- 重新测 seed 阈值：默认 1,000,000，放在高级选项中。
+- 重新测 seed 阈值：内置 990,000，不在界面展示；超过就必须重新测 seed。
+- 最终撞闪安全下限：内置 5，不在界面展示。
 - 无目标处理：默认 `运行测种脚本后重新捕获 seed`。
 - 目标选择：默认 `最低帧数`，未来可扩展 `手动选择`。
 
@@ -212,8 +213,8 @@ stateDiagram-v2
 推荐第一版采用“锁定目标 + 必要时重搜”的折中策略：
 
 - 初次测 seed 后搜索目标，选最低帧并锁定。
-- 过帧量不超过 100 万时，使用 reidentify；reidentify 返回的 advances 可继续用于同一个锁定目标，计算 `remaining_to_trigger`。
-- 过帧量超过 100 万时，重新捕获 seed；这时旧目标与当前 seed 的相对关系不再可靠，重新搜索目标并锁定新的最低帧。
+- 过帧量不超过 99 万时，使用 reidentify；reidentify 返回的 advances 可继续用于同一个锁定目标，计算 `remaining_to_trigger`。
+- 过帧量超过 99 万时，重新捕获 seed；这时旧目标与当前 seed 的相对关系不再可靠，重新搜索目标并锁定新的最低帧。
 - 如果 reidentify 后发现 `remaining_to_trigger <= 0`，说明已经错过触发点，本轮标记为 `target_missed`，回到 `SearchTarget` 或进入下一循环。
 - 如果已经进入 `max_wait_frames`，先进入 `FinalCalibrate`，得到脚本启动瞬间的 `flash_frames`，再运行撞闪脚本。
 
@@ -277,6 +278,6 @@ UI 职责：
 - 能按 `max_wait_frames` 决定过帧还是撞闪。
 - 过帧脚本运行前能填 `_目标帧数`。
 - 撞闪脚本运行前能做最终实时校准，并填 `_闪帧 = flash_frames`。
-- 过帧脚本完成后能按 100 万阈值选择 reidentify 或重新捕获 seed。
+- 过帧脚本完成后能按内置 99 万阈值选择 reidentify 或重新捕获 seed。
 - 支持单次、循环 N 次、无限循环。
 - 支持停止当前流程。

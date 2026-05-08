@@ -53,8 +53,8 @@ class AutoRngConfig:
     hit_script_path: Path | None = None
     fixed_delay: int = 100
     max_wait_frames: int = 300
-    reseed_threshold_frames: int = 1_000_000
-    min_final_flash_frames: int = 30
+    reseed_threshold_frames: int = 990_000
+    min_final_flash_frames: int = 5
     loop_mode: str = "single"
     loop_count: int = 1
     max_advances: int = 100_000

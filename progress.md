@@ -145,3 +145,23 @@
 | EasyConPanel compatibility tests | `.venv\Scripts\python.exe -m pytest tests\test_easycon_panel.py -q` | all pass | 25 passed | pass |
 | auto RNG + EasyConPanel targeted tests | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_scripts.py tests\automation\test_auto_rng_runner.py tests\test_ui.py tests\test_easycon_panel.py -q` | all pass | 65 passed | pass |
 | full test suite after wiring and compatibility fixes | `.venv\Scripts\python.exe -m pytest -q` | all pass | 171 passed | pass |
+
+### UI Parameter Simplification
+- **Status:** complete
+- Actions taken:
+  - 自动页策略区只保留 `delay` 和“最大等待帧数”两个用户可调参数。
+  - `reseed_threshold_frames` 改为内部默认 `990_000`，超过该值后必须重新测 seed。
+  - `min_final_flash_frames` 改为内部默认 `5`，不再在 UI 中展示。
+  - 更新 UI/runner 测试与设计 TODO，避免继续描述旧的 100 万 / 30 默认值。
+- Files modified:
+  - `src/auto_bdsp_rng/automation/auto_rng/models.py`
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `tests/test_ui.py`
+  - `tests/automation/test_auto_rng_runner.py`
+  - `docs/auto_rng_design.md`
+  - `docs/auto_rng_todo.md`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| UI and runner tests after parameter simplification | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py -q` | all pass | 35 passed | pass |
