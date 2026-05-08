@@ -9,7 +9,7 @@ pytest.importorskip("PySide6")
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGroupBox
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGroupBox, QLabel
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
@@ -231,8 +231,8 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     assert config.hit_script_path == tmp_path / "谢米.txt"
     assert config.fixed_delay == 1200
     assert config.max_wait_frames == 300
-    assert config.reseed_threshold_frames == panel.reseed_threshold_frames.value()
-    assert config.min_final_flash_frames == panel.min_final_flash_frames.value()
+    assert config.reseed_threshold_frames == 990_000
+    assert config.min_final_flash_frames == 5
 
 
 def test_auto_rng_panel_has_editable_target_form_and_no_old_main_regions(app):
@@ -255,6 +255,25 @@ def test_auto_rng_panel_has_editable_target_form_and_no_old_main_regions(app):
     assert target_form.shiny_filter.findText("Square") >= 0
     assert panel.parameter_preview.isVisible() is False
     assert panel.log_view.isReadOnly() is True
+    labels = {label.text() for label in panel.findChildren(QLabel)}
+    assert "重新测 seed 阈值" not in labels
+    assert "最小 final flash frames" not in labels
+
+
+def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(app):
+    panel = AutoRngPanel()
+    visible_labels = {label.text() for label in panel.findChildren(QLabel)}
+
+    assert "seed" not in visible_labels
+    assert "锁定目标" not in visible_labels
+    assert "raw target" not in visible_labels
+    assert "trigger advances" not in visible_labels
+    assert "current advances" not in visible_labels
+    assert "remaining_to_trigger" not in visible_labels
+    assert "final flash_frames" not in visible_labels
+    assert {"当前循环", "当前阶段", "原始目标帧", "触发帧", "当前帧", "距触发剩余", "最终闪帧"} <= visible_labels
+    assert not hasattr(panel, "summary_seed")
+    assert not hasattr(panel, "summary_target")
 
 
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
@@ -278,8 +297,6 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
 
     assert panel.status_badge.text() == "RunHitScript"
     assert panel.summary_loop.text() == "2"
-    assert panel.summary_seed.text() == "seed-1"
-    assert panel.summary_target.text() == "Shaymin"
     assert panel.summary_raw.text() == "1300"
     assert panel.summary_delay.text() == "1200"
     assert panel.summary_trigger.text() == "100"

@@ -133,13 +133,9 @@ class AutoRngPanel(QWidget):
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
-        self.reseed_threshold_frames = self._spin(0, 1_000_000_000, 990_000)
-        self.min_final_flash_frames = self._spin(0, 1_000_000_000, 5)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待帧数", self.max_wait_frames)
-        form.addRow("重新测 seed 阈值", self.reseed_threshold_frames)
-        form.addRow("最小 final flash frames", self.min_final_flash_frames)
         return group
 
     def _build_script_group(self) -> QGroupBox:
@@ -180,14 +176,12 @@ class AutoRngPanel(QWidget):
         fields = (
             ("当前循环", "summary_loop"),
             ("当前阶段", "summary_phase"),
-            ("seed", "summary_seed"),
-            ("锁定目标", "summary_target"),
-            ("raw target", "summary_raw"),
+            ("原始目标帧", "summary_raw"),
             ("delay", "summary_delay"),
-            ("trigger advances", "summary_trigger"),
-            ("current advances", "summary_current"),
-            ("remaining_to_trigger", "summary_remaining"),
-            ("final flash_frames", "summary_flash"),
+            ("触发帧", "summary_trigger"),
+            ("当前帧", "summary_current"),
+            ("距触发剩余", "summary_remaining"),
+            ("最终闪帧", "summary_flash"),
         )
         for row, (label_text, attr) in enumerate(fields):
             label = QLabel("-")
@@ -251,8 +245,6 @@ class AutoRngPanel(QWidget):
         self.status_badge.setText(phase_text)
         self.summary_phase.setText(phase_text)
         self.summary_loop.setText(_display_value(progress.loop_index))
-        self.summary_seed.setText(progress.seed_text or "-")
-        self.summary_target.setText(_target_text(progress))
         self.summary_raw.setText(_display_value(progress.raw_target_advances))
         self.summary_delay.setText(_display_value(progress.fixed_delay))
         self.summary_trigger.setText(_display_value(progress.trigger_advances))
@@ -318,8 +310,6 @@ class AutoRngPanel(QWidget):
             loop_mode=str(self.mode_combo.currentData()),
             loop_count=self.loop_count.value(),
             max_advances=self.max_advances.value(),
-            reseed_threshold_frames=self.reseed_threshold_frames.value(),
-            min_final_flash_frames=self.min_final_flash_frames.value(),
         )
 
     def run_with_runner(self, runner: object) -> None:

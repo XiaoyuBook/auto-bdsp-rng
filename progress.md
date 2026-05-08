@@ -190,3 +190,20 @@
 | targeted UI/auto RNG tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_panel_has_editable_target_form or auto_rng_services_search_uses_auto_target_form or auto_rng_services_search_with_bdsp_snapshot or auto_rng_panel_emits_config"` | all pass | 4 passed | pass |
 | broader UI/runner/script tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py` | all pass | 42 passed | pass |
 | full test suite | `.venv\Scripts\python.exe -m pytest` | all pass | 173 passed | pass |
+
+### UI Summary Cleanup
+- **Status:** complete
+- Actions taken:
+  - 隐藏自动策略中的内部参数 `重新测 seed 阈值` 和 `最小 final flash frames`，继续使用 `AutoRngConfig` 默认值。
+  - 运行摘要移除 `seed` 与 `锁定目标` 两行。
+  - 运行摘要字段中文化：`原始目标帧`、`触发帧`、`当前帧`、`距触发剩余`、`最终闪帧`。
+  - 补测试覆盖内部参数不露出、摘要不显示 seed/锁定目标、英文技术字段不作为 UI 标签出现。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `tests/test_ui.py`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| summary cleanup targeted tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_panel_emits_config or auto_rng_panel_has_editable_target_form or auto_rng_summary_uses_chinese_labels or auto_rng_panel_apply_progress"` | all pass | 4 passed | pass |
+| full test suite after summary cleanup | `.venv\Scripts\python.exe -m pytest` | all pass | 174 passed | pass |
