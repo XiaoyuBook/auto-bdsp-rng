@@ -6,6 +6,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngDecisionKind,
     AutoRngPhase,
     AutoRngProgress,
+    AutoRngSeedResult,
     AutoRngTarget,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "AutoRngDecisionKind",
     "AutoRngPhase",
     "AutoRngProgress",
+    "AutoRngSeedResult",
     "AutoRngTarget",
 ]

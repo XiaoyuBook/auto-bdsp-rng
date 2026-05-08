@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog
 
+from auto_bdsp_rng.automation.auto_rng import AutoRngConfig
 from auto_bdsp_rng.ui import MainWindow
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 
@@ -200,6 +201,30 @@ def test_auto_rng_panel_blocks_start_when_required_script_parameter_is_missing(a
 
     assert emitted == []
     assert "缺少必需参数 _目标帧数" in panel.log_view.toPlainText()
+
+
+def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_path):
+    (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path)
+    emitted: list[AutoRngConfig] = []
+    panel.startRequested.connect(lambda config: emitted.append(config))
+    panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
+    panel.fixed_delay.setValue(1200)
+    panel.max_wait_frames.setValue(300)
+
+    panel.start_button.click()
+
+    assert len(emitted) == 1
+    config = emitted[0]
+    assert isinstance(config, AutoRngConfig)
+    assert config.script_dir == tmp_path
+    assert config.seed_script_path == tmp_path / "BDSP测种.txt"
+    assert config.advance_script_path == tmp_path / "bdsp过帧.txt"
+    assert config.hit_script_path == tmp_path / "谢米.txt"
+    assert config.fixed_delay == 1200
+    assert config.max_wait_frames == 300
 
 
 def test_main_window_applies_selected_roi(app, monkeypatch):

@@ -62,3 +62,54 @@
 | What's the goal? | 为自动定点乱数界面设计完整 UI、流程和实现任务 |
 | What have I learned? | 见 findings.md |
 | What have I done? | 创建规划文件、完成调研、生成设计方案和 TODO |
+
+## Session: 2026-05-08 Implementation
+
+### Phase 3: Foundation Implementation
+- **Status:** complete
+- Actions taken:
+  - 新增 `src/auto_bdsp_rng/automation/auto_rng` 包。
+  - 实现 `AutoRngConfig`、`AutoRngProgress`、`AutoRngDecision`、`AutoRngTarget` 与 phase/decision enum。
+  - 实现自动脚本扫描、默认脚本选择、UTF-8/必需参数校验、`_目标帧数` 与 `_闪帧` 参数替换。
+  - 抽出 `StaticSearchCriteria` 与 `generate_static_candidates()`，让手动 BDSP 页复用搜索服务。
+  - 实现 delay/remaining/final calibration 纯决策函数。
+  - 新增 `AutoRngPanel` UI 骨架并接入 MainWindow 第四个 Tab。
+  - 新增脚本、runner 纯函数、UI Tab 与开始前参数校验测试。
+- Files created/modified:
+  - `src/auto_bdsp_rng/automation/auto_rng/__init__.py`
+  - `src/auto_bdsp_rng/automation/auto_rng/models.py`
+  - `src/auto_bdsp_rng/automation/auto_rng/scripts.py`
+  - `src/auto_bdsp_rng/automation/auto_rng/search.py`
+  - `src/auto_bdsp_rng/automation/auto_rng/runner.py`
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `src/auto_bdsp_rng/ui/main_window.py`
+  - `tests/automation/test_auto_rng_scripts.py`
+  - `tests/automation/test_auto_rng_runner.py`
+  - `tests/test_ui.py`
+
+### Phase 4: Rebase Conflict Resolution
+- **Status:** complete
+- Actions taken:
+  - 解决 `src/auto_bdsp_rng/ui/main_window.py` rebase 冲突。
+  - 保留当前基线中 `QLineEdit` 数值读取方式，并继续接入 `generate_static_candidates()`。
+  - 更新 UI 测试以匹配当前 Tab 文案和 QLineEdit 数值输入。
+  - 执行 `git rebase --continue`，生成提交 `5df6691 feat:增加自动定点乱数基础流程`。
+
+## Current Implementation Session
+- **Status:** in progress
+- Actions taken:
+  - 执行 planning-with-files session catch-up。
+  - 将 `task_plan.md` 从旧设计计划更新为实现计划。
+  - 即时销项 `docs/auto_rng_todo.md` 中已完成的设计、模型、脚本适配、搜索服务、基础 UI 与测试条目。
+  - 以 TDD 增加 runner mock 状态机测试：无候选测种、过帧后 reidentify、FinalCalibrate 撞闪、单次/循环 N 次 LoopCheck。
+  - 实现 `AutoRngServices` 注入接口、`AutoRngSeedResult`、`AutoRngRunner.run()` 状态机骨架和循环控制。
+  - 以 TDD 增加 `AutoRngPanel` 开始时发出 `AutoRngConfig` 的测试，并实现 `build_config()`。
+- Next:
+  - 继续接入 UI/QThread 信号层或补 Project_Xs/EasyCon 真实适配封装。
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| auto RNG targeted tests | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_scripts.py tests\automation\test_auto_rng_runner.py tests\test_ui.py -q` | all pass | 33 passed | pass |
+| runner state machine tests | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -q` | all pass | 14 passed | pass |
+| full test suite after current runner work | `.venv\Scripts\python.exe -m pytest -q` | identify residual failures | 156 passed, 8 EasyConPanel test failures | known unrelated baseline mismatch |

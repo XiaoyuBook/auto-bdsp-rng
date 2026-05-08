@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_ADVANCE_PARAMETER,
     AUTO_HIT_PARAMETER,
@@ -236,17 +237,33 @@ class AutoRngPanel(QWidget):
 
     def _start_clicked(self) -> None:
         self.update_parameter_preview()
+        config = self.build_config()
         try:
             validate_auto_scripts(
-                self._selected_path(self.seed_script_combo),
-                self._selected_path(self.advance_script_combo),
-                self._selected_path(self.hit_script_combo),
+                config.seed_script_path,
+                config.advance_script_path,
+                config.hit_script_path,
             )
         except AutoScriptError as exc:
             self.set_phase_text("配置错误")
             self.add_log(str(exc))
             return
-        self.startRequested.emit(self)
+        self.startRequested.emit(config)
+
+    def build_config(self) -> AutoRngConfig:
+        return AutoRngConfig(
+            script_dir=self.script_dir,
+            seed_script_path=self._selected_path(self.seed_script_combo),
+            advance_script_path=self._selected_path(self.advance_script_combo),
+            hit_script_path=self._selected_path(self.hit_script_combo),
+            fixed_delay=self.fixed_delay.value(),
+            max_wait_frames=self.max_wait_frames.value(),
+            reseed_threshold_frames=self.reseed_threshold_frames.value(),
+            min_final_flash_frames=self.min_final_flash_frames.value(),
+            loop_mode=str(self.mode_combo.currentData()),
+            loop_count=self.loop_count.value(),
+            max_advances=self.max_advances.value(),
+        )
 
     def _selected_path(self, combo: QComboBox) -> Path | None:
         value = combo.currentData()

@@ -61,6 +61,14 @@ class AutoRngConfig:
 
 
 @dataclass(frozen=True)
+class AutoRngSeedResult:
+    seed: Any
+    current_advances: int = 0
+    npc: int = 0
+    seed_text: str = ""
+
+
+@dataclass(frozen=True)
 class AutoRngDecision:
     kind: AutoRngDecisionKind
     phase: AutoRngPhase
