@@ -525,6 +525,13 @@ class PokeFinderTableWidget(QTableWidget):
 
 
 class MainWindow(QMainWindow):
+    autoCaptureFrameChanged = Signal(object)
+    autoCaptureProgressChanged = Signal(int, int)
+    autoSeedCaptured = Signal(object)
+    autoScriptStarted = Signal(str)
+    autoScriptFinished = Signal(object)
+    autoScriptFailed = Signal(str)
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("auto_bdsp_rng")
@@ -562,12 +569,21 @@ class MainWindow(QMainWindow):
         self._advance_step = 1
         self._build_actions()
         self._build_ui()
+        self._connect_auto_rng_sync_signals()
         self._apply_theme()
         self._refresh_config_list()
         self._refresh_encounters()
         self._sync_seed64_from_state32()
         self._apply_language()
         self.statusBar().showMessage(self._text("ready"))
+
+    def _connect_auto_rng_sync_signals(self) -> None:
+        self.autoCaptureFrameChanged.connect(self._handle_auto_capture_frame)
+        self.autoCaptureProgressChanged.connect(self._handle_auto_capture_progress)
+        self.autoSeedCaptured.connect(self._handle_auto_seed_captured)
+        self.autoScriptStarted.connect(self.easycon_tab.begin_external_bridge_script)
+        self.autoScriptFinished.connect(self.easycon_tab.finish_external_bridge_script)
+        self.autoScriptFailed.connect(self.easycon_tab.fail_external_bridge_script)
 
     def _build_actions(self) -> None:
         generate = QAction("Generate", self)
@@ -2119,6 +2135,92 @@ class MainWindow(QMainWindow):
         services = self._build_auto_rng_services(config)
         self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services))
 
+    def _handle_auto_capture_frame(self, frame: object) -> None:
+        self._display_frame(frame)
+
+    def _handle_auto_capture_progress(self, done: int, total: int) -> None:
+        self.progress_value.setText(f"{done}/{total}")
+
+    def _handle_auto_seed_captured(self, seed_result: AutoRngSeedResult) -> None:
+        state = self._state32_from_auto_seed_result(seed_result)
+        for box, text in zip(self.seed32_inputs, state.format_words()):
+            box.setText(text)
+        self._sync_seed64_from_state32()
+        self._sync_bdsp_data_from_auto_rng(state.to_seed_pair64())
+
+    def _state32_from_auto_seed_result(self, seed_result: AutoRngSeedResult) -> SeedState32:
+        seed = seed_result.seed
+        if isinstance(seed, SeedState32):
+            return seed
+        if isinstance(seed, SeedPair64):
+            return seed.to_state32()
+        to_state32 = getattr(seed, "to_state32", None)
+        if callable(to_state32):
+            return to_state32()
+        raise TypeError("Auto RNG seed result must contain SeedPair64 or SeedState32")
+
+    def _sync_bdsp_data_from_auto_rng(self, seed: SeedPair64) -> None:
+        form = self.auto_rng_tab.target_form
+        form.set_version(self._profile_version)
+        record = form.selected_record()
+        state_filter, shiny_mode = form.current_filter()
+        self._apply_auto_target_to_bdsp_controls(record, state_filter, shiny_mode)
+        self._active_record = record
+        try:
+            states = generate_static_candidates(
+                StaticSearchCriteria(
+                    seed=seed,
+                    profile=self._current_profile(),
+                    record=record,
+                    state_filter=state_filter,
+                    initial_advances=0,
+                    max_advances=self.auto_rng_tab.max_advances.value(),
+                    offset=0,
+                    lead=Lead.NONE,
+                    shiny_mode=shiny_mode,
+                )
+            )
+        except Exception as exc:
+            self._show_error("Generation failed", exc)
+            return
+        self._states = states
+        self._populate_table(states)
+        self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
+
+    def _apply_auto_target_to_bdsp_controls(self, record: StaticEncounterRecord, state_filter: StateFilter, shiny_mode: str) -> None:
+        category_index = self.category_combo.findData(record.category.value)
+        if category_index >= 0 and self.category_combo.currentIndex() != category_index:
+            self.category_combo.setCurrentIndex(category_index)
+        for index in range(self.encounter_combo.count()):
+            if getattr(self.encounter_combo.itemData(index), "description", None) == record.description:
+                self.encounter_combo.setCurrentIndex(index)
+                break
+        self.level_display.setText(str(record.template.level))
+        self.iv_count_display.setText(str(record.template.iv_count))
+        ability_text = {0: "0", 1: "1", 2: "隐藏", 255: "0/1"}.get(record.template.ability, "任意")
+        ability_index = self.template_ability_display.findText(ability_text)
+        self.template_ability_display.setCurrentIndex(max(0, ability_index))
+        self.template_shiny_display.setCurrentText("锁闪" if record.template.shiny == Shiny.NEVER else "随机")
+        for spin, value in zip(self.iv_min, state_filter.iv_min):
+            spin.setText(str(value))
+        for spin, value in zip(self.iv_max, state_filter.iv_max):
+            spin.setText(str(value))
+        self.ability_filter.setCurrentIndex(max(0, self.ability_filter.findData(state_filter.ability)))
+        self.gender_filter.setCurrentIndex(max(0, self.gender_filter.findData(state_filter.gender)))
+        self.height_min.setText(str(state_filter.height_min))
+        self.height_max.setText(str(state_filter.height_max))
+        self.weight_min.setText(str(state_filter.weight_min))
+        self.weight_max.setText(str(state_filter.weight_max))
+        self.shiny_filter.setCurrentIndex(max(0, self.shiny_filter.findData(shiny_mode)))
+        self.skip_filter.setChecked(state_filter.skip)
+        nature_index = -1
+        if state_filter.natures and not all(state_filter.natures):
+            try:
+                nature_index = next(index for index, enabled in enumerate(state_filter.natures) if enabled)
+            except StopIteration:
+                nature_index = -1
+        self.nature_combo.setCurrentIndex(max(0, self.nature_combo.findData(nature_index)))
+
     def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
         tracking_config = self._config_from_form()
         self.auto_rng_tab.target_form.set_version(self._profile_version)
@@ -2165,9 +2267,18 @@ class MainWindow(QMainWindow):
 
         def capture_seed_service() -> AutoRngSeedResult:
             self._capture_cancel.clear()
+
+            def store_frame(frame: object) -> None:
+                self.autoCaptureFrameChanged.emit(frame)
+
+            def store_progress(done: int, total: int) -> None:
+                self.autoCaptureProgressChanged.emit(done, total)
+
             observation = capture_player_blinks(
                 tracking_config.capture,
                 should_stop=self._capture_cancel.is_set,
+                frame_callback=store_frame,
+                progress_callback=store_progress,
                 show_window=False,
             )
             result = recover_seed_from_observation(observation, npc=tracking_config.npc)
@@ -2175,18 +2286,29 @@ class MainWindow(QMainWindow):
             elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
             if elapsed_advances:
                 result = replace(result, state=advance_seed_state(result.state, elapsed_advances).state)
-            return AutoRngSeedResult(
+            seed_result = AutoRngSeedResult(
                 seed=result.state,
                 current_advances=0,
                 npc=tracking_config.npc,
                 seed_text=" ".join(result.state.format_seed64_pair()),
             )
+            self.autoSeedCaptured.emit(seed_result)
+            return seed_result
 
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             self._capture_cancel.clear()
+
+            def store_frame(frame: object) -> None:
+                self.autoCaptureFrameChanged.emit(frame)
+
+            def store_progress(done: int, total: int) -> None:
+                self.autoCaptureProgressChanged.emit(done, total)
+
             observation = capture_player_blinks(
                 self._reidentify_capture_config(tracking_config.capture),
                 should_stop=self._capture_cancel.is_set,
+                frame_callback=store_frame,
+                progress_callback=store_progress,
                 show_window=False,
             )
             result = self._reidentify_from_observation(
@@ -2196,12 +2318,14 @@ class MainWindow(QMainWindow):
                 search_min=0,
                 search_max=max(100_000, config.max_advances, search_criteria.max_advances),
             )
-            return AutoRngSeedResult(
+            reidentified = AutoRngSeedResult(
                 seed=result.state,
                 current_advances=result.advances,
                 npc=tracking_config.npc,
                 seed_text=" ".join(result.state.format_seed64_pair()),
             )
+            self.autoSeedCaptured.emit(reidentified)
+            return reidentified
 
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
             candidates = generate_static_candidates(replace(search_criteria, seed=seed_pair_from_result(seed_result)))
@@ -2215,7 +2339,14 @@ class MainWindow(QMainWindow):
         def run_script_text_service(script_text: str, name: str) -> object:
             if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
                 raise RuntimeError("请先连接伊机控 Bridge")
-            return self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+            self.autoScriptStarted.emit(name)
+            try:
+                result = self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+            except Exception as exc:
+                self.autoScriptFailed.emit(str(exc))
+                raise
+            self.autoScriptFinished.emit(result)
+            return result
 
         def stop_current_script_service() -> None:
             self._capture_cancel.set()

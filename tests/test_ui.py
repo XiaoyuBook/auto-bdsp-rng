@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGri
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
-from auto_bdsp_rng.automation.easycon import EasyConStatus
+from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.gen8_static import State8
 from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui import MainWindow
@@ -453,6 +454,26 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
+def test_auto_rng_target_form_hides_iv_calculator_and_stats_toggle(app):
+    panel = AutoRngPanel()
+
+    assert panel.target_form.iv_calculator_button.isHidden()
+    assert panel.target_form.show_stats_check.isHidden()
+
+
+def test_auto_rng_stop_button_requests_runner_stop_immediately(app):
+    panel = AutoRngPanel()
+    stops: list[str] = []
+    emissions: list[str] = []
+    panel.stopRequested.connect(lambda: emissions.append("emitted"))
+    panel._runner_worker = SimpleNamespace(stop=lambda: stops.append("stopped"))
+
+    panel.stop_button.click()
+
+    assert stops == ["stopped"]
+    assert emissions == ["emitted"]
+
+
 def test_auto_rng_locked_target_view_shows_single_target_details(app):
     panel = AutoRngPanel()
     state = State8(
@@ -699,6 +720,54 @@ def test_main_window_auto_rng_capture_service_uses_project_xs(app, tmp_path, mon
     assert result.seed_text == "1111111122222222 3333333344444444"
 
 
+def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
+    observation = SimpleNamespace(offset_time=100.0)
+    displayed_frames: list[object] = []
+    generated = []
+    target_form = window.auto_rng_tab.target_form
+    target_form.iv_min[0].setValue(31)
+    target_form.iv_max[0].setValue(31)
+    target_form.height_min.setValue(0)
+    target_form.height_max.setValue(0)
+
+    def fake_capture(_config, **kwargs):
+        kwargs["progress_callback"](3, 40)
+        kwargs["frame_callback"]("frame-1")
+        return observation
+
+    def fake_generate(criteria):
+        generated.append(criteria)
+        return []
+
+    monkeypatch.setattr(window, "_display_frame", lambda frame: displayed_frames.append(frame))
+    monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 100.0)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(
+        main_window_module,
+        "recover_seed_from_observation",
+        lambda actual_observation, npc: SimpleNamespace(state=seed_state, advances=0),
+    )
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", fake_generate)
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, max_advances=9))
+
+    result = services.capture_seed()
+    QApplication.processEvents()
+
+    assert result.seed == seed_state
+    assert displayed_frames == ["frame-1"]
+    assert window.progress_value.text() == "3/40"
+    assert [box.text() for box in window.seed32_inputs] == ["11111111", "22222222", "33333333", "44444444"]
+    assert [box.text() for box in window.bdsp_seed64_inputs] == ["1111111122222222", "3333333344444444"]
+    assert window.iv_min[0].text() == "31"
+    assert window.iv_max[0].text() == "31"
+    assert window.height_max.text() == "0"
+    assert len(generated) >= 1
+    assert generated[-1].seed == seed_state.to_seed_pair64()
+    assert generated[-1].state_filter.iv_min[0] == 31
+
+
 def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
@@ -741,6 +810,36 @@ def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monk
 
     assert services.run_script_text("A 100", "hit.txt") == "ok"
     assert calls == [("A 100", "hit.txt")]
+
+
+def test_main_window_auto_rng_run_script_syncs_easycon_status_and_output(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    started = datetime(2026, 5, 8, 12, 0, 0)
+    ended = datetime(2026, 5, 8, 12, 0, 1)
+
+    class FakeBackend:
+        def run_script_text(self, script_text: str, name: str) -> EasyConRunResult:
+            return EasyConRunResult(
+                status=EasyConStatus.COMPLETED,
+                exit_code=0,
+                started_at=started,
+                ended_at=ended,
+                script_path=tmp_path / name,
+                port="COM1",
+                stdout="done\n",
+            )
+
+    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    services.run_script_text("A 100", "hit.txt")
+    QApplication.processEvents()
+
+    assert window.easycon_tab.task_state_text == "已完成"
+    assert "自动流程运行脚本: hit.txt" in window.easycon_tab.log_view.toPlainText()
+    assert "done" in window.easycon_tab.log_view.toPlainText()
+    assert window.easycon_tab.easycon_status.currentMessage() == "已完成，连接保持"
 
 
 def test_main_window_applies_selected_roi(app, monkeypatch):

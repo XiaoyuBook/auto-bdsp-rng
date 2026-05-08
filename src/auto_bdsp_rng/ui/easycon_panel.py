@@ -1340,6 +1340,55 @@ class EasyConPanel(QWidget):
         self._append_log("warn", "已请求停止当前 Bridge 任务，等待脚本退出")
         self._update_status_labels()
 
+    def begin_external_bridge_script(self, name: str) -> None:
+        started_at = datetime.now()
+        self.stop_requested = False
+        self.current_run_stdout = []
+        self.current_run_stderr = []
+        self.current_run_started_at = started_at
+        self.current_run_script_path = Path(name)
+        self.current_run_port = self.port_combo.currentText()
+        self.run_seconds = 0
+        self.elapsed_label.setText("00:00:00")
+        self.run_timer.start()
+        self.run_button.setText("停止脚本")
+        self.run_button.setEnabled(True)
+        self.bridge_status = EasyConStatus.RUNNING
+        self.task_state_text = "执行中"
+        self._append_log("info", f"自动流程运行脚本: {name}")
+        self._update_bridge_controls()
+
+    def finish_external_bridge_script(self, result: object) -> None:
+        stdout = getattr(result, "stdout", "")
+        stderr = getattr(result, "stderr", "")
+        if stdout:
+            self._append_log("stdout", str(stdout).rstrip())
+        if stderr:
+            self._append_log("stderr", str(stderr).rstrip())
+        status = (
+            "已中止"
+            if self.stop_requested or getattr(result, "exit_code", None) == 130
+            else "已完成，连接保持"
+            if getattr(result, "status", None) == EasyConStatus.COMPLETED
+            else "失败"
+        )
+        self.stop_requested = False
+        self.bridge_status = EasyConStatus.BRIDGE_CONNECTED if status.startswith("已完成") else EasyConStatus.FAILED
+        self._finish_run(
+            status,
+            exit_code=getattr(result, "exit_code", None),
+            started_at=getattr(result, "started_at", None),
+            ended_at=getattr(result, "ended_at", None),
+            script_path=getattr(result, "script_path", None),
+            port=getattr(result, "port", None),
+        )
+
+    def fail_external_bridge_script(self, error: str) -> None:
+        self.stop_requested = False
+        self.bridge_status = EasyConStatus.FAILED
+        self._append_log("error", f"自动流程脚本失败: {error}")
+        self._finish_run("失败", exit_code=1)
+
     def _read_stdout(self) -> None:
         if self.process is None:
             return

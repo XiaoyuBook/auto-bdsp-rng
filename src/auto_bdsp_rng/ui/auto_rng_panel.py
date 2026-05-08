@@ -177,7 +177,7 @@ class AutoRngPanel(QWidget):
         self.start_button.setMinimumWidth(68)
         self.stop_button.setMinimumWidth(68)
         self.start_button.clicked.connect(self._start_clicked)
-        self.stop_button.clicked.connect(self.stopRequested.emit)
+        self.stop_button.clicked.connect(self._stop_clicked)
         row.addWidget(QLabel("运行模式"))
         row.addWidget(self.mode_combo)
         row.addWidget(QLabel("次数"))
@@ -293,7 +293,8 @@ class AutoRngPanel(QWidget):
         group.setMaximumHeight(390)
         layout = QVBoxLayout(group)
         self.target_form = StaticTargetForm(self)
-        self.target_form.iv_calculator_button.clicked.connect(self.ivCalculatorRequested.emit)
+        self.target_form.show_stats_check.hide()
+        self.target_form.iv_calculator_button.hide()
         layout.addWidget(self.target_form)
         self.target_form_group = group
         return group
@@ -391,6 +392,11 @@ class AutoRngPanel(QWidget):
             return
         self.startRequested.emit(config)
 
+    def _stop_clicked(self) -> None:
+        if self._runner_worker is not None:
+            self._runner_worker.stop()
+        self.stopRequested.emit()
+
     def build_config(self) -> AutoRngConfig:
         return AutoRngConfig(
             script_dir=self.script_dir,
@@ -420,7 +426,6 @@ class AutoRngPanel(QWidget):
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        self.stopRequested.connect(worker.stop)
         self._runner_thread = thread
         self._runner_worker = worker
         self.start_button.setEnabled(False)
