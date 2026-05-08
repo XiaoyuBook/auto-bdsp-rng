@@ -43,24 +43,22 @@ class LockedTargetView(QGroupBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("锁定目标", parent)
         self.values: dict[str, QLabel] = {}
-        self.setMaximumHeight(156)
+        self.setMaximumHeight(82)
         layout = QGridLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
-        layout.setHorizontalSpacing(14)
-        layout.setVerticalSpacing(8)
+        layout.setHorizontalSpacing(18)
+        layout.setVerticalSpacing(6)
         fields = (
-            ("Adv", "Adv"),
-            ("EC", "EC"),
+            ("状态", "Status"),
             ("PID", "PID"),
-            ("Shiny", "Shiny"),
+            ("异色", "Shiny"),
             ("性格", "Nature"),
             ("特性", "Ability"),
             ("性别", "Gender"),
             ("个性", "Characteristic"),
             ("IVs", "IVs"),
-            ("H/W", "Height / Weight"),
-            ("raw/trigger/delay", "raw / trigger / delay"),
-            ("cur/rem/final", "current / remaining / final"),
+            ("身高", "Height"),
+            ("体重", "Weight"),
         )
         for index, (label_text, key) in enumerate(fields):
             label = QLabel(label_text)
@@ -68,17 +66,16 @@ class LockedTargetView(QGroupBox):
             value = QLabel("-")
             value.setObjectName("Badge")
             value.setWordWrap(False)
-            value.setMinimumWidth(68)
+            value.setMinimumWidth(54)
             self.values[key] = value
-            row = index // 4
-            column = (index % 4) * 2
-            layout.addWidget(label, row, column)
-            layout.addWidget(value, row, column + 1)
+            layout.addWidget(label, 0, index)
+            layout.addWidget(value, 1, index)
+            layout.setColumnStretch(index, 1)
         self.clear()
 
     def clear(self, status: str = "未锁定") -> None:
         for key, label in self.values.items():
-            label.setText(status if key == "Adv" else "-")
+            label.setText(status if key == "Status" else "-")
 
     def apply_progress(self, progress: AutoRngProgress) -> None:
         target = progress.locked_target
@@ -86,19 +83,9 @@ class LockedTargetView(QGroupBox):
             self.clear()
             return
         state = target.state
-        raw = _display_value(progress.raw_target_advances or target.raw_target_advances)
-        trigger = _display_value(progress.trigger_advances)
-        delay = _display_value(progress.fixed_delay)
-        current = _display_value(progress.current_advances)
-        remaining = _display_value(progress.remaining_to_trigger)
-        final = _display_value(progress.final_flash_frames)
-        self.values["raw / trigger / delay"].setText(f"{raw} / {trigger} / {delay}")
-        self.values["current / remaining / final"].setText(f"{current} / {remaining} / {final}")
+        self.values["Status"].setText("已锁定")
         if state is None:
-            self.values["Adv"].setText(str(target.raw_target_advances))
             return
-        self.values["Adv"].setText(str(getattr(state, "advances", target.raw_target_advances)))
-        self.values["EC"].setText(_hex32(getattr(state, "ec", None)))
         self.values["PID"].setText(_hex32(getattr(state, "pid", None)))
         self.values["Shiny"].setText(_shiny_text(getattr(state, "shiny", None)))
         self.values["Nature"].setText(_nature_text(getattr(state, "nature", None)))
@@ -106,7 +93,8 @@ class LockedTargetView(QGroupBox):
         self.values["Gender"].setText(_gender_text(getattr(state, "gender", None)))
         ivs = getattr(state, "ivs", None)
         self.values["IVs"].setText(_ivs_text(ivs))
-        self.values["Height / Weight"].setText(f"{_display_value(getattr(state, 'height', None))} / {_display_value(getattr(state, 'weight', None))}")
+        self.values["Height"].setText(_display_value(getattr(state, "height", None)))
+        self.values["Weight"].setText(_display_value(getattr(state, "weight", None)))
         self.values["Characteristic"].setText(_characteristic_text(state))
 
 
@@ -273,12 +261,12 @@ class AutoRngPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         top = QWidget()
-        top_layout = QHBoxLayout(top)
+        top_layout = QVBoxLayout(top)
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(8)
-        top_layout.addWidget(self._build_summary_group(), 2)
+        top_layout.addWidget(self._build_summary_group())
         self.locked_target_view = LockedTargetView()
-        top_layout.addWidget(self.locked_target_view, 3)
+        top_layout.addWidget(self.locked_target_view)
         layout.addWidget(top)
         layout.addWidget(self._build_target_form_group())
         layout.addWidget(self._build_candidate_history_group(), 1)
@@ -286,30 +274,29 @@ class AutoRngPanel(QWidget):
 
     def _build_summary_group(self) -> QGroupBox:
         group = QGroupBox("运行摘要")
-        group.setMaximumHeight(156)
-        group.setMaximumWidth(320)
+        group.setMaximumHeight(96)
         grid = QGridLayout(group)
         grid.setContentsMargins(12, 10, 12, 10)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(7)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(6)
         self.summary_group = group
         fields = (
             ("当前循环", "summary_loop"),
             ("当前阶段", "summary_phase"),
-            ("Seed", "summary_seed"),
             ("原始目标帧", "summary_raw"),
             ("delay", "summary_delay"),
-            ("触发帧", "summary_trigger"),
             ("当前帧", "summary_current"),
-            ("剩余", "summary_remaining"),
             ("最终闪帧", "summary_flash"),
         )
-        for row, (label_text, attr) in enumerate(fields):
+        for index, (label_text, attr) in enumerate(fields):
             label = QLabel("-")
             label.setObjectName("Badge")
             setattr(self, attr, label)
-            grid.addWidget(QLabel(label_text), row // 2, (row % 2) * 2)
-            grid.addWidget(label, row // 2, (row % 2) * 2 + 1)
+            row = index // 3
+            column = (index % 3) * 2
+            grid.addWidget(QLabel(label_text), row, column)
+            grid.addWidget(label, row, column + 1)
+            grid.setColumnStretch(column + 1, 1)
         return group
 
     def _build_target_form_group(self) -> QGroupBox:
@@ -380,12 +367,9 @@ class AutoRngPanel(QWidget):
         self.status_badge.setText(phase_text)
         self.summary_phase.setText(phase_text)
         self.summary_loop.setText(_display_value(progress.loop_index))
-        self.summary_seed.setText(progress.seed_text or "-")
         self.summary_raw.setText(_display_value(progress.raw_target_advances))
         self.summary_delay.setText(_display_value(progress.fixed_delay))
-        self.summary_trigger.setText(_display_value(progress.trigger_advances))
         self.summary_current.setText(_display_value(progress.current_advances))
-        self.summary_remaining.setText(_display_value(progress.remaining_to_trigger))
         self.summary_flash.setText(_display_value(progress.final_flash_frames))
         self.locked_target_view.apply_progress(progress)
         if progress.log_message:

@@ -273,3 +273,23 @@
 | layout reflow targeted tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_summary_uses_chinese_labels or compact_toolbar or locked_target_view_shows or editable_target_form"` | all pass | 4 passed | pass |
 | related auto RNG tests after reflow | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py` | all pass | 47 passed | pass |
 | full test suite after reflow | `.venv\Scripts\python.exe -m pytest` | all pass | 178 passed | pass |
+
+### Locked Target Field Simplification
+- **Status:** complete
+- Actions taken:
+  - 删除锁定目标里的 `Adv`、`EC`、`目标/触发/delay`、`当前/剩余/闪帧` 展示项。
+  - `锁定目标` 改为两行矩阵：第一行字段名，第二行对应数据；保留状态、PID、异色、性格、特性、性别、个性、IVs、身高、体重。
+  - 将 `H/W` 拆成中文 `身高` 与 `体重` 两列。
+  - `运行摘要` 改为平铺在 `锁定目标` 上方，并移除 Seed、触发帧、剩余字段。
+  - 将目标精灵设置里的 `设置` 分组收窄，减少约 150px 宽度占用。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `src/auto_bdsp_rng/ui/static_target_form.py`
+  - `tests/test_ui.py`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| UI tests after locked target simplification | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -q` | all pass | 27 passed | pass |
+| related auto RNG tests after locked target simplification | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py -q` | all pass | 42 passed | pass |
+| full test suite after locked target simplification | `.venv\Scripts\python.exe -m pytest -q` | all pass | 178 passed | pass |

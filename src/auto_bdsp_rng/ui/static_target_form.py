@@ -131,6 +131,8 @@ class StaticTargetForm(QWidget):
 
         settings = QGroupBox("设置")
         settings.setMaximumHeight(380)
+        settings.setMaximumWidth(260)
+        self.settings_group = settings
         settings_layout = QGridLayout(settings)
         settings_layout.setVerticalSpacing(8)
         self.category_combo = QComboBox()
@@ -163,10 +165,10 @@ class StaticTargetForm(QWidget):
         )
         for row, (label, widget) in enumerate(rows):
             widget.setFixedHeight(32)
-            widget.setFixedWidth(210)
+            widget.setFixedWidth(160)
             settings_layout.addWidget(QLabel(label), row, 0)
             settings_layout.addWidget(widget, row, 1)
-        root.addWidget(settings, 1)
+        root.addWidget(settings)
 
         filters = QGroupBox("筛选项")
         filters.setMaximumHeight(380)
