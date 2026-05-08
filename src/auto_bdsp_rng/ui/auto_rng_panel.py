@@ -104,7 +104,6 @@ class AutoRngWorker(QObject):
         super().__init__()
         self.runner = runner
         setattr(self.runner, "progress_callback", self.progressChanged.emit)
-        setattr(self.runner, "log_callback", self.logEmitted.emit)
 
     @Slot()
     def run(self) -> None:

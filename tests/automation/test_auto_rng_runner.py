@@ -117,7 +117,7 @@ def test_runner_clears_locked_target_when_final_calibrate_abandons_target(tmp_pa
     advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
     hit_script.write_text("_闪帧 = 填入这里\n", encoding="utf-8")
     services = AutoRngServices(
-        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=600, npc=0),
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=875, npc=0),
         search_candidates=lambda _seed: [FakeState(1000)],
         reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=875, npc=0),
         run_script_text=lambda _text, _name: None,
@@ -266,10 +266,11 @@ def test_runner_final_calibrate_runs_hit_script_with_live_flash_frames(tmp_path)
     advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
     hit_script.write_text("_闪帧 = 填入这里\n", encoding="utf-8")
     scripts: list[tuple[str, str]] = []
+    calls: list[str] = []
     services = AutoRngServices(
         capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
         search_candidates=lambda _seed: [FakeState(1300)],
-        reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+        reidentify=lambda _seed: calls.append("reidentify") or AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
         run_script_text=lambda text, name: scripts.append((name, text)),
         monotonic=lambda: 10.0,
     )
@@ -289,8 +290,49 @@ def test_runner_final_calibrate_runs_hit_script_with_live_flash_frames(tmp_path)
     runner.run(max_steps=6)
 
     assert scripts == [("BDSP测种.txt", "A 100\n"), ("谢米.txt", "_闪帧 = 100\n")]
+    assert calls == []
     assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
     assert runner.progress.final_flash_frames == 100
+
+
+def test_runner_does_not_reidentify_again_after_entering_final_calibrate(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "谢米.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 填入这里\n", encoding="utf-8")
+    calls: list[str] = []
+    scripts: list[tuple[str, str]] = []
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+        search_candidates=lambda _seed: [FakeState(1000)],
+        reidentify=lambda _seed: calls.append("reidentify") or AutoRngSeedResult(seed="seed-1", current_advances=600, npc=0),
+        run_script_text=lambda text, name: scripts.append((name, text)),
+        monotonic=lambda: 10.0,
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=100,
+            max_wait_frames=300,
+            min_final_flash_frames=5,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=9)
+
+    assert calls == ["reidentify"]
+    assert scripts == [
+        ("BDSP测种.txt", "A 100\n"),
+        ("bdsp过帧.txt", "_目标帧数 = 900\n"),
+        ("谢米.txt", "_闪帧 = 300\n"),
+    ]
+    assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
 
 
 def test_runner_single_mode_completes_after_hit_script(tmp_path):

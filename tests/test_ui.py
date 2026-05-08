@@ -585,7 +585,8 @@ def test_auto_rng_worker_emits_progress_and_finished(app):
 
         def run(self) -> AutoRngProgress:
             self.progress_callback(progress)
-            self.log_callback("完成")
+            if self.log_callback is not None:
+                self.log_callback("完成")
             return progress
 
         def stop(self) -> None:
@@ -604,7 +605,7 @@ def test_auto_rng_worker_emits_progress_and_finished(app):
     worker.stop()
 
     assert progress_events == [progress]
-    assert logs == ["完成"]
+    assert logs == []
     assert finished == [progress]
     assert runner.stopped is True
 

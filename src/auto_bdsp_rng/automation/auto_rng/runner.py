@@ -300,16 +300,16 @@ class AutoRngRunner:
         )
 
     def _final_calibrate(self) -> None:
-        self._seed_result = self.services.reidentify(self._require_seed())
+        seed = self._require_seed()
         target = self._require_target()
         ref_time = self.services.monotonic()
         decision = finalize_flash_frames(
             target,
             fixed_delay=self.config.fixed_delay,
-            current_advances_at_ref=self._seed_result.current_advances,
+            current_advances_at_ref=seed.current_advances,
             ref_time=ref_time,
             now_monotonic=self.services.monotonic(),
-            npc=self._seed_result.npc,
+            npc=seed.npc,
             min_final_flash_frames=self.config.min_final_flash_frames,
         )
         self._set_progress_from_decision(decision)
