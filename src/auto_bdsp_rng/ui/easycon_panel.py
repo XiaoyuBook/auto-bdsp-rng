@@ -5,10 +5,11 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -19,6 +20,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
+    QMenuBar,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -38,7 +41,6 @@ from auto_bdsp_rng.automation.easycon import (
     EasyConConfig,
     EasyConInstallation,
     EasyConStatus,
-    apply_parameter_values,
     classify_cli_failure,
     cli_connection_notice,
     detect_newline_style,
@@ -47,7 +49,6 @@ from auto_bdsp_rng.automation.easycon import (
     generate_script_file,
     list_ports,
     load_config,
-    parse_script_parameters,
     prune_generated_scripts,
     save_config,
     scan_builtin_scripts,
@@ -58,33 +59,52 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = PROJECT_ROOT / "script"
 GENERATED_DIR = SCRIPT_DIR / ".generated"
 
-KEYBOARD_VPAD_BUTTONS = {
-    Qt.Key.Key_L: "A",
-    Qt.Key.Key_K: "B",
-    Qt.Key.Key_I: "X",
-    Qt.Key.Key_J: "Y",
-    Qt.Key.Key_G: "L",
-    Qt.Key.Key_T: "R",
-    Qt.Key.Key_F: "ZL",
-    Qt.Key.Key_R: "ZR",
-    Qt.Key.Key_Plus: "PLUS",
-    Qt.Key.Key_Equal: "PLUS",
-    Qt.Key.Key_Minus: "MINUS",
-    Qt.Key.Key_Z: "CAPTURE",
-    Qt.Key.Key_C: "HOME",
-    Qt.Key.Key_Q: "LCLICK",
-    Qt.Key.Key_E: "RCLICK",
+# ── 可配置按键映射 ──────────────────────────────────
+
+DEFAULT_KEY_MAPPING = {
+    "A": Qt.Key.Key_L, "B": Qt.Key.Key_K, "X": Qt.Key.Key_I, "Y": Qt.Key.Key_J,
+    "L": Qt.Key.Key_G, "R": Qt.Key.Key_T, "ZL": Qt.Key.Key_F, "ZR": Qt.Key.Key_R,
+    "Plus": Qt.Key.Key_Plus, "Minus": Qt.Key.Key_Minus,
+    "Capture": Qt.Key.Key_Z, "Home": Qt.Key.Key_C,
+    "LClick": Qt.Key.Key_Q, "RClick": Qt.Key.Key_E,
+    "Up": 0, "Down": 0, "Left": 0, "Right": 0,
+    "UpLeft": 0, "DownLeft": 0, "UpRight": 0, "DownRight": 0,
+    "LSUp": Qt.Key.Key_W, "LSDown": Qt.Key.Key_S, "LSLeft": Qt.Key.Key_A, "LSRight": Qt.Key.Key_D,
+    "RSUp": Qt.Key.Key_Up, "RSDown": Qt.Key.Key_Down, "RSLeft": Qt.Key.Key_Left, "RSRight": Qt.Key.Key_Right,
 }
-KEYBOARD_VPAD_DIRECTIONS = {
-    Qt.Key.Key_W: ("left", "Up"),
-    Qt.Key.Key_S: ("left", "Down"),
-    Qt.Key.Key_A: ("left", "Left"),
-    Qt.Key.Key_D: ("left", "Right"),
-    Qt.Key.Key_Up: ("right", "Up"),
-    Qt.Key.Key_Down: ("right", "Down"),
-    Qt.Key.Key_Left: ("right", "Left"),
-    Qt.Key.Key_Right: ("right", "Right"),
-}
+
+_KEY_TO_QT = {int(v): k for k, v in Qt.Key.__dict__.items() if isinstance(v, int) and not k.startswith("_")}
+
+def _qt_key_name(key: int) -> str:
+    if key == 0:
+        return ""
+    name = _KEY_TO_QT.get(key, "")
+    if name.startswith("Key_"):
+        name = name[4:]
+    return name
+
+def _resolve_vpad_button(key: int, mapping: dict[str, int]) -> tuple[str, str, str] | None:
+    """返回 (kind, side/direction) 或 None — kind 为 'button' 或 'stick'"""
+    # 先查方向按键 (stick)
+    stick_map = {
+        "LSUp": ("left", "Up"), "LSDown": ("left", "Down"),
+        "LSLeft": ("left", "Left"), "LSRight": ("left", "Right"),
+        "RSUp": ("right", "Up"), "RSDown": ("right", "Down"),
+        "RSLeft": ("right", "Left"), "RSRight": ("right", "Right"),
+        "Up": ("hat", "Up"), "Down": ("hat", "Down"),
+        "Left": ("hat", "Left"), "Right": ("hat", "Right"),
+        "UpLeft": ("hat", "UpLeft"), "DownLeft": ("hat", "DownLeft"),
+        "UpRight": ("hat", "UpRight"), "DownRight": ("hat", "DownRight"),
+    }
+    for name, stick_info in stick_map.items():
+        if mapping.get(name, 0) == key:
+            return ("stick", stick_info[0], stick_info[1])
+    # 再查普通按键
+    button_names = ["A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus", "Capture", "Home", "LClick", "RClick"]
+    for name in button_names:
+        if mapping.get(name, 0) == key:
+            return ("button", name, None)
+    return None
 
 
 class LineNumberArea(QWidget):
@@ -211,6 +231,153 @@ class BridgeScriptWorker(QObject):
         self.finished.emit(result)
 
 
+class KeyMappingDialog(QDialog):
+    """按键映射对话框 — 手柄背景图 + 可点击按键位置绑定"""
+
+    _IMG_W, _IMG_H = 786, 786
+
+    # 基于 786×786 手柄图片的像素分析精确定位
+    # 坐标通过 PIL 逐像素扫描手柄图确定 (x, y, w, h, name, label)
+    _BTN_POSITIONS: list[tuple[int, int, int, int, str, str]] = [
+        # 左肩 (图片 y=155-195 暗区)
+        (238, 155, 44, 30, "ZL", "ZL"), (258, 180, 44, 30, "L", "L"),
+        # 右肩
+        (504, 155, 44, 30, "ZR", "ZR"), (484, 180, 44, 30, "R", "R"),
+        # 功能区 (y=195-215 暗区横条上)
+        (330, 195, 38, 26, "Minus", "－"), (385, 198, 38, 26, "Capture", "□"),
+        (435, 198, 42, 26, "Home", "◎"), (478, 195, 38, 26, "Plus", "＋"),
+        # 左摇杆: 中心 (155, 248), 范围 r≈38
+        (155, 210, 42, 42, "LSUp", "LS↑"), (155, 286, 42, 42, "LSDown", "LS↓"),
+        (117, 248, 42, 42, "LSLeft", "LS←"), (193, 248, 42, 42, "LSRight", "LS→"),
+        (155, 248, 42, 42, "LClick", "🔘"),
+        # 十字键: 中心 ~(360, 315), 范围 r≈32
+        (360, 283, 36, 34, "Up", "↑"), (360, 347, 36, 34, "Down", "↓"),
+        (328, 315, 36, 34, "Left", "←"), (392, 315, 36, 34, "Right", "→"),
+        (328, 283, 36, 34, "UpLeft", "↖"), (392, 283, 36, 34, "UpRight", "↗"),
+        (328, 347, 36, 34, "DownLeft", "↙"), (392, 347, 36, 34, "DownRight", "↘"),
+        # 右摇杆: 中心 (555, 352), 范围 r≈40
+        (555, 314, 42, 42, "RSUp", "RS↑"), (555, 390, 42, 42, "RSDown", "RS↓"),
+        (517, 352, 42, 42, "RSLeft", "RS←"), (593, 352, 42, 42, "RSRight", "RS→"),
+        (555, 352, 42, 42, "RClick", "🔘"),
+        # ABXY: X(693,255) Y(642,300) A(743,305) B(695,350)
+        (675, 240, 36, 36, "X", "X"), (624, 285, 36, 36, "Y", "Y"),
+        (725, 290, 36, 36, "A", "A"), (677, 335, 36, 36, "B", "B"),
+    ]
+
+    def __init__(self, mapping: dict[str, int], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("按键设置")
+        self.setFixedSize(820, 660)
+        self.setStyleSheet("background: #f2f1ee;")
+        self._mapping = dict(mapping)
+        self._active_name: str | None = None
+        self._buttons: dict[str, QPushButton] = {}
+        self._build_ui()
+        self._load_mapping()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+
+        hint = QLabel("点击手柄上的按键位置，然后按下键盘按键进行绑定。按 Esc 可清除当前绑定。")
+        hint.setStyleSheet("font-size: 12px; padding: 2px 8px; color: #555;")
+        layout.addWidget(hint)
+
+        # 手柄图片背景面板
+        bg_path = str(Path(__file__).resolve().parent / "controller_bg.png")
+        panel = QLabel()
+        panel.setFixedSize(self._IMG_W, self._IMG_H)
+        panel.setPixmap(QPixmap(bg_path).scaled(
+            self._IMG_W, self._IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        ))
+        panel.setScaledContents(False)
+
+        btn_style = (
+            "QPushButton {"
+            "  background: rgba(60,60,60,160); color: #ddd;"
+            "  border: 1px solid rgba(150,150,150,120); border-radius: 4px;"
+            "  font-size: 10px; font-weight: 700;"
+            "}"
+            " QPushButton:checked { background: #D7C17C; color: #1a1a1a; border-color: #8a7a4a; }"
+            " QPushButton:hover { background: rgba(120,120,120,180); }"
+        )
+
+        for x, y, w, h, name, label in self._BTN_POSITIONS:
+            btn = QPushButton(label, panel)
+            btn.setCheckable(True)
+            btn.setGeometry(x, y, w, h)
+            btn.setStyleSheet(btn_style)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setProperty("label", label)
+            btn.clicked.connect(lambda checked, n=name: self._select_button(n))
+            self._buttons[name] = btn
+
+        layout.addWidget(panel, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # 选中按键的信息提示
+        self._active_label = QLabel("")
+        self._active_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #8a7a4a; padding: 2px;")
+        self._active_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._active_label)
+
+        # 确定/取消
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        ok_btn = QPushButton("确定")
+        ok_btn.setFixedSize(140, 38)
+        ok_btn.setStyleSheet(
+            "QPushButton { background: #23936b; color: white; border: 0; border-radius: 3px;"
+            " font-size: 14px; font-weight: 700; }"
+            " QPushButton:hover { background: #1e7d5a; }"
+        )
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setFixedSize(140, 38)
+        cancel_btn.setStyleSheet(
+            "QPushButton { background: #fff; border: 1px solid #aaa; border-radius: 3px; font-size: 14px; }"
+            " QPushButton:hover { background: #e8e6e1; }"
+        )
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+    def _select_button(self, name: str) -> None:
+        self._active_name = name
+        for n, btn in self._buttons.items():
+            btn.setChecked(n == name)
+        label = self._buttons[name].property("label") or name
+        key = self._mapping.get(name, 0)
+        current = _qt_key_name(key) or "未绑定"
+        self._active_label.setText(f"当前选中: {label}  →  已绑定: {current}  (请按键盘按键)")
+
+    def _load_mapping(self) -> None:
+        for name, key in self._mapping.items():
+            btn = self._buttons.get(name)
+            if btn is not None:
+                key_name = _qt_key_name(key)
+                btn.setText(key_name if key_name else btn.property("label") or name)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._active_name is None:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            key = 0
+        self._mapping[self._active_name] = key
+        btn = self._buttons[self._active_name]
+        key_name = _qt_key_name(key)
+        btn.setText(key_name if key_name else btn.property("label") or self._active_name)
+        btn.setChecked(False)
+        self._active_label.setText("")
+        self._active_name = None
+
+    def get_mapping(self) -> dict[str, int]:
+        return dict(self._mapping)
+
+
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
 
@@ -225,14 +392,11 @@ class EasyConPanel(QWidget):
         self.bridge_connecting = False
         self.current_script_path: Path | None = None
         self.current_script_name = "未命名脚本"
-        self.current_script_is_template = False
         self.current_script_newline = "\n"
-        self.template_script_text = ""
-        self.parameter_widgets: dict[str, QLineEdit | QSpinBox] = {}
-        self.parameter_defaults: dict[str, str] = {}
-        self.parameter_lines: dict[str, int] = {}
+        self._saved_editor_text = ""
         self.virtual_controller_enabled = False
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
+        self.key_mapping: dict[str, int] = dict(DEFAULT_KEY_MAPPING)
         self.process: QProcess | None = None
         self.current_run_started_at: datetime | None = None
         self.current_run_script_path: Path | None = None
@@ -248,116 +412,372 @@ class EasyConPanel(QWidget):
         self.bridge_log.connect(self._append_log)
 
         self._build_ui()
-        self._build_actions()
+        # Ctrl+S 快捷键
+        save_action = QAction("保存", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_script)
+        self.addAction(save_action)
         self._refresh_script_list()
         self.detect_easycon()
         self.refresh_ports()
         self._update_run_enabled()
 
+    # ── 浅色主题颜色常量 ──────────────────────────────────
+    CLR_BG = "#f2f1ee"
+    CLR_PANEL_BG = "#e8e6e1"
+    CLR_BORDER = "#c8c6c0"
+    CLR_TEXT = "#1a1a1a"
+    CLR_HINT = "#767676"
+    CLR_LOG_BG = "#282826"
+    CLR_LOG_TEXT = "#e7ece9"
+    CLR_RUN_BTN = "#23936b"
+    CLR_WHITE = "#ffffff"
+    CLR_TIMER_BG = "#1a1a1a"
+    CLR_TIMER_TEXT = "#ffffff"
+    CLR_STATUSBAR_BG = "#e8e6e1"
+
+    def _easycon_light_button(self, text: str, fixed_width: int = 0) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {self.CLR_WHITE};
+                border: 1px solid {self.CLR_BORDER};
+                border-radius: 3px;
+                padding: 4px 12px;
+                color: {self.CLR_TEXT};
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ background: #e8e6e1; }}
+            QPushButton:pressed {{ background: #d4d2cc; }}
+            """
+        )
+        if fixed_width:
+            btn.setFixedWidth(fixed_width)
+        return btn
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(0)
+        self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 12px; }}")
 
-        toolbar = QFrame()
-        toolbar.setObjectName("EasyConToolbar")
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(10, 8, 10, 8)
-        toolbar_layout.setSpacing(8)
-        self.script_name_label = QLabel("未命名脚本")
-        self.script_name_label.setObjectName("Badge")
-        self.template_mode_label = QLabel("普通脚本")
-        self.template_mode_label.setObjectName("Badge")
-        self.open_button = QPushButton("打开脚本")
-        self.open_button.clicked.connect(self.open_script_dialog)
-        self.save_generated_button = QPushButton("保存临时脚本")
-        self.save_generated_button.clicked.connect(self.save_generated_script)
-        self.save_original_button = QPushButton("保存到原文件")
-        self.save_original_button.clicked.connect(self.save_to_original_script)
-        self.detect_button = QPushButton("检测 EasyCon")
-        self.detect_button.clicked.connect(self.detect_easycon)
-        self.toolbar_connect_button = QPushButton("连接伊机控")
-        self.toolbar_connect_button.clicked.connect(self.toggle_bridge_connection)
-        self.run_button = QPushButton("运行脚本")
-        self.run_button.setObjectName("PrimaryButton")
-        self.run_button.clicked.connect(self.toggle_run)
-        self.elapsed_label = QLabel("00:00:00")
-        self.elapsed_label.setObjectName("Badge")
-        toolbar_layout.addWidget(QLabel("伊机控"))
-        toolbar_layout.addWidget(self.script_name_label, 1)
-        toolbar_layout.addWidget(self.template_mode_label)
-        toolbar_layout.addWidget(self.open_button)
-        toolbar_layout.addWidget(self.save_generated_button)
-        toolbar_layout.addWidget(self.save_original_button)
-        toolbar_layout.addWidget(self.detect_button)
-        toolbar_layout.addWidget(self.toolbar_connect_button)
-        toolbar_layout.addWidget(self.elapsed_label)
-        toolbar_layout.addWidget(self.run_button)
-        layout.addWidget(toolbar)
+        # 主内容区
+        content = QWidget()
+        content.setStyleSheet(f"background: {self.CLR_BG};")
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(6, 6, 6, 6)
+        content_layout.setSpacing(6)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_left_panel())
-        splitter.addWidget(self._build_editor_panel())
-        splitter.setSizes([430, 1000])
-        layout.addWidget(splitter, 1)
+        content_layout.addWidget(self._build_log_area(), 42)
+        content_layout.addWidget(self._build_editor_area(), 55)
+        content_layout.addWidget(self._build_right_buttons(), 0)
 
-        self.easycon_status = QStatusBar()
-        self.easycon_status.setSizeGripEnabled(False)
-        self.status_easycon_label = QLabel("EasyCon: 未检测")
-        self.status_controller_label = QLabel("单片机: 未检测")
-        self.status_capture_label = QLabel("采集卡: 不使用")
-        self.status_labels_label = QLabel("标签: 0")
-        self.status_backend_label = QLabel("后端: 常驻连接")
-        for label in (
-            self.status_easycon_label,
-            self.status_controller_label,
-            self.status_capture_label,
-            self.status_labels_label,
-            self.status_backend_label,
-        ):
-            label.setObjectName("Badge")
-            self.easycon_status.addPermanentWidget(label)
-        layout.addWidget(self.easycon_status)
+        layout.addWidget(content, 1)
 
-    def _build_actions(self) -> None:
-        save = QAction("Save generated script", self)
-        save.setShortcut("Ctrl+S")
-        save.triggered.connect(self.save_generated_script)
-        self.addAction(save)
+        # 底部三栏
+        layout.addWidget(self._build_bottom_panel())
 
-        open_action = QAction("Open EasyCon script", self)
+        # 状态栏
+        layout.addWidget(self._build_bottom_status())
+
+    # ── 菜单栏 ──────────────────────────────────────────
+
+    def _build_menu_bar(self) -> QMenuBar:
+        menubar = QMenuBar()
+        menubar.setStyleSheet(
+            f"""
+            QMenuBar {{ background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER}; padding: 2px 6px; }}
+            QMenuBar::item {{ padding: 3px 10px; color: {self.CLR_TEXT}; }}
+            QMenuBar::item:selected {{ background: {self.CLR_PANEL_BG}; }}
+            QMenu {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; }}
+            QMenu::item {{ padding: 4px 28px 4px 12px; }}
+            QMenu::item:selected {{ background: {self.CLR_PANEL_BG}; }}
+            """
+        )
+
+        file_menu = menubar.addMenu("文件")
+        new_action = QAction("新建", self)
+        new_action.setShortcut("Ctrl+N")
+        file_menu.addAction(new_action)
+
+        open_action = QAction("打开", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_script_dialog)
-        self.addAction(open_action)
+        file_menu.addAction(open_action)
 
-        run = QAction("Run EasyCon script", self)
-        run.setShortcut("F5")
-        run.triggered.connect(self.toggle_run)
-        self.addAction(run)
+        save_action = QAction("保存", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_script)
+        file_menu.addAction(save_action)
 
-    def _build_left_panel(self) -> QWidget:
+        file_menu.addSeparator()
+        exit_action = QAction("退出", self)
+        file_menu.addAction(exit_action)
+
+        script_menu = menubar.addMenu("脚本")
+        run_menu_action = QAction("运行", self)
+        run_menu_action.setShortcut("F5")
+        run_menu_action.triggered.connect(self.toggle_run)
+        script_menu.addAction(run_menu_action)
+
+        stop_action = QAction("停止", self)
+        stop_action.triggered.connect(lambda: self.stop_bridge_script() if self._is_bridge_mode() else None)
+        script_menu.addAction(stop_action)
+
+        compile_action = QAction("编译", self)
+        script_menu.addAction(compile_action)
+
+        format_action = QAction("格式化", self)
+        script_menu.addAction(format_action)
+
+        menubar.addMenu("搜图")
+        menubar.addMenu("设置")
+        menubar.addMenu("ESP32")
+        menubar.addMenu("画图")
+
+        help_menu = menubar.addMenu("帮助")
+        about_action = QAction("关于", self)
+        help_menu.addAction(about_action)
+
+        return menubar
+
+    # ── 左区：输出日志 + 计时 + 运行 ─────────────────────
+
+    def _build_log_area(self) -> QWidget:
+        area = QWidget()
+        area.setStyleSheet(f"background: {self.CLR_BG};")
+        layout = QVBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # 日志区标题
+        log_header = QLabel("输出")
+        log_header.setStyleSheet(
+            f"font-weight: 700; font-size: 12px; padding: 2px 4px; border: 0; background: {self.CLR_BG};"
+        )
+        layout.addWidget(log_header)
+
+        # 黑色日志面板
+        log_panel = QFrame()
+        log_panel.setStyleSheet(
+            f"QFrame {{ background: {self.CLR_LOG_BG}; border: 1px solid {self.CLR_BORDER}; border-radius: 0; }}"
+        )
+        log_panel_layout = QVBoxLayout(log_panel)
+        log_panel_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.log_view = QTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.log_view.setStyleSheet(
+            f"""
+            QTextEdit {{
+                background: {self.CLR_LOG_BG};
+                color: {self.CLR_LOG_TEXT};
+                border: 0;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                font-size: 11px;
+            }}
+            """
+        )
+        self.log_view.document().setMaximumBlockCount(self.config.keep_log_lines)
+        log_panel_layout.addWidget(self.log_view)
+        layout.addWidget(log_panel, 1)
+
+        # 计时 + 运行按钮（横向排列）
+        action_row = QWidget()
+        action_row.setStyleSheet(f"background: {self.CLR_BG};")
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 3, 0, 0)
+        action_layout.setSpacing(4)
+
+        self.elapsed_label = QLabel("00:00:00")
+        self.elapsed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.elapsed_label.setMinimumHeight(70)
+        self.elapsed_label.setStyleSheet(
+            f"""
+            QLabel {{
+                background: {self.CLR_TIMER_BG};
+                color: {self.CLR_TIMER_TEXT};
+                font-size: 28px;
+                font-weight: 700;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                border: 0;
+            }}
+            """
+        )
+        action_layout.addWidget(self.elapsed_label, 5)
+
+        self.run_button = QPushButton("运行脚本")
+        self.run_button.setMinimumHeight(70)
+        self.run_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.run_button.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {self.CLR_RUN_BTN};
+                color: white;
+                font-size: 16px;
+                font-weight: 700;
+                border: 0;
+                border-radius: 0;
+            }}
+            QPushButton:hover {{ background: #1e7d5a; }}
+            QPushButton:pressed {{ background: #186b4c; }}
+            QPushButton:disabled {{ background: #a0a0a0; }}
+            """
+        )
+        self.run_button.clicked.connect(self.toggle_run)
+        action_layout.addWidget(self.run_button, 5)
+
+        layout.addWidget(action_row)
+        return area
+
+    # ── 中区：脚本编辑器 ────────────────────────────────
+
+    def _build_editor_area(self) -> QWidget:
+        area = QWidget()
+        area.setStyleSheet(f"background: {self.CLR_BG};")
+        layout = QVBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # 编辑器标题行
+        editor_header = QWidget()
+        editor_header.setStyleSheet(f"background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER};")
+        editor_header_layout = QHBoxLayout(editor_header)
+        editor_header_layout.setContentsMargins(8, 3, 8, 3)
+        self.script_name_label = QLabel(" 未命名脚本")
+        self.script_name_label.setStyleSheet(f"font-size: 12px; color: {self.CLR_TEXT}; border: 0; background: transparent;")
+        editor_header_layout.addWidget(self.script_name_label)
+        editor_header_layout.addStretch()
+
+        layout.addWidget(editor_header)
+
+        # 编辑器本体（白色背景）
+        editor_frame = QFrame()
+        editor_frame.setStyleSheet(
+            f"QFrame {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; border-top: 0; }}"
+        )
+        editor_frame_layout = QVBoxLayout(editor_frame)
+        editor_frame_layout.setContentsMargins(0, 0, 0, 0)
+        self.editor = EasyConScriptEditor()
+        self.editor.fileDropped.connect(self.load_script)
+        self.editor.textChanged.connect(self._on_editor_changed)
+        self.editor.setStyleSheet(
+            f"""
+            QPlainTextEdit {{
+                background: {self.CLR_WHITE};
+                color: {self.CLR_TEXT};
+                border: 0;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                font-size: 13px;
+                selection-background-color: #c8e0d0;
+            }}
+            """
+        )
+        editor_frame_layout.addWidget(self.editor, 1)
+        layout.addWidget(editor_frame, 1)
+        return area
+
+    # ── 右区：操作按钮 ──────────────────────────────────
+
+    def _build_right_buttons(self) -> QWidget:
+        area = QWidget()
+        area.setFixedWidth(130)
+        area.setStyleSheet(f"background: {self.CLR_BG};")
+        layout = QVBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        btn_style = (
+            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" border-radius: 2px; padding: 6px 8px; font-size: 12px; }}"
+            f" QPushButton:hover {{ background: {self.CLR_PANEL_BG}; }}"
+        )
+
+        new_btn = QPushButton("新建")
+        new_btn.setStyleSheet(btn_style)
+        new_btn.clicked.connect(self.new_script)
+        layout.addWidget(new_btn)
+
+        self.open_button = QPushButton("打开")
+        self.open_button.setStyleSheet(btn_style)
+        self.open_button.clicked.connect(self.open_script_dialog)
+        layout.addWidget(self.open_button)
+
+        self.save_button = QPushButton("保存")
+        self.save_button.setStyleSheet(btn_style)
+        self.save_button.clicked.connect(self.save_script)
+        layout.addWidget(self.save_button)
+
+        layout.addStretch()
+        return area
+
+    # ── 底部三栏 ────────────────────────────────────────
+
+    def _build_bottom_panel(self) -> QWidget:
         panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 8, 0)
-        layout.setSpacing(8)
+        panel.setStyleSheet(f"background: {self.CLR_PANEL_BG}; border-top: 1px solid {self.CLR_BORDER};")
+        outer = QHBoxLayout(panel)
+        outer.setContentsMargins(6, 4, 6, 4)
+        outer.setSpacing(6)
 
-        script_group = QGroupBox("内置脚本")
-        script_layout = QVBoxLayout(script_group)
-        self.script_list = QListWidget()
-        self.script_list.itemDoubleClicked.connect(self._load_script_item)
-        script_layout.addWidget(self.script_list)
-        layout.addWidget(script_group, 1)
+        outer.addWidget(self._build_serial_column(), 50)
+        outer.addWidget(self._build_vpad_column(), 50)
+        return panel
 
-        config_group = QGroupBox("连接配置")
-        config_layout = QGridLayout(config_group)
+    def _build_serial_column(self) -> QWidget:
+        group = QGroupBox("串口连接")
+        group.setStyleSheet(
+            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
+            f" background: {self.CLR_PANEL_BG}; }}"
+            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
+        )
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(4)
+
+        btn_style = (
+            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" border-radius: 2px; padding: 4px 10px; font-size: 11px; }}"
+            f" QPushButton:hover {{ background: #e8e6e1; }}"
+        )
+        combo_style = (
+            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
+        )
+
+        self.connect_button = QPushButton("自动连接(推荐)")
+        self.connect_button.setStyleSheet(btn_style)
+        self.connect_button.clicked.connect(self.toggle_bridge_connection)
+        layout.addWidget(self.connect_button)
+
+        serial_row = QHBoxLayout()
+        self.port_combo = QComboBox()
+        self.port_combo.setEditable(True)
+        self.port_combo.setCurrentText("下拉选择串口")
+        self.port_combo.setStyleSheet(combo_style)
+        self.port_combo.currentIndexChanged.connect(self._port_changed)
+        serial_row.addWidget(self.port_combo, 1)
+
+        self.disconnect_button = QPushButton("手动连接")
+        self.disconnect_button.setStyleSheet(btn_style)
+        self.disconnect_button.clicked.connect(self.connect_bridge)
+        serial_row.addWidget(self.disconnect_button)
+        layout.addLayout(serial_row)
+
+        # 隐藏的后端配置（保留原有控件，用户可通过设置菜单访问）
+        self._hidden_config_widgets()
+        return group
+
+    def _hidden_config_widgets(self) -> None:
+        """创建隐藏的配置控件，保留原有业务逻辑所需的所有属性"""
         self.ezcon_path = QLineEdit(str(self.config.ezcon_path or ""))
-        self.ezcon_path.setPlaceholderText("请选择 ezcon.exe 或设置 EASYCON_ROOT")
-        self.browse_ezcon_button = QPushButton("选择")
-        self.browse_ezcon_button.clicked.connect(self.choose_ezcon)
+        self.ezcon_path.setVisible(False)
         self.bridge_path = QLineEdit(str(self.config.bridge_path or ""))
-        self.bridge_path.setPlaceholderText("请选择 EasyConBridge.exe")
-        self.browse_bridge_button = QPushButton("选择")
+        self.bridge_path.setVisible(False)
+        self.browse_ezcon_button = QPushButton()
+        self.browse_ezcon_button.clicked.connect(self.choose_ezcon)
+        self.browse_bridge_button = QPushButton()
         self.browse_bridge_button.clicked.connect(self.choose_bridge)
         self.version_label = QLabel("EasyCon: 未检测")
         self.backend_mode = QComboBox()
@@ -366,136 +786,129 @@ class EasyConPanel(QWidget):
         self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
         self.backend_label = QLabel("单片机: 未连接")
         self.connection_state_label = QLabel("连接: 未检测")
-        self.connection_state_label.setObjectName("Badge")
         self.task_state_label = QLabel("任务: 未检测")
-        self.task_state_label.setObjectName("Badge")
-        self.port_combo = QComboBox()
-        self.port_combo.currentIndexChanged.connect(self._port_changed)
         self.refresh_ports_button = QPushButton("刷新串口")
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
         self.auto_select_port_button = QPushButton("自动选择串口")
         self.auto_select_port_button.clicked.connect(self.auto_select_port)
-        self.connect_button = QPushButton("连接伊机控")
-        self.connect_button.clicked.connect(self.toggle_bridge_connection)
-        self.disconnect_button = QPushButton("断开连接")
-        self.disconnect_button.clicked.connect(self.disconnect_bridge)
-        self.cli_test_button = QPushButton("测试 CLI 运行")
-        self.cli_test_button.clicked.connect(self.run_cli_smoke_test)
         self.mock_check = QCheckBox("mock 模式")
         self.mock_check.setChecked(self.config.mock_enabled)
         self.mock_check.toggled.connect(self._save_config_from_ui)
-        config_layout.addWidget(QLabel("ezcon"), 0, 0)
-        config_layout.addWidget(self.ezcon_path, 0, 1)
-        config_layout.addWidget(self.browse_ezcon_button, 0, 2)
-        config_layout.addWidget(QLabel("Bridge"), 1, 0)
-        config_layout.addWidget(self.bridge_path, 1, 1)
-        config_layout.addWidget(self.browse_bridge_button, 1, 2)
-        config_layout.addWidget(self.version_label, 2, 0, 1, 3)
-        config_layout.addWidget(QLabel("后端"), 3, 0)
-        config_layout.addWidget(self.backend_mode, 3, 1, 1, 2)
-        config_layout.addWidget(self.backend_label, 4, 0, 1, 3)
-        config_layout.addWidget(QLabel("状态"), 5, 0)
-        config_layout.addWidget(self.connection_state_label, 5, 1)
-        config_layout.addWidget(self.task_state_label, 5, 2)
-        config_layout.addWidget(QLabel("串口"), 6, 0)
-        config_layout.addWidget(self.port_combo, 6, 1)
-        config_layout.addWidget(self.refresh_ports_button, 6, 2)
-        config_layout.addWidget(self.auto_select_port_button, 7, 1, 1, 2)
-        config_layout.addWidget(self.connect_button, 8, 1)
-        config_layout.addWidget(self.disconnect_button, 8, 2)
-        config_layout.addWidget(self.mock_check, 9, 1, 1, 2)
-        config_layout.addWidget(self.cli_test_button, 10, 1, 1, 2)
-        layout.addWidget(config_group)
-
-        controller_group = QGroupBox("手柄测试")
-        controller_layout = QGridLayout(controller_group)
-        self.controller_duration = QSpinBox()
-        self.controller_duration.setRange(20, 5000)
-        self.controller_duration.setSingleStep(20)
-        self.controller_duration.setValue(100)
-        self.controller_duration.setSuffix(" ms")
-        self.test_a_button = QPushButton("A")
-        self.test_b_button = QPushButton("B")
-        self.test_home_button = QPushButton("HOME")
-        self.test_ls_reset_button = QPushButton("LS RESET")
-        self.test_rs_reset_button = QPushButton("RS RESET")
-        self.test_a_button.clicked.connect(lambda: self.send_controller_press("A"))
-        self.test_b_button.clicked.connect(lambda: self.send_controller_press("B"))
-        self.test_home_button.clicked.connect(lambda: self.send_controller_press("HOME"))
-        self.test_ls_reset_button.clicked.connect(lambda: self.send_controller_stick("left", "RESET"))
-        self.test_rs_reset_button.clicked.connect(lambda: self.send_controller_stick("right", "RESET"))
-        controller_layout.addWidget(QLabel("时长"), 0, 0)
-        controller_layout.addWidget(self.controller_duration, 0, 1, 1, 2)
-        controller_layout.addWidget(self.test_a_button, 1, 0)
-        controller_layout.addWidget(self.test_b_button, 1, 1)
-        controller_layout.addWidget(self.test_home_button, 1, 2)
-        controller_layout.addWidget(self.test_ls_reset_button, 2, 0, 1, 2)
-        controller_layout.addWidget(self.test_rs_reset_button, 2, 2)
-        self.keyboard_controller_check = QCheckBox("键盘虚拟手柄")
-        self.keyboard_controller_check.toggled.connect(self.set_keyboard_controller_enabled)
-        self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆，Esc=退出")
-        self.keyboard_mapping_label.setObjectName("Hint")
-        controller_layout.addWidget(self.keyboard_controller_check, 3, 0, 1, 3)
-        controller_layout.addWidget(self.keyboard_mapping_label, 4, 0, 1, 3)
-        layout.addWidget(controller_group)
-
-        param_group = QGroupBox("脚本参数")
-        param_layout = QVBoxLayout(param_group)
-        self.parameter_scroll = QScrollArea()
-        self.parameter_scroll.setWidgetResizable(True)
-        self.parameter_panel = QWidget()
-        self.parameter_form = QFormLayout(self.parameter_panel)
-        self.parameter_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.parameter_scroll.setWidget(self.parameter_panel)
-        self.rescan_button = QPushButton("重新扫描参数")
-        self.rescan_button.clicked.connect(self._rescan_parameters)
-        self.restore_defaults_button = QPushButton("恢复模板默认值")
-        self.restore_defaults_button.clicked.connect(self.restore_template_defaults)
-        param_buttons = QHBoxLayout()
-        param_buttons.addWidget(self.rescan_button)
-        param_buttons.addWidget(self.restore_defaults_button)
-        param_layout.addWidget(self.parameter_scroll)
-        param_layout.addLayout(param_buttons)
-        layout.addWidget(param_group, 1)
-
-        log_group = QGroupBox("输出日志")
-        log_layout = QVBoxLayout(log_group)
-        self.log_view = QTextEdit()
-        self.log_view.setObjectName("EasyConLog")
-        self.log_view.setReadOnly(True)
-        self.log_view.document().setMaximumBlockCount(self.config.keep_log_lines)
-        self.log_keep_lines = QSpinBox()
-        self.log_keep_lines.setRange(1, 100_000)
-        self.log_keep_lines.setValue(self.config.keep_log_lines)
-        self.log_keep_lines.setSuffix(" 行")
-        self.log_keep_lines.setToolTip("日志区最多保留的行数")
-        self.log_keep_lines.valueChanged.connect(self._log_retention_changed)
+        self.cli_test_button = QPushButton("测试 CLI 运行")
+        self.cli_test_button.clicked.connect(self.run_cli_smoke_test)
+        self.detect_button = QPushButton("检测 EasyCon")
+        self.detect_button.clicked.connect(self.detect_easycon)
+        self.toolbar_connect_button = QPushButton("连接伊机控")
+        self.toolbar_connect_button.clicked.connect(self.toggle_bridge_connection)
         self.clear_log_button = QPushButton("清空日志")
         self.clear_log_button.clicked.connect(self.log_view.clear)
         self.copy_log_button = QPushButton("复制日志")
         self.copy_log_button.clicked.connect(self.copy_all_logs)
         self.save_log_button = QPushButton("保存日志")
         self.save_log_button.clicked.connect(self.save_logs_dialog)
-        log_buttons = QHBoxLayout()
-        log_buttons.addWidget(QLabel("保留"))
-        log_buttons.addWidget(self.log_keep_lines)
-        log_buttons.addWidget(self.clear_log_button)
-        log_buttons.addWidget(self.copy_log_button)
-        log_buttons.addWidget(self.save_log_button)
-        log_layout.addWidget(self.log_view, 1)
-        log_layout.addLayout(log_buttons)
-        layout.addWidget(log_group, 1)
-        return panel
+        self.log_keep_lines = QSpinBox()
+        self.log_keep_lines.setValue(self.config.keep_log_lines)
+        self.log_keep_lines.valueChanged.connect(self._log_retention_changed)
 
-    def _build_editor_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.editor = EasyConScriptEditor()
-        self.editor.fileDropped.connect(self.load_script)
-        self.editor.textChanged.connect(self._update_run_enabled)
-        layout.addWidget(self.editor, 1)
-        return panel
+        # 脚本列表（保留，通过菜单访问）
+        self.script_list = QListWidget()
+        self.script_list.itemDoubleClicked.connect(self._load_script_item)
+
+
+    def _build_vpad_column(self) -> QWidget:
+        group = QGroupBox("虚拟手柄")
+        group.setStyleSheet(
+            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
+            f" background: {self.CLR_PANEL_BG}; }}"
+            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
+        )
+        layout = QGridLayout(group)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(4)
+
+        btn_style = (
+            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" border-radius: 2px; padding: 4px 8px; font-size: 11px; }}"
+            f" QPushButton:hover {{ background: #e8e6e1; }}"
+        )
+        combo_style = (
+            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
+        )
+
+        vpad_combo = QComboBox()
+        vpad_combo.addItem("键盘")
+        vpad_combo.setStyleSheet(combo_style)
+        layout.addWidget(vpad_combo, 0, 0, 1, 1)
+
+        self.keyboard_controller_check = QCheckBox("连接")
+        self.keyboard_controller_check.setStyleSheet(f"font-size: 11px; background: transparent;")
+        self.keyboard_controller_check.toggled.connect(self.set_keyboard_controller_enabled)
+        layout.addWidget(self.keyboard_controller_check, 0, 1, 1, 1)
+
+        mapping_btn = QPushButton("按键映射")
+        mapping_btn.setStyleSheet(btn_style)
+        mapping_btn.clicked.connect(self.open_key_mapping)
+        layout.addWidget(mapping_btn, 1, 0, 1, 1)
+
+        help_btn = QPushButton("帮助")
+        help_btn.setStyleSheet(btn_style)
+        layout.addWidget(help_btn, 1, 1, 1, 1)
+
+        record_btn = QPushButton("录制脚本")
+        record_btn.setStyleSheet(btn_style)
+        layout.addWidget(record_btn, 2, 0, 1, 1)
+
+        pause_btn = QPushButton("暂停录制")
+        pause_btn.setStyleSheet(btn_style)
+        layout.addWidget(pause_btn, 2, 1, 1, 1)
+
+        # 手柄测试按钮（保留原有功能）
+        self.controller_duration = QSpinBox()
+        self.controller_duration.setRange(20, 5000)
+        self.controller_duration.setValue(100)
+        self.test_a_button = QPushButton("A")
+        self.test_a_button.clicked.connect(lambda: self.send_controller_press("A"))
+        self.test_b_button = QPushButton("B")
+        self.test_b_button.clicked.connect(lambda: self.send_controller_press("B"))
+        self.test_home_button = QPushButton("HOME")
+        self.test_home_button.clicked.connect(lambda: self.send_controller_press("HOME"))
+        self.test_ls_reset_button = QPushButton("LS RESET")
+        self.test_ls_reset_button.clicked.connect(lambda: self.send_controller_stick("left", "RESET"))
+        self.test_rs_reset_button = QPushButton("RS RESET")
+        self.test_rs_reset_button.clicked.connect(lambda: self.send_controller_stick("right", "RESET"))
+
+        self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆")
+        self.keyboard_mapping_label.setStyleSheet(f"font-size: 10px; color: {self.CLR_HINT}; background: transparent;")
+
+        return group
+
+    # ── 底部状态栏 ──────────────────────────────────────
+
+    def _build_bottom_status(self) -> QStatusBar:
+        self.easycon_status = QStatusBar()
+        self.easycon_status.setSizeGripEnabled(False)
+        self.easycon_status.setStyleSheet(
+            f"""
+            QStatusBar {{ background: {self.CLR_STATUSBAR_BG}; border-top: 1px solid {self.CLR_BORDER}; padding: 2px 8px; }}
+            QStatusBar::item {{ border: 0; }}
+            """
+        )
+
+        self.status_easycon_label = QLabel("LOG")
+        self.status_controller_label = QLabel("单片机未连接")
+        self.status_backend_label = QLabel("后端: 常驻连接")
+
+        for label in (
+            self.status_easycon_label,
+            self.status_controller_label,
+            self.status_backend_label,
+        ):
+            label.setStyleSheet(
+                f"font-size: 11px; color: {self.CLR_HINT}; padding: 0 10px; border: 0; background: transparent;"
+            )
+            self.easycon_status.addPermanentWidget(label)
+
+        return self.easycon_status
 
     def _refresh_script_list(self) -> None:
         self.script_list.clear()
@@ -511,8 +924,7 @@ class EasyConPanel(QWidget):
         if self.installation.path is not None:
             self.ezcon_path.setText(str(self.installation.path))
         if self.installation.is_available:
-            self.version_label.setText(f"EasyCon: {self.installation.version} ({self.installation.source})")
-            self._append_log("info", f"已检测到 EasyCon: {self.installation.version}")
+            self.version_label.setText(f"EasyCon: {self.installation.source}")
         else:
             self.version_label.setText("EasyCon: 未找到")
             self._append_log("warn", _easycon_unavailable_message(self.installation, self.ezcon_path.text().strip()))
@@ -592,16 +1004,11 @@ class EasyConPanel(QWidget):
             return
         self.current_script_path = path
         self.current_script_name = path.name
-        self.current_script_is_template = _is_builtin_template(path)
         self.current_script_newline = detect_newline_style(text)
-        self.template_script_text = text
+        self._saved_editor_text = text
         self.script_name_label.setText(path.name)
-        self._update_template_mode_label()
         self.editor.setPlainText(text)
-        self._rescan_parameters()
-        self._restore_recent_parameters()
-        mode = "模板副本" if self.current_script_is_template else "外部脚本"
-        self._append_log("info", f"已加载{mode}: {path.name}")
+        self._append_log("info", f"已加载脚本: {path.name}")
         self._remember_recent_script(path)
 
     def _load_script_item(self, item: QListWidgetItem) -> None:
@@ -609,65 +1016,63 @@ class EasyConPanel(QWidget):
         if isinstance(path, Path):
             self.load_script(path)
 
-    def _rescan_parameters(self) -> None:
-        while self.parameter_form.rowCount():
-            self.parameter_form.removeRow(0)
-        self.parameter_widgets.clear()
-        self.parameter_defaults.clear()
-        self.parameter_lines.clear()
-        for parameter in parse_script_parameters(self.editor.toPlainText()):
-            if parameter.is_integer:
-                widget = QSpinBox()
-                widget.setRange(-1_000_000_000, 1_000_000_000)
-                if parameter.value.strip().lstrip("+-").isdigit():
-                    widget.setValue(int(parameter.value))
-                widget.valueChanged.connect(self._sync_parameters_to_editor)
-            else:
-                widget = QLineEdit("" if parameter.required else parameter.value)
-                widget.textChanged.connect(self._sync_parameters_to_editor)
-                if parameter.required:
-                    widget.setPlaceholderText("填入这里（必填）")
-            if parameter.comment:
-                widget.setToolTip(parameter.comment)
-            self.parameter_widgets[parameter.name] = widget
-            self.parameter_defaults[parameter.name] = parameter.default
-            self.parameter_lines[parameter.name] = parameter.line_index + 1
-            label = f"{parameter.name}{' *' if parameter.required else ''}"
-            field = QWidget()
-            field_layout = QHBoxLayout(field)
-            field_layout.setContentsMargins(0, 0, 0, 0)
-            field_layout.addWidget(widget, 1)
-            default_label = QLabel(f"默认: {parameter.default}")
-            default_label.setObjectName("Hint")
-            if parameter.comment:
-                default_label.setToolTip(parameter.comment)
-            field_layout.addWidget(default_label)
-            self.parameter_form.addRow(label, field)
-        if not self.parameter_widgets:
-            self.parameter_form.addRow("参数", QLabel("未发现脚本参数"))
-        self.restore_defaults_button.setEnabled(bool(self.parameter_widgets))
-        self._update_run_enabled()
+    def new_script(self) -> None:
+        self.current_script_path = None
+        self.current_script_name = "未命名文档.txt"
+        self.current_script_newline = "\n"
+        self.script_name_label.setText(" 未命名文档.txt")
+        self._saved_editor_text = ""
+        self.editor.setPlainText("")
+        self._append_log("info", "已新建空白脚本")
 
-    def _sync_parameters_to_editor(self) -> None:
-        if not self.parameter_widgets:
-            return
-        values = {
-            name: widget.value() if isinstance(widget, QSpinBox) else widget.text()
-            for name, widget in self.parameter_widgets.items()
-        }
-        cursor = self.editor.textCursor()
-        self.editor.blockSignals(True)
-        self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), values))
-        self.editor.setTextCursor(cursor)
-        self.editor.blockSignals(False)
-        self._save_current_parameters()
-        self._update_run_enabled()
+    def save_script(self) -> Path | None:
+        if not self.editor.toPlainText().strip():
+            self._append_log("warn", "没有可保存的脚本内容")
+            return None
+        if self.current_script_path is not None:
+            # 已有文件路径，直接覆盖保存
+            try:
+                self.current_script_path.write_text(
+                    self.editor.toPlainText(),
+                    encoding="utf-8",
+                    newline=self.current_script_newline,
+                )
+            except OSError as exc:
+                self._append_log("error", f"保存脚本失败: {exc}")
+                return None
+            self._saved_editor_text = self.editor.toPlainText()
+            self._update_dirty_indicator()
+            self._append_log("info", f"已保存: {self.current_script_path.name}")
+            return self.current_script_path
+        # 新文件，弹出保存对话框
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存脚本", str(SCRIPT_DIR), "EasyCon scripts (*.txt *.ecs)"
+        )
+        if not path:
+            return None
+        output = Path(path)
+        try:
+            output.write_text(
+                self.editor.toPlainText(),
+                encoding="utf-8",
+                newline=self.current_script_newline,
+            )
+        except OSError as exc:
+            self._append_log("error", f"保存脚本失败: {exc}")
+            return None
+        self.current_script_path = output
+        self.current_script_name = output.name
+        self._saved_editor_text = self.editor.toPlainText()
+        self.script_name_label.setText(f" {output.name}")
+        self._update_dirty_indicator()
+        self._remember_recent_script(output)
+        self._append_log("info", f"已保存: {output.name}")
+        return output
 
     def save_generated_script(self) -> Path | None:
         if not self.editor.toPlainText().strip():
             self._append_log("warn", "没有可保存的脚本内容")
             return None
-        self._sync_parameters_to_editor()
         try:
             path = generate_script_file(
                 self.editor.toPlainText(),
@@ -681,40 +1086,9 @@ class EasyConPanel(QWidget):
         self._append_log("info", f"已保存临时脚本: {path.name}")
         return path
 
-    def save_to_original_script(self) -> Path | None:
-        if self.current_script_path is None:
-            self._append_log("warn", "当前脚本没有原文件路径")
-            return None
-        self._sync_parameters_to_editor()
-        try:
-            self.current_script_path.write_text(
-                self.editor.toPlainText(),
-                encoding="utf-8",
-                newline=self.current_script_newline,
-            )
-        except OSError as exc:
-            self._append_log("error", f"保存到原文件失败: {exc}")
-            return None
-        self.template_script_text = self.editor.toPlainText()
-        self.current_script_is_template = _is_builtin_template(self.current_script_path)
-        self._update_template_mode_label()
-        self._append_log("info", f"已保存到原文件: {self.current_script_path.name}")
-        return self.current_script_path
 
-    def restore_template_defaults(self) -> None:
-        source_text = self.template_script_text or self.editor.toPlainText()
-        defaults = {parameter.name: parameter.default for parameter in parse_script_parameters(source_text)}
-        if not defaults:
-            self._append_log("warn", "当前脚本没有可恢复的模板默认值")
-            return
-        cursor = self.editor.textCursor()
-        self.editor.blockSignals(True)
-        self.editor.setPlainText(apply_parameter_values(self.editor.toPlainText(), defaults))
-        self.editor.setTextCursor(cursor)
-        self.editor.blockSignals(False)
-        self._rescan_parameters()
-        self._save_current_parameters()
-        self._append_log("info", "已恢复模板默认值")
+
+
 
     def toggle_run(self) -> None:
         if self._is_bridge_mode():
@@ -732,8 +1106,6 @@ class EasyConPanel(QWidget):
             self.run_script_via_bridge()
             return
         self.detect_easycon()
-        if not self._validate_parameters_for_run(focus=True):
-            return
         if not self._can_run():
             self._append_log("warn", "配置未完成，无法运行脚本")
             return
@@ -768,12 +1140,9 @@ class EasyConPanel(QWidget):
         if self.bridge_status == EasyConStatus.RUNNING:
             self.stop_bridge_script()
             return
-        if not self._validate_parameters_for_run(focus=True):
-            return
         if not self._can_run():
             self._append_log("warn", "请先连接伊机控，再运行脚本")
             return
-        self._sync_parameters_to_editor()
         generated_script = self.save_generated_script()
         if generated_script is None:
             return
@@ -966,58 +1335,35 @@ class EasyConPanel(QWidget):
             return False
         if not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
             return False
-        if self._first_invalid_required_parameter() is not None:
-            return False
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             return False
         return True
 
-    def _first_invalid_required_parameter(self) -> str | None:
-        for name, widget in self.parameter_widgets.items():
-            if (
-                isinstance(widget, QLineEdit)
-                and widget.placeholderText().startswith("填入这里")
-                and not widget.text().strip()
-            ):
-                return name
-        return None
+    def _on_editor_changed(self) -> None:
+        self._update_run_enabled()
+        self._update_dirty_indicator()
 
-    def _validate_parameters_for_run(self, focus: bool = False) -> bool:
-        invalid = self._first_invalid_required_parameter()
-        if invalid is None:
-            return True
-        line = self.parameter_lines.get(invalid)
-        if line is not None:
-            self.editor.go_to_line(line)
-            self._append_log("error", f"参数 {invalid} 未填写，已定位到第 {line} 行")
-        else:
-            self._append_log("error", f"参数 {invalid} 未填写")
-        widget = self.parameter_widgets.get(invalid)
-        if focus and widget is not None:
-            widget.setFocus()
-        return False
+    def _update_dirty_indicator(self) -> None:
+        if not hasattr(self, "script_name_label"):
+            return
+        current = self.editor.toPlainText()
+        dirty = current != self._saved_editor_text
+        name = self.current_script_name
+        if dirty and not name.startswith("*"):
+            name = "*" + name
+        elif not dirty and name.startswith("*"):
+            name = name[1:]
+        self.script_name_label.setText(f" {name}")
 
     def _update_run_enabled(self) -> None:
         if hasattr(self, "run_button"):
             self.run_button.setEnabled(self._can_run())
-        if hasattr(self, "save_original_button"):
-            self.save_original_button.setEnabled(self.current_script_path is not None)
         if hasattr(self, "connect_button"):
             self._update_bridge_controls()
         if hasattr(self, "connection_state_label"):
             self._update_status_labels()
 
-    def _update_template_mode_label(self) -> None:
-        if not hasattr(self, "template_mode_label"):
-            return
-        if self.current_script_is_template:
-            self.template_mode_label.setText("模板副本")
-            self.template_mode_label.setToolTip("来自 script 目录，运行和 Ctrl+S 只保存临时副本，不覆盖原模板。")
-            self.save_original_button.setEnabled(True)
-            return
-        self.template_mode_label.setText("普通脚本")
-        self.template_mode_label.setToolTip("")
-        self.save_original_button.setEnabled(self.current_script_path is not None)
+
 
     def _save_config_from_ui(self) -> None:
         if not hasattr(self, "ezcon_path"):
@@ -1055,44 +1401,6 @@ class EasyConPanel(QWidget):
     def _log_retention_changed(self) -> None:
         self.log_view.document().setMaximumBlockCount(self.log_keep_lines.value())
         self._save_config_from_ui()
-
-    def _restore_recent_parameters(self) -> None:
-        key = _script_parameter_config_key(self.current_script_path)
-        if key is None:
-            return
-        values = self.config.script_parameters.get(key)
-        if not values:
-            return
-        restored = False
-        for name, value in values.items():
-            widget = self.parameter_widgets.get(name)
-            if widget is None:
-                continue
-            if isinstance(widget, QSpinBox):
-                try:
-                    widget.setValue(int(value))
-                except ValueError:
-                    continue
-            else:
-                widget.setText(value)
-            restored = True
-        if restored:
-            self._append_log("info", "已恢复该脚本上次使用的参数")
-
-    def _save_current_parameters(self) -> None:
-        key = _script_parameter_config_key(self.current_script_path)
-        if key is None or not self.parameter_widgets:
-            return
-        values = {
-            name: str(widget.value() if isinstance(widget, QSpinBox) else widget.text())
-            for name, widget in self.parameter_widgets.items()
-        }
-        script_parameters = {script: dict(parameters) for script, parameters in self.config.script_parameters.items()}
-        if script_parameters.get(key) == values:
-            return
-        script_parameters[key] = values
-        self.config = replace(self.config, script_parameters=script_parameters)
-        save_config(self.config)
 
     def _append_log(self, level: str, message: str) -> None:
         color = {
@@ -1238,6 +1546,16 @@ class EasyConPanel(QWidget):
             return
         self._run_inline_cli_script(f"test_{side}_{direction.lower()}", f"{label}\n")
 
+    def open_key_mapping(self) -> None:
+        dialog = KeyMappingDialog(self.key_mapping, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.key_mapping = dialog.get_mapping()
+        self._append_log("info", "按键映射已更新")
+        # 如果虚拟手柄已启用，先关闭再重新启用以应用新映射
+        if self.virtual_controller_enabled:
+            self.keyboard_controller_check.setChecked(False)
+
     def set_keyboard_controller_enabled(self, enabled: bool) -> None:
         if enabled:
             if not self._is_bridge_mode() or self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
@@ -1279,7 +1597,7 @@ class EasyConPanel(QWidget):
             return True
         if down and key in self.virtual_controller_keys:
             return True
-        action = _keyboard_virtual_controller_action(key)
+        action = _resolve_vpad_button(key, self.key_mapping)
         if action is None:
             return False
         if not down and key not in self.virtual_controller_keys:
@@ -1451,15 +1769,11 @@ class EasyConPanel(QWidget):
             return
         connection_text = self._connection_state_text()
         backend_text = "常驻连接" if self._is_bridge_mode() else "CLI 过渡"
-        easycon_text = (
-            f"EasyCon: {self.installation.version}"
-            if self.installation.is_available and self.installation.version
-            else "EasyCon: 未检测"
-        )
+        easycon_text = "LOG"
         self.connection_state_label.setText(f"连接: {connection_text}")
         self.task_state_label.setText(f"任务: {self.task_state_text}")
         self.status_easycon_label.setText(easycon_text)
-        self.status_controller_label.setText(f"单片机: {connection_text}")
+        self.status_controller_label.setText(f"单片机{'已连接' if connection_text == '已长期连接' else '未连接'}")
         self.status_backend_label.setText(f"后端: {backend_text}")
 
     def _connection_state_text(self) -> str:
@@ -1494,27 +1808,7 @@ def _first_supported_drop(mime_data) -> Path | None:  # type: ignore[no-untyped-
     return None
 
 
-def _is_builtin_template(path: Path) -> bool:
-    try:
-        resolved = path.resolve()
-        script_root = SCRIPT_DIR.resolve()
-        generated_root = GENERATED_DIR.resolve()
-    except OSError:
-        return False
-    return resolved.is_relative_to(script_root) and not resolved.is_relative_to(generated_root)
 
-
-def _script_parameter_config_key(path: Path | None) -> str | None:
-    if path is None:
-        return None
-    try:
-        resolved = path.resolve()
-        script_root = SCRIPT_DIR.resolve()
-        if resolved.is_relative_to(script_root):
-            return f"script/{resolved.relative_to(script_root).as_posix()}"
-        return str(resolved)
-    except OSError:
-        return str(path)
 
 
 def _easycon_unavailable_message(installation: EasyConInstallation, requested_path: str = "") -> str:
@@ -1522,14 +1816,3 @@ def _easycon_unavailable_message(installation: EasyConInstallation, requested_pa
     if requested_path and "does not exist" not in error:
         return "ezcon 路径可能无效或文件损坏，请重新选择 ezcon.exe。"
     return "请选择 ezcon.exe 或设置 EASYCON_ROOT。"
-
-
-def _keyboard_virtual_controller_action(key: int) -> tuple[str, str, str | None] | None:
-    button = KEYBOARD_VPAD_BUTTONS.get(Qt.Key(key))
-    if button is not None:
-        return ("button", button, None)
-    direction = KEYBOARD_VPAD_DIRECTIONS.get(Qt.Key(key))
-    if direction is not None:
-        side, value = direction
-        return ("stick", side, value)
-    return None

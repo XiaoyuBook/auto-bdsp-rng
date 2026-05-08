@@ -6,8 +6,8 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QRect, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QIntValidator, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -281,8 +280,8 @@ TEXT = {
         "profile": "Profile",
         "filters": "Filters",
         "preview": "Preview",
-        "project_xs": "Project_Xs",
-        "bdsp_search": "BDSP / PokeFinder",
+        "project_xs": "Seed 捕捉",
+        "bdsp_search": "定点数据区",
         "easycon": "EasyCon",
         "status": "Status",
         "config": "Config",
@@ -309,7 +308,7 @@ TEXT = {
         "stop_preview": "Stop Preview",
         "save_config": "Save Config",
         "raw_screenshot": "Capture Eye",
-        "select_roi": "Select ROI",
+        "select_roi": "框选眼睛区域",
         "eye_selecting": "Right-drag on preview to capture the eye template",
         "eye_captured": "Eye template captured",
         "eye_captured_select_roi": "Eye template captured. Redraw the ROI around the eye.",
@@ -341,8 +340,8 @@ TEXT = {
         "profile": "玩家档案",
         "filters": "筛选",
         "preview": "捕获预览",
-        "project_xs": "Project_Xs",
-        "bdsp_search": "BDSP / PokeFinder",
+        "project_xs": "Seed 捕捉",
+        "bdsp_search": "定点数据区",
         "easycon": "伊机控",
         "status": "状态",
         "config": "配置",
@@ -369,7 +368,7 @@ TEXT = {
         "stop_preview": "停止预览",
         "save_config": "保存配置",
         "raw_screenshot": "截取眼睛",
-        "select_roi": "选择 ROI",
+        "select_roi": "框选眼睛区域",
         "eye_selecting": "请在预览图上按住右键框选眼睛模板",
         "eye_captured": "眼睛模板已应用",
         "eye_captured_select_roi": "眼睛模板已应用，请重新框选眼睛 ROI",
@@ -517,7 +516,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("auto_bdsp_rng")
-        self.resize(1480, 900)
+        self.setMinimumSize(1150, 900)
+        self.resize(1150, 900)
         self.lang = "zh"
         self._profile_version = GameVersion.BD
         self._active_record: StaticEncounterRecord | None = None
@@ -614,66 +614,140 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 8, 0)
         left_layout.setSpacing(10)
-        self.status_group = self._build_project_status_group()
         self.capture_group = self._build_blink_group()
         self.seed_group = self._build_seed_group()
-        left_layout.addWidget(self.status_group)
         left_layout.addWidget(self.capture_group)
         left_layout.addWidget(self.seed_group)
         left_layout.addStretch(1)
 
+        # 右侧：状态条（紧凑） + 预览（下部）
+        self.status_group = self._build_project_status_group()
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(self.status_group)
+        right_layout.addWidget(self._build_preview_panel(), 1)
+
         splitter.addWidget(left)
-        splitter.addWidget(self._build_preview_panel())
+        splitter.addWidget(right)
         splitter.setSizes([430, 1050])
         return splitter
 
     def _build_bdsp_tab(self) -> QWidget:
         panel = QWidget()
-        layout = QGridLayout(panel)
+        layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(10)
+        layout.setSpacing(8)
 
+        # ── 顶部：存档信息 ──
         self.profile_group = self._build_profile_group()
-        self.rng_info_group = self._build_rng_info_group()
-        self.static_group = self._build_static_group()
-        self.filter_group = self._build_filter_group()
-        self.results_panel = self._build_results()
+        self.profile_group.setMaximumHeight(120)
+        layout.addWidget(self.profile_group)
 
-        layout.addWidget(self.profile_group, 0, 0, 1, 3)
-        layout.addWidget(self.rng_info_group, 1, 0)
-        layout.addWidget(self.static_group, 1, 1)
-        layout.addWidget(self.filter_group, 1, 2)
-        layout.addWidget(self.results_panel, 2, 0, 1, 3)
-        layout.setRowMinimumHeight(1, 320)
-        layout.setColumnStretch(0, 0)
-        layout.setColumnStretch(1, 0)
-        layout.setColumnStretch(2, 1)
-        layout.setRowStretch(2, 1)
+        # ── 中部：乱数信息 / 设置 / 筛选项 ──
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(10)
+        self.rng_info_group = self._build_rng_info_group()
+        self.rng_info_group.setMinimumWidth(100)
+        self.static_group = self._build_static_group()
+        self.static_group.setMinimumWidth(140)
+        self.filter_group = self._build_filter_group()
+        self.filter_group.setMinimumWidth(620)
+        mid_row.addWidget(self.rng_info_group, 1)
+        mid_row.addWidget(self.static_group, 1)
+        mid_row.addWidget(self.filter_group, 2)
+        mid_widget = QWidget()
+        mid_widget.setLayout(mid_row)
+        mid_widget.setMaximumHeight(360)
+        layout.addWidget(mid_widget)
+
+        # ── 下部：结果表格（主区域） ──
+        self.results_panel = self._build_results()
+        layout.addWidget(self.results_panel, 1)
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
-        group = QGroupBox()
-        layout = QGridLayout(group)
+        group = QGroupBox("状态")
+        group.setMaximumHeight(95)
+
+        outer = QVBoxLayout(group)
+        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setSpacing(0)
+        outer.addStretch()
+
+        # 控件统一样式
+        stat_label_css = "font-size: 12px; color: #666; border: 0; background: transparent;"
+        stat_value_css = "font-size: 12px; font-weight: 600; color: #1a1a1a; border: 0; background: transparent;"
+        spin_css = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 140px; }"
+        btn_css = (
+            "QPushButton { min-height: 30px; max-height: 30px;"
+            " min-width: 86px; max-width: 100px; padding: 0 14px; }"
+        )
+
+        row = QHBoxLayout()
+        row.setSpacing(28)
+        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        # Progress
         self.progress_label = QLabel("Progress:")
+        self.progress_label.setStyleSheet(stat_label_css)
         self.progress_value = QLabel("0/0")
+        self.progress_value.setStyleSheet(stat_value_css)
+        pg = QHBoxLayout()
+        pg.setSpacing(4)
+        pg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        pg.addWidget(self.progress_label)
+        pg.addWidget(self.progress_value)
+        row.addLayout(pg)
+
+        # Advances
         self.advances_label = QLabel("Advances:")
+        self.advances_label.setStyleSheet(stat_label_css)
         self.advances_value = QLabel("0")
+        self.advances_value.setStyleSheet(stat_value_css)
+        ag = QHBoxLayout()
+        ag.setSpacing(4)
+        ag.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        ag.addWidget(self.advances_label)
+        ag.addWidget(self.advances_value)
+        row.addLayout(ag)
+
+        # Timer
         self.timer_label = QLabel("Timer:")
+        self.timer_label.setStyleSheet(stat_label_css)
         self.timer_value = QLabel("0")
+        self.timer_value.setStyleSheet(stat_value_css)
+        tg = QHBoxLayout()
+        tg.setSpacing(4)
+        tg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        tg.addWidget(self.timer_label)
+        tg.addWidget(self.timer_value)
+        row.addLayout(tg)
+
+        # 分隔
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #c8c6c0;")
+        sep.setFixedHeight(22)
+        row.addWidget(sep)
+        row.setSpacing(12)
+
+        # X to advance
         self.x_to_advance_label = QLabel("X to advance:")
+        self.x_to_advance_label.setStyleSheet(stat_label_css)
         self.x_to_advance = self._spin(0, 10_000_000, 165)
+        self.x_to_advance.setStyleSheet(spin_css)
         self.advance_button = QPushButton("Advance")
+        self.advance_button.setStyleSheet(btn_css)
         self.advance_button.clicked.connect(self.advance_current_seed)
-        layout.addWidget(self.progress_label, 0, 0)
-        layout.addWidget(self.progress_value, 0, 1)
-        layout.addWidget(self.advances_label, 1, 0)
-        layout.addWidget(self.advances_value, 1, 1)
-        layout.addWidget(self.timer_label, 2, 0)
-        layout.addWidget(self.timer_value, 2, 1)
-        layout.addWidget(self.x_to_advance_label, 3, 0)
-        layout.addWidget(self.x_to_advance, 3, 1)
-        layout.addWidget(self.advance_button, 4, 1)
+        row.addWidget(self.x_to_advance_label)
+        row.addWidget(self.x_to_advance)
+        row.addWidget(self.advance_button)
+
+        row.addStretch()
+        outer.addLayout(row)
+        outer.addStretch()
         return group
 
     def _build_controls(self) -> QWidget:
@@ -770,11 +844,12 @@ class MainWindow(QMainWindow):
     def _build_seed_group(self) -> QGroupBox:
         group = QGroupBox()
         layout = QGridLayout(group)
-        self.seed32_inputs = [QLineEdit(text) for text in ("12345678", "9ABCDEF0", "11111111", "22222222")]
+        self.seed32_inputs = [QLineEdit() for _ in range(4)]
+        for box in self.seed32_inputs:
+            box.setReadOnly(True)
+            box.setMaxLength(8)
+            box.setPlaceholderText("—")
         self.seed64_outputs = [QLineEdit() for _ in range(2)]
-        for input_box in self.seed32_inputs:
-            input_box.setMaxLength(8)
-            input_box.editingFinished.connect(self._sync_seed64_from_state32)
         for output in self.seed64_outputs:
             output.setReadOnly(True)
             output.setObjectName("Readonly")
@@ -797,7 +872,7 @@ class MainWindow(QMainWindow):
         self.lead_combo.addItem("同步：勤奋", int(Lead.SYNCHRONIZE_START))
         self.lead_combo.addItem("迷人之躯 ♀", int(Lead.CUTE_CHARM_F))
         self.lead_combo.addItem("迷人之躯 ♂", int(Lead.CUTE_CHARM_M))
-        self.bdsp_seed64_inputs = [QLineEdit(text) for text in ("123456789ABCDEF0", "1111111122222222")]
+        self.bdsp_seed64_inputs = [QLineEdit() for _ in range(2)]
         for input_box in self.bdsp_seed64_inputs:
             input_box.setMaxLength(16)
             input_box.editingFinished.connect(self._sync_state32_from_bdsp_seed64)
@@ -820,7 +895,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Offset"), 5, 0)
         layout.addWidget(self.offset, 5, 1)
         layout.addWidget(self.generate_button, 6, 0, 1, 2)
-        group.setMinimumWidth(260)
+        group.setMinimumWidth(250)
         return group
 
     def _build_static_group(self) -> QGroupBox:
@@ -837,7 +912,7 @@ class MainWindow(QMainWindow):
         self.encounter_combo = QComboBox()
         self.encounter_combo.currentIndexChanged.connect(self._update_encounter_details)
         self.level_display = self._spin(1, 100, 1)
-        self.level_display.setEnabled(False)
+        self.level_display.setReadOnly(True)
         self.template_ability_display = QComboBox()
         self.template_ability_display.addItems(["0", "1", "隐藏", "0/1", "任意"])
         self.template_ability_display.setEnabled(False)
@@ -845,7 +920,7 @@ class MainWindow(QMainWindow):
         self.template_shiny_display.addItems(["随机", "锁闪"])
         self.template_shiny_display.setEnabled(False)
         self.iv_count_display = self._spin(0, 6, 0)
-        self.iv_count_display.setEnabled(False)
+        self.iv_count_display.setReadOnly(True)
 
         rows = (
             ("分类", self.category_combo),
@@ -858,132 +933,313 @@ class MainWindow(QMainWindow):
         for row, (label, widget) in enumerate(rows):
             layout.addWidget(QLabel(label), row, 0)
             layout.addWidget(widget, row, 1)
-        group.setMinimumWidth(300)
+        group.setMinimumWidth(290)
         return group
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
-        layout = QGridLayout(group)
+        group.setMinimumHeight(150)
+        group.setMaximumHeight(155)
+
+        outer = QHBoxLayout(group)
+        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setSpacing(24)
+        outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
+        css_cb = "QCheckBox { font-size: 12px; spacing: 6px; border: 0; background: transparent; }"
+
+        input_css = (
+            "QLineEdit {"
+            " min-height: 30px; max-height: 30px; min-width: 220px; max-width: 220px;"
+            " background: #ffffff; color: #1a1a1a;"
+            " border: 1px solid #c8c8c8; border-radius: 2px;"
+            " padding-left: 8px;"
+            "}"
+        )
+
+        # ── 左列：存档选择 ──
+        left = QVBoxLayout()
+        left.setSpacing(6)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        lbl = QLabel("存档信息")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(58)
         self.profile_name = QLineEdit("-")
         self.profile_name.setPlaceholderText("存档信息")
-        self.tid = self._spin(0, 65535, 12345)
-        self.sid = self._spin(0, 65535, 54321)
-        self.tsv = QLineEdit()
+        self.profile_name.setFixedWidth(180)
+        self.profile_name.setStyleSheet(input_css)
+        row1.addWidget(lbl)
+        row1.addWidget(self.profile_name)
+        row1.addStretch()
+        left.addLayout(row1)
+
+        self.profile_manager_button = QPushButton("存档信息管理")
+        self.profile_manager_button.setFixedWidth(180)
+        self.profile_manager_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
+        self.profile_manager_button.clicked.connect(self.open_profile_manager)
+        left.addWidget(self.profile_manager_button)
+        left.addStretch()
+        outer.addLayout(left)
+
+        # ── 竖线 ──
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setStyleSheet("color: #c8c6c0;")
+        sep1.setFixedHeight(120)
+        outer.addWidget(sep1)
+
+        # ── 中列：TID / SID / TSV — 三行纯文本框 ──
+        self.tid = QLineEdit("12345")
+        self.tid.setStyleSheet(input_css)
+        self.sid = QLineEdit("54321")
+        self.sid.setStyleSheet(input_css)
+        self.tsv = QLineEdit("58376")
         self.tsv.setReadOnly(True)
+        self.tsv.setStyleSheet(input_css)
+        self.tid.editingFinished.connect(self._update_tsv)
+        self.sid.editingFinished.connect(self._update_tsv)
+
+        mid = QGridLayout()
+        mid.setVerticalSpacing(8)
+        mid.setHorizontalSpacing(4)
+        for row, (label_text, widget) in enumerate([("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)]):
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(css_label)
+            lbl.setFixedSize(42, 30)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            widget.setFixedSize(220, 30)
+            mid.addWidget(lbl, row, 0)
+            mid.addWidget(widget, row, 1)
+        outer.addLayout(mid)
+
+        # ── 竖线 ──
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setStyleSheet("color: #c8c6c0;")
+        sep2.setFixedHeight(120)
+        outer.addWidget(sep2)
+
+        # ── 右列：游戏与护符 ──
+        right = QVBoxLayout()
+        right.setSpacing(8)
+
+        game_row = QHBoxLayout()
+        game_row.setSpacing(8)
+        game_lbl = QLabel("游戏")
+        game_lbl.setStyleSheet(css_label)
+        game_lbl.setFixedWidth(36)
+        self.profile_game_value = QLabel(self._game_label(self._profile_version))
+        self.profile_game_value.setStyleSheet("font-size: 12px; font-weight: 600; border: 0; background: transparent;")
+        game_row.addWidget(game_lbl)
+        game_row.addWidget(self.profile_game_value)
+        game_row.addStretch()
+        right.addLayout(game_row)
+
         self.national_dex = QCheckBox("全国图鉴")
         self.shiny_charm = QCheckBox("闪耀护符")
         self.oval_charm = QCheckBox("圆形护符")
-        self.tid.valueChanged.connect(self._update_tsv)
-        self.sid.valueChanged.connect(self._update_tsv)
-        self._update_tsv()
 
-        self.profile_manager_button = QPushButton("存档信息管理")
-        self.profile_manager_button.clicked.connect(self.open_profile_manager)
-        self.profile_game_value = QLabel(self._game_label(self._profile_version))
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setFrameShadow(QFrame.Shadow.Sunken)
+        charms_row1 = QHBoxLayout()
+        charms_row1.setSpacing(20)
+        charms_row1.addWidget(self.national_dex)
+        charms_row1.addWidget(self.shiny_charm)
+        charms_row1.addStretch()
+        right.addLayout(charms_row1)
+        right.addWidget(self.oval_charm)
 
-        layout.addWidget(QLabel("存档信息"), 0, 0)
-        layout.addWidget(self.profile_name, 0, 1)
-        layout.addWidget(self.profile_manager_button, 1, 1)
-        layout.addWidget(QLabel("TID"), 0, 2)
-        layout.addWidget(self.tid, 0, 3)
-        layout.addWidget(QLabel("SID"), 1, 2)
-        layout.addWidget(self.sid, 1, 3)
-        layout.addWidget(QLabel("TSV"), 2, 2)
-        layout.addWidget(self.tsv, 2, 3)
-        layout.addWidget(divider, 0, 4, 3, 1)
-        layout.addWidget(QLabel("游戏"), 0, 5)
-        layout.addWidget(self.profile_game_value, 0, 6)
-        layout.addWidget(self.national_dex, 1, 5)
-        layout.addWidget(self.shiny_charm, 1, 6)
-        layout.addWidget(self.oval_charm, 2, 5)
-        layout.setColumnStretch(6, 1)
+        for cb in (self.national_dex, self.shiny_charm, self.oval_charm):
+            cb.setStyleSheet(css_cb)
+
+        right.addStretch()
+        outer.addLayout(right)
+        outer.addStretch()
         return group
 
     def _build_filter_group(self) -> QGroupBox:
-        group = QGroupBox()
-        layout = QGridLayout(group)
+        group = QGroupBox("筛选项")
+        group.setMaximumHeight(340)
+
+        outer = QHBoxLayout(group)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(28)
+
+        css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
+        css_ctrl = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 64px; }"
+        css_combo = "QComboBox { min-height: 30px; max-height: 30px; min-width: 180px; }"
+        css_cb = "font-size: 12px; spacing: 6px; border: 0; background: transparent;"
+
+        # ── 左列：IV 范围 + 底部按钮 ──
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+
+        iv_grid = QGridLayout()
+        iv_grid.setVerticalSpacing(7)
+        iv_grid.setHorizontalSpacing(6)
+        self.iv_min: list[QLineEdit] = []
+        self.iv_max: list[QLineEdit] = []
+        iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+        for row, label in enumerate(iv_labels):
+            lbl = QLabel(label)
+            lbl.setStyleSheet(css_label)
+            lbl.setFixedWidth(50)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            min_spin = self._spin(0, 31, 0)
+            min_spin.setFixedWidth(68)
+            min_spin.setStyleSheet(css_ctrl)
+            max_spin = self._spin(0, 31, 31)
+            max_spin.setFixedWidth(68)
+            max_spin.setStyleSheet(css_ctrl)
+            self.iv_min.append(min_spin)
+            self.iv_max.append(max_spin)
+            iv_grid.addWidget(lbl, row, 0)
+            iv_grid.addWidget(min_spin, row, 1)
+            iv_grid.addWidget(max_spin, row, 2)
+        left_col.addLayout(iv_grid)
+
+        # checkbox + 按钮
+        self.show_stats_check = QCheckBox("显示能力值")
+        self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
+        self.show_stats_check.setStyleSheet(css_cb)
+        left_col.addWidget(self.show_stats_check)
+
+        self.iv_calculator_button = QPushButton("个体值计算器")
+        self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
+        self.iv_calculator_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
+        self.iv_calculator_button.setFixedWidth(230)
+        left_col.addWidget(self.iv_calculator_button)
+
+        left_col.addStretch()
+        outer.addLayout(left_col)
+
+        # ── 竖线分隔 ──
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #c8c6c0;")
+        sep.setMinimumHeight(260)
+        outer.addWidget(sep)
+
+        # ── 右列：筛选条件 + 底部复选框 ──
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
+
+        right = QGridLayout()
+        right.setVerticalSpacing(7)
+        right.setHorizontalSpacing(8)
+
+        # 特性
+        self.ability_filter = QComboBox()
+        self.ability_filter.addItem("任意", 255)
+        self.ability_filter.addItem("0", 0)
+        self.ability_filter.addItem("1", 1)
+        self.ability_filter.addItem("隐藏", 2)
+        self.ability_filter.setStyleSheet(css_combo)
+        lbl = QLabel("特性")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 0, 0)
+        right.addWidget(self.ability_filter, 0, 1)
+
+        # 性别
+        self.gender_filter = QComboBox()
+        self.gender_filter.addItem("任意", 255)
+        self.gender_filter.addItem("雄性", 0)
+        self.gender_filter.addItem("雌性", 1)
+        self.gender_filter.addItem("无性别", 2)
+        self.gender_filter.setStyleSheet(css_combo)
+        lbl = QLabel("性别")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 1, 0)
+        right.addWidget(self.gender_filter, 1, 1)
+
+        # Height
+        self.height_min = self._spin(0, 255, 0)
+        self.height_min.setFixedWidth(80)
+        self.height_min.setStyleSheet(css_ctrl)
+        self.height_max = self._spin(0, 255, 255)
+        self.height_max.setFixedWidth(80)
+        self.height_max.setStyleSheet(css_ctrl)
+        lbl = QLabel("Height")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 2, 0)
+        ht = QHBoxLayout()
+        ht.setSpacing(6)
+        ht.addWidget(self.height_min)
+        ht.addWidget(self.height_max)
+        ht.addStretch()
+        right.addLayout(ht, 2, 1)
+
+        # 性格
+        self.nature_combo = QComboBox()
+        self.nature_combo.addItem("任意", -1)
+        for index, nature in enumerate(NATURES_ZH):
+            self.nature_combo.addItem(nature, index)
+        self.nature_combo.setStyleSheet(css_combo)
+        lbl = QLabel("性格")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 3, 0)
+        right.addWidget(self.nature_combo, 3, 1)
+
+        # 异色
         self.shiny_filter = QComboBox()
         self.shiny_filter.addItem("任意", "any")
         self.shiny_filter.addItem("异色", "shiny")
         self.shiny_filter.addItem("Star", "star")
         self.shiny_filter.addItem("Square", "square")
         self.shiny_filter.addItem("非异色", "none")
-        self.ability_filter = QComboBox()
-        self.ability_filter.addItem("任意", 255)
-        self.ability_filter.addItem("0", 0)
-        self.ability_filter.addItem("1", 1)
-        self.ability_filter.addItem("隐藏", 2)
-        self.gender_filter = QComboBox()
-        self.gender_filter.addItem("任意", 255)
-        self.gender_filter.addItem("雄性", 0)
-        self.gender_filter.addItem("雌性", 1)
-        self.gender_filter.addItem("无性别", 2)
-        self.nature_combo = QComboBox()
-        self.nature_combo.addItem("任意", -1)
-        for index, nature in enumerate(NATURES_ZH):
-            self.nature_combo.addItem(nature, index)
-        self.height_min = self._spin(0, 255, 0)
-        self.height_max = self._spin(0, 255, 255)
-        self.weight_min = self._spin(0, 255, 0)
-        self.weight_max = self._spin(0, 255, 255)
-        self.skip_filter = QCheckBox("取消筛选")
-        self.show_stats_check = QCheckBox("显示能力值")
-        self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
-        self.iv_calculator_button = QPushButton("个体值计算器")
-        self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
+        self.shiny_filter.setStyleSheet(css_combo)
+        lbl = QLabel("异色")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 4, 0)
+        right.addWidget(self.shiny_filter, 4, 1)
 
+        # Weight
+        self.weight_min = self._spin(0, 255, 0)
+        self.weight_min.setFixedWidth(80)
+        self.weight_min.setStyleSheet(css_ctrl)
+        self.weight_max = self._spin(0, 255, 255)
+        self.weight_max.setFixedWidth(80)
+        self.weight_max.setStyleSheet(css_ctrl)
+        lbl = QLabel("Weight")
+        lbl.setStyleSheet(css_label)
+        lbl.setFixedWidth(70)
+        right.addWidget(lbl, 5, 0)
+        wt = QHBoxLayout()
+        wt.setSpacing(6)
+        wt.addWidget(self.weight_min)
+        wt.addWidget(self.weight_max)
+        wt.addStretch()
+        right.addLayout(wt, 5, 1)
+
+        right_col.addLayout(right)
+
+        # 取消筛选
+        self.skip_filter = QCheckBox("取消筛选")
+        self.skip_filter.setStyleSheet(css_cb)
+        right_col.addWidget(self.skip_filter)
+
+        right_col.addStretch()
+        outer.addLayout(right_col, 1)
+
+        # 保留旧控件引用（隐藏）
         self.nature_list = QListWidget()
         self.nature_list.setVisible(False)
-        self.nature_list.setMaximumHeight(126)
         for nature in NATURES:
             item = QListWidgetItem(nature)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)
             self.nature_list.addItem(item)
-        nature_buttons = QHBoxLayout()
         self.all_natures_button = QPushButton("All natures")
         self.all_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Checked))
         self.clear_natures_button = QPushButton("Clear")
         self.clear_natures_button.clicked.connect(lambda: self._set_all_natures(Qt.CheckState.Unchecked))
-        self.all_natures_button.setVisible(False)
-        self.clear_natures_button.setVisible(False)
 
-        iv_grid = QGridLayout()
-        self.iv_min: list[QSpinBox] = []
-        self.iv_max: list[QSpinBox] = []
-        iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
-        for row, label in enumerate(iv_labels):
-            min_spin = self._spin(0, 31, 0)
-            max_spin = self._spin(0, 31, 31)
-            self.iv_min.append(min_spin)
-            self.iv_max.append(max_spin)
-            iv_grid.addWidget(QLabel(label), row, 0)
-            iv_grid.addWidget(min_spin, row, 1)
-            iv_grid.addWidget(max_spin, row, 2)
-        left = QWidget()
-        left.setLayout(iv_grid)
-        layout.addWidget(left, 0, 0, 6, 3)
-        layout.addWidget(QLabel("特性"), 0, 4)
-        layout.addWidget(self.ability_filter, 0, 5, 1, 2)
-        layout.addWidget(QLabel("性别"), 1, 4)
-        layout.addWidget(self.gender_filter, 1, 5, 1, 2)
-        layout.addWidget(QLabel("Height"), 2, 4)
-        layout.addWidget(self.height_min, 2, 5)
-        layout.addWidget(self.height_max, 2, 6)
-        layout.addWidget(QLabel("性格"), 3, 4)
-        layout.addWidget(self.nature_combo, 3, 5, 1, 2)
-        layout.addWidget(QLabel("异色"), 4, 4)
-        layout.addWidget(self.shiny_filter, 4, 5, 1, 2)
-        layout.addWidget(QLabel("Weight"), 5, 4)
-        layout.addWidget(self.weight_min, 5, 5)
-        layout.addWidget(self.weight_max, 5, 6)
-        layout.addWidget(self.show_stats_check, 6, 0, 1, 3)
-        layout.addWidget(self.iv_calculator_button, 7, 0, 1, 3)
-        layout.addWidget(self.skip_filter, 6, 4, 1, 3)
-        layout.setColumnStretch(3, 1)
         return group
 
     def _build_right_side(self) -> QWidget:
@@ -1020,14 +1276,19 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         toolbar = QHBoxLayout()
-        self.generate_button = QPushButton()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        btn_css = "QPushButton { min-height: 30px; max-height: 30px; padding: 0 14px; }"
+        self.generate_button = QPushButton("生成")
+        self.generate_button.setStyleSheet(btn_css)
         self.generate_button.setObjectName("PrimaryButton")
         self.generate_button.clicked.connect(self.generate_results)
-        self.copy_button = QPushButton()
+        self.copy_button = QPushButton("复制")
+        self.copy_button.setStyleSheet(btn_css)
         self.copy_button.clicked.connect(self.copy_results)
-        self.export_button = QPushButton()
+        self.export_button = QPushButton("导出 CSV")
+        self.export_button.setStyleSheet(btn_css)
         self.export_button.clicked.connect(self.export_results)
-        self.result_count = QLabel("0 results")
+        self.result_count = QLabel("0 条结果")
         self.result_count.setObjectName("ResultCount")
         toolbar.addWidget(self.generate_button)
         toolbar.addWidget(self.copy_button)
@@ -1056,152 +1317,164 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QWidget {
-                background: #101418;
-                color: #E7ECE9;
+                background: #f2f1ee;
+                color: #1a1a1a;
                 font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
                 font-size: 12px;
             }
+            QLabel {
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
             QFrame#Header {
-                background: #182027;
-                border: 1px solid #2D3B3F;
-                border-radius: 6px;
+                background: #ffffff;
+                border: 1px solid #c8c6c0;
+                border-radius: 4px;
             }
             QLabel#WindowTitle {
                 font-size: 20px;
                 font-weight: 700;
-                color: #F4F1E8;
+                color: #1a1a1a;
             }
             QLabel#Badge, QLabel#ResultCount {
-                color: #91E0C3;
+                color: #23936b;
                 font-weight: 600;
             }
             QTabWidget::pane {
-                border: 1px solid #2D3B3F;
+                border: 1px solid #c8c6c0;
                 border-radius: 4px;
                 top: -1px;
+                background: #f2f1ee;
             }
             QTabBar::tab {
-                background: #182027;
-                border: 1px solid #2D3B3F;
-                color: #AEB9B8;
+                background: #e8e6e1;
+                border: 1px solid #c8c6c0;
+                color: #555;
                 min-width: 150px;
                 padding: 8px 18px;
                 font-weight: 700;
             }
             QTabBar::tab:selected {
-                background: #D7C17C;
-                color: #101418;
-                border-color: #E6D79B;
+                background: #ffffff;
+                color: #1a1a1a;
+                border-bottom-color: #ffffff;
             }
             QTabBar::tab:hover:!selected {
-                background: #223038;
-                color: #F4F1E8;
+                background: #ddd9d2;
+                color: #1a1a1a;
             }
             QLabel#Preview {
-                background: #070A0D;
-                border: 1px solid #2D3B3F;
+                background: #e8e6e1;
+                border: 1px solid #c8c6c0;
                 border-radius: 4px;
-                color: #6F7D80;
+                color: #767676;
             }
             QGroupBox {
-                border: 1px solid #2B373A;
+                border: 1px solid #c8c6c0;
                 border-radius: 6px;
                 margin-top: 9px;
                 padding: 10px 8px 8px 8px;
-                background: #141B20;
+                background: #ffffff;
                 font-weight: 700;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 9px;
                 padding: 0 4px;
-                color: #D7C17C;
+                color: #23936b;
             }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget {
-                background: #0C1014;
-                border: 1px solid #324046;
+            QLineEdit, QDoubleSpinBox, QComboBox, QListWidget {
+                background: #ffffff;
+                border: 1px solid #c8c6c0;
                 border-radius: 4px;
                 min-height: 24px;
                 padding: 2px 6px;
-                selection-background-color: #2C6F73;
+                color: #1a1a1a;
+                selection-background-color: #c8e0d0;
             }
             QPlainTextEdit {
-                background: #0A0E12;
-                border: 1px solid #33444A;
+                background: #ffffff;
+                border: 1px solid #c8c6c0;
                 border-radius: 4px;
-                color: #E7ECE9;
+                color: #1a1a1a;
                 font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
                 font-size: 12px;
                 padding: 10px;
-                selection-background-color: #2C6F73;
+                selection-background-color: #c8e0d0;
             }
             QTextEdit#EasyConLog {
-                background: #05080A;
-                border: 1px solid #2E3B3F;
-                border-radius: 4px;
-                color: #E7ECE9;
+                background: #282826;
+                border: 1px solid #c8c6c0;
+                border-radius: 0;
+                color: #e7ece9;
                 font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
                 font-size: 11px;
                 padding: 8px;
             }
             QFrame#EasyConToolbar {
-                background: #151D22;
-                border: 1px solid #2F3E43;
+                background: #ffffff;
+                border: 1px solid #c8c6c0;
                 border-radius: 4px;
             }
             QStatusBar {
-                background: #0C1014;
-                border: 1px solid #2D3B3F;
-                border-radius: 4px;
-                color: #AEB9B8;
+                background: #e8e6e1;
+                border-top: 1px solid #c8c6c0;
+                color: #767676;
             }
             QLineEdit#Readonly {
-                color: #91E0C3;
-                background: #10171A;
+                color: #23936b;
+                background: #e8e6e1;
             }
             QPushButton {
-                background: #26343A;
-                border: 1px solid #405156;
+                background: #ffffff;
+                border: 1px solid #c8c6c0;
                 border-radius: 4px;
                 min-height: 26px;
                 padding: 4px 10px;
                 font-weight: 600;
+                color: #1a1a1a;
             }
             QPushButton:hover {
-                background: #30444B;
-                border-color: #5B7478;
+                background: #e8e6e1;
+                border-color: #aaa;
             }
             QPushButton#PrimaryButton {
-                background: #D7C17C;
-                color: #101418;
-                border-color: #E6D79B;
+                background: #23936b;
+                color: #ffffff;
+                border-color: #23936b;
+            }
+            QPushButton#PrimaryButton:hover {
+                background: #1e7d5a;
             }
             QTableWidget {
-                background: #0C1014;
-                alternate-background-color: #111A1E;
-                border: 1px solid #2D3B3F;
-                gridline-color: #203036;
+                background: #ffffff;
+                alternate-background-color: #f5f4f0;
+                border: 1px solid #c8c6c0;
+                gridline-color: #e0ded8;
+                color: #1a1a1a;
             }
             QTableWidget::item:selected {
-                background: #1E91E6;
-                color: #FFFFFF;
+                background: #23936b;
+                color: #ffffff;
             }
             QHeaderView::section {
-                background: #19252A;
-                color: #F4F1E8;
+                background: #e8e6e1;
+                color: #1a1a1a;
                 border: 0;
-                border-right: 1px solid #2D3B3F;
+                border-right: 1px solid #c8c6c0;
+                border-bottom: 1px solid #c8c6c0;
                 padding: 6px;
                 font-weight: 700;
             }
             """
         )
 
-    def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
-        spin = QSpinBox()
-        spin.setRange(minimum, maximum)
-        spin.setValue(value)
-        return spin
+    def _spin(self, minimum: int, maximum: int, value: int) -> QLineEdit:
+        w = QLineEdit(str(value))
+        w.setValidator(QIntValidator(minimum, maximum))
+        w.setAlignment(Qt.AlignmentFlag.AlignRight)
+        return w
 
     def _double_spin(self, minimum: float, maximum: float, value: float, decimals: int) -> QDoubleSpinBox:
         spin = QDoubleSpinBox()
@@ -1247,8 +1520,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
         name = QLineEdit(self.profile_name.text())
-        tid = self._spin(0, 65535, self.tid.value())
-        sid = self._spin(0, 65535, self.sid.value())
+        tid = self._spin(0, 65535, int(self.tid.text() or 0))
+        sid = self._spin(0, 65535, int(self.sid.text() or 0))
         version = QComboBox()
         for game_version in (GameVersion.BD, GameVersion.SP):
             version.addItem(self._game_label(game_version), game_version.value)
@@ -1275,8 +1548,8 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.profile_name.setText(name.text() or "-")
-        self.tid.setValue(tid.value())
-        self.sid.setValue(sid.value())
+        self.tid.setText(str(int(tid.text() or 0)))
+        self.sid.setText(str(int(sid.text() or 0)))
         self.national_dex.setChecked(national_dex.isChecked())
         self.shiny_charm.setChecked(shiny_charm.isChecked())
         self.oval_charm.setChecked(oval_charm.isChecked())
@@ -1366,43 +1639,43 @@ class MainWindow(QMainWindow):
         roi_x, roi_y, roi_w, roi_h = config.capture.roi
         self.monitor_window.setChecked(config.capture.monitor_window)
         self.window_prefix.setText(config.capture.window_prefix)
-        self.camera.setValue(config.capture.camera)
-        self.x.setValue(roi_x)
-        self.y.setValue(roi_y)
-        self.w.setValue(roi_w)
-        self.h.setValue(roi_h)
+        self.camera.setText(str(config.capture.camera))
+        self.x.setText(str(roi_x))
+        self.y.setText(str(roi_y))
+        self.w.setText(str(roi_w))
+        self.h.setText(str(roi_h))
         self.threshold.setValue(config.capture.threshold)
         self.white_delay.setValue(config.white_delay)
-        self.advance_delay.setValue(config.advance_delay)
-        self.advance_delay_2.setValue(config.advance_delay_2)
-        self.npc_count.setValue(config.npc)
-        self.timeline_npc.setValue(config.timeline_npc)
-        self.pokemon_npc.setValue(config.pokemon_npc)
-        self.display_percent.setValue(config.display_percent)
+        self.advance_delay.setText(str(config.advance_delay))
+        self.advance_delay_2.setText(str(config.advance_delay_2))
+        self.npc_count.setText(str(config.npc))
+        self.timeline_npc.setText(str(config.timeline_npc))
+        self.pokemon_npc.setText(str(config.pokemon_npc))
+        self.display_percent.setText(str(config.display_percent))
         self._eye_image_path = config.capture.eye_image_path
 
     def _config_from_form(self) -> ProjectXsTrackingConfig:
         loaded = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
         capture = BlinkCaptureConfig(
             eye_image_path=self._eye_image_path or loaded.capture.eye_image_path,
-            roi=(self.x.value(), self.y.value(), self.w.value(), self.h.value()),
+            roi=(int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0)),
             threshold=self.threshold.value(),
             blink_count=DEFAULT_BLINK_COUNT,
             monitor_window=self.monitor_window.isChecked(),
             window_prefix=self.window_prefix.text(),
             crop=loaded.capture.crop,
-            camera=self.camera.value(),
+            camera=int(self.camera.text() or 0),
         )
         return ProjectXsTrackingConfig(
             source_path=loaded.source_path,
             capture=capture,
             white_delay=self.white_delay.value(),
-            advance_delay=self.advance_delay.value(),
-            advance_delay_2=self.advance_delay_2.value(),
-            npc=self.npc_count.value(),
-            pokemon_npc=self.pokemon_npc.value(),
-            timeline_npc=self.timeline_npc.value(),
-            display_percent=self.display_percent.value(),
+            advance_delay=int(self.advance_delay.text() or 0),
+            advance_delay_2=int(self.advance_delay_2.text() or 0),
+            npc=int(self.npc_count.text() or 0),
+            pokemon_npc=int(self.pokemon_npc.text() or 0),
+            timeline_npc=int(self.timeline_npc.text() or 0),
+            display_percent=int(self.display_percent.text() or 0),
         )
 
     def save_current_config(self) -> None:
@@ -1431,7 +1704,7 @@ class MainWindow(QMainWindow):
     def start_roi_selection(self) -> None:
         if self._is_capturing():
             return
-        self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         self._begin_preview_selection("roi")
         self.statusBar().showMessage(self._text("roi_selecting"))
 
@@ -1466,7 +1739,7 @@ class MainWindow(QMainWindow):
             self.apply_selected_roi(roi)
 
     def apply_selected_roi(self, roi: object) -> None:
-        old_roi = self._roi_before_selection or (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        old_roi = self._roi_before_selection or (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
         try:
             import cv2
@@ -1528,16 +1801,16 @@ class MainWindow(QMainWindow):
             return
         self._eye_image_path = output_path
         self._selection_mode = "roi"
-        self._roi_before_selection = (self.x.value(), self.y.value(), self.w.value(), self.h.value())
+        self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         self._display_frame(self._latest_preview_frame if self._latest_preview_frame is not None else frame)
         self.preview_label.set_selection_enabled(True)
         self.statusBar().showMessage(f"{self._text('eye_captured_select_roi')}: {output_path}")
 
     def _set_roi_values(self, roi: tuple[int, int, int, int]) -> None:
-        self.x.setValue(roi[0])
-        self.y.setValue(roi[1])
-        self.w.setValue(roi[2])
-        self.h.setValue(roi[3])
+        self.x.setText(str(roi[0]))
+        self.y.setText(str(roi[1]))
+        self.w.setText(str(roi[2]))
+        self.h.setText(str(roi[3]))
 
     def _update_preview_frame(self) -> None:
         try:
@@ -1618,9 +1891,9 @@ class MainWindow(QMainWindow):
             return
         template = record.template
         if hasattr(self, "level_display"):
-            self.level_display.setValue(template.level)
+            self.level_display.setText(str(template.level))
         if hasattr(self, "iv_count_display"):
-            self.iv_count_display.setValue(template.iv_count)
+            self.iv_count_display.setText(str(template.iv_count))
         if hasattr(self, "template_ability_display"):
             ability_text = {0: "0", 1: "1", 2: "隐藏", 255: "0/1"}.get(template.ability, "任意")
             index = self.template_ability_display.findText(ability_text)
@@ -1629,7 +1902,7 @@ class MainWindow(QMainWindow):
             self.template_shiny_display.setCurrentText("锁闪" if template.shiny == Shiny.NEVER else "随机")
 
     def _update_tsv(self) -> None:
-        self.tsv.setText(str(self.tid.value() ^ self.sid.value()))
+        self.tsv.setText(str(int(self.tid.text() or 0) ^ int(self.sid.text() or 0)))
 
     def _set_all_natures(self, state: Qt.CheckState) -> None:
         for row in range(self.nature_list.count()):
@@ -1671,24 +1944,12 @@ class MainWindow(QMainWindow):
         return (hp, *values)
 
     def open_iv_calculator(self) -> None:
-        row = self.table.currentRow() if hasattr(self, "table") else -1
-        state = self._states[row] if 0 <= row < len(self._states) else None
-        dialog = QDialog(self)
-        dialog.setWindowTitle("个体值计算器" if self.lang == "zh" else "IV Calculator")
-        layout = QGridLayout(dialog)
-        labels = ("HP", "攻击", "防御", "特攻", "特防", "速度") if self.lang == "zh" else IV_LABELS
-        ivs = state.ivs if state is not None else tuple(spin.value() for spin in self.iv_min)
-        for index, (label, value) in enumerate(zip(labels, ivs)):
-            layout.addWidget(QLabel(label), index, 0)
-            spin = self._spin(0, 31, value)
-            layout.addWidget(spin, index, 1)
-        if state is not None:
-            layout.addWidget(QLabel("个性" if self.lang == "zh" else "Characteristic"), 6, 0)
-            layout.addWidget(QLabel(self._characteristic_text(state)), 6, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons, 7, 0, 1, 2)
+        from auto_bdsp_rng.data import load_species_info, get_species_info
+
+        species_table = load_species_info()
+        dialog = _IVCalculatorDialog(species_table, self)
         dialog.exec()
+
 
     def _sync_seed64_from_state32(self) -> None:
         try:
@@ -1733,8 +1994,8 @@ class MainWindow(QMainWindow):
         return Profile8(
             name=self.profile_name.text() or "-",
             version=self._profile_version.value,
-            tid=self.tid.value(),
-            sid=self.sid.value(),
+            tid=int(self.tid.text() or 0),
+            sid=int(self.sid.text() or 0),
             national_dex=self.national_dex.isChecked(),
             shiny_charm=self.shiny_charm.isChecked(),
             oval_charm=self.oval_charm.isChecked(),
@@ -1756,15 +2017,15 @@ class MainWindow(QMainWindow):
             natures = tuple(index == nature_index for index in range(len(NATURES)))
         return (
             StateFilter.from_iv_ranges(
-                [spin.value() for spin in self.iv_min],
-                [spin.value() for spin in self.iv_max],
+                [int(spin.text() or 0) for spin in self.iv_min],
+                [int(spin.text() or 0) for spin in self.iv_max],
                 ability=self.ability_filter.currentData(),
                 gender=self.gender_filter.currentData(),
                 shiny=shiny_value,
-                height_min=self.height_min.value() if hasattr(self, "height_min") else 0,
-                height_max=self.height_max.value() if hasattr(self, "height_max") else 255,
-                weight_min=self.weight_min.value() if hasattr(self, "weight_min") else 0,
-                weight_max=self.weight_max.value() if hasattr(self, "weight_max") else 255,
+                height_min=int(self.height_min.text() or 0) if hasattr(self, "height_min") else 0,
+                height_max=int(self.height_max.text() or 0) if hasattr(self, "height_max") else 255,
+                weight_min=int(self.weight_min.text() or 0) if hasattr(self, "weight_min") else 0,
+                weight_max=int(self.weight_max.text() or 0) if hasattr(self, "weight_max") else 255,
                 skip=self.skip_filter.isChecked() if hasattr(self, "skip_filter") else False,
                 natures=natures,
             ),
@@ -1785,7 +2046,7 @@ class MainWindow(QMainWindow):
         self.advances_value.setText(str(self._tracked_advances))
 
     def advance_current_seed(self) -> None:
-        advances = self.x_to_advance.value()
+        advances = int(self.x_to_advance.text() or 0)
         if advances <= 0:
             return
         try:
@@ -1929,7 +2190,7 @@ class MainWindow(QMainWindow):
                     observation,
                     npc=config.npc,
                     search_min=0,
-                    search_max=max(100_000, self.max_advances.value() if hasattr(self, "max_advances") else 100_000),
+                    search_max=max(100_000, int(self.max_advances.text() or 0) if hasattr(self, "max_advances") else 100_000),
                 )
             except Exception as exc:  # pragma: no cover - exercised through UI polling
                 self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
@@ -1973,7 +2234,7 @@ class MainWindow(QMainWindow):
             box.setText(text)
         self.progress_value.setText(f"{DEFAULT_BLINK_COUNT}/{DEFAULT_BLINK_COUNT}")
         self._sync_seed64_from_state32()
-        self._advance_step = self.npc_count.value() + 1
+        self._advance_step = int(self.npc_count.text() or 0) + 1
         self._tracked_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
         self.advances_value.setText("0")
         self.timer_value.setText("0")
@@ -1994,9 +2255,9 @@ class MainWindow(QMainWindow):
             self._active_record = record
             template = replace(record.template, version=self._profile_version.value)
             generator = StaticGenerator8(
-                self.initial_advances.value(),
-                self.max_advances.value(),
-                self.offset.value(),
+                int(self.initial_advances.text() or 0),
+                int(self.max_advances.text() or 0),
+                int(self.offset.text() or 0),
                 self.lead_combo.currentData(),
                 template,
                 self._current_profile(),
@@ -2107,6 +2368,462 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, title, str(error))
         self.statusBar().showMessage(str(error))
 
+
+
+
+def _compute_iv_range(base_stats, stats, levels, nature, characteristic, hidden_power):
+    """基于 PokeFinder IVChecker 算法计算个体值范围"""
+    iv_order = [0, 1, 2, 5, 3, 4]
+    labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+
+    def _calc_single(bs, st, lv, nat, charac):
+        min_ivs = [31] * 6
+        max_ivs = [0] * 6
+        for i in range(6):
+            for iv in range(32):
+                if nat != 255:
+                    increased, decreased = NATURE_MODIFIERS[nat]
+                    base = ((2 * bs[i] + iv) * lv) // 100 + 5
+                    if i == 0:
+                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                    if i == increased:
+                        base = (base * 110) // 100
+                    elif i == decreased:
+                        base = (base * 90) // 100
+                    if base == st[i]:
+                        min_ivs[i] = min(iv, min_ivs[i])
+                        max_ivs[i] = max(iv, max_ivs[i])
+                else:
+                    if i == 0:
+                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                    else:
+                        base = ((2 * bs[i] + iv) * lv) // 100 + 5
+                    if base == st[i] or (i != 0 and (int(base * 0.9) == st[i] or int(base * 1.1) == st[i])):
+                        min_ivs[i] = min(iv, min_ivs[i])
+                        max_ivs[i] = max(iv, max_ivs[i])
+
+        possible = [[] for _ in range(6)]
+        char_high = 31
+        char_idx = -1
+        if charac != 255:
+            char_idx = iv_order[charac // 5]
+            result = charac % 5
+            for iv_val in range(min_ivs[char_idx], max_ivs[char_idx] + 1):
+                if (iv_val % 5) == result:
+                    if all(iv_val >= min_ivs[j] for j in range(6)):
+                        possible[char_idx].append(iv_val)
+                        char_high = iv_val
+        for i in range(6):
+            if i == char_idx:
+                continue
+            for iv_val in range(min_ivs[i], min(max_ivs[i], char_high) + 1):
+                possible[i].append(iv_val)
+        return possible
+
+    result = None
+    for idx in range(len(stats)):
+        current = _calc_single(base_stats, stats[idx], levels[idx], nature, characteristic)
+        if result is None:
+            result = current
+        else:
+            for j in range(6):
+                result[j] = sorted(set(result[j]) & set(current[j]))
+
+    if hidden_power != 255 and result is not None:
+        parity = [[] for _ in range(6)]
+        for i in range(6):
+            has_even = any(v % 2 == 0 for v in result[i])
+            has_odd = any(v % 2 == 1 for v in result[i])
+            if has_even:
+                parity[i].append(0)
+            if has_odd:
+                parity[i].append(1)
+        temp = [[] for _ in range(6)]
+        for hp in parity[0]:
+            for atk in parity[1]:
+                for def_ in parity[2]:
+                    for spa in parity[3]:
+                        for spd in parity[4]:
+                            for spe in parity[5]:
+                                t = ((hp + 2 * atk + 4 * def_ + 16 * spa + 32 * spd + 8 * spe) * 15) // 63
+                                if t == hidden_power:
+                                    for j, p in enumerate([hp, atk, def_, spa, spd, spe]):
+                                        temp[j].extend(v for v in result[j] if v % 2 == p)
+        for i in range(6):
+            result[i] = sorted(set(temp[i]))
+
+    return result if result else [[] for _ in range(6)]
+
+
+def _format_iv_range(ivs):
+    if not ivs:
+        return "无效"
+    if len(ivs) == 1:
+        return str(ivs[0])
+    parts = []
+    start = ivs[0]
+    for i in range(1, len(ivs)):
+        if ivs[i] != ivs[i - 1] + 1:
+            if start == ivs[i - 1]:
+                parts.append(str(start))
+            else:
+                parts.append(f"{start}-{ivs[i - 1]}")
+            start = ivs[i]
+    if start == ivs[-1]:
+        parts.append(str(start))
+    else:
+        parts.append(f"{start}-{ivs[-1]}")
+    return ", ".join(parts)
+
+
+def _compute_stat(base, iv, lv, nature, stat_index):
+    if stat_index == 0:
+        s = ((2 * base + iv) * lv) // 100 + lv + 10
+    else:
+        s = ((2 * base + iv) * lv) // 100 + 5
+    if nature != 255:
+        increased, decreased = NATURE_MODIFIERS[nature]
+        if stat_index == increased:
+            s = (s * 110) // 100
+        elif stat_index == decreased:
+            s = (s * 90) // 100
+    return s
+
+
+def _compute_next_level(base_stats, ivs, level, nature):
+    labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+    result = [level] * 6
+    for i in range(6):
+        if len(ivs[i]) < 2:
+            continue
+        for lv in range(level + 1, 101):
+            found = False
+            for j in range(1, len(ivs[i])):
+                prev = _compute_stat(base_stats[i], ivs[i][j - 1], lv, nature, i)
+                curr = _compute_stat(base_stats[i], ivs[i][j], lv, nature, i)
+                if prev < curr:
+                    result[i] = lv
+                    found = True
+                    break
+            if found:
+                break
+    return result
+
+
+class _IVCalculatorDialog(QDialog):
+    """个体值计算器 — 基于 PokeFinder IVChecker 算法"""
+
+    _SPECIES_NAMES: dict[int, str] | None = None
+
+    def __init__(self, species_table, parent=None):
+        super().__init__(parent)
+        self._species_table = species_table
+        self._rows = 0
+        self._entry_grid = None
+
+        self.setWindowTitle("个体值计算器")
+        self.setMinimumSize(860, 580)
+        self.resize(900, 620)
+        self.setStyleSheet("background: #f2f1ee;")
+
+        self._build_ui()
+        self._add_entry()
+        self._on_game_changed()
+
+    @classmethod
+    def _load_species_names(cls):
+        if cls._SPECIES_NAMES is not None:
+            return cls._SPECIES_NAMES
+        cls._SPECIES_NAMES = {}
+        names_path = Path(__file__).resolve().parents[3] / "third_party" / "PokeFinder" / "Core" / "Resources" / "i18n" / "zh" / "species_zh.txt"
+        if names_path.exists():
+            with open(names_path, encoding="utf-8-sig") as f:
+                for i, line in enumerate(f, start=1):
+                    name = line.strip()
+                    if name:
+                        cls._SPECIES_NAMES[i] = name
+        return cls._SPECIES_NAMES
+
+    def _build_ui(self):
+        main = QHBoxLayout(self)
+        main.setContentsMargins(16, 16, 16, 16)
+        main.setSpacing(14)
+
+        css_ctrl = "QComboBox, QLineEdit { min-height: 32px; max-height: 32px; }"
+        css_btn = (
+            "QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
+            " background: #ffffff; border: 1px solid #c8c6c0; border-radius: 3px; color: #1a1a1a;"
+            " font-size: 12px; }"
+            " QPushButton:hover { background: #e8e6e1; }"
+        )
+        css_primary = (
+            "QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
+            " background: #159a6a; border: 1px solid #12845b; border-radius: 3px; color: #ffffff;"
+            " font-size: 12px; font-weight: 700; }"
+            " QPushButton:hover { background: #12845b; }"
+        )
+        css_entry = "QLineEdit { min-height: 32px; max-height: 32px; max-width: 75px; }"
+
+        # ── 左侧 ──
+        left = QVBoxLayout()
+        left.setSpacing(10)
+
+        # 设置分组
+        settings = QGroupBox("设置")
+        sl = QVBoxLayout(settings)
+        sl.setSpacing(8)
+
+        # 第一行
+        r1 = QHBoxLayout()
+        r1.setSpacing(10)
+        r1.addWidget(QLabel("游戏"))
+        self._game_combo = QComboBox()
+        self._game_combo.setFixedWidth(200)
+        self._game_combo.addItem("晶灿钻石/明亮珍珠", "BDSP")
+        self._game_combo.currentIndexChanged.connect(self._on_game_changed)
+        r1.addWidget(self._game_combo)
+        r1.addWidget(QLabel("宝可梦"))
+        self._pokemon_combo = QComboBox()
+        self._pokemon_combo.setEditable(True)
+        self._pokemon_combo.setFixedWidth(170)
+        self._pokemon_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._pokemon_combo.completer().setFilterMode(Qt.MatchFlag.MatchContains)
+        self._pokemon_combo.installEventFilter(self)
+        self._pokemon_combo.currentIndexChanged.connect(self._on_pokemon_changed)
+        r1.addWidget(self._pokemon_combo)
+        r1.addStretch()
+        sl.addLayout(r1)
+
+        # 第二行
+        r2 = QHBoxLayout()
+        r2.setSpacing(10)
+        r2.addWidget(QLabel("个性"))
+        self._char_combo = QComboBox()
+        self._char_combo.setFixedWidth(150)
+        self._char_combo.addItem("无", 255)
+        chars = ["非常喜欢吃", "经常打瞌睡", "经常午睡", "经常乱扔东西", "喜欢放松",
+                 "以力气自豪", "喜欢打闹", "有点易怒", "喜欢打架", "血气方刚",
+                 "身体强壮", "能忍耐", "抗打能力强", "不屈不挠", "毅力十足",
+                 "好奇心强", "爱恶作剧", "考虑周到", "经常思考", "非常讲究",
+                 "意志坚强", "有点固执", "讨厌输", "有点爱逞强", "忍耐力强",
+                 "喜欢跑步", "警觉性高", "冲动", "有点轻浮", "逃得快"]
+        for i, c in enumerate(chars):
+            self._char_combo.addItem(c, i)
+        r2.addWidget(self._char_combo)
+        r2.addWidget(QLabel("觉醒力量"))
+        self._hp_combo = QComboBox()
+        self._hp_combo.setFixedWidth(150)
+        self._hp_combo.addItem("无", 255)
+        hp_types = ["格斗", "飞行", "毒", "地面", "岩石", "虫", "幽灵", "钢",
+                    "火", "水", "草", "电", "超能力", "冰", "龙", "恶"]
+        for i, t in enumerate(hp_types):
+            self._hp_combo.addItem(t, i)
+        r2.addWidget(self._hp_combo)
+        r2.addWidget(QLabel("性格"))
+        self._nature_combo = QComboBox()
+        self._nature_combo.setFixedWidth(150)
+        self._nature_combo.addItem("无", 255)
+        for i, n in enumerate(NATURES_ZH):
+            self._nature_combo.addItem(n, i)
+        r2.addWidget(self._nature_combo)
+        r2.addStretch()
+        sl.addLayout(r2)
+
+        # 第三行：操作按钮
+        r3 = QHBoxLayout()
+        r3.setSpacing(10)
+        add_btn = QPushButton("新增行")
+        add_btn.setStyleSheet(css_btn)
+        add_btn.clicked.connect(self._add_entry)
+        r3.addWidget(add_btn)
+        del_btn = QPushButton("删除行")
+        del_btn.setStyleSheet(css_btn)
+        del_btn.clicked.connect(self._remove_entry)
+        r3.addWidget(del_btn)
+        calc_btn = QPushButton("计算")
+        calc_btn.setStyleSheet(css_primary)
+        calc_btn.clicked.connect(self._calculate)
+        r3.addWidget(calc_btn)
+        r3.addStretch()
+        sl.addLayout(r3)
+        left.addWidget(settings)
+
+        # 能力值输入
+        input_group = QGroupBox("能力值输入")
+        ivl = QVBoxLayout(input_group)
+        ivl.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(6)
+        widths = [70, 75, 75, 75, 75, 75, 75]
+        for h, w in zip(("等级", "HP", "攻击", "防御", "特攻", "特防", "速度"), widths):
+            lbl = QLabel(h)
+            lbl.setFixedWidth(w)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("font-weight: 700;")
+            hdr.addWidget(lbl)
+        hdr.addStretch()
+        ivl.addLayout(hdr)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(240)
+        self._entry_container = QWidget()
+        self._entry_grid = QGridLayout(self._entry_container)
+        self._entry_grid.setContentsMargins(0, 4, 0, 0)
+        self._entry_grid.setSpacing(4)
+        scroll.setWidget(self._entry_container)
+        ivl.addWidget(scroll)
+        left.addWidget(input_group, 1)
+        main.addLayout(left, 7)
+
+        # ── 右侧 ──
+        right = QVBoxLayout()
+        right.setSpacing(10)
+
+        base_group = QGroupBox("种族值")
+        bl = QGridLayout(base_group)
+        bl.setVerticalSpacing(8)
+        bl.setHorizontalSpacing(10)
+        self._base_labels = {}
+        for i, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
+            lbl = QLabel(label)
+            lbl.setFixedWidth(40)
+            bl.addWidget(lbl, i, 0)
+            val = QLabel("-")
+            val.setStyleSheet("font-weight: 600;")
+            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._base_labels[label] = val
+            bl.addWidget(val, i, 1)
+        bl.setRowStretch(6, 1)
+        right.addWidget(base_group, 2)
+
+        result_group = QGroupBox("计算结果")
+        rl = QGridLayout(result_group)
+        rl.setVerticalSpacing(8)
+        rl.setHorizontalSpacing(10)
+        self._result_labels = {}
+        self._next_level_label = None
+        for i, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
+            lbl = QLabel(label)
+            lbl.setFixedWidth(40)
+            rl.addWidget(lbl, i, 0)
+            val = QLabel("-")
+            val.setStyleSheet("font-weight: 600; color: #1a1a1a;")
+            self._result_labels[label] = val
+            rl.addWidget(val, i, 1)
+        rl.addWidget(QLabel("下一级"), 6, 0)
+        self._next_level_label = QLabel("-")
+        self._next_level_label.setStyleSheet("font-weight: 600; color: #1a1a1a;")
+        self._next_level_label.setWordWrap(True)
+        rl.addWidget(self._next_level_label, 6, 1)
+        rl.setRowStretch(7, 1)
+        right.addWidget(result_group, 3)
+
+        close_btn = QPushButton("关闭")
+        close_btn.setStyleSheet(
+            "QPushButton { min-height: 36px; max-height: 36px;"
+            " background: #ffffff; border: 1px solid #c8c6c0; border-radius: 3px; color: #1a1a1a; }"
+            " QPushButton:hover { background: #e8e6e1; }"
+        )
+        close_btn.clicked.connect(self.close)
+        right.addWidget(close_btn)
+
+        main.addLayout(right, 3)
+
+    def _add_entry(self):
+        self._rows += 1
+        r = self._rows
+        defaults = [1, 0, 0, 0, 0, 0, 0]
+        widths = [70, 75, 75, 75, 75, 75, 75]
+        for col, (default, w) in enumerate(zip(defaults, widths)):
+            wgt = QLineEdit(str(default))
+            wgt.setFixedWidth(w)
+            wgt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            wgt.setValidator(QIntValidator(0, 999 if col == 0 else 9999))
+            self._entry_grid.addWidget(wgt, r, col)
+
+    def eventFilter(self, obj, event):
+        if obj is self._pokemon_combo and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                popup = self._pokemon_combo.completer().popup()
+                if popup is not None:
+                    popup.hide()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _remove_entry(self):
+        if self._rows <= 1:
+            return
+        for col in range(7):
+            item = self._entry_grid.itemAtPosition(self._rows, col)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._rows -= 1
+
+    def _on_game_changed(self):
+        species_names = self._load_species_names()
+        specie_list = []
+        for idx, info in enumerate(self._species_table):
+            if idx > 0 and info.present:
+                name = species_names.get(info.species, f"#{info.species}")
+                specie_list.append((name, idx))
+        self._pokemon_combo.blockSignals(True)
+        self._pokemon_combo.clear()
+        for name, idx in specie_list:
+            self._pokemon_combo.addItem(name, idx)
+        self._pokemon_combo.blockSignals(False)
+        if self._pokemon_combo.count() > 0:
+            self._on_pokemon_changed()
+
+    def _on_pokemon_changed(self):
+        idx = self._pokemon_combo.currentData()
+        if idx is None:
+            return
+        info = self._species_table[idx]
+        stat_names = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+        for i, name in enumerate(stat_names):
+            self._base_labels[name].setText(str(info.stats[i]))
+
+    def _calculate(self):
+        base_stats = [0] * 6
+        species_idx = self._pokemon_combo.currentData()
+        if species_idx is not None:
+            info = self._species_table[species_idx]
+            base_stats = list(info.stats)
+
+        stats = []
+        levels = []
+        for row in range(1, self._rows + 1):
+            row_stats = []
+            for col in range(7):
+                item = self._entry_grid.itemAtPosition(row, col)
+                if item and item.widget():
+                    val = int(item.widget().text() or 0)
+                else:
+                    val = 0
+                if col == 0:
+                    levels.append(val if val > 0 else 1)
+                else:
+                    row_stats.append(val)
+            if len(row_stats) == 6:
+                stats.append(row_stats)
+
+        if not stats:
+            return
+
+        nature = self._nature_combo.currentData()
+        characteristic = self._char_combo.currentData()
+        hidden_power = self._hp_combo.currentData()
+
+        ivs = _compute_iv_range(base_stats, stats, levels, nature, characteristic, hidden_power)
+
+        stat_names = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+        for i, name in enumerate(stat_names):
+            self._result_labels[name].setText(_format_iv_range(ivs[i]))
+
+        next_levels = _compute_next_level(base_stats, ivs, levels[-1], nature)
+        self._next_level_label.setText(", ".join(str(l) for l in next_levels))
 
 def create_window() -> MainWindow:
     return MainWindow()
