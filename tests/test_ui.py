@@ -10,6 +10,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog
 
 from auto_bdsp_rng.ui import MainWindow
+from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 
 
 @pytest.fixture
@@ -18,18 +19,25 @@ def app(monkeypatch):
     return QApplication.instance() or QApplication([])
 
 
+def _set_bdsp_seed(window: MainWindow) -> None:
+    window.bdsp_seed64_inputs[0].setText("123456789ABCDEF0")
+    window.bdsp_seed64_inputs[1].setText("1111111122222222")
+
+
 def test_main_window_generates_static_results(app):
     window = MainWindow()
 
     assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
-        "Project_Xs",
-        "BDSP / PokeFinder",
+        "Seed 捕捉",
+        "定点数据区",
         "伊机控",
+        "自动定点乱数",
     ]
-    assert window.tabs.tabText(window.tabs.currentIndex()) == "Project_Xs"
+    assert window.tabs.tabText(window.tabs.currentIndex()) == "Seed 捕捉"
 
     window.tabs.setCurrentWidget(window.bdsp_tab)
-    window.max_advances.setValue(2)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
     window.generate_results()
 
     assert window.table.rowCount() == 3
@@ -41,8 +49,8 @@ def test_main_window_generates_static_results(app):
 def test_bdsp_max_advances_matches_pokefinder_limit(app):
     window = MainWindow()
 
-    assert window.max_advances.maximum() == 1_000_000_000
-    assert window.max_advances.value() == 100_000
+    assert window.max_advances.validator().top() == 1_000_000_000
+    assert window.max_advances.text() == "100000"
 
 
 def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
@@ -62,7 +70,8 @@ def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
 def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
-    window.max_advances.setValue(30)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("30")
     iv_header_count = len(window._result_headers())
     window.show_stats_check.setChecked(True)
     window.generate_results()
@@ -84,7 +93,8 @@ def test_bdsp_table_uses_pokefinder_cell_interactions(app):
 def test_main_window_exports_txt_from_results(app, monkeypatch, tmp_path):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
-    window.max_advances.setValue(2)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
     window.generate_results()
     output = tmp_path / "results.txt"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args, **_kwargs: (str(output), "Text files (*.txt)"))
@@ -99,14 +109,15 @@ def test_main_window_exports_txt_from_results(app, monkeypatch, tmp_path):
 def test_main_window_syncs_seed64_display(app):
     window = MainWindow()
 
-    assert window.seed64_outputs[0].text() == "123456789ABCDEF0"
-    assert window.seed64_outputs[1].text() == "1111111122222222"
+    assert window.seed64_outputs[0].text() == ""
+    assert window.seed64_outputs[1].text() == ""
 
 
 def test_seed_update_auto_refreshes_existing_results(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
-    window.max_advances.setValue(2)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
     window.generate_results()
     first_ec = window.table.item(0, 1).text()
 
@@ -121,7 +132,8 @@ def test_seed_update_auto_refreshes_existing_results(app):
 def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
-    window.max_advances.setValue(2)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
     window.generate_results()
     observation = BlinkObservation.from_sequences([0, 1, 0], [0, 12, 24])
     state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
@@ -131,6 +143,8 @@ def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
         "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation",
         lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=42),
     )
+    for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
+        box.setText(text)
 
     window.reidentify_seed()
     window._capture_thread.join(timeout=2)
@@ -149,10 +163,10 @@ def test_main_window_loads_project_xs_config_fields(app):
 
     assert window.window_prefix.text() == "PotPlayer"
     assert window.monitor_window.isChecked() is True
-    assert window.x.value() == 516
-    assert window.y.value() == 377
-    assert window.w.value() == 38
-    assert window.h.value() == 53
+    assert window.x.text() == "516"
+    assert window.y.text() == "377"
+    assert window.w.text() == "38"
+    assert window.h.text() == "53"
     assert window.threshold.value() == 0.7
 
 
@@ -166,6 +180,28 @@ def test_main_window_can_switch_language(app):
     assert window.tabs.tabText(2) == "EasyCon"
 
 
+def test_main_window_has_auto_rng_tab(app):
+    window = MainWindow()
+
+    assert window.tabs.count() == 4
+    assert window.tabs.tabText(3) == "自动定点乱数"
+
+
+def test_auto_rng_panel_blocks_start_when_required_script_parameter_is_missing(app, tmp_path):
+    (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "bdsp过帧.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path)
+    emitted = []
+    panel.startRequested.connect(lambda payload: emitted.append(payload))
+    panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
+
+    panel.start_button.click()
+
+    assert emitted == []
+    assert "缺少必需参数 _目标帧数" in panel.log_view.toPlainText()
+
+
 def test_main_window_applies_selected_roi(app, monkeypatch):
     window = MainWindow()
 
@@ -177,7 +213,7 @@ def test_main_window_applies_selected_roi(app, monkeypatch):
 
     window.apply_selected_roi((20, 30, 40, 50))
 
-    assert window.x.value() == 20
-    assert window.y.value() == 30
-    assert window.w.value() == 40
-    assert window.h.value() == 50
+    assert window.x.text() == "20"
+    assert window.y.text() == "30"
+    assert window.w.text() == "40"
+    assert window.h.text() == "50"

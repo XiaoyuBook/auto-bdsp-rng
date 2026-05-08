@@ -55,9 +55,11 @@ from auto_bdsp_rng.blink_detection import (
     render_eye_preview,
     save_project_xs_config,
 )
+from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
-from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter, StaticGenerator8
+from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
+from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 
 
@@ -283,6 +285,7 @@ TEXT = {
         "project_xs": "Seed 捕捉",
         "bdsp_search": "定点数据区",
         "easycon": "EasyCon",
+        "auto_rng": "Auto Static RNG",
         "status": "Status",
         "config": "Config",
         "browse": "Browse",
@@ -343,6 +346,7 @@ TEXT = {
         "project_xs": "Seed 捕捉",
         "bdsp_search": "定点数据区",
         "easycon": "伊机控",
+        "auto_rng": "自动定点乱数",
         "status": "状态",
         "config": "配置",
         "browse": "浏览",
@@ -598,9 +602,11 @@ class MainWindow(QMainWindow):
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel()
+        self.auto_rng_tab = AutoRngPanel()
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
+        self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
         root_layout.addWidget(self.tabs, 1)
 
         self.setCentralWidget(root)
@@ -1566,6 +1572,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(0, self._text("project_xs"))
         self.tabs.setTabText(1, self._text("bdsp_search"))
         self.tabs.setTabText(2, self._text("easycon"))
+        self.tabs.setTabText(3, self._text("auto_rng"))
         self.status_group.setTitle(self._text("status"))
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
@@ -2250,22 +2257,21 @@ class MainWindow(QMainWindow):
             record = self.encounter_combo.currentData()
             if record is None:
                 raise ValueError("Select a static encounter")
-            seed = self._current_seed_pair()
             state_filter, shiny_mode = self._current_filter()
             self._active_record = record
-            template = replace(record.template, version=self._profile_version.value)
-            generator = StaticGenerator8(
-                int(self.initial_advances.text() or 0),
-                int(self.max_advances.text() or 0),
-                int(self.offset.text() or 0),
-                self.lead_combo.currentData(),
-                template,
-                self._current_profile(),
-                state_filter,
+            states = generate_static_candidates(
+                StaticSearchCriteria(
+                    seed=self._current_seed_pair(),
+                    profile=self._current_profile(),
+                    record=record,
+                    state_filter=state_filter,
+                    initial_advances=int(self.initial_advances.text() or 0),
+                    max_advances=int(self.max_advances.text() or 0),
+                    offset=int(self.offset.text() or 0),
+                    lead=self.lead_combo.currentData(),
+                    shiny_mode=shiny_mode,
+                )
             )
-            states = generator.generate(seed)
-            if shiny_mode == "none":
-                states = [state for state in states if state.shiny == 0]
         except Exception as exc:
             self._show_error("Generation failed", exc)
             return
