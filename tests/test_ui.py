@@ -9,7 +9,7 @@ pytest.importorskip("PySide6")
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
@@ -254,7 +254,8 @@ def test_auto_rng_panel_has_editable_target_form_and_no_old_main_regions(app):
     assert target_form.height_min.value() == 0
     assert target_form.height_max.value() == 255
     assert target_form.shiny_filter.findText("Square") >= 0
-    assert panel.parameter_preview.isVisible() is False
+    assert not hasattr(panel, "parameter_preview")
+    assert not hasattr(panel, "preview_button")
     assert panel.log_view.isReadOnly() is True
     labels = {label.text() for label in panel.findChildren(QLabel)}
     assert "重新测 seed 阈值" not in labels
@@ -301,10 +302,14 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert panel.loop_count.width() == 80
     assert panel.start_button.height() == 34
     assert panel.stop_button.height() == 34
-    assert 360 <= panel.config_panel.minimumWidth() <= 400
+    assert panel.config_panel.minimumWidth() == 300
     assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
     assert panel.strategy_group.maximumHeight() <= 170
-    assert panel.script_group.maximumHeight() <= 280
+    assert panel.script_group.maximumHeight() <= 230
+    assert panel.max_advances.width() <= 150
+    assert panel.seed_script_combo.width() <= 170
+    assert panel.refresh_scripts_button.width() <= 250
+    assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
 def test_auto_rng_locked_target_view_shows_single_target_details(app):
@@ -346,12 +351,15 @@ def test_auto_rng_locked_target_view_shows_single_target_details(app):
     assert values["Gender"].text() == "雄"
     assert values["Height"].text() == "33"
     assert values["Weight"].text() == "155"
+    assert "Characteristic" not in values
     assert "Adv" not in values
     assert "EC" not in values
     assert "raw / trigger / delay" not in values
     assert "current / remaining / final" not in values
 
     locked_layout = panel.locked_target_view.layout()
+    assert locked_layout.itemAtPosition(0, 6).widget().text() == "IVs"
+    assert locked_layout.columnStretch(6) > locked_layout.columnStretch(1)
     for column in range(locked_layout.columnCount()):
         label_item = locked_layout.itemAtPosition(0, column)
         value_item = locked_layout.itemAtPosition(1, column)

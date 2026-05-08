@@ -22,8 +22,6 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngProgress
 from auto_bdsp_rng.automation.auto_rng.scripts import (
-    AUTO_ADVANCE_PARAMETER,
-    AUTO_HIT_PARAMETER,
     DEFAULT_ADVANCE_SCRIPT_NAME,
     DEFAULT_SEED_SCRIPT_NAME,
     AutoScriptError,
@@ -55,7 +53,6 @@ class LockedTargetView(QGroupBox):
             ("性格", "Nature"),
             ("特性", "Ability"),
             ("性别", "Gender"),
-            ("个性", "Characteristic"),
             ("IVs", "IVs"),
             ("身高", "Height"),
             ("体重", "Weight"),
@@ -66,11 +63,11 @@ class LockedTargetView(QGroupBox):
             value = QLabel("-")
             value.setObjectName("Badge")
             value.setWordWrap(False)
-            value.setMinimumWidth(54)
+            value.setMinimumWidth(220 if key == "IVs" else 48)
             self.values[key] = value
             layout.addWidget(label, 0, index)
             layout.addWidget(value, 1, index)
-            layout.setColumnStretch(index, 1)
+            layout.setColumnStretch(index, 5 if key == "IVs" else 1)
         self.clear()
 
     def clear(self, status: str = "未锁定") -> None:
@@ -95,7 +92,6 @@ class LockedTargetView(QGroupBox):
         self.values["IVs"].setText(_ivs_text(ivs))
         self.values["Height"].setText(_display_value(getattr(state, "height", None)))
         self.values["Weight"].setText(_display_value(getattr(state, "weight", None)))
-        self.values["Characteristic"].setText(_characteristic_text(state))
 
 
 class AutoRngWorker(QObject):
@@ -151,7 +147,7 @@ class AutoRngPanel(QWidget):
         self.config_panel = self._build_config_panel()
         splitter.addWidget(self.config_panel)
         splitter.addWidget(self._build_runtime_panel())
-        splitter.setSizes([380, 1040])
+        splitter.setSizes([300, 1120])
         layout.addWidget(splitter, 1)
 
     def _build_toolbar(self) -> QWidget:
@@ -194,8 +190,8 @@ class AutoRngPanel(QWidget):
 
     def _build_config_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(380)
-        panel.setMaximumWidth(380)
+        panel.setMinimumWidth(300)
+        panel.setMaximumWidth(300)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -216,7 +212,7 @@ class AutoRngPanel(QWidget):
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
-            spin.setFixedWidth(200)
+            spin.setFixedWidth(145)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待帧数", self.max_wait_frames)
@@ -224,7 +220,7 @@ class AutoRngPanel(QWidget):
 
     def _build_script_group(self) -> QGroupBox:
         group = QGroupBox("脚本")
-        group.setMaximumHeight(270)
+        group.setMaximumHeight(220)
         layout = QGridLayout(group)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setHorizontalSpacing(8)
@@ -234,25 +230,18 @@ class AutoRngPanel(QWidget):
         self.hit_script_combo = QComboBox()
         self.refresh_scripts_button = QPushButton("刷新脚本列表")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        self.preview_button = QPushButton("参数预览")
-        self.preview_button.clicked.connect(self.update_parameter_preview)
-        self.parameter_preview = QPlainTextEdit()
-        self.parameter_preview.setReadOnly(True)
-        self.parameter_preview.setMaximumHeight(130)
-        self.parameter_preview.setVisible(False)
         for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo):
             combo.setFixedHeight(34)
-            combo.setFixedWidth(200)
-        for button in (self.refresh_scripts_button, self.preview_button):
-            button.setFixedHeight(34)
+            combo.setFixedWidth(170)
+        self.refresh_scripts_button.setFixedHeight(34)
+        self.refresh_scripts_button.setMaximumWidth(250)
         layout.addWidget(QLabel("测种脚本"), 0, 0)
         layout.addWidget(self.seed_script_combo, 0, 1)
         layout.addWidget(QLabel("过帧脚本"), 1, 0)
         layout.addWidget(self.advance_script_combo, 1, 1)
         layout.addWidget(QLabel("撞闪脚本"), 2, 0)
         layout.addWidget(self.hit_script_combo, 2, 1)
-        layout.addWidget(self.refresh_scripts_button, 3, 0)
-        layout.addWidget(self.preview_button, 3, 1)
+        layout.addWidget(self.refresh_scripts_button, 3, 0, 1, 2)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
@@ -340,23 +329,6 @@ class AutoRngPanel(QWidget):
             combo.blockSignals(False)
         self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
         self._select_script(self.advance_script_combo, choose_default_script(self._scripts, DEFAULT_ADVANCE_SCRIPT_NAME))
-        self.update_parameter_preview()
-
-    def update_parameter_preview(self) -> None:
-        lines = [
-            f"脚本目录: {self.script_dir}",
-            f"过帧必需参数: {AUTO_ADVANCE_PARAMETER}",
-            f"撞闪必需参数: {AUTO_HIT_PARAMETER}",
-        ]
-        try:
-            validate_auto_scripts(self._selected_path(self.seed_script_combo), self._selected_path(self.advance_script_combo), self._selected_path(self.hit_script_combo))
-        except AutoScriptError as exc:
-            lines.append(f"校验: {exc}")
-        else:
-            lines.append("校验: 通过")
-        self.parameter_preview.setPlainText("\n".join(lines))
-        if hasattr(self, "log_view"):
-            self.add_log("\n".join(lines))
 
     def set_phase_text(self, text: str) -> None:
         self.status_badge.setText(text)
@@ -406,7 +378,6 @@ class AutoRngPanel(QWidget):
         )
 
     def _start_clicked(self) -> None:
-        self.update_parameter_preview()
         config = self.build_config()
         try:
             validate_auto_scripts(
@@ -523,25 +494,3 @@ def _ivs_text(ivs: object) -> str:
     if len(values) != 6:
         return "-"
     return " / ".join(f"{label} {value}" for label, value in zip(IV_LABELS_ZH, values))
-
-
-def _characteristic_text(state: object) -> str:
-    ivs = getattr(state, "ivs", None)
-    pid = getattr(state, "pid", None)
-    if ivs is None or pid is None:
-        return "-"
-    values = tuple(int(value) for value in ivs)
-    if len(values) != 6:
-        return "-"
-    zh = (
-        ("非常喜欢吃", "经常打瞌睡", "经常午睡", "经常乱扔东西", "喜欢放松"),
-        ("以力量自豪", "喜欢打闹", "有点易怒", "喜欢打架", "血气方刚"),
-        ("身体强壮", "能忍耐", "抗打能力强", "不屈不挠", "毅力十足"),
-        ("好奇心强", "爱恶作剧", "考虑周到", "经常思考", "非常讲究"),
-        ("意志坚强", "有点固执", "讨厌输", "有点爱逞强", "忍耐力强"),
-        ("喜欢跑步", "警觉性高", "冲动", "有点轻浮", "逃得快"),
-    )
-    max_iv = max(values)
-    start = int(pid) % 6
-    stat_index = next(index for offset in range(6) for index in ((start + offset) % 6,) if values[index] == max_iv)
-    return zh[stat_index][max_iv % 5]

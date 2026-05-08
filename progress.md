@@ -293,3 +293,20 @@
 | UI tests after locked target simplification | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -q` | all pass | 27 passed | pass |
 | related auto RNG tests after locked target simplification | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py -q` | all pass | 42 passed | pass |
 | full test suite after locked target simplification | `.venv\Scripts\python.exe -m pytest -q` | all pass | 178 passed | pass |
+
+### Left Rail Compression And Preview Removal
+- **Status:** complete
+- Actions taken:
+  - 左侧栏从 380px 压缩到 300px，并同步压缩自动策略输入框、脚本下拉框和刷新按钮宽度。
+  - 删除自动页脚本区的 `参数预览` 按钮、隐藏预览框、预览方法和启动前预览调用；启动时仍保留脚本校验。
+  - 锁定目标删除 `个性` 字段，给 `IVs` 列更大的最小宽度与伸展权重，避免长 IV 文本被过度挤压。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `tests/test_ui.py`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| UI tests after left rail compression | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -q` | all pass | 27 passed | pass |
+| auto RNG related tests after preview removal | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py -q` | all pass | 47 passed | pass |
+| full test suite after preview removal | `.venv\Scripts\python.exe -m pytest -q` | all pass | 178 passed | pass |
