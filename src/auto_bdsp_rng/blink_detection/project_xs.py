@@ -225,21 +225,22 @@ def capture_player_blinks(
         raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
 
     try:
-        blinks, intervals, offset_time = rngtool.tracking_blink(
-            eye_image,
-            *config.roi,
-            threshold=config.threshold,
-            size=config.blink_count,
-            monitor_window=config.monitor_window,
-            window_prefix=config.window_prefix,
-            crop=_project_xs_crop(config.crop),
-            camera=config.camera,
-            tk_window=None,
-            should_stop=should_stop,
-            frame_callback=frame_callback,
-            progress_callback=progress_callback,
-            show_window=show_window,
-        )
+        with _project_xs_import_path():
+            blinks, intervals, offset_time = rngtool.tracking_blink(
+                eye_image,
+                *config.roi,
+                threshold=config.threshold,
+                size=config.blink_count,
+                monitor_window=config.monitor_window,
+                window_prefix=config.window_prefix,
+                crop=_project_xs_crop(config.crop),
+                camera=config.camera,
+                tk_window=None,
+                should_stop=should_stop,
+                frame_callback=frame_callback,
+                progress_callback=progress_callback,
+                show_window=show_window,
+            )
     except Exception as exc:  # Project_Xs raises broad UI/capture exceptions.
         raise ProjectXsIntegrationError(f"Project_Xs blink tracking failed: {exc}") from exc
     if should_stop is not None and should_stop():
@@ -258,17 +259,18 @@ def capture_pokemon_blinks(config: BlinkCaptureConfig) -> PokemonBlinkObservatio
         raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
 
     try:
-        intervals = rngtool.tracking_poke_blink(
-            eye_image,
-            *config.roi,
-            threshold=config.threshold,
-            size=config.blink_count,
-            monitor_window=config.monitor_window,
-            window_prefix=config.window_prefix,
-            crop=_project_xs_crop(config.crop),
-            camera=config.camera,
-            tk_window=None,
-        )
+        with _project_xs_import_path():
+            intervals = rngtool.tracking_poke_blink(
+                eye_image,
+                *config.roi,
+                threshold=config.threshold,
+                size=config.blink_count,
+                monitor_window=config.monitor_window,
+                window_prefix=config.window_prefix,
+                crop=_project_xs_crop(config.crop),
+                camera=config.camera,
+                tk_window=None,
+            )
     except Exception as exc:
         raise ProjectXsIntegrationError(f"Project_Xs Pokemon blink tracking failed: {exc}") from exc
 

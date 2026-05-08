@@ -13,6 +13,7 @@ from auto_bdsp_rng.blink_detection import (
     SeedState32,
     advance_seed_state,
     capture_pokemon_blinks,
+    capture_player_blinks,
     capture_preview_frame,
     load_project_xs_config,
     plan_timeline,
@@ -27,6 +28,7 @@ from auto_bdsp_rng.blink_detection import (
     track_advances,
 )
 from auto_bdsp_rng.blink_detection.project_xs import ProjectXsIntegrationError
+import auto_bdsp_rng.blink_detection.project_xs as project_xs_module
 
 
 class FakeRng:
@@ -196,6 +198,60 @@ def test_capture_pokemon_blinks_uses_project_xs_rngtool(monkeypatch, tmp_path):
     observation = capture_pokemon_blinks(config)
 
     assert observation.intervals == (1.25, 3.5)
+
+
+def test_capture_player_blinks_keeps_project_xs_src_importable_during_tracking(monkeypatch, tmp_path):
+    project_xs_src = str(project_xs_module.PROJECT_XS_SRC)
+    monkeypatch.setattr(sys, "path", [path for path in sys.path if path != project_xs_src])
+    fake_cv2 = types.SimpleNamespace(
+        IMREAD_GRAYSCALE=0,
+        imread=lambda _path, _mode: "eye-image",
+    )
+
+    def fake_tracking_blink(*_args, **_kwargs):
+        assert project_xs_src in sys.path
+        return [0, 1], [0, 12], 123.0
+
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(tracking_blink=fake_tracking_blink))
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        blink_count=2,
+        monitor_window=True,
+    )
+
+    observation = capture_player_blinks(config)
+
+    assert observation.intervals == (0, 12)
+    assert project_xs_src not in sys.path
+
+
+def test_capture_pokemon_blinks_keeps_project_xs_src_importable_during_tracking(monkeypatch, tmp_path):
+    project_xs_src = str(project_xs_module.PROJECT_XS_SRC)
+    monkeypatch.setattr(sys, "path", [path for path in sys.path if path != project_xs_src])
+    fake_cv2 = types.SimpleNamespace(
+        IMREAD_GRAYSCALE=0,
+        imread=lambda _path, _mode: "eye-image",
+    )
+
+    def fake_tracking_poke_blink(*_args, **_kwargs):
+        assert project_xs_src in sys.path
+        return [1.25, 3.5]
+
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(tracking_poke_blink=fake_tracking_poke_blink))
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        blink_count=2,
+        monitor_window=True,
+    )
+
+    observation = capture_pokemon_blinks(config)
+
+    assert observation.intervals == (1.25, 3.5)
+    assert project_xs_src not in sys.path
 
 
 def test_recover_tidsid_seed_from_observation_uses_project_xs_rngtool(monkeypatch):

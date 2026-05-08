@@ -2100,7 +2100,18 @@ class MainWindow(QMainWindow):
     def _is_capturing(self) -> bool:
         return self._capture_thread is not None and self._capture_thread.is_alive()
 
+    def _ensure_preview_for_auto_rng(self) -> bool:
+        if self._preview_timer.isActive():
+            return True
+        self._preview_timer.start()
+        self.preview_button.setText(self._text("stop_preview"))
+        self.statusBar().showMessage(self._text("preview_running"))
+        self._update_preview_frame()
+        return self._preview_timer.isActive()
+
     def _start_auto_rng(self, config: AutoRngConfig) -> None:
+        if not self._ensure_preview_for_auto_rng():
+            return
         services = self._build_auto_rng_services(config)
         self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services))
 

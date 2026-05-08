@@ -557,6 +557,22 @@ def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, mon
     assert started[0].config == config
 
 
+def test_main_window_auto_rng_start_opens_preview_when_inactive(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    config = AutoRngConfig(script_dir=tmp_path)
+    started: list[AutoRngRunner] = []
+    preview_updates: list[str] = []
+    monkeypatch.setattr(window, "_update_preview_frame", lambda: preview_updates.append("updated"))
+    monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
+
+    window._start_auto_rng(config)
+
+    assert window._preview_timer.isActive()
+    assert window.preview_button.text() == window._text("stop_preview")
+    assert preview_updates == ["updated"]
+    assert len(started) == 1
+
+
 def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
