@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGro
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
 from auto_bdsp_rng.automation.easycon import EasyConStatus
+from auto_bdsp_rng.gen8_static import State8
 from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
@@ -262,18 +263,61 @@ def test_auto_rng_panel_has_editable_target_form_and_no_old_main_regions(app):
 
 def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(app):
     panel = AutoRngPanel()
+    group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
     visible_labels = {label.text() for label in panel.findChildren(QLabel)}
 
-    assert "seed" not in visible_labels
-    assert "锁定目标" not in visible_labels
+    assert "锁定目标" in group_titles
+    assert "Seed" in visible_labels
     assert "raw target" not in visible_labels
     assert "trigger advances" not in visible_labels
     assert "current advances" not in visible_labels
     assert "remaining_to_trigger" not in visible_labels
     assert "final flash_frames" not in visible_labels
-    assert {"当前循环", "当前阶段", "原始目标帧", "触发帧", "当前帧", "距触发剩余", "最终闪帧"} <= visible_labels
-    assert not hasattr(panel, "summary_seed")
+    assert {"当前循环", "当前阶段", "Seed", "原始目标帧", "触发帧", "当前帧", "剩余", "最终闪帧"} <= visible_labels
+    assert hasattr(panel, "summary_seed")
     assert not hasattr(panel, "summary_target")
+
+
+def test_auto_rng_locked_target_view_shows_single_target_details(app):
+    panel = AutoRngPanel()
+    state = State8(
+        advances=1000,
+        ec=0x45EBFFE9,
+        sidtid=0,
+        pid=0xB3B242E2,
+        ivs=(4, 29, 5, 0, 18, 14),
+        ability=1,
+        gender=0,
+        level=5,
+        nature=0,
+        shiny=2,
+        height=33,
+        weight=155,
+    )
+
+    panel.apply_progress(
+        AutoRngProgress(
+            phase=AutoRngPhase.DECIDE_ADVANCE,
+            locked_target=AutoRngTarget(raw_target_advances=1000, state=state),
+            raw_target_advances=1000,
+            fixed_delay=100,
+            trigger_advances=900,
+            current_advances=0,
+            remaining_to_trigger=900,
+        )
+    )
+
+    values = panel.locked_target_view.values
+    assert values["Adv"].text() == "1000"
+    assert values["EC"].text() == "45EBFFE9"
+    assert values["PID"].text() == "B3B242E2"
+    assert values["Shiny"].text() == "方闪"
+    assert values["Nature"].text() == "勤奋"
+    assert values["Ability"].text() == "1"
+    assert values["IVs"].text() == "HP 4 / 攻击 29 / 防御 5 / 特攻 0 / 特防 18 / 速度 14"
+    assert values["Gender"].text() == "雄"
+    assert values["Height / Weight"].text() == "33 / 155"
+    assert values["raw / trigger / delay"].text() == "1000 / 900 / 100"
 
 
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
@@ -297,6 +341,7 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
 
     assert panel.status_badge.text() == "RunHitScript"
     assert panel.summary_loop.text() == "2"
+    assert panel.summary_seed.text() == "seed-1"
     assert panel.summary_raw.text() == "1300"
     assert panel.summary_delay.text() == "1200"
     assert panel.summary_trigger.text() == "100"
@@ -304,6 +349,21 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     assert panel.summary_remaining.text() == "100"
     assert panel.summary_flash.text() == "100"
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
+
+
+def test_auto_rng_locked_target_view_clears_when_progress_has_no_target(app):
+    panel = AutoRngPanel()
+    panel.apply_progress(
+        AutoRngProgress(
+            phase=AutoRngPhase.DECIDE_ADVANCE,
+            locked_target=AutoRngTarget(raw_target_advances=1000),
+            raw_target_advances=1000,
+        )
+    )
+
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.SEARCH_TARGET, log_message="最终剩余帧过近，放弃本目标"))
+
+    assert panel.locked_target_view.values["Adv"].text() == "未锁定"
 
 
 def test_auto_rng_worker_emits_progress_and_finished(app):

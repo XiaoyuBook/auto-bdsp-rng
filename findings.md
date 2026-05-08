@@ -65,3 +65,9 @@
 - 新的 `StaticTargetForm` 位于 `src/auto_bdsp_rng/ui/static_target_form.py`，自动页单独持有该表单实例。
 - `MainWindow._build_auto_rng_services()` 现在从 `auto_rng_tab.target_form` 读取记录、IV/Height/Weight/性格/性别/特性/异色筛选，搜索结果仍由 runner 默认锁定最低 advances。
 - 脚本目录和校验信息改为写入自动页日志，不再显示为左侧主区域内的大文本摘要。
+
+## 2026-05-08 Locked Target UI Findings
+- 运行摘要改为右侧顶部紧凑卡片，和“锁定目标”卡片并排展示，避免一整块横向大空白。
+- “锁定目标”是单体详情视图，不是候选表；字段来自当前锁定的 `State8`，包括 Adv、EC、PID、Shiny、Nature、Ability、IVs、Gender、Height/Weight、Characteristic，以及 raw/trigger/delay、current/remaining/final。
+- 自动流程在 `TARGET_MISSED` 或 `TARGET_TOO_CLOSE` 决策后清空 runner 的 `_locked_target`，UI 随 progress 显示 `未锁定`。
+- Reidentify 继续逼近同一个目标时，progress 保持 locked_target，锁定目标详情保持显示，同时 current/remaining/final 等进度字段刷新。

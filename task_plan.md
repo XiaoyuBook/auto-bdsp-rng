@@ -98,3 +98,24 @@ Phase 7: Verification & Delivery
 ### Verification
 - `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_panel_has_editable_target_form or auto_rng_services_search_uses_auto_target_form"` 先失败，确认测试覆盖旧错误。
 - `.venv\Scripts\python.exe -m pytest` 通过：173 passed。
+
+## 2026-05-08 Locked Target Detail UI
+
+### Goal
+优化自动页右侧顶部：运行摘要更紧凑，并新增独立“锁定目标”单体详情区，展示最低帧候选的完整目标信息。
+
+### Checklist
+- [x] 写失败测试覆盖锁定目标详情显示
+- [x] 写失败测试覆盖太近/错过时清空 locked target
+- [x] 右侧顶部改为运行摘要与锁定目标并排
+- [x] 运行摘要改为紧凑 key-value 网格
+- [x] 锁定目标显示 Adv、EC、PID、Shiny、Nature、Ability、IVs、Gender、Height/Weight、Characteristic
+- [x] 锁定目标显示 raw/trigger/delay 与 current/remaining/final
+- [x] 不恢复候选结果大表
+- [x] 保持目标精灵设置完整可编辑，日志仍在左侧
+- [x] 跑全量测试
+
+### Verification
+- `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "locked_target or auto_rng_summary"` 通过：3 passed。
+- `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -k "clears_locked_target"` 通过：1 passed。
+- `.venv\Scripts\python.exe -m pytest` 通过：177 passed。

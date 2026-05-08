@@ -109,6 +109,40 @@ def test_final_calibrate_does_not_run_hit_script_when_too_close():
     assert decision.flash_frames == 25
 
 
+def test_runner_clears_locked_target_when_final_calibrate_abandons_target(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "谢米.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 填入这里\n", encoding="utf-8")
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=600, npc=0),
+        search_candidates=lambda _seed: [FakeState(1000)],
+        reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=875, npc=0),
+        run_script_text=lambda _text, _name: None,
+        monotonic=lambda: 10.0,
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=100,
+            max_wait_frames=300,
+            min_final_flash_frames=30,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=4)
+
+    assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
+    assert runner.progress.locked_target is None
+    assert runner.progress.log_message == "最终剩余帧过近，放弃本目标"
+
+
 def test_no_candidates_decides_to_run_seed_script():
     decision = decide_search_target([])
 

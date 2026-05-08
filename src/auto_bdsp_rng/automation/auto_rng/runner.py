@@ -16,6 +16,8 @@ from auto_bdsp_rng.automation.auto_rng.models import (
 )
 from auto_bdsp_rng.automation.auto_rng.scripts import prepare_advance_script_text, prepare_hit_script_text
 
+_UNSET = object()
+
 
 def decide_search_target(candidates: Sequence[object]) -> AutoRngDecision:
     if not candidates:
@@ -336,10 +338,15 @@ class AutoRngRunner:
         self._set_progress(AutoRngPhase.COMPLETED, "自动流程完成", loop_index=self._completed_loops)
 
     def _set_progress_from_decision(self, decision: AutoRngDecision, *, last_script_path: object | None = None) -> None:
+        if decision.kind in (AutoRngDecisionKind.TARGET_MISSED, AutoRngDecisionKind.TARGET_TOO_CLOSE):
+            self._locked_target = None
+            locked_target: object | None = None
+        else:
+            locked_target = decision.target or self._locked_target
         self._set_progress(
             decision.phase,
             decision.message,
-            locked_target=decision.target or self._locked_target,
+            locked_target=locked_target,
             raw_target_advances=decision.raw_target_advances,
             fixed_delay=decision.fixed_delay,
             trigger_advances=decision.trigger_advances,
@@ -354,7 +361,7 @@ class AutoRngRunner:
             "phase": phase,
             "loop_index": updates.get("loop_index", self.progress.loop_index),
             "log_message": message,
-            "locked_target": updates.get("locked_target", self.progress.locked_target),
+            "locked_target": updates["locked_target"] if updates.get("locked_target", _UNSET) is not _UNSET else self.progress.locked_target,
             "raw_target_advances": updates.get("raw_target_advances", self.progress.raw_target_advances),
             "fixed_delay": updates.get("fixed_delay", self.progress.fixed_delay),
             "trigger_advances": updates.get("trigger_advances", self.progress.trigger_advances),

@@ -207,3 +207,28 @@
 |------|-------|----------|--------|--------|
 | summary cleanup targeted tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_panel_emits_config or auto_rng_panel_has_editable_target_form or auto_rng_summary_uses_chinese_labels or auto_rng_panel_apply_progress"` | all pass | 4 passed | pass |
 | full test suite after summary cleanup | `.venv\Scripts\python.exe -m pytest` | all pass | 174 passed | pass |
+
+### Locked Target Detail UI
+- **Status:** complete
+- Actions taken:
+  - 新增 `LockedTargetView`，右侧顶部从单个宽运行摘要改为“运行摘要 + 锁定目标”并排布局。
+  - `运行摘要` 保持紧凑 key-value 网格，显示当前循环、当前阶段、Seed、原始目标帧、delay、触发帧、当前帧、剩余、最终闪帧。
+  - `锁定目标` 只显示当前锁定的一只，不恢复候选结果大表；展示 Adv、EC、PID、Shiny、Nature、Ability、Gender、Characteristic、IVs、Height/Weight、raw/trigger/delay、current/remaining/final。
+  - `AutoRngPanel.apply_progress()` 现在同步刷新锁定目标详情。
+  - runner 在 `TARGET_MISSED` / `TARGET_TOO_CLOSE` 时清空 `_locked_target`，让 UI 标记未锁定。
+  - 以 TDD 增加 UI 锁定目标详情测试和 runner 放弃目标清空测试。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `src/auto_bdsp_rng/automation/auto_rng/runner.py`
+  - `tests/test_ui.py`
+  - `tests/automation/test_auto_rng_runner.py`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| locked target UI tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "locked_target or auto_rng_summary"` | all pass | 3 passed | pass |
+| runner clear locked target test | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -k "clears_locked_target"` | all pass | 1 passed | pass |
+| related auto RNG tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py` | all pass | 46 passed | pass |
+| full test suite after locked target UI | `.venv\Scripts\python.exe -m pytest` | all pass | 177 passed | pass |
