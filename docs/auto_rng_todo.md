@@ -72,7 +72,7 @@
 - [x] 右侧运行摘要显示 delay、trigger advances、final flash frames。
 - [x] 右侧候选表：显示本次搜索结果并高亮锁定目标。
 - [x] 右侧日志：滚动显示每一步决策与脚本结果。
-- [ ] 状态变化通过 Qt Signal 更新 UI，避免 worker 直接操作控件。
+- [x] 状态变化通过 Qt Signal 更新 UI，避免 worker 直接操作控件。
 
 ## 6. 测试
 
@@ -95,6 +95,8 @@
 - [x] UI 测试：新增 Tab 存在。
 - [x] UI 测试：开始前缺少必需脚本参数会显示错误。
 - [x] UI 测试：开始时发出完整 `AutoRngConfig`。
+- [x] UI 测试：`AutoRngProgress` 通过面板入口更新摘要和日志。
+- [x] UI 测试：`AutoRngWorker` 通过 Qt Signal 发出 progress/log/finished。
 
 ## 7. 风险与后续问题
 

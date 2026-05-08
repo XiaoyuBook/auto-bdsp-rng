@@ -9,9 +9,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog
 
-from auto_bdsp_rng.automation.auto_rng import AutoRngConfig
+from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngTarget
 from auto_bdsp_rng.ui import MainWindow
-from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
+from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
 
 
 @pytest.fixture
@@ -225,6 +225,73 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     assert config.hit_script_path == tmp_path / "谢米.txt"
     assert config.fixed_delay == 1200
     assert config.max_wait_frames == 300
+
+
+def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
+    panel = AutoRngPanel()
+
+    panel.apply_progress(
+        AutoRngProgress(
+            phase=AutoRngPhase.RUN_HIT_SCRIPT,
+            loop_index=2,
+            seed_text="seed-1",
+            locked_target=AutoRngTarget(raw_target_advances=1300, label="Shaymin"),
+            raw_target_advances=1300,
+            fixed_delay=1200,
+            trigger_advances=100,
+            current_advances=0,
+            remaining_to_trigger=100,
+            final_flash_frames=100,
+            log_message="最终撞闪剩余 100 帧",
+        )
+    )
+
+    assert panel.status_badge.text() == "RunHitScript"
+    assert panel.summary_loop.text() == "2"
+    assert panel.summary_seed.text() == "seed-1"
+    assert panel.summary_target.text() == "Shaymin"
+    assert panel.summary_raw.text() == "1300"
+    assert panel.summary_delay.text() == "1200"
+    assert panel.summary_trigger.text() == "100"
+    assert panel.summary_current.text() == "0"
+    assert panel.summary_remaining.text() == "100"
+    assert panel.summary_flash.text() == "100"
+    assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
+
+
+def test_auto_rng_worker_emits_progress_and_finished(app):
+    progress = AutoRngProgress(phase=AutoRngPhase.COMPLETED, log_message="完成")
+
+    class FakeRunner:
+        def __init__(self) -> None:
+            self.progress_callback = None
+            self.log_callback = None
+            self.stopped = False
+
+        def run(self) -> AutoRngProgress:
+            self.progress_callback(progress)
+            self.log_callback("完成")
+            return progress
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    runner = FakeRunner()
+    worker = AutoRngWorker(runner)
+    progress_events: list[AutoRngProgress] = []
+    logs: list[str] = []
+    finished: list[AutoRngProgress] = []
+    worker.progressChanged.connect(progress_events.append)
+    worker.logEmitted.connect(logs.append)
+    worker.finished.connect(finished.append)
+
+    worker.run()
+    worker.stop()
+
+    assert progress_events == [progress]
+    assert logs == ["完成"]
+    assert finished == [progress]
+    assert runner.stopped is True
 
 
 def test_main_window_applies_selected_roi(app, monkeypatch):

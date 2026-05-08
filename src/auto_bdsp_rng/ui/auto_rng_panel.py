@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig
+from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngProgress
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_ADVANCE_PARAMETER,
     AUTO_HIT_PARAMETER,
@@ -38,6 +38,34 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = PROJECT_ROOT / "script"
 
 
+class AutoRngWorker(QObject):
+    progressChanged = Signal(object)
+    logEmitted = Signal(str)
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, runner: object) -> None:
+        super().__init__()
+        self.runner = runner
+        setattr(self.runner, "progress_callback", self.progressChanged.emit)
+        setattr(self.runner, "log_callback", self.logEmitted.emit)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.runner.run()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
+
+    @Slot()
+    def stop(self) -> None:
+        stop = getattr(self.runner, "stop", None)
+        if callable(stop):
+            stop()
+
+
 class AutoRngPanel(QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
@@ -46,6 +74,8 @@ class AutoRngPanel(QWidget):
         super().__init__(parent)
         self.script_dir = script_dir
         self._scripts: list[Path] = []
+        self._runner_thread: QThread | None = None
+        self._runner_worker: AutoRngWorker | None = None
         self._build_ui()
         self.refresh_scripts()
 
@@ -225,6 +255,22 @@ class AutoRngPanel(QWidget):
         self.status_badge.setText(text)
         self.summary_phase.setText(text)
 
+    def apply_progress(self, progress: AutoRngProgress) -> None:
+        phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
+        self.status_badge.setText(phase_text)
+        self.summary_phase.setText(phase_text)
+        self.summary_loop.setText(_display_value(progress.loop_index))
+        self.summary_seed.setText(progress.seed_text or "-")
+        self.summary_target.setText(_target_text(progress))
+        self.summary_raw.setText(_display_value(progress.raw_target_advances))
+        self.summary_delay.setText(_display_value(progress.fixed_delay))
+        self.summary_trigger.setText(_display_value(progress.trigger_advances))
+        self.summary_current.setText(_display_value(progress.current_advances))
+        self.summary_remaining.setText(_display_value(progress.remaining_to_trigger))
+        self.summary_flash.setText(_display_value(progress.final_flash_frames))
+        if progress.log_message:
+            self.add_log(progress.log_message)
+
     def add_log(self, message: str) -> None:
         self.log_view.appendPlainText(message)
 
@@ -265,6 +311,44 @@ class AutoRngPanel(QWidget):
             max_advances=self.max_advances.value(),
         )
 
+    def run_with_runner(self, runner: object) -> None:
+        if self._runner_thread is not None:
+            self.add_log("自动流程已在运行")
+            return
+        thread = QThread(self)
+        worker = AutoRngWorker(runner)
+        worker.moveToThread(thread)
+        worker.progressChanged.connect(self.apply_progress)
+        worker.logEmitted.connect(self.add_log)
+        worker.finished.connect(self._runner_finished)
+        worker.failed.connect(self._runner_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self.stopRequested.connect(worker.stop)
+        self._runner_thread = thread
+        self._runner_worker = worker
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        thread.start()
+
+    def _runner_finished(self, progress: object) -> None:
+        if isinstance(progress, AutoRngProgress):
+            self.apply_progress(progress)
+        self._clear_runner_thread()
+
+    def _runner_failed(self, message: str) -> None:
+        self.set_phase_text("失败")
+        self.add_log(message)
+        self._clear_runner_thread()
+
+    def _clear_runner_thread(self) -> None:
+        self._runner_thread = None
+        self._runner_worker = None
+        self.start_button.setEnabled(True)
+
     def _selected_path(self, combo: QComboBox) -> Path | None:
         value = combo.currentData()
         return Path(value) if value else None
@@ -281,3 +365,14 @@ class AutoRngPanel(QWidget):
         spin.setRange(minimum, maximum)
         spin.setValue(value)
         return spin
+
+
+def _display_value(value: object) -> str:
+    return "-" if value is None else str(value)
+
+
+def _target_text(progress: AutoRngProgress) -> str:
+    target = progress.locked_target
+    if target is None:
+        return "-"
+    return target.label or str(target.raw_target_advances)

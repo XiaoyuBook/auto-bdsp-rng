@@ -104,12 +104,16 @@
   - 以 TDD 增加 runner mock 状态机测试：无候选测种、过帧后 reidentify、FinalCalibrate 撞闪、单次/循环 N 次 LoopCheck。
   - 实现 `AutoRngServices` 注入接口、`AutoRngSeedResult`、`AutoRngRunner.run()` 状态机骨架和循环控制。
   - 以 TDD 增加 `AutoRngPanel` 开始时发出 `AutoRngConfig` 的测试，并实现 `build_config()`。
+  - 回答并记录：循环结束条件目前只包含单次/循环 N 次/无限循环计数与用户手动停止，业务成功停止条件后续补。
+  - 以 TDD 增加 `AutoRngPanel.apply_progress()` 与 `AutoRngWorker` 信号测试。
+  - 实现 `AutoRngWorker`，通过 Qt Signal 发出 progress/log/finished/failed；实现 `AutoRngPanel.run_with_runner()` 的 QThread 封装入口。
 - Next:
-  - 继续接入 UI/QThread 信号层或补 Project_Xs/EasyCon 真实适配封装。
+  - 补 Project_Xs/EasyCon 真实适配封装，或继续把自动页搜索条件从占位改为可收集配置。
 
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
 | auto RNG targeted tests | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_scripts.py tests\automation\test_auto_rng_runner.py tests\test_ui.py -q` | all pass | 33 passed | pass |
+| auto RNG targeted tests after worker | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_scripts.py tests\automation\test_auto_rng_runner.py tests\test_ui.py -q` | all pass | 35 passed | pass |
 | runner state machine tests | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -q` | all pass | 14 passed | pass |
 | full test suite after current runner work | `.venv\Scripts\python.exe -m pytest -q` | identify residual failures | 156 passed, 8 EasyConPanel test failures | known unrelated baseline mismatch |

@@ -45,10 +45,10 @@ Phase 5: Runner 状态机与 mock 集成
 
 ### Phase 6: UI 与真实接口接线
 - [ ] `AutoRngPanel` 收集真实搜索条件，而不是占位说明
-- [ ] 通过 QThread/Signal 驱动 runner，避免 UI 线程执行长流程
+- [x] 通过 QThread/Signal 驱动 runner，避免 UI 线程执行长流程
 - [ ] 接入 Project_Xs capture/reidentify 封装
 - [ ] 接入 EasyCon Bridge `run_script_text()` 与 `stop_current_script()`
-- **Status:** pending
+- **Status:** in_progress
 
 ### Phase 7: Verification & Delivery
 - [ ] 跑自动 RNG 目标测试
