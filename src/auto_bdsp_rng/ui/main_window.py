@@ -540,6 +540,7 @@ class MainWindow(QMainWindow):
         self._roi_before_selection: tuple[int, int, int, int] | None = None
         self._selection_mode: str | None = None
         self._resume_preview_after_selection = False
+        self._resume_preview_after_capture = False
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(100)
         self._preview_timer.timeout.connect(self._update_preview_frame)
@@ -1753,6 +1754,18 @@ class MainWindow(QMainWindow):
         self.preview_button.setText(self._text("stop_preview"))
         self.statusBar().showMessage(self._text("preview_running"))
 
+    def _pause_preview_for_capture(self) -> None:
+        self._resume_preview_after_capture = self._preview_timer.isActive()
+        if self._resume_preview_after_capture:
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("stop_preview"))
+
+    def _restore_preview_after_capture(self) -> None:
+        if self._resume_preview_after_capture:
+            self._preview_timer.start()
+            self.preview_button.setText(self._text("stop_preview"))
+        self._resume_preview_after_capture = False
+
     def start_roi_selection(self) -> None:
         if self._is_capturing():
             return
@@ -2265,9 +2278,7 @@ class MainWindow(QMainWindow):
             self._show_error("Blink capture failed", exc)
             return
 
-        if self._preview_timer.isActive():
-            self._preview_timer.stop()
-            self.preview_button.setText(self._text("preview_button"))
+        self._pause_preview_for_capture()
         self.preview_button.setEnabled(False)
         self.preview_label.set_selection_enabled(False)
         self._stop_advance_tracking()
@@ -2334,9 +2345,7 @@ class MainWindow(QMainWindow):
             self._show_error("Reidentify failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
 
-        if self._preview_timer.isActive():
-            self._preview_timer.stop()
-            self.preview_button.setText(self._text("preview_button"))
+        self._pause_preview_for_capture()
         self.preview_button.setEnabled(False)
         self.reidentify_button.setEnabled(False)
         self.preview_label.set_selection_enabled(False)
@@ -2412,6 +2421,7 @@ class MainWindow(QMainWindow):
         self.preview_button.setEnabled(True)
         self.reidentify_button.setEnabled(True)
         self.capture_button.setText(self._text("capture_seed"))
+        self._restore_preview_after_capture()
         if self._capture_error is not None:
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))

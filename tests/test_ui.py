@@ -205,6 +205,51 @@ def test_reidentify_noisy_option_uses_20_blinks_and_noisy_reidentify(app, monkey
     assert window.advances_value.text() == "43"
 
 
+def test_capture_seed_restores_running_preview(app, monkeypatch):
+    window = MainWindow()
+    observation = SimpleNamespace(offset_time=100.0)
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 100.0)
+    monkeypatch.setattr("auto_bdsp_rng.ui.main_window.capture_player_blinks", lambda *_args, **_kwargs: observation)
+    monkeypatch.setattr(
+        "auto_bdsp_rng.ui.main_window.recover_seed_from_observation",
+        lambda *_args, **_kwargs: SimpleNamespace(state=seed_state),
+    )
+    window._preview_timer.start()
+    window.preview_button.setText(window._text("stop_preview"))
+
+    window.capture_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    assert window._preview_timer.isActive()
+    assert window.preview_button.text() == window._text("stop_preview")
+
+
+def test_reidentify_restores_running_preview(app, monkeypatch):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    _set_bdsp_seed(window)
+    observation = BlinkObservation.from_sequences([0, 1, 0], [0, 12, 24])
+    state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    monkeypatch.setattr("auto_bdsp_rng.ui.main_window.capture_player_blinks", lambda *_args, **_kwargs: observation)
+    monkeypatch.setattr(
+        "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation",
+        lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=42),
+    )
+    for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
+        box.setText(text)
+    window._preview_timer.start()
+    window.preview_button.setText(window._text("stop_preview"))
+
+    window.reidentify_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    assert window._preview_timer.isActive()
+    assert window.preview_button.text() == window._text("stop_preview")
+
+
 def test_main_window_loads_project_xs_config_fields(app):
     window = MainWindow()
     index = window.config_combo.findText("config_bebe.json")
