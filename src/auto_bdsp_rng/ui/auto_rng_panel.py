@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -42,27 +43,32 @@ class LockedTargetView(QGroupBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("锁定目标", parent)
         self.values: dict[str, QLabel] = {}
+        self.setMaximumHeight(156)
         layout = QGridLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setHorizontalSpacing(14)
+        layout.setVerticalSpacing(8)
         fields = (
-            ("帧数", "Adv"),
+            ("Adv", "Adv"),
             ("EC", "EC"),
             ("PID", "PID"),
-            ("异色", "Shiny"),
+            ("Shiny", "Shiny"),
             ("性格", "Nature"),
             ("特性", "Ability"),
             ("性别", "Gender"),
             ("个性", "Characteristic"),
             ("IVs", "IVs"),
-            ("身高 / 体重", "Height / Weight"),
-            ("raw / trigger / delay", "raw / trigger / delay"),
-            ("current / remaining / final", "current / remaining / final"),
+            ("H/W", "Height / Weight"),
+            ("raw/trigger/delay", "raw / trigger / delay"),
+            ("cur/rem/final", "current / remaining / final"),
         )
         for index, (label_text, key) in enumerate(fields):
             label = QLabel(label_text)
             label.setObjectName("MutedLabel")
             value = QLabel("-")
             value.setObjectName("Badge")
-            value.setWordWrap(True)
+            value.setWordWrap(False)
+            value.setMinimumWidth(68)
             self.values[key] = value
             row = index // 4
             column = (index % 4) * 2
@@ -149,20 +155,25 @@ class AutoRngPanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self._build_toolbar())
+        layout.setSpacing(12)
+        self.toolbar = self._build_toolbar()
+        layout.addWidget(self.toolbar)
 
         splitter = QSplitter()
-        splitter.addWidget(self._build_config_panel())
+        self.config_panel = self._build_config_panel()
+        splitter.addWidget(self.config_panel)
         splitter.addWidget(self._build_runtime_panel())
-        splitter.setSizes([480, 900])
+        splitter.setSizes([380, 1040])
         layout.addWidget(splitter, 1)
 
     def _build_toolbar(self) -> QWidget:
         toolbar = QFrame()
         toolbar.setObjectName("EasyConToolbar")
+        toolbar.setMaximumHeight(60)
+        toolbar.setMinimumHeight(56)
         row = QHBoxLayout(toolbar)
-        row.setContentsMargins(10, 8, 10, 8)
+        row.setContentsMargins(12, 8, 12, 8)
+        row.setSpacing(8)
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("单次", "single")
         self.mode_combo.addItem("循环 N 次", "count")
@@ -173,6 +184,14 @@ class AutoRngPanel(QWidget):
         self.stop_button = QPushButton("停止")
         self.status_badge = QLabel("空闲")
         self.status_badge.setObjectName("Badge")
+        for widget in (self.mode_combo, self.loop_count):
+            widget.setFixedHeight(34)
+        self.mode_combo.setFixedWidth(110)
+        self.loop_count.setFixedWidth(80)
+        self.start_button.setFixedHeight(34)
+        self.stop_button.setFixedHeight(34)
+        self.start_button.setMinimumWidth(68)
+        self.stop_button.setMinimumWidth(68)
         self.start_button.clicked.connect(self._start_clicked)
         self.stop_button.clicked.connect(self.stopRequested.emit)
         row.addWidget(QLabel("运行模式"))
@@ -187,19 +206,29 @@ class AutoRngPanel(QWidget):
 
     def _build_config_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setMinimumWidth(380)
+        panel.setMaximumWidth(380)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 8, 0)
-        layout.addWidget(self._build_strategy_group())
-        layout.addWidget(self._build_script_group())
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        self.strategy_group = self._build_strategy_group()
+        self.script_group = self._build_script_group()
+        layout.addWidget(self.strategy_group)
+        layout.addWidget(self.script_group)
         layout.addWidget(self._build_log_group(), 1)
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
         group = QGroupBox("自动策略")
+        group.setMaximumHeight(160)
         form = QFormLayout(group)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(8)
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
+        for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
+            spin.setFixedWidth(200)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待帧数", self.max_wait_frames)
@@ -207,7 +236,11 @@ class AutoRngPanel(QWidget):
 
     def _build_script_group(self) -> QGroupBox:
         group = QGroupBox("脚本")
+        group.setMaximumHeight(270)
         layout = QGridLayout(group)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
         self.seed_script_combo = QComboBox()
         self.advance_script_combo = QComboBox()
         self.hit_script_combo = QComboBox()
@@ -219,6 +252,11 @@ class AutoRngPanel(QWidget):
         self.parameter_preview.setReadOnly(True)
         self.parameter_preview.setMaximumHeight(130)
         self.parameter_preview.setVisible(False)
+        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo):
+            combo.setFixedHeight(34)
+            combo.setFixedWidth(200)
+        for button in (self.refresh_scripts_button, self.preview_button):
+            button.setFixedHeight(34)
         layout.addWidget(QLabel("测种脚本"), 0, 0)
         layout.addWidget(self.seed_script_combo, 0, 1)
         layout.addWidget(QLabel("过帧脚本"), 1, 0)
@@ -233,6 +271,7 @@ class AutoRngPanel(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
         top = QWidget()
         top_layout = QHBoxLayout(top)
         top_layout.setContentsMargins(0, 0, 0, 0)
@@ -241,12 +280,19 @@ class AutoRngPanel(QWidget):
         self.locked_target_view = LockedTargetView()
         top_layout.addWidget(self.locked_target_view, 3)
         layout.addWidget(top)
-        layout.addWidget(self._build_target_form_group(), 1)
+        layout.addWidget(self._build_target_form_group())
+        layout.addWidget(self._build_candidate_history_group(), 1)
         return panel
 
     def _build_summary_group(self) -> QGroupBox:
         group = QGroupBox("运行摘要")
+        group.setMaximumHeight(156)
+        group.setMaximumWidth(320)
         grid = QGridLayout(group)
+        grid.setContentsMargins(12, 10, 12, 10)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(7)
+        self.summary_group = group
         fields = (
             ("当前循环", "summary_loop"),
             ("当前阶段", "summary_phase"),
@@ -268,10 +314,22 @@ class AutoRngPanel(QWidget):
 
     def _build_target_form_group(self) -> QGroupBox:
         group = QGroupBox("目标精灵设置")
+        group.setMaximumHeight(390)
         layout = QVBoxLayout(group)
         self.target_form = StaticTargetForm(self)
         self.target_form.iv_calculator_button.clicked.connect(self.ivCalculatorRequested.emit)
         layout.addWidget(self.target_form)
+        self.target_form_group = group
+        return group
+
+    def _build_candidate_history_group(self) -> QGroupBox:
+        group = QGroupBox("目标候选 / 历史记录")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 12, 12, 12)
+        self.candidate_history_empty = QLabel("暂无候选结果")
+        self.candidate_history_empty.setObjectName("MutedLabel")
+        self.candidate_history_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.candidate_history_empty, 1)
         return group
 
     def _build_log_group(self) -> QGroupBox:
@@ -279,6 +337,8 @@ class AutoRngPanel(QWidget):
         layout = QVBoxLayout(group)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setFont(QFont("Consolas", 10))
+        self.log_view.setStyleSheet("QPlainTextEdit { padding: 12px; }")
         layout.addWidget(self.log_view)
         return group
 
@@ -442,6 +502,8 @@ class AutoRngPanel(QWidget):
         spin = QSpinBox()
         spin.setRange(minimum, maximum)
         spin.setValue(value)
+        spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        spin.setFixedHeight(34)
         return spin
 
 
@@ -499,4 +561,3 @@ def _characteristic_text(state: object) -> str:
     start = int(pid) % 6
     stat_index = next(index for offset in range(6) for index in ((start + offset) % 6,) if values[index] == max_iv)
     return zh[stat_index][max_iv % 5]
-

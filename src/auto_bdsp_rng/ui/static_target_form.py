@@ -127,9 +127,12 @@ class StaticTargetForm(QWidget):
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
+        root.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         settings = QGroupBox("设置")
+        settings.setMaximumHeight(380)
         settings_layout = QGridLayout(settings)
+        settings_layout.setVerticalSpacing(8)
         self.category_combo = QComboBox()
         self.category_combo.addItem("御三家", StaticEncounterCategory.STARTERS.value)
         self.category_combo.addItem("全部", None)
@@ -159,11 +162,14 @@ class StaticTargetForm(QWidget):
             ("IV Count", self.iv_count_display),
         )
         for row, (label, widget) in enumerate(rows):
+            widget.setFixedHeight(32)
+            widget.setFixedWidth(210)
             settings_layout.addWidget(QLabel(label), row, 0)
             settings_layout.addWidget(widget, row, 1)
         root.addWidget(settings, 1)
 
         filters = QGroupBox("筛选项")
+        filters.setMaximumHeight(380)
         outer = QHBoxLayout(filters)
         outer.setContentsMargins(12, 10, 12, 10)
         outer.setSpacing(24)
@@ -246,9 +252,11 @@ class StaticTargetForm(QWidget):
         grid.addLayout(_range_row(self.weight_min, self.weight_max), 5, 1)
 
         right_col.addLayout(grid)
+        for combo in (self.ability_filter, self.gender_filter, self.nature_combo, self.shiny_filter):
+            combo.setFixedHeight(32)
+            combo.setFixedWidth(240)
         self.skip_filter = QCheckBox("取消筛选")
         right_col.addWidget(self.skip_filter)
-        right_col.addStretch()
         outer.addLayout(right_col, 1)
 
     def set_version(self, version: GameVersion) -> None:
@@ -351,6 +359,8 @@ class StaticTargetForm(QWidget):
         spin.setRange(minimum, maximum)
         spin.setValue(value)
         spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        spin.setFixedHeight(32)
         return spin
 
 

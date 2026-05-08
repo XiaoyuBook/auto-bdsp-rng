@@ -232,3 +232,44 @@
 | runner clear locked target test | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -k "clears_locked_target"` | all pass | 1 passed | pass |
 | related auto RNG tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py` | all pass | 46 passed | pass |
 | full test suite after locked target UI | `.venv\Scripts\python.exe -m pytest` | all pass | 177 passed | pass |
+
+### Compact Locked Target Strip
+- **Status:** complete
+- Actions taken:
+  - 将 `锁定目标` 从多行网格改为单行横向信息条，继续显示当前锁定单体信息，不恢复候选表。
+  - 右侧 `目标精灵设置` 不再用 stretch 填满剩余高度，设置自然高度上限，避免筛选项内部出现大块空白。
+  - `StaticTargetForm` 设置/筛选分组改为顶部对齐并限制高度，空白不再落在控件内部。
+  - 补测试约束锁定目标布局为 `QHBoxLayout`，并约束目标设置区域最大高度。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `src/auto_bdsp_rng/ui/static_target_form.py`
+  - `tests/test_ui.py`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| compact locked target layout tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_summary_uses_chinese_labels or locked_target_view_shows or editable_target_form"` | all pass | 3 passed | pass |
+| related auto RNG tests after compact layout | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py` | all pass | 46 passed | pass |
+| full test suite after compact layout | `.venv\Scripts\python.exe -m pytest` | all pass | 177 passed | pass |
+
+### Console Layout Reflow
+- **Status:** complete
+- Actions taken:
+  - 顶部运行控制栏固定为 56-60px 工具栏，运行模式宽 110px、次数宽 80px，按钮统一 34px 高。
+  - 左侧栏固定宽度 380px，自动策略、脚本、日志纵向排列，分组间距 12px；日志使用等宽字体和 12px padding。
+  - 右侧顶部改为 156px 高度的信息行：运行摘要固定宽 320px，锁定目标为同高 key-value 矩阵。
+  - 锁定目标不再是一行散文本，改为 Adv/EC/PID/Shiny/性格/特性/性别/个性/IVs/HW/进度字段矩阵。
+  - 目标精灵设置限制到自然内容高度，设置/筛选顶部对齐，控件统一 32px 高。
+  - 右侧底部新增 `目标候选 / 历史记录` 占位区，显示 `暂无候选结果`，避免右侧下半部分裸空。
+  - 数字 spinbox 隐藏上下箭头，视觉上接近普通输入框。
+- Files modified:
+  - `src/auto_bdsp_rng/ui/auto_rng_panel.py`
+  - `src/auto_bdsp_rng/ui/static_target_form.py`
+  - `tests/test_ui.py`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| layout reflow targeted tests | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -k "auto_rng_summary_uses_chinese_labels or compact_toolbar or locked_target_view_shows or editable_target_form"` | all pass | 4 passed | pass |
+| related auto RNG tests after reflow | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py` | all pass | 47 passed | pass |
+| full test suite after reflow | `.venv\Scripts\python.exe -m pytest` | all pass | 178 passed | pass |

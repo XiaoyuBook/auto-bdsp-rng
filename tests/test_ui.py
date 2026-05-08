@@ -9,7 +9,7 @@ pytest.importorskip("PySide6")
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGroupBox, QLabel
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
@@ -276,6 +276,27 @@ def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(a
     assert {"当前循环", "当前阶段", "Seed", "原始目标帧", "触发帧", "当前帧", "剩余", "最终闪帧"} <= visible_labels
     assert hasattr(panel, "summary_seed")
     assert not hasattr(panel, "summary_target")
+    assert isinstance(panel.locked_target_view.layout(), QGridLayout)
+    assert 140 <= panel.locked_target_view.maximumHeight() <= 170
+    assert 140 <= panel.summary_group.maximumHeight() <= 170
+    assert 280 <= panel.summary_group.maximumWidth() <= 340
+    assert panel.target_form_group.maximumHeight() <= 390
+    assert "目标候选 / 历史记录" in group_titles
+    assert panel.candidate_history_empty.text() == "暂无候选结果"
+
+
+def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
+    panel = AutoRngPanel()
+
+    assert 56 <= panel.toolbar.maximumHeight() <= 64
+    assert panel.mode_combo.width() == 110
+    assert panel.loop_count.width() == 80
+    assert panel.start_button.height() == 34
+    assert panel.stop_button.height() == 34
+    assert 360 <= panel.config_panel.minimumWidth() <= 400
+    assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
+    assert panel.strategy_group.maximumHeight() <= 170
+    assert panel.script_group.maximumHeight() <= 280
 
 
 def test_auto_rng_locked_target_view_shows_single_target_details(app):
