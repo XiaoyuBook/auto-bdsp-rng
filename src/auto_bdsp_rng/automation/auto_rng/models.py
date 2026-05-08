@@ -66,6 +66,7 @@ class AutoRngSeedResult:
     current_advances: int = 0
     npc: int = 0
     seed_text: str = ""
+    measured_at: float | None = None
 
 
 @dataclass(frozen=True)

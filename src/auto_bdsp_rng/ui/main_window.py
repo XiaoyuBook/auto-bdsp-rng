@@ -2291,6 +2291,7 @@ class MainWindow(QMainWindow):
                 current_advances=0,
                 npc=tracking_config.npc,
                 seed_text=" ".join(result.state.format_seed64_pair()),
+                measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(seed_result)
             return seed_result
@@ -2323,6 +2324,7 @@ class MainWindow(QMainWindow):
                 current_advances=result.advances,
                 npc=tracking_config.npc,
                 seed_text=" ".join(result.state.format_seed64_pair()),
+                measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(reidentified)
             return reidentified

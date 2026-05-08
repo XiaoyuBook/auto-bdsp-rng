@@ -234,7 +234,7 @@ class AutoRngRunner:
             self.progress_callback(progress)
 
     def _capture_seed(self) -> None:
-        self._seed_result = self.services.capture_seed()
+        self._seed_result = self._with_measurement_time(self.services.capture_seed())
         self._set_progress(
             AutoRngPhase.SEARCH_TARGET,
             "捕获 seed 完成",
@@ -291,7 +291,7 @@ class AutoRngRunner:
         self._set_progress_from_decision(decision, last_script_path=path)
 
     def _reidentify(self, next_phase: AutoRngPhase) -> None:
-        self._seed_result = self.services.reidentify(self._require_seed())
+        self._seed_result = self._with_measurement_time(self.services.reidentify(self._require_seed()))
         self._set_progress(
             next_phase,
             "reidentify 完成",
@@ -302,12 +302,11 @@ class AutoRngRunner:
     def _final_calibrate(self) -> None:
         seed = self._require_seed()
         target = self._require_target()
-        ref_time = self.services.monotonic()
         decision = finalize_flash_frames(
             target,
             fixed_delay=self.config.fixed_delay,
             current_advances_at_ref=seed.current_advances,
-            ref_time=ref_time,
+            ref_time=self._seed_measured_at(seed),
             now_monotonic=self.services.monotonic(),
             npc=seed.npc,
             min_final_flash_frames=self.config.min_final_flash_frames,
@@ -321,9 +320,30 @@ class AutoRngRunner:
         flash_frames = self.progress.final_flash_frames
         if flash_frames is None:
             raise RuntimeError("最终撞闪帧未计算")
-        text = prepare_hit_script_text(path.read_text(encoding="utf-8"), flash_frames)
+        seed = self._require_seed()
+        target = self._require_target()
+        decision = finalize_flash_frames(
+            target,
+            fixed_delay=self.config.fixed_delay,
+            current_advances_at_ref=seed.current_advances,
+            ref_time=self._seed_measured_at(seed),
+            now_monotonic=self.services.monotonic(),
+            npc=seed.npc,
+            min_final_flash_frames=self.config.min_final_flash_frames,
+        )
+        if decision.kind != AutoRngDecisionKind.RUN_HIT_SCRIPT:
+            self._set_progress_from_decision(decision, last_script_path=path)
+            return
+        text = prepare_hit_script_text(path.read_text(encoding="utf-8"), decision.flash_frames or 0)
         self.services.run_script_text(text, path.name)
-        self._set_progress(AutoRngPhase.LOOP_CHECK, f"撞闪脚本完成: {path.name}", last_script_path=path)
+        self._set_progress(
+            AutoRngPhase.LOOP_CHECK,
+            f"撞闪脚本完成: {path.name}",
+            last_script_path=path,
+            current_advances=decision.current_advances,
+            remaining_to_trigger=decision.remaining_to_trigger,
+            final_flash_frames=decision.flash_frames,
+        )
 
     def _loop_check(self) -> None:
         self._completed_loops += 1
@@ -378,6 +398,16 @@ class AutoRngRunner:
         if self._seed_result is None:
             raise RuntimeError("seed 尚未捕获")
         return self._seed_result
+
+    def _with_measurement_time(self, seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
+        if seed_result.measured_at is not None:
+            return seed_result
+        return replace(seed_result, measured_at=self.services.monotonic())
+
+    def _seed_measured_at(self, seed_result: AutoRngSeedResult) -> float:
+        if seed_result.measured_at is not None:
+            return seed_result.measured_at
+        return self.services.monotonic()
 
     def _require_target(self) -> AutoRngTarget:
         if self._locked_target is None:
