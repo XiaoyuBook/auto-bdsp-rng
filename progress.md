@@ -310,3 +310,22 @@
 | UI tests after left rail compression | `.venv\Scripts\python.exe -m pytest tests\test_ui.py -q` | all pass | 27 passed | pass |
 | auto RNG related tests after preview removal | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py -q` | all pass | 47 passed | pass |
 | full test suite after preview removal | `.venv\Scripts\python.exe -m pytest -q` | all pass | 178 passed | pass |
+
+### Auto Runner Seed Script Ordering
+- **Status:** complete
+- Actions taken:
+  - 调查用户反馈：点击自动页开始后直接进入 Project_Xs 测 seed，没有先执行伊机控测种脚本。
+  - 定位根因：`AutoRngRunner.run()` 从 `CAPTURE_SEED` 起步，测种脚本只在搜索无候选后才运行。
+  - 增加失败测试，固定启动顺序必须为 `测种脚本 -> capture seed`。
+  - 修改 runner 初始状态为 `RUN_SEED_SCRIPT`；循环下一轮也回到 `RUN_SEED_SCRIPT`，确保每轮先执行测种动作。
+- Files modified:
+  - `src/auto_bdsp_rng/automation/auto_rng/runner.py`
+  - `tests/automation/test_auto_rng_runner.py`
+
+## Test Results
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| runner ordering test red | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -q` | fail before fix | 1 expected failure plus old step-count mismatches | pass |
+| runner tests after seed script ordering fix | `.venv\Scripts\python.exe -m pytest tests\automation\test_auto_rng_runner.py -q` | all pass | 16 passed | pass |
+| related auto RNG tests after seed script ordering fix | `.venv\Scripts\python.exe -m pytest tests\test_ui.py tests\automation\test_auto_rng_runner.py tests\automation\test_auto_rng_scripts.py -q` | all pass | 48 passed | pass |
+| full test suite after seed script ordering fix | `.venv\Scripts\python.exe -m pytest -q` | all pass | 179 passed | pass |

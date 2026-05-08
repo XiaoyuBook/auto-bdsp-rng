@@ -136,7 +136,7 @@ def test_runner_clears_locked_target_when_final_calibrate_abandons_target(tmp_pa
         services=services,
     )
 
-    runner.run(max_steps=4)
+    runner.run(max_steps=5)
 
     assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
     assert runner.progress.locked_target is None
@@ -192,7 +192,35 @@ def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
 
     assert calls == ["capture"]
     assert scripts == [("BDSP测种.txt", "A 100\n")]
-    assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+
+
+def test_runner_starts_by_running_seed_script_before_capture(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "谢米.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 填入这里\n", encoding="utf-8")
+    events: list[str] = []
+    services = AutoRngServices(
+        capture_seed=lambda: events.append("capture") or AutoRngSeedResult(seed="seed-1", current_advances=0),
+        search_candidates=lambda _seed: [],
+        run_script_text=lambda _text, name: events.append(f"script:{name}"),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=2)
+
+    assert events == ["script:BDSP测种.txt", "capture"]
 
 
 def test_runner_runs_advance_script_then_reidentifies_when_request_is_within_threshold(tmp_path):
@@ -222,9 +250,9 @@ def test_runner_runs_advance_script_then_reidentifies_when_request_is_within_thr
         services=services,
     )
 
-    runner.run(max_steps=5)
+    runner.run(max_steps=6)
 
-    assert scripts == [("bdsp过帧.txt", "_目标帧数 = 900\n")]
+    assert scripts == [("BDSP测种.txt", "A 100\n"), ("bdsp过帧.txt", "_目标帧数 = 900\n")]
     assert calls == ["reidentify"]
     assert runner.progress.phase == AutoRngPhase.DECIDE_ADVANCE
     assert runner.progress.current_advances == 600
@@ -258,9 +286,9 @@ def test_runner_final_calibrate_runs_hit_script_with_live_flash_frames(tmp_path)
         services=services,
     )
 
-    runner.run(max_steps=5)
+    runner.run(max_steps=6)
 
-    assert scripts == [("谢米.txt", "_闪帧 = 100\n")]
+    assert scripts == [("BDSP测种.txt", "A 100\n"), ("谢米.txt", "_闪帧 = 100\n")]
     assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
     assert runner.progress.final_flash_frames == 100
 
@@ -291,7 +319,7 @@ def test_runner_single_mode_completes_after_hit_script(tmp_path):
         services=services,
     )
 
-    runner.run(max_steps=6)
+    runner.run(max_steps=7)
 
     assert runner.progress.phase == AutoRngPhase.COMPLETED
     assert runner.progress.loop_index == 1
@@ -326,8 +354,8 @@ def test_runner_count_mode_runs_requested_number_of_loops(tmp_path):
         services=services,
     )
 
-    runner.run(max_steps=12)
+    runner.run(max_steps=14)
 
     assert runner.progress.phase == AutoRngPhase.COMPLETED
     assert runner.progress.loop_index == 2
-    assert scripts == ["谢米.txt", "谢米.txt"]
+    assert scripts == ["BDSP测种.txt", "谢米.txt", "BDSP测种.txt", "谢米.txt"]

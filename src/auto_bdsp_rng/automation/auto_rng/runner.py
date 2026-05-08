@@ -200,7 +200,7 @@ class AutoRngRunner:
 
     def run(self, *, max_steps: int = 100) -> AutoRngProgress:
         if self.progress.phase == AutoRngPhase.IDLE:
-            self._set_progress(AutoRngPhase.CAPTURE_SEED, "开始自动流程")
+            self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "开始自动流程，运行测种脚本")
         steps = 0
         while not self._stop_requested and steps < max_steps:
             steps += 1
@@ -329,11 +329,11 @@ class AutoRngRunner:
         self._completed_loops += 1
         if self.config.loop_mode == "infinite":
             self._locked_target = None
-            self._set_progress(AutoRngPhase.CAPTURE_SEED, "进入下一轮无限循环", loop_index=self._completed_loops)
+            self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "进入下一轮无限循环，运行测种脚本", loop_index=self._completed_loops)
             return
         if self.config.loop_mode == "count" and self._completed_loops < self.config.loop_count:
             self._locked_target = None
-            self._set_progress(AutoRngPhase.CAPTURE_SEED, "进入下一轮循环", loop_index=self._completed_loops)
+            self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "进入下一轮循环，运行测种脚本", loop_index=self._completed_loops)
             return
         self._set_progress(AutoRngPhase.COMPLETED, "自动流程完成", loop_index=self._completed_loops)
 
