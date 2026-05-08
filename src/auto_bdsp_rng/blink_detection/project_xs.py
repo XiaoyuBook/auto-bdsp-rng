@@ -144,6 +144,7 @@ def _to_project_xs_config_dict(config: ProjectXsTrackingConfig) -> dict[str, obj
         "npc": config.npc,
         "pokemon_npc": config.pokemon_npc,
         "timeline_npc": config.timeline_npc,
+        "reident_1_pk_npc": config.reidentify_1_pk_npc,
         "crop": [0, 0, 0, 0] if config.capture.crop is None else list(config.capture.crop),
         "camera": config.capture.camera,
         "display_percent": config.display_percent,
@@ -189,6 +190,7 @@ def load_project_xs_config(config: str | Path, *, blink_count: int = 40) -> Proj
         pokemon_npc=int(raw_config.get("pokemon_npc", 0)),
         timeline_npc=int(raw_config.get("timeline_npc", 0)),
         display_percent=int(raw_config.get("display_percent", 100)),
+        reidentify_1_pk_npc=bool(raw_config.get("reident_1_pk_npc", False)),
     )
 
 
@@ -435,6 +437,43 @@ def reidentify_seed_from_observation(
         reidentified_state = SeedState32.from_words(reidentified_rng.get_state())
     except (AttributeError, TypeError, ValueError) as exc:
         raise ProjectXsIntegrationError("Project_Xs reidentify returned an invalid seed state") from exc
+
+    return ProjectXsReidentifyResult(
+        state=reidentified_state,
+        observation=observation,
+        advances=int(advances),
+    )
+
+
+def reidentify_seed_from_observation_noisy(
+    state: SeedState32,
+    observation: BlinkObservation,
+    *,
+    search_min: int = 0,
+    search_max: int = 100_000,
+) -> ProjectXsReidentifyResult:
+    """Reidentify Project_Xs Xorshift state with the 1 Pokemon NPC noisy flow."""
+
+    rngtool = _load_module("rngtool")
+    xorshift = _load_module("xorshift")
+    try:
+        rng = xorshift.Xorshift(*state.words)
+        reidentified_rng, advances = rngtool.reidentiy_by_intervals_noisy(
+            rng,
+            list(observation.intervals),
+            search_min=search_min,
+            search_max=search_max,
+        )
+    except Exception as exc:
+        raise ProjectXsIntegrationError("Project_Xs noisy reidentify failed") from exc
+
+    if reidentified_rng is None:
+        raise ProjectXsIntegrationError("Project_Xs noisy reidentify did not find a matching state")
+
+    try:
+        reidentified_state = SeedState32.from_words(reidentified_rng.get_state())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ProjectXsIntegrationError("Project_Xs noisy reidentify returned an invalid seed state") from exc
 
     return ProjectXsReidentifyResult(
         state=reidentified_state,

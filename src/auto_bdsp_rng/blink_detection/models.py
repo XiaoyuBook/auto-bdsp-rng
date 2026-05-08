@@ -210,6 +210,7 @@ class ProjectXsTrackingConfig:
     pokemon_npc: int = 0
     timeline_npc: int = 0
     display_percent: int = 100
+    reidentify_1_pk_npc: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -229,4 +230,5 @@ class ProjectXsTrackingConfig:
             "pokemon_npc": self.pokemon_npc,
             "timeline_npc": self.timeline_npc,
             "display_percent": self.display_percent,
+            "reidentify_1_pk_npc": self.reidentify_1_pk_npc,
         }

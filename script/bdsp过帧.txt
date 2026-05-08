@@ -96,3 +96,4 @@ WAIT 6000# 可根据设备情况修改时间
 LS RESET
 Y
 ENDIF
+WAIT 1000

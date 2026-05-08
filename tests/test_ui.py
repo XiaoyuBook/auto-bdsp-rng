@@ -146,7 +146,13 @@ def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
     observation = BlinkObservation.from_sequences([0, 1, 0], [0, 12, 24])
     state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
 
-    monkeypatch.setattr("auto_bdsp_rng.ui.main_window.capture_player_blinks", lambda *args, **kwargs: observation)
+    capture_counts: list[int] = []
+
+    def fake_capture(config, *args, **kwargs):
+        capture_counts.append(config.blink_count)
+        return observation
+
+    monkeypatch.setattr("auto_bdsp_rng.ui.main_window.capture_player_blinks", fake_capture)
     monkeypatch.setattr(
         "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation",
         lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=42),
@@ -161,7 +167,42 @@ def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
     assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
     assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
     assert window.advances_value.text() == "42"
+    assert capture_counts == [7]
     assert window.result_count.text() == "3 条结果"
+
+
+def test_reidentify_noisy_option_uses_20_blinks_and_noisy_reidentify(app, monkeypatch):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    _set_bdsp_seed(window)
+    observation = BlinkObservation.from_sequences([0, 1, 0], [0, 12, 24])
+    state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    capture_counts: list[int] = []
+
+    def fake_capture(config, *args, **kwargs):
+        capture_counts.append(config.blink_count)
+        return observation
+
+    def fail_regular(*_args, **_kwargs):
+        raise AssertionError("regular reidentify should not be used")
+
+    monkeypatch.setattr("auto_bdsp_rng.ui.main_window.capture_player_blinks", fake_capture)
+    monkeypatch.setattr("auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation", fail_regular)
+    monkeypatch.setattr(
+        "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation_noisy",
+        lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=43),
+    )
+    for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
+        box.setText(text)
+    window.reidentify_1_pk_npc.setChecked(True)
+
+    window.reidentify_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    assert capture_counts == [20]
+    assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
+    assert window.advances_value.text() == "43"
 
 
 def test_main_window_loads_project_xs_config_fields(app):
@@ -541,7 +582,13 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     window = MainWindow()
     seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
     calls: list[SeedState32] = []
-    monkeypatch.setattr(main_window_module, "capture_player_blinks", lambda *_args, **_kwargs: SimpleNamespace(offset_time=0.0))
+    capture_counts: list[int] = []
+
+    def fake_capture(config, *_args, **_kwargs):
+        capture_counts.append(config.blink_count)
+        return SimpleNamespace(offset_time=0.0)
+
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
 
     def fake_reidentify(current_state, _observation, **_kwargs):
         calls.append(current_state)
@@ -555,6 +602,7 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     assert calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
     assert result.seed == seed_state
     assert result.current_advances == 42
+    assert capture_counts == [7]
 
 
 def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monkeypatch):

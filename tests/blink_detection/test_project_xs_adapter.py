@@ -16,6 +16,7 @@ from auto_bdsp_rng.blink_detection import (
     capture_preview_frame,
     load_project_xs_config,
     plan_timeline,
+    reidentify_seed_from_observation_noisy,
     reidentify_seed_from_observation,
     render_eye_preview,
     recover_seed_from_observation,
@@ -140,6 +141,29 @@ def test_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
     result = reidentify_seed_from_observation(state, observation, npc=1, search_min=10, search_max=100)
 
     assert result.advances == 42
+    assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
+
+
+def test_noisy_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
+    def fake_reidentify_noisy(rng, intervals, search_min=0, search_max=0):
+        assert rng.get_state() == [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222]
+        assert intervals == [0, 12, 24]
+        assert search_min == 10
+        assert search_max == 100
+        return FakeRng(), 43
+
+    monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
+    monkeypatch.setitem(
+        sys.modules,
+        "rngtool",
+        types.SimpleNamespace(reidentiy_by_intervals_noisy=fake_reidentify_noisy),
+    )
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    observation = BlinkObservation.from_sequences([], [0, 12, 24])
+
+    result = reidentify_seed_from_observation_noisy(state, observation, search_min=10, search_max=100)
+
+    assert result.advances == 43
     assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
 
 

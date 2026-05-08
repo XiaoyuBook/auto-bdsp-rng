@@ -45,12 +45,14 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     ProjectXsIntegrationError,
+    ProjectXsReidentifyResult,
     ProjectXsTrackingConfig,
     advance_seed_state,
     capture_player_blinks,
     capture_preview_frame,
     load_project_xs_config,
     reidentify_seed_from_observation,
+    reidentify_seed_from_observation_noisy,
     recover_seed_from_observation,
     render_eye_preview,
     save_project_xs_config,
@@ -69,6 +71,8 @@ from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PROJECT_XS_CONFIGS = PROJECT_ROOT / "third_party" / "Project_Xs_CHN" / "configs"
 DEFAULT_BLINK_COUNT = 40
+REIDENTIFY_BLINK_COUNT = 7
+NOISY_REIDENTIFY_BLINK_COUNT = 20
 
 NATURES = (
     "Hardy",
@@ -293,6 +297,7 @@ TEXT = {
         "config": "Config",
         "browse": "Browse",
         "monitor_window": "Monitor Window",
+        "reidentify_1_pk_npc": "Reidentify 1 PK NPC",
         "window_prefix": "Window Prefix",
         "camera": "Camera",
         "x": "X",
@@ -807,6 +812,7 @@ class MainWindow(QMainWindow):
         self.select_roi_button.clicked.connect(self.start_roi_selection)
 
         self.monitor_window = QCheckBox()
+        self.reidentify_1_pk_npc = QCheckBox()
         self.window_prefix = QLineEdit()
         self.camera = self._spin(0, 99, 0)
         self.x = self._spin(0, 10000, 0)
@@ -830,20 +836,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.preview_button, 1, 0)
         layout.addWidget(self.capture_button, 1, 2)
         layout.addWidget(self.reidentify_button, 1, 3)
-        layout.addWidget(QLabel(), 2, 0)
-        layout.addWidget(self.window_prefix, 2, 1, 1, 3)
-        self._add_form_row(layout, 3, "camera", self.camera)
-        layout.addWidget(self.select_roi_button, 4, 1, 1, 3)
-        self._add_form_row(layout, 5, "threshold", self.threshold)
-        self._add_form_row(layout, 6, "time_delay", self.white_delay)
-        self._add_form_row(layout, 7, "advance_delay", self.advance_delay)
-        self._add_form_row(layout, 8, "advance_delay_2", self.advance_delay_2)
-        self._add_form_row(layout, 9, "npcs", self.npc_count)
-        self._add_form_row(layout, 10, "timeline_npcs", self.timeline_npc)
-        self._add_form_row(layout, 11, "pokemon_npcs", self.pokemon_npc)
-        self._add_form_row(layout, 12, "display_percent", self.display_percent)
-        layout.addWidget(self.save_config_button, 13, 2)
-        layout.addWidget(self.raw_screenshot_button, 13, 3)
+        layout.addWidget(self.reidentify_1_pk_npc, 2, 1, 1, 3)
+        layout.addWidget(QLabel(), 3, 0)
+        layout.addWidget(self.window_prefix, 3, 1, 1, 3)
+        self._add_form_row(layout, 4, "camera", self.camera)
+        layout.addWidget(self.select_roi_button, 5, 1, 1, 3)
+        self._add_form_row(layout, 6, "threshold", self.threshold)
+        self._add_form_row(layout, 7, "time_delay", self.white_delay)
+        self._add_form_row(layout, 8, "advance_delay", self.advance_delay)
+        self._add_form_row(layout, 9, "advance_delay_2", self.advance_delay_2)
+        self._add_form_row(layout, 10, "npcs", self.npc_count)
+        self._add_form_row(layout, 11, "timeline_npcs", self.timeline_npc)
+        self._add_form_row(layout, 12, "pokemon_npcs", self.pokemon_npc)
+        self._add_form_row(layout, 13, "display_percent", self.display_percent)
+        layout.addWidget(self.save_config_button, 14, 2)
+        layout.addWidget(self.raw_screenshot_button, 14, 3)
         return group
 
     def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:
@@ -1594,6 +1601,7 @@ class MainWindow(QMainWindow):
         self.config_label.setText(self._text("config"))
         self.browse_button.setText(self._text("browse"))
         self.monitor_window.setText(self._text("monitor_window"))
+        self.reidentify_1_pk_npc.setText(self._text("reidentify_1_pk_npc"))
         self.capture_button.setText(self._text("stop_capture") if self._is_capturing() else self._text("capture_seed"))
         self.reidentify_button.setText(self._text("reidentify_seed"))
         self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
@@ -1650,6 +1658,7 @@ class MainWindow(QMainWindow):
             return
         roi_x, roi_y, roi_w, roi_h = config.capture.roi
         self.monitor_window.setChecked(config.capture.monitor_window)
+        self.reidentify_1_pk_npc.setChecked(config.reidentify_1_pk_npc)
         self.window_prefix.setText(config.capture.window_prefix)
         self.camera.setText(str(config.capture.camera))
         self.x.setText(str(roi_x))
@@ -1688,6 +1697,37 @@ class MainWindow(QMainWindow):
             pokemon_npc=int(self.pokemon_npc.text() or 0),
             timeline_npc=int(self.timeline_npc.text() or 0),
             display_percent=int(self.display_percent.text() or 0),
+            reidentify_1_pk_npc=self.reidentify_1_pk_npc.isChecked(),
+        )
+
+    def _reidentify_blink_count(self) -> int:
+        return NOISY_REIDENTIFY_BLINK_COUNT if self.reidentify_1_pk_npc.isChecked() else REIDENTIFY_BLINK_COUNT
+
+    def _reidentify_capture_config(self, capture: BlinkCaptureConfig) -> BlinkCaptureConfig:
+        return replace(capture, blink_count=self._reidentify_blink_count())
+
+    def _reidentify_from_observation(
+        self,
+        state: SeedState32,
+        observation: object,
+        *,
+        npc: int,
+        search_min: int,
+        search_max: int,
+    ) -> ProjectXsReidentifyResult:
+        if self.reidentify_1_pk_npc.isChecked():
+            return reidentify_seed_from_observation_noisy(
+                state,
+                observation,  # type: ignore[arg-type]
+                search_min=search_min,
+                search_max=search_max,
+            )
+        return reidentify_seed_from_observation(
+            state,
+            observation,  # type: ignore[arg-type]
+            npc=npc,
+            search_min=search_min,
+            search_max=search_max,
         )
 
     def save_current_config(self) -> None:
@@ -2117,11 +2157,11 @@ class MainWindow(QMainWindow):
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             self._capture_cancel.clear()
             observation = capture_player_blinks(
-                tracking_config.capture,
+                self._reidentify_capture_config(tracking_config.capture),
                 should_stop=self._capture_cancel.is_set,
                 show_window=False,
             )
-            result = reidentify_seed_from_observation(
+            result = self._reidentify_from_observation(
                 state32_from_result(seed_result),
                 observation,
                 npc=tracking_config.npc,
@@ -2305,12 +2345,14 @@ class MainWindow(QMainWindow):
         self._capture_result = None
         self._capture_error = None
         self._capture_mode = "reidentify"
-        self._capture_progress = (0, DEFAULT_BLINK_COUNT)
+        reidentify_capture = self._reidentify_capture_config(config.capture)
+        reidentify_blink_count = reidentify_capture.blink_count
+        self._capture_progress = (0, reidentify_blink_count)
         with self._capture_lock:
             self._capture_frame = None
-        self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
+        self.progress_value.setText(f"0/{reidentify_blink_count}")
         self.capture_button.setText(self._text("stop_capture"))
-        self.statusBar().showMessage(self._text("capturing"))
+        self.statusBar().showMessage(f"Capturing {reidentify_blink_count} blinks...")
 
         last_display_frame_at = 0.0
 
@@ -2331,13 +2373,13 @@ class MainWindow(QMainWindow):
         def run_reidentify() -> None:
             try:
                 observation = capture_player_blinks(
-                    config.capture,
+                    reidentify_capture,
                     should_stop=self._capture_cancel.is_set,
                     frame_callback=store_frame,
                     progress_callback=store_progress,
                     show_window=False,
                 )
-                self._capture_result = reidentify_seed_from_observation(
+                self._capture_result = self._reidentify_from_observation(
                     current_state,
                     observation,
                     npc=config.npc,
@@ -2384,7 +2426,7 @@ class MainWindow(QMainWindow):
             return
         for box, text in zip(self.seed32_inputs, result.state.format_words()):
             box.setText(text)
-        self.progress_value.setText(f"{DEFAULT_BLINK_COUNT}/{DEFAULT_BLINK_COUNT}")
+        self.progress_value.setText(f"{total}/{total}")
         self._sync_seed64_from_state32()
         self._advance_step = int(self.npc_count.text() or 0) + 1
         self._tracked_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
