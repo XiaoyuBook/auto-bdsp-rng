@@ -3,6 +3,7 @@ from __future__ import annotations
 from auto_bdsp_rng.data import (
     GameVersion,
     StaticEncounterCategory,
+    _personal_bdsp_path,
     get_species_info,
     get_static_encounters,
     get_static_templates,
@@ -24,6 +25,13 @@ def test_load_species_info_parses_bdsp_personal_table():
     assert turtwig.normal_ability_count == 2
     assert turtwig.has_hidden_ability is True
     assert turtwig.as_generator_info().ability_count == 2
+
+
+def test_default_personal_bdsp_path_points_to_existing_project_resource():
+    path = _personal_bdsp_path()
+
+    assert path.name == "personal_bdsp.bin"
+    assert path.exists()
 
 
 def test_static_encounters_include_template_metadata_and_species_info():
