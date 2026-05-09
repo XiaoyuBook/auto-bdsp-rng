@@ -6,7 +6,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QIntValidator, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -526,6 +526,39 @@ class PokeFinderTableWidget(QTableWidget):
         return False
 
 
+class ShinyThresholdCalibrationWorker(QObject):
+    finished = Signal(float)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, capture_config: BlinkCaptureConfig) -> None:
+        super().__init__()
+        self._capture_config = capture_config
+        self._cancel = threading.Event()
+
+    def run(self) -> None:
+        try:
+            result = measure_keyword_interval(
+                lambda: capture_preview_frame(self._capture_config),
+                read_ocr_text,
+                should_stop=self._cancel.is_set,
+                timeout_seconds=45.0,
+                poll_interval_seconds=0.1,
+            )
+        except RuntimeError as exc:
+            if self._cancel.is_set():
+                self.cancelled.emit()
+            else:
+                self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        else:
+            self.finished.emit(result.interval_seconds)
+
+    def stop(self) -> None:
+        self._cancel.set()
+
+
 class MainWindow(QMainWindow):
     autoCaptureFrameChanged = Signal(object)
     autoCaptureProgressChanged = Signal(int, int)
@@ -562,6 +595,8 @@ class MainWindow(QMainWindow):
         self._capture_result: object | None = None
         self._capture_error: Exception | None = None
         self._capture_frame: object | None = None
+        self._shiny_calibration_thread: QThread | None = None
+        self._shiny_calibration_worker: ShinyThresholdCalibrationWorker | None = None
         self._capture_mode = "seed"
         self._capture_progress = (0, DEFAULT_BLINK_COUNT)
         self._advance_timer = QTimer(self)
@@ -2048,29 +2083,53 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def calibrate_shiny_threshold(self) -> None:
-        self.statusBar().showMessage("正在监控 出现了 -> 去吧 对话框...")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            tracking_config = self._config_from_form()
-            result = measure_keyword_interval(
-                lambda: capture_preview_frame(tracking_config.capture),
-                read_ocr_text,
-                sleep=self._dialog_timing_sleep,
-                timeout_seconds=45.0,
-                poll_interval_seconds=0.1,
-            )
-        except Exception as exc:
-            self._show_error("闪光判定校准失败", exc if isinstance(exc, Exception) else Exception(str(exc)))
+        if self._shiny_calibration_worker is not None:
+            self._stop_shiny_threshold_calibration()
             return
-        finally:
-            QApplication.restoreOverrideCursor()
-        self._show_shiny_threshold_dialog(result.interval_seconds)
 
-    def _dialog_timing_sleep(self, seconds: float) -> None:
-        end_at = time.monotonic() + seconds
-        while time.monotonic() < end_at:
-            QApplication.processEvents()
-            time.sleep(min(0.01, max(0.0, end_at - time.monotonic())))
+        tracking_config = self._config_from_form()
+        worker = ShinyThresholdCalibrationWorker(tracking_config.capture)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._shiny_threshold_calibration_finished)
+        worker.failed.connect(self._shiny_threshold_calibration_failed)
+        worker.cancelled.connect(self._shiny_threshold_calibration_cancelled)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._shiny_calibration_worker = worker
+        self._shiny_calibration_thread = thread
+        self.calibrate_shiny_threshold_button.setText("停止校准")
+        self.statusBar().showMessage("正在后台监控 出现了 -> 去吧 对话框...")
+        thread.start()
+
+    def _stop_shiny_threshold_calibration(self) -> None:
+        if self._shiny_calibration_worker is None:
+            return
+        self.calibrate_shiny_threshold_button.setEnabled(False)
+        self.statusBar().showMessage("正在停止闪光判定校准...")
+        self._shiny_calibration_worker.stop()
+
+    def _reset_shiny_threshold_calibration(self) -> None:
+        self._shiny_calibration_worker = None
+        self._shiny_calibration_thread = None
+        self.calibrate_shiny_threshold_button.setEnabled(True)
+        self.calibrate_shiny_threshold_button.setText("校准闪光判定")
+
+    def _shiny_threshold_calibration_finished(self, interval_seconds: float) -> None:
+        self._reset_shiny_threshold_calibration()
+        self._show_shiny_threshold_dialog(interval_seconds)
+
+    def _shiny_threshold_calibration_failed(self, message: str) -> None:
+        self._reset_shiny_threshold_calibration()
+        self._show_error("闪光判定校准失败", RuntimeError(message))
+
+    def _shiny_threshold_calibration_cancelled(self) -> None:
+        self._reset_shiny_threshold_calibration()
+        self.statusBar().showMessage("闪光判定校准已停止")
 
     def _show_shiny_threshold_dialog(self, interval_seconds: float) -> None:
         suggested = suggested_shiny_threshold(interval_seconds)

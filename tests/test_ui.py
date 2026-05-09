@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -381,6 +382,34 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
 def test_main_window_exposes_shiny_threshold_calibration_button_on_seed_capture_tab(app):
     window = MainWindow()
 
+    assert window.calibrate_shiny_threshold_button.text() == "校准闪光判定"
+
+
+def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app, monkeypatch):
+    window = MainWindow()
+    cursor_states: list[bool] = []
+    shown: list[float] = []
+
+    def fake_measure_keyword_interval(*_args, **_kwargs):
+        cursor_states.append(QApplication.overrideCursor() is not None)
+        time.sleep(0.15)
+        return SimpleNamespace(interval_seconds=2.5)
+
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure_keyword_interval)
+    monkeypatch.setattr(window, "_show_shiny_threshold_dialog", lambda interval: shown.append(interval))
+
+    started_at = time.monotonic()
+    window.calibrate_shiny_threshold()
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.1
+    assert window.calibrate_shiny_threshold_button.text() == "停止校准"
+    for _ in range(20):
+        if shown:
+            break
+        QTest.qWait(50)
+    assert cursor_states == [False]
+    assert shown == [2.5]
     assert window.calibrate_shiny_threshold_button.text() == "校准闪光判定"
 
 
