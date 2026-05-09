@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from auto_bdsp_rng.automation.auto_rng.scripts import (
@@ -47,3 +49,29 @@ def test_prepare_advance_script_fails_when_target_parameter_missing():
 def test_prepare_hit_script_fails_when_flash_parameter_missing():
     with pytest.raises(AutoScriptError, match=AUTO_HIT_PARAMETER):
         prepare_hit_script_text("_目标帧数 = 900\n", 100)
+
+
+def test_bundled_shaymin_script_does_not_repeat_flash_frame_wait():
+    script_path = Path(__file__).resolve().parents[2] / "script" / "谢米.txt"
+    text = script_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    repeated_wait_loop = (
+        "FOR\n"
+        "        WAIT 1010\n"
+        "        $2 -= 1\n"
+        "        IF $2 == 0\n"
+        "            BREAK\n"
+        "        ENDIF\n"
+        "    NEXT"
+    )
+
+    assert repeated_wait_loop not in text
+
+
+def test_bundled_hit_scripts_do_not_apply_internal_flash_compensation():
+    script_dir = Path(__file__).resolve().parents[2] / "script"
+
+    for script_name in ("谢米.txt", "玫瑰公园.txt"):
+        text = (script_dir / script_name).read_text(encoding="utf-8")
+
+        assert "$2 -= 43" not in text

@@ -4,9 +4,9 @@
 
 - [x] 确认页面名称使用 `自动定点乱数`。
 - [x] 确认脚本目录使用现有 `script`，不新增 `scripts`。
-- [x] 确认 `fixed_delay` 的语义为：目标帧前提前运行撞闪脚本。
+- [x] 确认 `fixed_delay` 的语义为：固定 `_闪帧` 等待结束后到实际撞到之间的用户校准延迟。
 - [x] 确认过帧脚本 `_目标帧数` 填 `remaining_to_trigger`，不额外扣脚本内部预留值。
-- [x] 确认撞闪脚本 `_闪帧` 填最终实时校准后的 `flash_frames`，不是旧的 `remaining_to_trigger`。
+- [x] 确认撞闪脚本 `_闪帧` 固定为数字，自动流程不再动态改写。
 - [x] 确认默认 `max_wait_frames = 300`。
 - [x] 确认内置 `reseed_threshold_frames = 990_000`，不在 UI 展示。
 - [x] 确认内置 `min_final_flash_frames = 5`，不在 UI 展示。
@@ -44,7 +44,7 @@
 - [x] 过帧后若请求过帧量 `<= 990_000`，下一步走 Reidentify。
 - [x] SearchTarget 无结果时运行测种脚本，然后回到 CaptureSeed。
 - [x] SearchTarget 有结果时锁定最低帧目标。
-- [x] DecideAdvance 计算 `trigger_advances = raw_target_advances - fixed_delay`。
+- [x] DecideAdvance 计算 `trigger_advances = raw_target_advances - fixed_delay - fixed_flash_frames`。
 - [x] 确保 `fixed_delay` 不修改 seed、不修改搜索结果、不加到 `current_advances`。
 - [x] DecideAdvance 计算 `remaining_to_trigger = trigger_advances - current_advances`。
 - [x] `remaining_to_trigger <= 0` 时判定错过目标，不运行撞闪。
@@ -53,10 +53,10 @@
 - [x] FinalCalibrate 执行最终 reidentify 或最终 capture seed。
 - [x] FinalCalibrate 记录 `current_advances_at_ref` 和 `ref_time`。
 - [x] FinalCalibrate 在提交撞闪脚本前用时间差计算 `live_current_advances`。
-- [x] FinalCalibrate 计算 `flash_frames = trigger_advances - live_current_advances`。
-- [x] `flash_frames <= 0` 时判定错过目标，不运行撞闪。
-- [x] `flash_frames < min_final_flash_frames` 时判定距离太近，放弃本目标并重新测 seed / 搜索。
-- [x] FinalCalibrate 安全通过后运行撞闪脚本，填 `_闪帧 = flash_frames`。
+- [x] FinalCalibrate 计算 `remaining_to_trigger = trigger_advances - live_current_advances`。
+- [x] `remaining_to_trigger <= 0` 时判定错过脚本启动点，不运行撞闪。
+- [x] `remaining_to_trigger < min_final_flash_frames` 时判定距离太近，放弃本目标并重新测 seed / 搜索。
+- [x] FinalCalibrate 安全通过后按原文运行固定 `_闪帧` 的撞闪脚本。
 - [x] LoopCheck 支持单次、循环 N 次、无限循环。
 - [x] 支持用户停止，并能停止当前 EasyCon Bridge 脚本或 Project_Xs 捕捉。
 
@@ -106,6 +106,6 @@
 ## 7. 风险与后续问题
 
 - [ ] 明确“暂停”是否需要真正暂停状态机，还是第一版只支持停止。
-- [ ] 明确撞闪脚本内部已有的固定扣帧逻辑是否需要 UI 提示；自动流程第一版只填最终实时剩余帧 `flash_frames`，不额外替脚本扣内置值。
+- [x] 明确撞闪脚本内部固定扣帧逻辑应移除；自动流程使用固定 `_闪帧`，并通过 `fixed_delay` 决定脚本启动点。
 - [ ] 明确重新捕获 seed 后是否必须重新锁定目标；当前方案建议重新搜索并锁定新最低帧。
 - [ ] 后续补充循环停止条件，例如成功识别闪、用户确认、截图判定、脚本输出关键字。

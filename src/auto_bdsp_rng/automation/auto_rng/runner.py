@@ -14,7 +14,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngSeedResult,
     AutoRngTarget,
 )
-from auto_bdsp_rng.automation.auto_rng.scripts import prepare_advance_script_text, prepare_hit_script_text
+from auto_bdsp_rng.automation.auto_rng.scripts import prepare_advance_script_text
 
 _UNSET = object()
 
@@ -44,8 +44,9 @@ def decide_target_advance(
     current_advances: int,
     fixed_delay: int,
     max_wait_frames: int,
+    fixed_flash_frames: int = 0,
 ) -> AutoRngDecision:
-    trigger_advances = target.raw_target_advances - fixed_delay
+    trigger_advances = target.raw_target_advances - fixed_delay - fixed_flash_frames
     remaining_to_trigger = trigger_advances - current_advances
     common = {
         "target": target,
@@ -84,33 +85,35 @@ def finalize_flash_frames(
     fixed_delay: int,
     current_advances_at_ref: int,
     ref_time: float,
+    fixed_flash_frames: int = 0,
     now_monotonic: float | None = None,
     npc: int = 0,
     min_final_flash_frames: int = 30,
 ) -> AutoRngDecision:
     now = time.monotonic() if now_monotonic is None else now_monotonic
-    trigger_advances = target.raw_target_advances - fixed_delay
+    trigger_advances = target.raw_target_advances - fixed_delay - fixed_flash_frames
     elapsed_seconds = max(0.0, now - ref_time)
     elapsed_advances = math.floor(elapsed_seconds / 1.018) * (npc + 1)
     live_current_advances = current_advances_at_ref + elapsed_advances
-    flash_frames = trigger_advances - live_current_advances
+    remaining_to_trigger = trigger_advances - live_current_advances
+    flash_frames = fixed_flash_frames if fixed_flash_frames > 0 else remaining_to_trigger
     common = {
         "target": target,
         "raw_target_advances": target.raw_target_advances,
         "fixed_delay": fixed_delay,
         "trigger_advances": trigger_advances,
         "current_advances": live_current_advances,
-        "remaining_to_trigger": flash_frames,
+        "remaining_to_trigger": remaining_to_trigger,
         "flash_frames": flash_frames,
     }
-    if flash_frames <= 0:
+    if remaining_to_trigger <= 0:
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_MISSED,
             phase=AutoRngPhase.SEARCH_TARGET,
             message="最终校准后已错过目标，不运行撞闪脚本",
             **common,
         )
-    if flash_frames < min_final_flash_frames:
+    if remaining_to_trigger < min_final_flash_frames:
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_TOO_CLOSE,
             phase=AutoRngPhase.SEARCH_TARGET,
@@ -195,6 +198,7 @@ class AutoRngRunner:
             target,
             current_advances=current_advances,
             fixed_delay=self.config.fixed_delay,
+            fixed_flash_frames=self.config.fixed_flash_frames,
             max_wait_frames=self.config.max_wait_frames,
         )
 
@@ -273,6 +277,7 @@ class AutoRngRunner:
             target,
             current_advances=seed.current_advances,
             fixed_delay=self.config.fixed_delay,
+            fixed_flash_frames=self.config.fixed_flash_frames,
             max_wait_frames=self.config.max_wait_frames,
         )
         self._requested_advances = decision.requested_advances or 0
@@ -305,6 +310,7 @@ class AutoRngRunner:
         decision = finalize_flash_frames(
             target,
             fixed_delay=self.config.fixed_delay,
+            fixed_flash_frames=self.config.fixed_flash_frames,
             current_advances_at_ref=seed.current_advances,
             ref_time=self._seed_measured_at(seed),
             now_monotonic=self.services.monotonic(),
@@ -325,6 +331,7 @@ class AutoRngRunner:
         decision = finalize_flash_frames(
             target,
             fixed_delay=self.config.fixed_delay,
+            fixed_flash_frames=self.config.fixed_flash_frames,
             current_advances_at_ref=seed.current_advances,
             ref_time=self._seed_measured_at(seed),
             now_monotonic=self.services.monotonic(),
@@ -334,7 +341,7 @@ class AutoRngRunner:
         if decision.kind != AutoRngDecisionKind.RUN_HIT_SCRIPT:
             self._set_progress_from_decision(decision, last_script_path=path)
             return
-        text = prepare_hit_script_text(path.read_text(encoding="utf-8"), decision.flash_frames or 0)
+        text = path.read_text(encoding="utf-8")
         self.services.run_script_text(text, path.name)
         self._set_progress(
             AutoRngPhase.LOOP_CHECK,

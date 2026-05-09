@@ -52,6 +52,7 @@ class AutoRngConfig:
     advance_script_path: Path | None = None
     hit_script_path: Path | None = None
     fixed_delay: int = 100
+    fixed_flash_frames: int = 60
     max_wait_frames: int = 300
     reseed_threshold_frames: int = 990_000
     min_final_flash_frames: int = 5

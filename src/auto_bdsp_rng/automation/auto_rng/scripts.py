@@ -79,13 +79,24 @@ def validate_auto_scripts(
     if hit_script_path is None:
         raise AutoScriptError("请选择撞闪脚本")
     require_parameter(advance_script_path, AUTO_ADVANCE_PARAMETER)
-    require_parameter(hit_script_path, AUTO_HIT_PARAMETER)
+    require_integer_parameter(hit_script_path, AUTO_HIT_PARAMETER)
 
 
 def require_parameter(path: Path, parameter_name: str) -> None:
     text = _read_utf8(path)
     if parameter_name not in {parameter.name for parameter in parse_script_parameters(text)}:
         raise AutoScriptError(f"{path.name} 缺少必需参数 {parameter_name}")
+
+
+def require_integer_parameter(path: Path, parameter_name: str) -> None:
+    text = _read_utf8(path)
+    for parameter in parse_script_parameters(text):
+        if parameter.name != parameter_name:
+            continue
+        if not parameter.is_integer:
+            raise AutoScriptError(f"{path.name} 必需参数 {parameter_name} 必须是固定数字")
+        return
+    raise AutoScriptError(f"{path.name} 缺少必需参数 {parameter_name}")
 
 
 def replace_required_parameter(text: str, parameter_name: str, value: int) -> str:
