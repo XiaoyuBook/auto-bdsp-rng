@@ -58,7 +58,7 @@ from auto_bdsp_rng.blink_detection import (
     save_project_xs_config,
 )
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
-from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_dialog_interval, suggested_shiny_threshold
+from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
@@ -2052,10 +2052,12 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             tracking_config = self._config_from_form()
-            result = measure_dialog_interval(
+            result = measure_keyword_interval(
                 lambda: capture_preview_frame(tracking_config.capture),
+                read_ocr_text,
                 sleep=self._dialog_timing_sleep,
                 timeout_seconds=45.0,
+                poll_interval_seconds=0.1,
             )
         except Exception as exc:
             self._show_error("闪光判定校准失败", exc if isinstance(exc, Exception) else Exception(str(exc)))
@@ -2437,10 +2439,12 @@ class MainWindow(QMainWindow):
             script_thread = threading.Thread(target=run_script, daemon=True)
             script_thread.start()
             try:
-                timing = measure_dialog_interval(
+                timing = measure_keyword_interval(
                     lambda: capture_preview_frame(tracking_config.capture),
+                    read_ocr_text,
                     should_stop=self._capture_cancel.is_set,
                     timeout_seconds=max(45.0, threshold_seconds + 10.0),
+                    poll_interval_seconds=0.1,
                 )
             except Exception:
                 stop_current_script_service()
