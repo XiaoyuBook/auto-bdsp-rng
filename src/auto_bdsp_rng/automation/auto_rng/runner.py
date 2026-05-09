@@ -251,7 +251,10 @@ class AutoRngRunner:
     def _search_target(self) -> None:
         seed = self._require_seed()
         candidates = self.services.search_candidates(seed)
-        decision = decide_search_target(candidates)
+        # 过滤已过帧：只保留 current_advances + delay + 闪帧 之后的候选
+        min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
+        reachable = [c for c in candidates if c.advances >= min_reachable]
+        decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
             return

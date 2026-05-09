@@ -2258,11 +2258,19 @@ class MainWindow(QMainWindow):
 
     def _handle_auto_seed_captured(self, seed_result: AutoRngSeedResult) -> None:
         state = self._state32_from_auto_seed_result(seed_result)
-        for box, text in zip(self.seed32_inputs, state.format_words()):
-            box.setText(text)
-        self._sync_seed64_from_state32()
+        incoming_words = state.format_words()
+        # 检测 seed 是否变化：未变化说明是 reidentify，不应覆盖数据区
+        seed_changed = any(
+            box.text() != word
+            for box, word in zip(self.seed32_inputs, incoming_words)
+        )
+        if seed_changed:
+            for box, text in zip(self.seed32_inputs, incoming_words):
+                box.setText(text)
+            self._sync_seed64_from_state32()
+            self._sync_bdsp_data_from_auto_rng(state.to_seed_pair64())
+        # reidentify 只更新 current_advances，不改变 seed/数据区
         self._start_auto_advance_tracking(seed_result)
-        self._sync_bdsp_data_from_auto_rng(state.to_seed_pair64())
 
     def _state32_from_auto_seed_result(self, seed_result: AutoRngSeedResult) -> SeedState32:
         seed = seed_result.seed
@@ -2447,11 +2455,13 @@ class MainWindow(QMainWindow):
                 search_min=0,
                 search_max=max(100_000, config.max_advances, search_criteria.max_advances),
             )
+            # reidentify 不改变 seed，只更新 current_advances 位置
+            # 保留原始 seed，避免数据区被推进后的状态覆盖
             reidentified = AutoRngSeedResult(
-                seed=result.state,
+                seed=seed_result.seed,
                 current_advances=result.advances,
                 npc=tracking_config.npc,
-                seed_text=" ".join(result.state.format_seed64_pair()),
+                seed_text=seed_result.seed_text,
                 measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(reidentified)
@@ -2747,10 +2757,12 @@ class MainWindow(QMainWindow):
         if result is None:
             self.statusBar().showMessage(self._text("capture_stopped"))
             return
-        for box, text in zip(self.seed32_inputs, result.state.format_words()):
-            box.setText(text)
+        # reidentify 不修改 seed，只更新 current_advances
+        if self._capture_mode != "reidentify":
+            for box, text in zip(self.seed32_inputs, result.state.format_words()):
+                box.setText(text)
+            self._sync_seed64_from_state32()
         self.progress_value.setText(f"{total}/{total}")
-        self._sync_seed64_from_state32()
         self._advance_step = int(self.npc_count.text() or 0) + 1
         self._tracked_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
         self.advances_value.setText("0")
