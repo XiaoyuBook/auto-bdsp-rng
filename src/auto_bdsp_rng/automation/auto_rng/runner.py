@@ -14,7 +14,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngSeedResult,
     AutoRngTarget,
 )
-from auto_bdsp_rng.automation.auto_rng.scripts import prepare_advance_script_text
+from auto_bdsp_rng.automation.auto_rng.scripts import AUTO_HIT_PARAMETER, prepare_advance_script_text, read_integer_parameter
 
 _UNSET = object()
 
@@ -198,7 +198,7 @@ class AutoRngRunner:
             target,
             current_advances=current_advances,
             fixed_delay=self.config.fixed_delay,
-            fixed_flash_frames=self.config.fixed_flash_frames,
+            fixed_flash_frames=self._fixed_flash_frames(),
             max_wait_frames=self.config.max_wait_frames,
         )
 
@@ -277,7 +277,7 @@ class AutoRngRunner:
             target,
             current_advances=seed.current_advances,
             fixed_delay=self.config.fixed_delay,
-            fixed_flash_frames=self.config.fixed_flash_frames,
+            fixed_flash_frames=self._fixed_flash_frames(),
             max_wait_frames=self.config.max_wait_frames,
         )
         self._requested_advances = decision.requested_advances or 0
@@ -310,7 +310,7 @@ class AutoRngRunner:
         decision = finalize_flash_frames(
             target,
             fixed_delay=self.config.fixed_delay,
-            fixed_flash_frames=self.config.fixed_flash_frames,
+            fixed_flash_frames=self._fixed_flash_frames(),
             current_advances_at_ref=seed.current_advances,
             ref_time=self._seed_measured_at(seed),
             now_monotonic=self.services.monotonic(),
@@ -331,7 +331,7 @@ class AutoRngRunner:
         decision = finalize_flash_frames(
             target,
             fixed_delay=self.config.fixed_delay,
-            fixed_flash_frames=self.config.fixed_flash_frames,
+            fixed_flash_frames=self._fixed_flash_frames(),
             current_advances_at_ref=seed.current_advances,
             ref_time=self._seed_measured_at(seed),
             now_monotonic=self.services.monotonic(),
@@ -420,3 +420,9 @@ class AutoRngRunner:
         if self._locked_target is None:
             raise RuntimeError("目标尚未锁定")
         return self._locked_target
+
+    def _fixed_flash_frames(self) -> int:
+        path = self.config.hit_script_path
+        if path is None:
+            return self.config.fixed_flash_frames
+        return read_integer_parameter(path, AUTO_HIT_PARAMETER)

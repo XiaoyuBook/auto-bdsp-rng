@@ -6,7 +6,7 @@
 - [x] 确认脚本目录使用现有 `script`，不新增 `scripts`。
 - [x] 确认 `fixed_delay` 的语义为：固定 `_闪帧` 等待结束后到实际撞到之间的用户校准延迟。
 - [x] 确认过帧脚本 `_目标帧数` 填 `remaining_to_trigger`，不额外扣脚本内部预留值。
-- [x] 确认撞闪脚本 `_闪帧` 固定为数字，自动流程不再动态改写。
+- [x] 确认撞闪脚本 `_闪帧` 固定为数字，自动流程读取该数字但不再动态改写。
 - [x] 确认默认 `max_wait_frames = 300`。
 - [x] 确认内置 `reseed_threshold_frames = 990_000`，不在 UI 展示。
 - [x] 确认内置 `min_final_flash_frames = 5`，不在 UI 展示。

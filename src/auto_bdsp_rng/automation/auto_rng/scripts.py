@@ -89,13 +89,17 @@ def require_parameter(path: Path, parameter_name: str) -> None:
 
 
 def require_integer_parameter(path: Path, parameter_name: str) -> None:
+    read_integer_parameter(path, parameter_name)
+
+
+def read_integer_parameter(path: Path, parameter_name: str) -> int:
     text = _read_utf8(path)
     for parameter in parse_script_parameters(text):
         if parameter.name != parameter_name:
             continue
         if not parameter.is_integer:
             raise AutoScriptError(f"{path.name} 必需参数 {parameter_name} 必须是固定数字")
-        return
+        return int(parameter.value)
     raise AutoScriptError(f"{path.name} 缺少必需参数 {parameter_name}")
 
 
