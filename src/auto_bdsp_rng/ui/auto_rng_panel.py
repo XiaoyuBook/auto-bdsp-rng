@@ -6,6 +6,7 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -203,18 +204,25 @@ class AutoRngPanel(QWidget):
 
     def _build_strategy_group(self) -> QGroupBox:
         group = QGroupBox("自动策略")
-        group.setMaximumHeight(160)
+        group.setMaximumHeight(170)
         form = QFormLayout(group)
         form.setContentsMargins(12, 12, 12, 12)
         form.setVerticalSpacing(8)
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
+        self.shiny_threshold_seconds = QDoubleSpinBox()
+        self.shiny_threshold_seconds.setRange(0.0, 999.0)
+        self.shiny_threshold_seconds.setDecimals(3)
+        self.shiny_threshold_seconds.setSingleStep(0.1)
+        self.shiny_threshold_seconds.setValue(0.0)
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
             spin.setFixedWidth(145)
+        self.shiny_threshold_seconds.setFixedWidth(145)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待帧数", self.max_wait_frames)
+        form.addRow("闪光阈值(秒)", self.shiny_threshold_seconds)
         return group
 
     def _build_script_group(self) -> QGroupBox:
@@ -407,6 +415,7 @@ class AutoRngPanel(QWidget):
             loop_mode=str(self.mode_combo.currentData()),
             loop_count=self.loop_count.value(),
             max_advances=self.max_advances.value(),
+            shiny_threshold_seconds=self.shiny_threshold_seconds.value() or None,
         )
 
     def run_with_runner(self, runner: object) -> None:

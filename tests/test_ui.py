@@ -378,6 +378,25 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     assert config.min_final_flash_frames == 5
 
 
+def test_main_window_exposes_shiny_threshold_calibration_button_on_seed_capture_tab(app):
+    window = MainWindow()
+
+    assert window.calibrate_shiny_threshold_button.text() == "校准闪光判定"
+
+
+def test_auto_rng_panel_includes_editable_shiny_threshold_in_config(app, tmp_path):
+    (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path)
+    panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
+    panel.shiny_threshold_seconds.setValue(2.8)
+
+    config = panel.build_config()
+
+    assert config.shiny_threshold_seconds == 2.8
+
+
 def test_auto_rng_panel_has_editable_target_form_and_no_old_main_regions(app):
     panel = AutoRngPanel()
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
@@ -625,6 +644,7 @@ def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, mon
         hit_script_path=hit_script,
     )
     started: list[AutoRngRunner] = []
+    window._latest_preview_frame = object()
     monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_rng(config)

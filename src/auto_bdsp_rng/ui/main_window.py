@@ -58,6 +58,8 @@ from auto_bdsp_rng.blink_detection import (
     save_project_xs_config,
 )
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
+from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_dialog_interval, suggested_shiny_threshold
+from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
 from auto_bdsp_rng.automation.easycon import EasyConStatus
@@ -827,6 +829,8 @@ class MainWindow(QMainWindow):
         self.raw_screenshot_button.clicked.connect(self.start_eye_capture_selection)
         self.select_roi_button = QPushButton()
         self.select_roi_button.clicked.connect(self.start_roi_selection)
+        self.calibrate_shiny_threshold_button = QPushButton()
+        self.calibrate_shiny_threshold_button.clicked.connect(self.calibrate_shiny_threshold)
 
         self.monitor_window = QCheckBox()
         self.reidentify_1_pk_npc = QCheckBox()
@@ -853,6 +857,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.preview_button, 1, 0)
         layout.addWidget(self.capture_button, 1, 2)
         layout.addWidget(self.reidentify_button, 1, 3)
+        layout.addWidget(self.calibrate_shiny_threshold_button, 2, 0)
         layout.addWidget(self.reidentify_1_pk_npc, 2, 1, 1, 3)
         layout.addWidget(QLabel(), 3, 0)
         layout.addWidget(self.window_prefix, 3, 1, 1, 3)
@@ -1622,6 +1627,7 @@ class MainWindow(QMainWindow):
         self.capture_button.setText(self._text("stop_capture") if self._is_capturing() else self._text("capture_seed"))
         self.reidentify_button.setText(self._text("reidentify_seed"))
         self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
+        self.calibrate_shiny_threshold_button.setText("校准闪光判定")
         self.save_config_button.setText(self._text("save_config"))
         self.raw_screenshot_button.setText(self._text("raw_screenshot"))
         self.select_roi_button.setText(self._text("select_roi"))
@@ -2041,6 +2047,54 @@ class MainWindow(QMainWindow):
         dialog = _IVCalculatorDialog(species_table, self)
         dialog.exec()
 
+    def calibrate_shiny_threshold(self) -> None:
+        self.statusBar().showMessage("正在监控 出现了 -> 去吧 对话框...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            tracking_config = self._config_from_form()
+            result = measure_dialog_interval(
+                lambda: capture_preview_frame(tracking_config.capture),
+                sleep=self._dialog_timing_sleep,
+                timeout_seconds=45.0,
+            )
+        except Exception as exc:
+            self._show_error("闪光判定校准失败", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._show_shiny_threshold_dialog(result.interval_seconds)
+
+    def _dialog_timing_sleep(self, seconds: float) -> None:
+        end_at = time.monotonic() + seconds
+        while time.monotonic() < end_at:
+            QApplication.processEvents()
+            time.sleep(min(0.01, max(0.0, end_at - time.monotonic())))
+
+    def _show_shiny_threshold_dialog(self, interval_seconds: float) -> None:
+        suggested = suggested_shiny_threshold(interval_seconds)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("闪光判定校准")
+        layout = QVBoxLayout(dialog)
+        message = QLabel(f"当前间隔 {interval_seconds:.3f}s，是否以 {suggested:.3f}s 作为闪光判定？")
+        message.setWordWrap(True)
+        threshold = QDoubleSpinBox()
+        threshold.setRange(0.0, 999.0)
+        threshold.setDecimals(3)
+        threshold.setSingleStep(0.1)
+        threshold.setValue(suggested)
+        form = QFormLayout()
+        form.addRow("闪光判定阈值(秒)", threshold)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(message)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.auto_rng_tab.shiny_threshold_seconds.setValue(threshold.value())
+        self.statusBar().showMessage(f"闪光判定阈值已设置为 {threshold.value():.3f}s")
+
 
     def _sync_seed64_from_state32(self) -> None:
         try:
@@ -2370,11 +2424,42 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
+            self._capture_cancel.clear()
+            errors: list[BaseException] = []
+
+            def run_script() -> None:
+                try:
+                    run_script_text_service(script_text, name)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            script_thread = threading.Thread(target=run_script, daemon=True)
+            script_thread.start()
+            try:
+                timing = measure_dialog_interval(
+                    lambda: capture_preview_frame(tracking_config.capture),
+                    should_stop=self._capture_cancel.is_set,
+                    timeout_seconds=max(45.0, threshold_seconds + 10.0),
+                )
+            except Exception:
+                stop_current_script_service()
+                script_thread.join(timeout=5.0)
+                raise
+            is_shiny = timing.interval_seconds >= threshold_seconds
+            if not is_shiny:
+                stop_current_script_service()
+            script_thread.join(timeout=5.0)
+            if errors and is_shiny:
+                raise errors[0]
+            return ShinyCheckResult(is_shiny=is_shiny, interval_seconds=timing.interval_seconds)
+
         return AutoRngServices(
             capture_seed=capture_seed_service,
             reidentify=reidentify_service,
             search_candidates=search_candidates_service,
             run_script_text=run_script_text_service,
+            run_hit_script_with_shiny_check=run_hit_script_with_shiny_check,
             stop_current_script=stop_current_script_service,
         )
 

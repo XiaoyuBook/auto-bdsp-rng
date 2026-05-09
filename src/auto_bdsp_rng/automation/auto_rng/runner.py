@@ -13,6 +13,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngProgress,
     AutoRngSeedResult,
     AutoRngTarget,
+    ShinyCheckResult,
 )
 from auto_bdsp_rng.automation.auto_rng.scripts import AUTO_HIT_PARAMETER, prepare_advance_script_text, read_integer_parameter
 
@@ -154,6 +155,7 @@ class AutoRngServices:
     reidentify: Callable[[AutoRngSeedResult], AutoRngSeedResult] = _missing_service  # type: ignore[assignment]
     search_candidates: Callable[[AutoRngSeedResult], Sequence[object]] = _missing_service  # type: ignore[assignment]
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
+    run_hit_script_with_shiny_check: Callable[[str, str, float], ShinyCheckResult] | None = None
     stop_current_script: Callable[[], None] | None = None
     monotonic: Callable[[], float] = time.monotonic
 
@@ -342,7 +344,10 @@ class AutoRngRunner:
             self._set_progress_from_decision(decision, last_script_path=path)
             return
         text = path.read_text(encoding="utf-8")
-        self.services.run_script_text(text, path.name)
+        shiny_result = self._run_hit_script_text(text, path.name)
+        if shiny_result is not None:
+            self._handle_shiny_check_result(shiny_result, path)
+            return
         self._set_progress(
             AutoRngPhase.LOOP_CHECK,
             f"撞闪脚本完成: {path.name}",
@@ -350,6 +355,50 @@ class AutoRngRunner:
             current_advances=decision.current_advances,
             remaining_to_trigger=decision.remaining_to_trigger,
             final_flash_frames=decision.flash_frames,
+        )
+
+    def _run_hit_script_text(self, text: str, name: str) -> ShinyCheckResult | None:
+        threshold = self.config.shiny_threshold_seconds
+        if threshold is not None and self.services.run_hit_script_with_shiny_check is not None:
+            return self.services.run_hit_script_with_shiny_check(text, name, threshold)
+        self.services.run_script_text(text, name)
+        return None
+
+    def _handle_shiny_check_result(self, result: ShinyCheckResult, path: object) -> None:
+        interval_text = "-" if result.interval_seconds is None else f"{result.interval_seconds:.3f}s"
+        if result.is_shiny:
+            self._completed_loops += 1
+            self._locked_target = None
+            self._set_progress(
+                AutoRngPhase.COMPLETED,
+                f"疑似出闪，间隔 {interval_text}，已停止自动流程",
+                loop_index=self._completed_loops,
+                last_script_path=path,
+            )
+            return
+        self._completed_loops += 1
+        self._locked_target = None
+        if self.config.loop_mode == "infinite":
+            self._set_progress(
+                AutoRngPhase.RUN_SEED_SCRIPT,
+                f"未出闪，间隔 {interval_text}，进入下一轮测种",
+                loop_index=self._completed_loops,
+                last_script_path=path,
+            )
+            return
+        if self.config.loop_mode == "count" and self._completed_loops < self.config.loop_count:
+            self._set_progress(
+                AutoRngPhase.RUN_SEED_SCRIPT,
+                f"未出闪，间隔 {interval_text}，进入下一轮测种",
+                loop_index=self._completed_loops,
+                last_script_path=path,
+            )
+            return
+        self._set_progress(
+            AutoRngPhase.COMPLETED,
+            f"未出闪，间隔 {interval_text}，自动流程完成",
+            loop_index=self._completed_loops,
+            last_script_path=path,
         )
 
     def _loop_check(self) -> None:

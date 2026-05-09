@@ -59,6 +59,7 @@ class AutoRngConfig:
     loop_mode: str = "single"
     loop_count: int = 1
     max_advances: int = 100_000
+    shiny_threshold_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,14 @@ class AutoRngDecision:
     requested_advances: int | None = None
     flash_frames: int | None = None
     message: str = ""
+
+
+@dataclass(frozen=True)
+class ShinyCheckResult:
+    is_shiny: bool
+    interval_seconds: float | None = None
+    first_event_text: str = "出现了"
+    second_event_text: str = "去吧"
 
 
 @dataclass(frozen=True)
