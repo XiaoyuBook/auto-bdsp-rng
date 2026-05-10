@@ -15,6 +15,7 @@ class AutoRngPhase(str, Enum):
     RUN_ADVANCE_SCRIPT = "RunAdvanceScript"
     REIDENTIFY = "Reidentify"
     FINAL_CALIBRATE = "FinalCalibrate"
+    FINAL_WAIT = "FinalWait"
     RUN_HIT_SCRIPT = "RunHitScript"
     LOOP_CHECK = "LoopCheck"
     COMPLETED = "Completed"
@@ -25,6 +26,7 @@ class AutoRngDecisionKind(str, Enum):
     RUN_SEED_SCRIPT = "run_seed_script"
     RUN_ADVANCE_SCRIPT = "run_advance_script"
     FINAL_CALIBRATE = "final_calibrate"
+    FINAL_WAIT = "final_wait"
     RUN_HIT_SCRIPT = "run_hit_script"
     REIDENTIFY = "reidentify"
     CAPTURE_SEED = "capture_seed"
@@ -69,6 +71,7 @@ class AutoRngSeedResult:
     npc: int = 0
     seed_text: str = ""
     measured_at: float | None = None
+    expected_advances_hint: int | None = None
 
 
 @dataclass(frozen=True)

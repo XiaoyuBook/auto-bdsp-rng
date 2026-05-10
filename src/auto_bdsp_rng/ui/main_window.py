@@ -2441,6 +2441,13 @@ class MainWindow(QMainWindow):
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
 
+            # 约束 reidentify 搜索范围：按预期位置缩小 search_min
+            search_max = max(100_000, config.max_advances, search_criteria.max_advances)
+            hint = seed_result.expected_advances_hint
+            if hint is not None:
+                search_min = max(0, hint - 10_000)
+            else:
+                search_min = 0
             observation = capture_player_blinks(
                 self._reidentify_capture_config(tracking_config.capture),
                 should_stop=self._capture_cancel.is_set,
@@ -2452,9 +2459,15 @@ class MainWindow(QMainWindow):
                 state32_from_result(seed_result),
                 observation,
                 npc=tracking_config.npc,
-                search_min=0,
-                search_max=max(100_000, config.max_advances, search_criteria.max_advances),
+                search_min=search_min,
+                search_max=search_max,
             )
+            # 校验 reidentify 结果与预期的偏差
+            if hint is not None and abs(result.advances - hint) > 20_000:
+                self.auto_rng_tab.add_log(
+                    f"reidentify 结果 {result.advances} 偏离预期 {hint} 超过 20000，"
+                    f"可能识别错误，但仍继续（由上层决策判断）"
+                )
             # reidentify 不改变 seed，只更新 current_advances 位置
             # 保留原始 seed，避免数据区被推进后的状态覆盖
             reidentified = AutoRngSeedResult(
@@ -2715,7 +2728,7 @@ class MainWindow(QMainWindow):
                     current_state,
                     observation,
                     npc=config.npc,
-                    search_min=0,
+                    search_min=max(0, self._tracked_advances - 10_000) if self._tracked_advances else 0,
                     search_max=max(100_000, int(self.max_advances.text() or 0) if hasattr(self, "max_advances") else 100_000),
                 )
             except Exception as exc:  # pragma: no cover - exercised through UI polling
