@@ -6,7 +6,7 @@ public interface IEasyConSession : IDisposable
     IReadOnlyList<string> ListPorts();
     void Connect(string port);
     void Disconnect();
-    ScriptRunResult RunScript(string scriptText, string name, bool highResolution, CancellationToken token);
+    ScriptRunResult RunScript(string scriptText, string name, bool highResolution, string? requestedAt, CancellationToken token);
     void Press(string button, int durationMs);
     void Stick(string side, string direction, int? durationMs);
     void KeyDown(string button);

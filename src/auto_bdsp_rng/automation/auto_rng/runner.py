@@ -464,13 +464,18 @@ class AutoRngRunner:
             raise RuntimeError("最终撞闪帧未计算")
         seed = self._require_seed()
         target = self._require_target()
+        now = self.services.monotonic()
+        # ── 诊断：距 measured_at 已过时间（换算帧） ──
+        ref_time = self._seed_measured_at(seed)
+        elapsed_since_ref = max(0.0, now - ref_time)
+        diag_frames_since_ref = int(elapsed_since_ref / 1.018) * (seed.npc + 1)
         decision = finalize_flash_frames(
             target,
             fixed_delay=self.config.fixed_delay,
             fixed_flash_frames=self._fixed_flash_frames(),
             current_advances_at_ref=seed.current_advances,
-            ref_time=self._seed_measured_at(seed),
-            now_monotonic=self.services.monotonic(),
+            ref_time=ref_time,
+            now_monotonic=now,
             npc=seed.npc,
             min_final_flash_frames=self.config.min_final_flash_frames,
         )
@@ -478,12 +483,15 @@ class AutoRngRunner:
             self._set_progress_from_decision(decision, last_script_path=path)
             return
         text = path.read_text(encoding="utf-8")
-        # 记录提交撞闪脚本时的实际状态
+        t_before_service = self.services.monotonic()
+        elapsed_from_ref_to_service = max(0.0, t_before_service - ref_time)
+        diag_frames_to_service = int(elapsed_from_ref_to_service / 1.018) * (seed.npc + 1)
+        # 记录提交撞闪脚本时的时序诊断
         commit_log = (
-            f"启动撞闪脚本——目前帧数 {decision.current_advances} 帧，"
+            f"启动撞闪脚本——估算帧数 {decision.current_advances + diag_frames_since_ref} 帧"
+            f"（基准 {decision.current_advances} + 诊断已过 {diag_frames_since_ref} 帧），"
             f"撞闪_闪帧 {decision.flash_frames}，"
-            f"脚本启动帧 {decision.trigger_advances}，"
-            f"还需过 {decision.remaining_to_trigger} 帧"
+            f"脚本启动帧 {decision.trigger_advances}"
         )
         self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, commit_log,
             current_advances=decision.current_advances,
@@ -492,12 +500,17 @@ class AutoRngRunner:
             trigger_advances=decision.trigger_advances,
         )
         shiny_result = self._run_hit_script_text(text, path.name)
+        # ── 诊断：脚本执行后已过时间和帧数 ──
+        t_after_service = self.services.monotonic()
+        total_elapsed = max(0.0, t_after_service - ref_time)
+        total_diag_frames = int(total_elapsed / 1.018) * (seed.npc + 1)
         if shiny_result is not None:
             self._handle_shiny_check_result(shiny_result, path)
             return
         self._set_progress(
             AutoRngPhase.LOOP_CHECK,
-            f"撞闪脚本完成——{path.name}",
+            f"撞闪脚本完成——{path.name}"
+            f"（提交时距基准 {diag_frames_to_service} 帧，总计诊断耗时 {total_diag_frames} 帧）",
             last_script_path=path,
             current_advances=decision.current_advances,
             remaining_to_trigger=decision.remaining_to_trigger,

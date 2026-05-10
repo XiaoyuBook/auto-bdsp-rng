@@ -48,7 +48,7 @@ public sealed class FakeEasyConSession : IEasyConSession, IPersistentSessionDiag
         _log("disconnected");
     }
 
-    public ScriptRunResult RunScript(string scriptText, string name, bool highResolution, CancellationToken token)
+    public ScriptRunResult RunScript(string scriptText, string name, bool highResolution, string? requestedAt, CancellationToken token)
     {
         EnsureConnected();
         RunCount++;

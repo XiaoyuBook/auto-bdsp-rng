@@ -186,6 +186,7 @@ class BridgeEasyConBackend(EasyConBackend):
                 "script_text": script_text,
                 "name": name or "script",
                 "high_resolution": high_resolution,
+                "requested_at": started_at.isoformat(),
             })
         except Exception:
             self._status = EasyConStatus.FAILED
