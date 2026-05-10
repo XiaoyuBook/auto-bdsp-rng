@@ -388,7 +388,7 @@ class AutoRngRunner:
         self._set_progress_from_decision(decision)
 
     def _final_wait(self) -> None:
-        """不运行脚本，利用内部帧计时器等待，到启动点直接触发撞闪脚本。"""
+        """定时触发：算好还需要多少秒，睡到点直接启动撞闪脚本。"""
         seed = self._require_seed()
         remaining = self.progress.remaining_to_trigger
         fixed_flash = self._fixed_flash_frames()
@@ -397,29 +397,21 @@ class AutoRngRunner:
             return
 
         wait_seconds = remaining * 1.018 / max(1, seed.npc + 1)
-        ref_time = self._seed_measured_at(seed)
+        trigger = (self.progress.raw_target_advances or 0) - self.config.fixed_delay - fixed_flash
         self._set_progress(
             AutoRngPhase.FINAL_WAIT,
-            f"进入等待区，还需过 {remaining} 帧（约 {wait_seconds:.0f} 秒），不运行脚本，靠帧计时器等待",
+            f"设置定时触发——还需过 {remaining} 帧（约 {wait_seconds:.0f} 秒），"
+            f"到脚本启动帧 {trigger} 时自动运行撞闪脚本",
             current_advances=seed.current_advances,
             remaining_to_trigger=remaining,
         )
-        # 轮询帧计时器直到到达启动点（每次睡 1 秒，避免忙等）
-        while True:
-            elapsed = max(0.0, self.services.monotonic() - ref_time)
-            elapsed_frames = int(elapsed / 1.018) * (seed.npc + 1)
-            live_current = seed.current_advances + elapsed_frames
-            live_remaining = (self.progress.raw_target_advances or 0) - self.config.fixed_delay - fixed_flash - live_current
-            if live_remaining <= 0:
-                break
-            time.sleep(1.0)
-        # 直接启动撞闪脚本，不 reidentify
-        self._seed_result = replace(seed, current_advances=live_current, measured_at=self.services.monotonic())
-        trigger = (self.progress.raw_target_advances or 0) - self.config.fixed_delay - fixed_flash
+        time.sleep(wait_seconds)
+        new_current = seed.current_advances + remaining
+        self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
         self._set_progress(
             AutoRngPhase.RUN_HIT_SCRIPT,
-            f"等待完成，启动撞闪脚本（目前帧数 ≈{live_current} 帧，脚本启动帧 {trigger}，撞闪_闪帧 {fixed_flash}）",
-            current_advances=live_current,
+            f"定时触发——目前帧数 ≈{new_current} 帧，启动撞闪脚本（撞闪_闪帧 {fixed_flash}）",
+            current_advances=new_current,
             final_flash_frames=fixed_flash,
         )
 
