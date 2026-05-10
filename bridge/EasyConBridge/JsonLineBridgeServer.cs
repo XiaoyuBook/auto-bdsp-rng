@@ -141,7 +141,7 @@ public sealed class JsonLineBridgeServer
 
         var scriptText = RequiredString(request.Payload, "script_text");
         var name = OptionalString(request.Payload, "name") ?? "script";
-        var highResolution = OptionalBool(request.Payload, "high_resolution") ?? true;
+        var highResolution = OptionalBool(request.Payload, "high_resolution") ?? false;
         var token = _currentRunCts.Token;
 
         _ = Task.Run(async () =>
