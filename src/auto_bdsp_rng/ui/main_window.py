@@ -62,7 +62,7 @@ from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_inte
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
-from auto_bdsp_rng.automation.easycon import EasyConStatus
+from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
@@ -2254,7 +2254,15 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services))
 
     def _ensure_bridge_connected(self) -> bool:
-        """确保伊机控 Bridge 已连接；未连接时尝试自动连接。"""
+        """确保伊机控连接就绪；CLI 模式只需串口可用，Bridge 模式需要连接。"""
+        if not self.easycon_tab._is_bridge_mode():
+            # CLI 模式：只需要串口配置
+            port = self.easycon_tab.port_combo.currentText()
+            if not port:
+                self._show_error("CLI 模式需要串口", "请先在伊机控面板选择串口")
+                return False
+            return True
+        # Bridge 模式：确保连接
         bridge_status = self.easycon_tab.bridge_status
         if bridge_status == EasyConStatus.BRIDGE_CONNECTED:
             return True
@@ -2515,12 +2523,37 @@ class MainWindow(QMainWindow):
                 self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，锁定最低帧 Adv={locked}")
             return candidates
 
+        # CLI 后端（按需创建，复用同一个实例以便 stop_current_script 生效）
+        _cli_backend: CliEasyConBackend | None = None
+
+        def _get_cli_backend() -> CliEasyConBackend:
+            nonlocal _cli_backend
+            if _cli_backend is None:
+                _cli_backend = CliEasyConBackend()
+            return _cli_backend
+
+        def _cli_port() -> str:
+            return self.easycon_tab.port_combo.currentText()
+
         def run_script_text_service(script_text: str, name: str) -> object:
-            if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
-                raise RuntimeError("请先连接伊机控 Bridge")
+            if self.easycon_tab._is_bridge_mode():
+                if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+                    raise RuntimeError("请先连接伊机控 Bridge")
+                self.autoScriptStarted.emit(name)
+                try:
+                    result = self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+                except Exception as exc:
+                    self.autoScriptFailed.emit(str(exc))
+                    raise
+                self.autoScriptFinished.emit(result)
+                return result
+            # CLI 模式：通过 ezcon.exe 执行脚本
+            port = _cli_port()
+            if not port:
+                raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             self.autoScriptStarted.emit(name)
             try:
-                result = self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+                result = _get_cli_backend().run_script_text(script_text, name, port=port)
             except Exception as exc:
                 self.autoScriptFailed.emit(str(exc))
                 raise
@@ -2529,10 +2562,16 @@ class MainWindow(QMainWindow):
 
         def stop_current_script_service() -> None:
             self._capture_cancel.set()
-            try:
-                self.easycon_tab._ensure_bridge_backend().stop_current_script()
-            except Exception:
-                pass
+            if self.easycon_tab._is_bridge_mode():
+                try:
+                    self.easycon_tab._ensure_bridge_backend().stop_current_script()
+                except Exception:
+                    pass
+            elif _cli_backend is not None:
+                try:
+                    _cli_backend.stop_current_script()
+                except Exception:
+                    pass
 
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
             self._capture_cancel.clear()
