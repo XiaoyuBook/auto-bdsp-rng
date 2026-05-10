@@ -78,6 +78,7 @@ class CliEasyConBackend(EasyConBackend):
 
     def run_script_text(self, script_text: str, name: str | None = None, *, port: str = "", high_resolution: bool = False) -> EasyConRunResult:
         """将脚本文本写入临时文件，通过 ezcon.exe 执行。"""
+        t_start = datetime.now()
         installation = self.discover()
         ezcon_path = installation.path
         if ezcon_path is None:
@@ -86,9 +87,27 @@ class CliEasyConBackend(EasyConBackend):
             raise RuntimeError("CLI 模式需要指定串口")
         tmp_path = Path(tempfile.mktemp(suffix=".ecs"))
         tmp_path.write_text(script_text, encoding="utf-8")
+        t_ready = datetime.now()
         try:
             task = EasyConRunTask(script_path=tmp_path, port=port, ezcon_path=ezcon_path, name=name or "cli-script")
-            return self.run_script(task)
+            result = self.run_script(task)
+            t_end = datetime.now()
+            # CLI 诊断：各阶段耗时
+            prepare_ms = (t_ready - t_start).total_seconds() * 1000
+            ezcon_ms = (result.ended_at - result.started_at).total_seconds() * 1000 if result.ended_at and result.started_at else 0
+            diag = (
+                f"CLI 诊断[{name}]: 准备={prepare_ms:.0f}ms, "
+                f"ezcon.exe={ezcon_ms:.0f}ms (~{ezcon_ms / 1018:.0f}帧), "
+                f"串口={port}"
+            )
+            result = EasyConRunResult(
+                status=result.status, exit_code=result.exit_code,
+                started_at=result.started_at, ended_at=result.ended_at,
+                script_path=result.script_path, port=result.port,
+                stdout=f"{diag}\n{result.stdout}",
+                stderr=result.stderr,
+            )
+            return result
         finally:
             try:
                 tmp_path.unlink(missing_ok=True)
