@@ -811,3 +811,117 @@ def test_reidentify_passes_expected_advances_hint_to_service():
 
     assert len(captured) == 1
     assert captured[0].expected_advances_hint == 100 + 1000  # 1100
+
+
+# ─── 动态 _闪帧 调整 ──────────────────────────────────────────────
+
+def test_remaining_20_with_flash_60_adjusts_to_19():
+    """remaining=20 < flash=60 但 >= 6 → FINAL_ADJUST（new_flash=19）。"""
+    target = AutoRngTarget(raw_target_advances=11915)
+
+    decision = decide_target_advance(
+        target,
+        current_advances=10383,
+        fixed_delay=1452,
+        fixed_flash_frames=60,
+        max_wait_frames=500,
+    )
+
+    # trigger = 11915 - 1452 - 60 = 10403，remaining = 10403 - 10383 = 20
+    assert decision.remaining_to_trigger == 20
+    assert decision.kind == AutoRngDecisionKind.FINAL_ADJUST
+    assert decision.phase == AutoRngPhase.FINAL_ADJUST
+    assert "动态调整" in decision.message
+    assert "19" in decision.message
+
+
+def test_remaining_6_with_flash_60_adjusts_to_5():
+    """remaining=6 → new_flash=5（最小可调整闪帧）。"""
+    target = AutoRngTarget(raw_target_advances=11915)
+
+    decision = decide_target_advance(
+        target,
+        current_advances=10397,
+        fixed_delay=1452,
+        fixed_flash_frames=60,
+        max_wait_frames=500,
+    )
+
+    assert decision.remaining_to_trigger == 6
+    assert decision.kind == AutoRngDecisionKind.FINAL_ADJUST
+
+
+def test_remaining_5_with_flash_60_is_target_missed():
+    """remaining=5 < min_adjustable+1=6 → TARGET_MISSED。"""
+    target = AutoRngTarget(raw_target_advances=11915)
+
+    decision = decide_target_advance(
+        target,
+        current_advances=10398,
+        fixed_delay=1452,
+        fixed_flash_frames=60,
+        max_wait_frames=500,
+    )
+
+    assert decision.remaining_to_trigger == 5
+    assert decision.kind == AutoRngDecisionKind.TARGET_MISSED
+
+
+def test_remaining_2_with_flash_60_is_target_missed():
+    """remaining=2 << flash=60 → TARGET_MISSED。"""
+    target = AutoRngTarget(raw_target_advances=11915)
+
+    decision = decide_target_advance(
+        target,
+        current_advances=10401,
+        fixed_delay=1452,
+        fixed_flash_frames=60,
+        max_wait_frames=500,
+    )
+
+    assert decision.remaining_to_trigger == 2
+    assert decision.kind == AutoRngDecisionKind.TARGET_MISSED
+    assert "放弃" in decision.message
+
+
+# ─── 动态 _闪帧 调整集成测试 ──────────────────────────────────────
+
+def test_runner_final_adjust_dynamic_flash(tmp_path):
+    """FINAL_ADJUST 动态写入 _闪帧=19 并运行撞闪脚本。"""
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "谢米.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+
+    scripts: list[tuple[str, str]] = []
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+        search_candidates=lambda _seed: [FakeState(11915)],
+        reidentify=lambda _seed: AutoRngSeedResult(
+            seed="seed-1", current_advances=10383, npc=0,
+        ),
+        run_script_text=lambda text, name: scripts.append((name, text)),
+        monotonic=lambda: 10.0,
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=1452,
+            max_wait_frames=500,
+            min_final_flash_frames=5,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=10)
+
+    # 确认撞闪脚本被调用，且 _闪帧 被动态改为 19
+    hit_texts = [t for n, t in scripts if "谢米" in n]
+    assert hit_texts, f"expected hit script call, got {scripts}"
+    assert "_闪帧 = 19" in hit_texts[0], f"expected dynamic flash 19, got {hit_texts[0]}"
+    assert runner.progress.phase in (AutoRngPhase.LOOP_CHECK, AutoRngPhase.RUN_HIT_SCRIPT)

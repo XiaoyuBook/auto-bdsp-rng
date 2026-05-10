@@ -18,6 +18,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_HIT_PARAMETER,
     prepare_advance_script_text,
+    prepare_hit_script_text,
     read_advance_script_offset,
     read_integer_parameter,
 )
@@ -94,11 +95,21 @@ def decide_target_advance(
                 message=f"到达脚本启动点，剩余 {remaining_to_trigger} 帧即为 _闪帧，进入最终实时校准",
                 **common,
             )
-        # remaining < fixed_flash_frames，已错过脚本固定 _闪帧窗口
+        # remaining < fixed_flash_frames，尝试动态调整 _闪帧
+        min_adjustable = 5
+        if remaining_to_trigger >= min_adjustable + 1:
+            # 可以调整：new_flash = remaining - 1（>= min_adjustable），等1帧后运行
+            return AutoRngDecision(
+                kind=AutoRngDecisionKind.FINAL_ADJUST,
+                phase=AutoRngPhase.FINAL_ADJUST,
+                message=f"过帧过头，动态调整 _闪帧={remaining_to_trigger - 1}（原 _闪帧={fixed_flash_frames}，remaining={remaining_to_trigger}）",
+                **common,
+            )
+        # remaining <= min_adjustable，无法调整（调整后 _闪帧 < min_adjustable）
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_MISSED,
             phase=AutoRngPhase.SEARCH_TARGET,
-            message=f"剩余 {remaining_to_trigger} 帧 < _闪帧 {fixed_flash_frames}，已错过脚本启动窗口",
+            message=f"剩余 {remaining_to_trigger} 帧 < _闪帧 {fixed_flash_frames} 且不足 {min_adjustable + 1}，放弃",
             **common,
         )
     # fixed_flash_frames == 0，无固定闪帧，脚本将使用 remaining 作为动态闪帧
@@ -258,6 +269,8 @@ class AutoRngRunner:
                 self._final_calibrate()
             elif phase == AutoRngPhase.FINAL_WAIT:
                 self._final_wait()
+            elif phase == AutoRngPhase.FINAL_ADJUST:
+                self._final_adjust()
             elif phase == AutoRngPhase.RUN_HIT_SCRIPT:
                 self._run_hit_script()
             elif phase == AutoRngPhase.LOOP_CHECK:
@@ -390,6 +403,49 @@ class AutoRngRunner:
             AutoRngPhase.FINAL_CALIBRATE,
             f"final wait {wait_frames} 帧完成（脚本参数 {script_frames}），进入最终实时校准",
             current_advances=new_current,
+        )
+
+    def _final_adjust(self) -> None:
+        """过帧过头时动态调整 _闪帧：new_flash = remaining - 1，等1帧后直接运行撞闪脚本。"""
+        seed = self._require_seed()
+        remaining = self.progress.remaining_to_trigger
+        min_adjustable = 5
+
+        if remaining is None or remaining < min_adjustable + 1:
+            self._locked_target = None
+            self._set_progress(AutoRngPhase.SEARCH_TARGET,
+                f"剩余 {remaining} 帧不足 {min_adjustable + 1}，无法动态调整闪帧")
+            return
+
+        new_flash = remaining - 1
+        new_current = seed.current_advances + 1
+        self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
+
+        # 动态写入撞闪脚本的 _闪帧，绕过 finalize_flash_frames 的固定闪帧逻辑
+        path = self.config.hit_script_path
+        if path is None:
+            raise RuntimeError("撞闪脚本未配置")
+        text = prepare_hit_script_text(path.read_text(encoding="utf-8"), new_flash)
+
+        self._set_progress(
+            AutoRngPhase.RUN_HIT_SCRIPT,
+            f"动态调整 _闪帧={new_flash}（原 remaining={remaining}），等待1帧后运行撞闪脚本",
+            final_flash_frames=new_flash,
+            current_advances=new_current,
+            remaining_to_trigger=remaining,
+        )
+
+        shiny_result = self._run_hit_script_text(text, path.name)
+        if shiny_result is not None:
+            self._handle_shiny_check_result(shiny_result, path)
+            return
+        self._set_progress(
+            AutoRngPhase.LOOP_CHECK,
+            f"撞闪脚本完成: {path.name}（动态闪帧 {new_flash}）",
+            last_script_path=path,
+            current_advances=new_current,
+            remaining_to_trigger=remaining,
+            final_flash_frames=new_flash,
         )
 
     def _run_hit_script(self) -> None:
