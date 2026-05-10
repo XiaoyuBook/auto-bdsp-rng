@@ -58,15 +58,10 @@ public sealed class EasyConSession : IEasyConSession
         EnsureConnected();
         _log($"run_script [{name}] start, highResolution={highResolution}");
 
-        // 1) 与原版 EasyCon 一致：先停止烧录脚本运行
-        if (!_switch!.RemoteStop())
-        {
-            _log("RemoteStop failed — 可能烧录脚本正在运行，尝试继续");
-        }
-        else
-        {
-            _log("RemoteStop OK");
-        }
+        // 原版 EasyCon 只在 HasKeyAction 且 RemoteStop 成功时才继续，否则弹窗让用户手动停止。
+        // Bridge 无法检测单片机是否正在运行烧录脚本，无条件 RemoteStop 会在无脚本时
+        // 每次阻塞 200ms（SendSync 超时），导致脚本首键延迟和串口状态不一致。
+        // 对齐原版行为：不主动 RemoteStop，由用户自行确保无烧录脚本在运行。
 
         var scripter = new Scripter();
         var output = new BridgeOutputAdapter(JsonLineBridgeServer.WriteLog);
@@ -80,7 +75,7 @@ public sealed class EasyConSession : IEasyConSession
             return new ScriptRunResult(1, output.Stdout, output.Stderr);
         }
 
-        // 3) 与原版 EasyCon 一致：传入 highResolution 参数
+        // 与原版 EasyCon 一致：传入 highResolution 参数
         var pad = new GamePadAdapter(_switch, highResolution);
         try
         {
@@ -106,7 +101,7 @@ public sealed class EasyConSession : IEasyConSession
         }
         finally
         {
-            // 4) 脚本结束后释放所有按键/摇杆状态
+            // 脚本结束后释放所有按键/摇杆状态
             ReleaseAllControllerState();
         }
     }
