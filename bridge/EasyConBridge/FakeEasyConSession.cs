@@ -48,11 +48,11 @@ public sealed class FakeEasyConSession : IEasyConSession, IPersistentSessionDiag
         _log("disconnected");
     }
 
-    public ScriptRunResult RunScript(string scriptText, string name, CancellationToken token)
+    public ScriptRunResult RunScript(string scriptText, string name, bool highResolution, CancellationToken token)
     {
         EnsureConnected();
         RunCount++;
-        _log($"running {name}");
+        _log($"running {name} highResolution={highResolution}");
         try
         {
             if (scriptText.Contains("WAIT_LONG", StringComparison.OrdinalIgnoreCase))

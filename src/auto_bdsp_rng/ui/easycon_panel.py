@@ -1265,6 +1265,8 @@ class EasyConPanel(QWidget):
         self.bridge_status = EasyConStatus.RUNNING
         self.task_state_text = "执行中"
         self._update_bridge_controls()
+        # 释放虚拟手柄状态，避免 eventFilter 残留输入影响脚本时序
+        self._release_virtual_controller_keys()
         self._append_log("info", "通过常驻连接运行脚本")
         thread = QThread(self)
         worker = BridgeScriptWorker(self._ensure_bridge_backend(), script_text, self.current_script_name)

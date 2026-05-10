@@ -53,9 +53,25 @@ public sealed class EasyConSession : IEasyConSession
         _log("disconnected");
     }
 
-    public ScriptRunResult RunScript(string scriptText, string name, CancellationToken token)
+    public ScriptRunResult RunScript(string scriptText, string name, bool highResolution, CancellationToken token)
     {
         EnsureConnected();
+        _log($"run_script [{name}] start, highResolution={highResolution}");
+
+        // 1) 与原版 EasyCon 一致：先停止烧录脚本运行
+        if (!_switch!.RemoteStop())
+        {
+            _log("RemoteStop failed — 可能烧录脚本正在运行，尝试继续");
+        }
+        else
+        {
+            _log("RemoteStop OK");
+        }
+
+        // 2) 释放所有按键/摇杆，确保从 neutral report 开始
+        ReleaseAllControllerState();
+        _log("released all controller state to neutral");
+
         var scripter = new Scripter();
         var output = new BridgeOutputAdapter(JsonLineBridgeServer.WriteLog);
         var diagnostics = scripter.Parse(scriptText, fileName: null!, externalGetters: []);
@@ -68,11 +84,18 @@ public sealed class EasyConSession : IEasyConSession
             return new ScriptRunResult(1, output.Stdout, output.Stderr);
         }
 
-        var pad = new GamePadAdapter(_switch!);
+        // 3) 与原版 EasyCon 一致：传入 highResolution 参数
+        var pad = new GamePadAdapter(_switch, highResolution);
         try
         {
+            var startedAt = DateTime.Now;
+            _log($"script [{name}] execution start at {startedAt:HH:mm:ss.fff}");
+
             scripter.Run(output, pad, token);
-            output.Info("script completed");
+
+            var endedAt = DateTime.Now;
+            _log($"script [{name}] completed at {endedAt:HH:mm:ss.fff}, elapsed={(endedAt - startedAt).TotalMilliseconds:F1}ms");
+            output.Info($"script completed in {(endedAt - startedAt).TotalMilliseconds:F0}ms");
             return new ScriptRunResult(0, output.Stdout, output.Stderr);
         }
         catch (OperationCanceledException)
@@ -85,17 +108,22 @@ public sealed class EasyConSession : IEasyConSession
             output.Error(ex.Message);
             return new ScriptRunResult(1, output.Stdout, output.Stderr);
         }
+        finally
+        {
+            // 4) 脚本结束后释放所有按键/摇杆状态
+            ReleaseAllControllerState();
+        }
     }
 
     public void Press(string button, int durationMs)
     {
-        RunScript($"{button} {durationMs}", $"press-{button}", CancellationToken.None);
+        RunScript($"{button} {durationMs}", $"press-{button}", highResolution: true, CancellationToken.None);
     }
 
     public void Stick(string side, string direction, int? durationMs)
     {
         var script = durationMs is null ? $"{side} {direction}" : $"{side} {direction} {durationMs.Value}";
-        RunScript(script, $"stick-{side}", CancellationToken.None);
+        RunScript(script, $"stick-{side}", highResolution: true, CancellationToken.None);
     }
 
     public void KeyDown(string button)
@@ -130,6 +158,27 @@ public sealed class EasyConSession : IEasyConSession
     public void Dispose()
     {
         Disconnect();
+    }
+
+    private void ReleaseAllControllerState()
+    {
+        // 释放所有可能的按键，摇杆归中
+        foreach (SwitchButton button in Enum.GetValues(typeof(SwitchButton)))
+        {
+            _switch!.Up(button);
+        }
+        _switch!.LeftDirection(DirectionKey.Up, false);
+        _switch!.LeftDirection(DirectionKey.Down, false);
+        _switch!.LeftDirection(DirectionKey.Left, false);
+        _switch!.LeftDirection(DirectionKey.Right, false);
+        _switch!.RightDirection(DirectionKey.Up, false);
+        _switch!.RightDirection(DirectionKey.Down, false);
+        _switch!.RightDirection(DirectionKey.Left, false);
+        _switch!.RightDirection(DirectionKey.Right, false);
+        _switch!.HatDirection(DirectionKey.Up, false);
+        _switch!.HatDirection(DirectionKey.Down, false);
+        _switch!.HatDirection(DirectionKey.Left, false);
+        _switch!.HatDirection(DirectionKey.Right, false);
     }
 
     private void EnsureConnected()
