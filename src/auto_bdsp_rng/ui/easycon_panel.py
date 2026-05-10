@@ -761,6 +761,17 @@ class EasyConPanel(QWidget):
         self.connect_button.clicked.connect(self.toggle_bridge_connection)
         layout.addWidget(self.connect_button)
 
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("连接模式"))
+        self.backend_mode = QComboBox()
+        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
+        self.backend_mode.addItem("CLI 诊断", "cli")
+        self.backend_mode.setStyleSheet(combo_style)
+        self.backend_mode.setCurrentIndex(0)
+        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
+        mode_row.addWidget(self.backend_mode, 1)
+        layout.addLayout(mode_row)
+
         serial_row = QHBoxLayout()
         self.port_combo = QComboBox()
         self.port_combo.setEditable(True)
@@ -790,10 +801,6 @@ class EasyConPanel(QWidget):
         self.browse_bridge_button = QPushButton()
         self.browse_bridge_button.clicked.connect(self.choose_bridge)
         self.version_label = QLabel("EasyCon: 未检测")
-        self.backend_mode = QComboBox()
-        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
-        self.backend_mode.addItem("CLI 诊断", "cli")
-        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
         self.backend_label = QLabel("单片机: 未连接")
         self.connection_state_label = QLabel("连接: 未检测")
         self.task_state_label = QLabel("任务: 未检测")
@@ -1884,7 +1891,7 @@ class EasyConPanel(QWidget):
         return Path(bridge_text) if bridge_text else None
 
     def _is_bridge_mode(self) -> bool:
-        return not hasattr(self, "backend_mode") or self.backend_mode.currentData() == "bridge"
+        return self.backend_mode.currentData() == "bridge"
 
     def _backend_mode_changed(self) -> None:
         self._update_bridge_controls()
