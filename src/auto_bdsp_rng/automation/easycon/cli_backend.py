@@ -92,12 +92,11 @@ class CliEasyConBackend(EasyConBackend):
             task = EasyConRunTask(script_path=tmp_path, port=port, ezcon_path=ezcon_path, name=name or "cli-script")
             result = self.run_script(task)
             t_end = datetime.now()
-            # CLI 诊断：各阶段耗时
             prepare_ms = (t_ready - t_start).total_seconds() * 1000
             ezcon_ms = (result.ended_at - result.started_at).total_seconds() * 1000 if result.ended_at and result.started_at else 0
             diag = (
-                f"CLI 诊断[{name}]: 准备={prepare_ms:.0f}ms, "
-                f"ezcon.exe={ezcon_ms:.0f}ms (~{ezcon_ms / 1018:.0f}帧), "
+                f"CLI 模式[{name}]: 准备={prepare_ms:.0f}ms, "
+                f"耗时={ezcon_ms:.0f}ms (~{ezcon_ms / 1018:.0f}帧), "
                 f"串口={port}"
             )
             result = EasyConRunResult(

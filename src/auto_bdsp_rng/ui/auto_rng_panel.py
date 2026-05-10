@@ -344,6 +344,9 @@ class AutoRngPanel(QWidget):
         self.status_badge.setText(text)
         self.summary_phase.setText(text)
 
+    def set_live_advances(self, advances: int) -> None:
+        self.summary_current.setText(str(advances))
+
     def apply_progress(self, progress: AutoRngProgress) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         self.status_badge.setText(phase_text)
@@ -379,9 +382,7 @@ class AutoRngPanel(QWidget):
             "\n".join(
                 (
                     f"搜索目标: {target or '-'}",
-                    f"存档信息: {profile or '-'}",
                     f"个体筛选: {filters or '-'}",
-                    f"Seed: {seed or '-'}",
                     f"最大帧数: {max_advances}",
                 )
             )

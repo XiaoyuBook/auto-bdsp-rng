@@ -1829,8 +1829,13 @@ class MainWindow(QMainWindow):
         if not self._preview_timer.isActive():
             self._preview_timer.start()
             self.preview_button.setText(self._text("stop_preview"))
-            self.statusBar().showMessage(self._text("preview_running"))
-        self._update_preview_frame()
+            self.statusBar().showMessage("预览已自动启动，等待摄像头就绪…")
+        # 等待摄像头首帧到达（最多等 5 秒）
+        waited = 0.0
+        while self._latest_preview_frame is None and waited < 5.0:
+            time.sleep(0.2)
+            waited += 0.2
+            self._update_preview_frame()
         return self._latest_preview_frame is not None
 
     def start_roi_selection(self) -> None:
@@ -2521,7 +2526,7 @@ class MainWindow(QMainWindow):
             if locked is None:
                 self.auto_rng_tab.add_log("找到 0 个候选")
             else:
-                self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，锁定最低帧 Adv={locked}")
+                self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，最低帧 Adv={locked}")
             return candidates
 
         # CLI 后端（按需创建，复用同一个实例以便 stop_current_script 生效）
@@ -2556,7 +2561,7 @@ class MainWindow(QMainWindow):
             try:
                 result = _get_cli_backend().run_script_text(script_text, name, port=port)
                 # 从 stdout 提取 CLI 诊断行并输出到自动流程日志
-                diag_lines = [line for line in result.stdout.splitlines() if line.startswith("CLI 诊断")]
+                diag_lines = [line for line in result.stdout.splitlines() if line.startswith("CLI 模式")]
                 for line in diag_lines:
                     self.auto_rng_tab.add_log(line)
             except Exception as exc:
@@ -2640,6 +2645,8 @@ class MainWindow(QMainWindow):
     def _advance_tick(self) -> None:
         self._tracked_advances += self._advance_step
         self.advances_value.setText(str(self._tracked_advances))
+        # 同步更新自动定点面板的目前帧数
+        self.auto_rng_tab.set_live_advances(self._tracked_advances)
 
     def advance_current_seed(self) -> None:
         advances = int(self.x_to_advance.text() or 0)

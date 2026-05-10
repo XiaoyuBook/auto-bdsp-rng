@@ -41,7 +41,7 @@ def decide_search_target(candidates: Sequence[object]) -> AutoRngDecision:
         phase=AutoRngPhase.DECIDE_ADVANCE,
         target=target,
         raw_target_advances=target.raw_target_advances,
-        message=f"锁定最低帧目标 {target.raw_target_advances}",
+        message=f"候选最低帧 {target.raw_target_advances}",
     )
 
 
@@ -585,28 +585,9 @@ class AutoRngRunner:
             locked_target: object | None = None
         else:
             locked_target = decision.target or self._locked_target
-        # 关键决策日志（中文）
-        details = []
-        if decision.raw_target_advances is not None:
-            details.append(f"原始目标帧={decision.raw_target_advances}")
-        if decision.fixed_delay is not None:
-            details.append(f"delay={decision.fixed_delay}")
-        if decision.trigger_advances is not None:
-            details.append(f"脚本启动帧={decision.trigger_advances}")
-        if decision.current_advances is not None:
-            details.append(f"目前帧数={decision.current_advances}")
-        if decision.remaining_to_trigger is not None:
-            details.append(f"还需过={decision.remaining_to_trigger}")
-        if decision.flash_frames is not None:
-            details.append(f"闪帧={decision.flash_frames}")
-        if decision.requested_advances is not None:
-            details.append(f"本次计划过帧={decision.requested_advances}")
-        log_line = decision.message
-        if details:
-            log_line += f"（{'，'.join(details)}）"
         self._set_progress(
             decision.phase,
-            log_line,
+            decision.message,
             locked_target=locked_target,
             raw_target_advances=decision.raw_target_advances,
             fixed_delay=decision.fixed_delay,
