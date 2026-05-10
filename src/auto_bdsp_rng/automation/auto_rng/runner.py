@@ -154,7 +154,7 @@ def finalize_flash_frames(
             message=f"已过脚本启动点 {abs(remaining_to_trigger)} 帧，不运行撞闪脚本",
             **common,
         )
-    if remaining_to_trigger < min_final_flash_frames and fixed_flash_frames > 0:
+    if remaining_to_trigger > 0 and remaining_to_trigger < min_final_flash_frames and fixed_flash_frames > 0:
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_TOO_CLOSE,
             phase=AutoRngPhase.SEARCH_TARGET,
@@ -224,6 +224,7 @@ class AutoRngRunner:
         self.progress = AutoRngProgress(phase=AutoRngPhase.IDLE)
         self._seed_result: AutoRngSeedResult | None = None
         self._locked_target: AutoRngTarget | None = None
+        self._missed_target_advance: int | None = None
         self._requested_advances = 0
         self._completed_loops = 0
 
@@ -298,12 +299,16 @@ class AutoRngRunner:
         candidates = self.services.search_candidates(seed)
         # 过滤已过帧：只保留可达候选
         min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
+        # 如果上一目标已错过，跳过它防止死循环
+        if self._missed_target_advance is not None:
+            min_reachable = max(min_reachable, self._missed_target_advance + 1)
         reachable = [c for c in candidates if c.advances >= min_reachable]
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
             return
         self._locked_target = decision.target
+        self._missed_target_advance = None
         flash = self._fixed_flash_frames()
         trigger = decision.raw_target_advances - self.config.fixed_delay - flash
         self._set_progress(
@@ -321,6 +326,7 @@ class AutoRngRunner:
         path = self.config.seed_script_path
         if path is None:
             raise RuntimeError("测种脚本未配置")
+        self._missed_target_advance = None
         text = path.read_text(encoding="utf-8")
         self.services.run_script_text(text, path.name)
         self._set_progress(AutoRngPhase.CAPTURE_SEED, f"测种脚本完成——{path.name}", last_script_path=path)
@@ -575,6 +581,9 @@ class AutoRngRunner:
 
     def _set_progress_from_decision(self, decision: AutoRngDecision, *, last_script_path: object | None = None) -> None:
         if decision.kind in (AutoRngDecisionKind.TARGET_MISSED, AutoRngDecisionKind.TARGET_TOO_CLOSE):
+            # 记录已错过的目标帧，下次搜索跳过
+            if decision.raw_target_advances is not None:
+                self._missed_target_advance = decision.raw_target_advances
             self._locked_target = None
             locked_target: object | None = None
         else:
