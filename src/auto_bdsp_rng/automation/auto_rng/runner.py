@@ -388,34 +388,30 @@ class AutoRngRunner:
         self._set_progress_from_decision(decision)
 
     def _final_wait(self) -> None:
-        """等待剩余帧数后直接启动撞闪脚本（脚本启动帧已含闪帧扣除，不再重复扣）。"""
+        """不运行脚本，按时间等待后 reidentify 确认位置（避免脚本冷启动开销导致帧偏移）。"""
         seed = self._require_seed()
         remaining = self.progress.remaining_to_trigger
         fixed_flash = self._fixed_flash_frames()
         if remaining is None or remaining <= 0:
             self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, "等待量 ≤ 0，跳过，直接启动撞闪脚本")
             return
-        wait_frames = remaining  # 等待全部剩余帧数，不再扣除闪帧
 
-        path = self.config.advance_script_path
-        if path is None:
-            raise RuntimeError("过帧脚本未配置")
-        # 过帧脚本内部有 _目标帧数 - offset 的偏移量，需要补偿
-        offset = read_advance_script_offset(path)
-        script_frames = wait_frames + offset
-        text = prepare_advance_script_text(path.read_text(encoding="utf-8"), script_frames)
-        self.services.run_script_text(
-            text,
-            f"{path.name}（等待 {wait_frames} 帧，脚本参数 {script_frames}）",
-        )
-        # 更新位置并重置计时基准，然后直接启动撞闪脚本
-        new_current = seed.current_advances + wait_frames
-        self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
+        # 按时间估算等待秒数，让游戏自然走帧
+        wait_seconds = remaining * 1.018 / max(1, seed.npc + 1)
         self._set_progress(
-            AutoRngPhase.RUN_HIT_SCRIPT,
-            f"等待 {wait_frames} 帧完成，启动撞闪脚本（目前帧数 {new_current} 帧，撞闪_闪帧 {fixed_flash}）",
-            current_advances=new_current,
-            final_flash_frames=fixed_flash,
+            AutoRngPhase.FINAL_WAIT,
+            f"进入等待区，还需过 {remaining} 帧（约 {wait_seconds:.0f} 秒），不运行脚本，等待游戏自然走帧",
+            current_advances=seed.current_advances,
+            remaining_to_trigger=remaining,
+        )
+        time.sleep(wait_seconds)
+        # 重新识别确认当前位置（新 seed capture，带 measured_at）
+        self._seed_result = self._with_measurement_time(self.services.reidentify(seed))
+        self._set_progress(
+            AutoRngPhase.DECIDE_ADVANCE,
+            f"等待后重新识别——目前帧数 {self._seed_result.current_advances} 帧",
+            current_advances=self._seed_result.current_advances,
+            seed_text=self._seed_result.seed_text,
         )
 
     def _final_adjust(self) -> None:
