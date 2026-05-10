@@ -167,8 +167,7 @@ class StaticGenerator8:
         states: list[State8] = []
         for count in range(self.max_advances + 1):
             ec = rng_list.next()
-            # sidtid 来自训练师 Profile，不消耗 RNG（对齐 PokeFinder）
-            sidtid = (self.profile.sid << 16) | (self.profile.tid & 0xFFFF)
+            sidtid = rng_list.next()
             pid = rng_list.next()
             shiny, pid = _apply_non_roamer_shiny(self.template, self.profile, sidtid, pid)
             ivs = _fill_random_ivs(rng_list, _next_unique_fixed_iv_indices(rng_list, self.template.iv_count))
@@ -204,8 +203,7 @@ class StaticGenerator8:
         for count in range(self.max_advances + 1):
             ec = _gen_static_ec(roamer)
             rng = XoroshiroBDSP(ec)
-            # sidtid 来自训练师 Profile，不消耗 RNG（对齐 PokeFinder）
-            sidtid = (self.profile.sid << 16) | (self.profile.tid & 0xFFFF)
+            sidtid = rng.next_uint(U32_MAX)
             pid = rng.next_uint(U32_MAX)
             shiny, pid = _apply_roamer_shiny(self.profile, sidtid, pid)
             ivs = _fill_random_ivs(rng, _next_unique_fixed_iv_indices(rng, 3))

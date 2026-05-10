@@ -179,12 +179,12 @@ GAME_LABELS_EN = {
     GameVersion.BDSP: "BDSP",
 }
 CHARACTERISTICS_ZH = (
-    ("非常喜欢吃", "经常打瞌睡", "经常午睡", "经常乱扔东西", "喜欢放松"),
-    ("以力气自豪", "喜欢打闹", "有点易怒", "喜欢打架", "血气方刚"),
-    ("身体强壮", "能忍耐", "抗打能力强", "不屈不挠", "毅力十足"),
-    ("好奇心强", "爱恶作剧", "考虑周到", "经常思考", "非常讲究"),
-    ("意志坚强", "有点固执", "讨厌输", "有点爱逞强", "忍耐力强"),
-    ("喜欢跑步", "警觉性高", "冲动", "有点轻浮", "逃得快"),
+    ("非常喜欢吃东西", "经常睡午觉", "常常打瞌睡", "经常乱扔东西", "喜欢悠然自在"),
+    ("以力气大为傲", "喜欢胡闹", "有点容易生气", "喜欢打架", "血气方刚"),
+    ("身体强壮", "抗打能力强", "顽强不屈", "能吃苦耐劳", "善于忍耐"),
+    ("好奇心强", "喜欢恶作剧", "做事万无一失", "经常思考", "一丝不苟"),
+    ("性格强势", "有一点点爱慕虚荣", "争强好胜", "不服输", "有一点点固执"),
+    ("喜欢比谁跑得快", "对声音敏感", "冒冒失失", "有点容易得意忘形", "逃得快"),
 )
 ABILITY_NAMES_ZH = {
     65: "茂盛",
@@ -2056,11 +2056,18 @@ class MainWindow(QMainWindow):
         return f"{slot}: {name}" if name else str(slot)
 
     def _characteristic_text(self, state: State8) -> str:
-        max_iv = max(state.ivs)
-        # PokeFinder 兼容：个性由 EC 决定，不是 PID 或 max_iv
-        start = state.ec % 6
-        stat_index = next(index for offset in range(6) for index in ((start + offset) % 6,) if state.ivs[index] == max_iv)
-        characteristic_index = state.ec % 5
+        order = (0, 1, 2, 5, 3, 4)
+        char_order = (0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4)
+        ec_index = state.ec % 6
+        char_index = ec_index
+        max_iv = 0
+        for offset in range(6):
+            index = char_order[ec_index + offset]
+            if state.ivs[order[index]] > max_iv:
+                char_index = index
+                max_iv = state.ivs[order[index]]
+        stat_index = order[char_index]
+        characteristic_index = max_iv % 5
         if self.lang == "zh":
             return CHARACTERISTICS_ZH[stat_index][characteristic_index]
         return f"{IV_LABELS[stat_index]} {max_iv}"

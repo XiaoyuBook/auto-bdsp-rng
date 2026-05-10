@@ -100,6 +100,26 @@ def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     assert window._result_headers()[7:13] == ["HP能力", "攻击能力", "防御能力", "特攻能力", "特防能力", "速度能力"]
 
 
+def test_bdsp_characteristic_matches_pokefinder_tie_break_and_translation(app):
+    window = MainWindow()
+    state = State8(
+        advances=14113,
+        ec=0x38458EDC,
+        sidtid=0,
+        pid=0xE4B100B9,
+        ivs=(31, 31, 31, 9, 23, 31),
+        ability=1,
+        gender=2,
+        level=30,
+        nature=16,
+        shiny=2,
+        height=165,
+        weight=135,
+    )
+
+    assert window._characteristic_text(state) == "经常睡午觉"
+
+
 def test_main_window_exports_txt_from_results(app, monkeypatch, tmp_path):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
