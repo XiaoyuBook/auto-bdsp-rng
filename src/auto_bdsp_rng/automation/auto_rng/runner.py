@@ -53,6 +53,7 @@ def decide_target_advance(
     max_wait_frames: int,
     fixed_flash_frames: int = 0,
 ) -> AutoRngDecision:
+    """三段式决策：脚本启动帧 = 原始目标帧 - delay - 撞闪_闪帧，已含闪帧扣除。"""
     trigger_advances = target.raw_target_advances - fixed_delay - fixed_flash_frames
     remaining_to_trigger = trigger_advances - current_advances
     common = {
@@ -67,7 +68,7 @@ def decide_target_advance(
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_MISSED,
             phase=AutoRngPhase.SEARCH_TARGET,
-            message="已错过目标触发点",
+            message=f"错过脚本启动点（脚本启动帧 {trigger_advances}，目前帧数 {current_advances}）",
             **common,
         )
     if remaining_to_trigger > max_wait_frames:
@@ -75,48 +76,46 @@ def decide_target_advance(
             kind=AutoRngDecisionKind.RUN_ADVANCE_SCRIPT,
             phase=AutoRngPhase.RUN_ADVANCE_SCRIPT,
             requested_advances=remaining_to_trigger,
-            message=f"过帧到触发点前 {remaining_to_trigger} 帧",
+            message=f"还需过 {remaining_to_trigger} 帧（大于最大等待窗口 {max_wait_frames}），继续运行过帧脚本",
             **common,
         )
-    # remaining <= max_wait_frames，进入最终等待区
+    # 剩余帧数 ≤ 最大等待窗口，进入最终等待区
     if fixed_flash_frames > 0:
         if remaining_to_trigger > fixed_flash_frames:
-            wait_frames = remaining_to_trigger - fixed_flash_frames
+            # 脚本启动帧已含闪帧扣除，等待全部剩余帧数后直接运行撞闪脚本
             return AutoRngDecision(
                 kind=AutoRngDecisionKind.FINAL_WAIT,
                 phase=AutoRngPhase.FINAL_WAIT,
-                message=f"距脚本启动点 {remaining_to_trigger} 帧，先等待 {wait_frames} 帧再撞闪",
+                message=f"还需过 {remaining_to_trigger} 帧（≤ 最大等待窗口 {max_wait_frames}），不再运行过帧脚本，直接等待 {remaining_to_trigger} 帧",
                 **common,
             )
         if remaining_to_trigger == fixed_flash_frames:
             return AutoRngDecision(
                 kind=AutoRngDecisionKind.FINAL_CALIBRATE,
                 phase=AutoRngPhase.FINAL_CALIBRATE,
-                message=f"到达脚本启动点，剩余 {remaining_to_trigger} 帧即为 _闪帧，进入最终实时校准",
+                message=f"正好到达脚本启动点，剩余帧数等于撞闪_闪帧 {fixed_flash_frames}，直接进入校准",
                 **common,
             )
         # remaining < fixed_flash_frames，尝试动态调整 _闪帧
         min_adjustable = 5
         if remaining_to_trigger >= min_adjustable + 1:
-            # 可以调整：new_flash = remaining - 1（>= min_adjustable），等1帧后运行
             return AutoRngDecision(
                 kind=AutoRngDecisionKind.FINAL_ADJUST,
                 phase=AutoRngPhase.FINAL_ADJUST,
-                message=f"过帧过头，动态调整 _闪帧={remaining_to_trigger - 1}（原 _闪帧={fixed_flash_frames}，remaining={remaining_to_trigger}）",
+                message=f"过帧过头（还需过 {remaining_to_trigger} 帧），动态调整撞闪_闪帧为 {remaining_to_trigger - 1}",
                 **common,
             )
-        # remaining <= min_adjustable，无法调整（调整后 _闪帧 < min_adjustable）
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_MISSED,
             phase=AutoRngPhase.SEARCH_TARGET,
-            message=f"剩余 {remaining_to_trigger} 帧 < _闪帧 {fixed_flash_frames} 且不足 {min_adjustable + 1}，放弃",
+            message=f"还需过 {remaining_to_trigger} 帧，不足 {min_adjustable + 1} 帧无法调整闪帧，放弃",
             **common,
         )
-    # fixed_flash_frames == 0，无固定闪帧，脚本将使用 remaining 作为动态闪帧
+    # fixed_flash_frames == 0，无固定闪帧
     return AutoRngDecision(
         kind=AutoRngDecisionKind.FINAL_CALIBRATE,
         phase=AutoRngPhase.FINAL_CALIBRATE,
-        message=f"进入最终实时校准（无固定闪帧，remaining={remaining_to_trigger}）",
+        message=f"进入最终实时校准（无固定闪帧，还需过 {remaining_to_trigger} 帧）",
         **common,
     )
 
@@ -148,25 +147,25 @@ def finalize_flash_frames(
         "remaining_to_trigger": remaining_to_trigger,
         "flash_frames": flash_frames,
     }
-    if remaining_to_trigger <= 0:
+    if remaining_to_trigger < 0:
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_MISSED,
             phase=AutoRngPhase.SEARCH_TARGET,
-            message=f"最终校准后已错过目标（remaining={remaining_to_trigger}），不运行撞闪脚本",
+            message=f"已过脚本启动点 {abs(remaining_to_trigger)} 帧，不运行撞闪脚本",
             **common,
         )
-    if remaining_to_trigger < min_final_flash_frames:
+    if remaining_to_trigger < min_final_flash_frames and fixed_flash_frames > 0:
         return AutoRngDecision(
             kind=AutoRngDecisionKind.TARGET_TOO_CLOSE,
             phase=AutoRngPhase.SEARCH_TARGET,
-            message=f"最终剩余帧 {remaining_to_trigger} < min {min_final_flash_frames}，放弃本目标",
+            message=f"还需过 {remaining_to_trigger} 帧（小于最小允许 {min_final_flash_frames}），放弃",
             **common,
         )
-    flash_label = f"闪帧={flash_frames}" if fixed_flash_frames > 0 else f"动态闪帧={flash_frames}"
+    flash_label = f"撞闪_闪帧={flash_frames}" if fixed_flash_frames > 0 else f"动态闪帧={flash_frames}"
     return AutoRngDecision(
         kind=AutoRngDecisionKind.RUN_HIT_SCRIPT,
         phase=AutoRngPhase.RUN_HIT_SCRIPT,
-        message=f"提交撞闪脚本（{flash_label}，remaining={remaining_to_trigger}）",
+        message=f"启动撞闪脚本（{flash_label}，还需过 {remaining_to_trigger} 帧）",
         **common,
     )
 
@@ -289,7 +288,7 @@ class AutoRngRunner:
         self._seed_result = self._with_measurement_time(self.services.capture_seed())
         self._set_progress(
             AutoRngPhase.SEARCH_TARGET,
-            "捕获 seed 完成",
+            "seed 捕获完成",
             current_advances=self._seed_result.current_advances,
             seed_text=self._seed_result.seed_text,
         )
@@ -297,7 +296,7 @@ class AutoRngRunner:
     def _search_target(self) -> None:
         seed = self._require_seed()
         candidates = self.services.search_candidates(seed)
-        # 过滤已过帧：只保留 current_advances + delay + 闪帧 之后的候选
+        # 过滤已过帧：只保留可达候选
         min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
         reachable = [c for c in candidates if c.advances >= min_reachable]
         decision = decide_search_target(reachable if reachable else [])
@@ -305,11 +304,16 @@ class AutoRngRunner:
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
             return
         self._locked_target = decision.target
+        flash = self._fixed_flash_frames()
+        trigger = decision.raw_target_advances - self.config.fixed_delay - flash
         self._set_progress(
             AutoRngPhase.DECIDE_ADVANCE,
-            decision.message,
+            f"原始目标帧 {decision.raw_target_advances}，delay {self.config.fixed_delay}，"
+            f"撞闪_闪帧 {flash}，脚本启动帧 {trigger}",
             locked_target=self._locked_target,
             raw_target_advances=decision.raw_target_advances,
+            fixed_delay=self.config.fixed_delay,
+            trigger_advances=trigger,
             current_advances=seed.current_advances,
         )
 
@@ -319,7 +323,7 @@ class AutoRngRunner:
             raise RuntimeError("测种脚本未配置")
         text = path.read_text(encoding="utf-8")
         self.services.run_script_text(text, path.name)
-        self._set_progress(AutoRngPhase.CAPTURE_SEED, f"测种脚本完成: {path.name}", last_script_path=path)
+        self._set_progress(AutoRngPhase.CAPTURE_SEED, f"测种脚本完成——{path.name}", last_script_path=path)
 
     def _decide_advance(self) -> None:
         target = self._require_target()
@@ -348,14 +352,17 @@ class AutoRngRunner:
 
     def _reidentify(self, next_phase: AutoRngPhase) -> None:
         seed = self._require_seed()
+        prev_advances = seed.current_advances
         # 传递预期位置提示，用于约束 reidentify 搜索范围
         hint = seed.current_advances + self._requested_advances if self._requested_advances else None
         seed_with_hint = seed if hint is None else replace(seed, expected_advances_hint=hint)
         self._seed_result = self._with_measurement_time(self.services.reidentify(seed_with_hint))
+        new_advances = self._seed_result.current_advances
+        actual_advance = new_advances - prev_advances
         self._set_progress(
             next_phase,
-            "reidentify 完成",
-            current_advances=self._seed_result.current_advances,
+            f"重新识别完成——目前帧数 {new_advances} 帧，上次实际过帧 {actual_advance} 帧",
+            current_advances=new_advances,
             seed_text=self._seed_result.seed_text,
         )
 
@@ -375,15 +382,14 @@ class AutoRngRunner:
         self._set_progress_from_decision(decision)
 
     def _final_wait(self) -> None:
-        """在脚本启动点前等待 remaining - _闪帧 帧，等到只剩 _闪帧 时再运行撞闪脚本。"""
+        """等待剩余帧数后直接启动撞闪脚本（脚本启动帧已含闪帧扣除，不再重复扣）。"""
         seed = self._require_seed()
         remaining = self.progress.remaining_to_trigger
         fixed_flash = self._fixed_flash_frames()
-        if remaining is None or remaining <= fixed_flash:
-            # 异常情况：应该已到启动点，直接进入校准
-            self._set_progress(AutoRngPhase.FINAL_CALIBRATE, "final wait 跳过（已在启动点内）")
+        if remaining is None or remaining <= 0:
+            self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, "等待量 ≤ 0，跳过，直接启动撞闪脚本")
             return
-        wait_frames = remaining - fixed_flash
+        wait_frames = remaining  # 等待全部剩余帧数，不再扣除闪帧
 
         path = self.config.advance_script_path
         if path is None:
@@ -394,15 +400,16 @@ class AutoRngRunner:
         text = prepare_advance_script_text(path.read_text(encoding="utf-8"), script_frames)
         self.services.run_script_text(
             text,
-            f"{path.name} (final wait, 脚本参数={script_frames}, 实际等待≈{wait_frames})",
+            f"{path.name}（等待 {wait_frames} 帧，脚本参数 {script_frames}）",
         )
-        # 更新位置并将 measured_at 重置为当前时间，确保 FINAL_CALIBRATE 的实时计算正确
+        # 更新位置并重置计时基准，然后直接启动撞闪脚本
         new_current = seed.current_advances + wait_frames
         self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
         self._set_progress(
-            AutoRngPhase.FINAL_CALIBRATE,
-            f"final wait {wait_frames} 帧完成（脚本参数 {script_frames}），进入最终实时校准",
+            AutoRngPhase.RUN_HIT_SCRIPT,
+            f"等待 {wait_frames} 帧完成，启动撞闪脚本（目前帧数 {new_current} 帧，撞闪_闪帧 {fixed_flash}）",
             current_advances=new_current,
+            final_flash_frames=fixed_flash,
         )
 
     def _final_adjust(self) -> None:
@@ -414,14 +421,14 @@ class AutoRngRunner:
         if remaining is None or remaining < min_adjustable + 1:
             self._locked_target = None
             self._set_progress(AutoRngPhase.SEARCH_TARGET,
-                f"剩余 {remaining} 帧不足 {min_adjustable + 1}，无法动态调整闪帧")
+                f"还需过 {remaining} 帧，不足 {min_adjustable + 1} 帧，无法动态调整闪帧")
             return
 
         new_flash = remaining - 1
         new_current = seed.current_advances + 1
         self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
 
-        # 动态写入撞闪脚本的 _闪帧，绕过 finalize_flash_frames 的固定闪帧逻辑
+        # 动态写入撞闪脚本的 _闪帧
         path = self.config.hit_script_path
         if path is None:
             raise RuntimeError("撞闪脚本未配置")
@@ -429,7 +436,7 @@ class AutoRngRunner:
 
         self._set_progress(
             AutoRngPhase.RUN_HIT_SCRIPT,
-            f"动态调整 _闪帧={new_flash}（原 remaining={remaining}），等待1帧后运行撞闪脚本",
+            f"动态调整——将撞闪_闪帧改为 {new_flash}（原还需过 {remaining} 帧），等待 1 帧后启动",
             final_flash_frames=new_flash,
             current_advances=new_current,
             remaining_to_trigger=remaining,
@@ -441,7 +448,7 @@ class AutoRngRunner:
             return
         self._set_progress(
             AutoRngPhase.LOOP_CHECK,
-            f"撞闪脚本完成: {path.name}（动态闪帧 {new_flash}）",
+            f"撞闪脚本完成——{path.name}（动态闪帧 {new_flash}）",
             last_script_path=path,
             current_advances=new_current,
             remaining_to_trigger=remaining,
@@ -473,10 +480,10 @@ class AutoRngRunner:
         text = path.read_text(encoding="utf-8")
         # 记录提交撞闪脚本时的实际状态
         commit_log = (
-            f"提交撞闪脚本 current={decision.current_advances} "
-            f"flash={decision.flash_frames} "
-            f"trigger={decision.trigger_advances} "
-            f"remaining={decision.remaining_to_trigger}"
+            f"启动撞闪脚本——目前帧数 {decision.current_advances} 帧，"
+            f"撞闪_闪帧 {decision.flash_frames}，"
+            f"脚本启动帧 {decision.trigger_advances}，"
+            f"还需过 {decision.remaining_to_trigger} 帧"
         )
         self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, commit_log,
             current_advances=decision.current_advances,
@@ -490,7 +497,7 @@ class AutoRngRunner:
             return
         self._set_progress(
             AutoRngPhase.LOOP_CHECK,
-            f"撞闪脚本完成: {path.name}",
+            f"撞闪脚本完成——{path.name}",
             last_script_path=path,
             current_advances=decision.current_advances,
             remaining_to_trigger=decision.remaining_to_trigger,
@@ -559,25 +566,25 @@ class AutoRngRunner:
             locked_target: object | None = None
         else:
             locked_target = decision.target or self._locked_target
-        # 关键决策日志：raw_target、delay、flash、trigger、current、remaining
+        # 关键决策日志（中文）
         details = []
         if decision.raw_target_advances is not None:
-            details.append(f"raw={decision.raw_target_advances}")
+            details.append(f"原始目标帧={decision.raw_target_advances}")
         if decision.fixed_delay is not None:
             details.append(f"delay={decision.fixed_delay}")
         if decision.trigger_advances is not None:
-            details.append(f"trigger={decision.trigger_advances}")
+            details.append(f"脚本启动帧={decision.trigger_advances}")
         if decision.current_advances is not None:
-            details.append(f"current={decision.current_advances}")
+            details.append(f"目前帧数={decision.current_advances}")
         if decision.remaining_to_trigger is not None:
-            details.append(f"remaining={decision.remaining_to_trigger}")
+            details.append(f"还需过={decision.remaining_to_trigger}")
         if decision.flash_frames is not None:
-            details.append(f"flash={decision.flash_frames}")
+            details.append(f"闪帧={decision.flash_frames}")
         if decision.requested_advances is not None:
-            details.append(f"requested={decision.requested_advances}")
-        log_line = f"[{decision.kind.value}] {decision.message}"
+            details.append(f"本次计划过帧={decision.requested_advances}")
+        log_line = decision.message
         if details:
-            log_line += f" ({', '.join(details)})"
+            log_line += f"（{'，'.join(details)}）"
         self._set_progress(
             decision.phase,
             log_line,

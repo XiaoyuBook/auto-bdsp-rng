@@ -223,7 +223,7 @@ class AutoRngPanel(QWidget):
         self.shiny_threshold_seconds.setFixedWidth(145)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
-        form.addRow("最大等待帧数", self.max_wait_frames)
+        form.addRow("最大等待窗口", self.max_wait_frames)
         form.addRow("闪光阈值(秒)", self.shiny_threshold_seconds)
         return group
 
@@ -283,7 +283,7 @@ class AutoRngPanel(QWidget):
             ("当前阶段", "summary_phase"),
             ("原始目标帧", "summary_raw"),
             ("delay", "summary_delay"),
-            ("当前帧", "summary_current"),
+            ("目前帧数", "summary_current"),
             ("最终闪帧", "summary_flash"),
         )
         for index, (label_text, attr) in enumerate(fields):

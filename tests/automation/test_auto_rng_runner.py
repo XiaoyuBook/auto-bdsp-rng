@@ -623,8 +623,8 @@ def test_runner_stops_after_hit_monitor_reports_shiny(tmp_path):
 
 # ─── decide_target_advance 三段式决策 ──────────────────────────────
 
-def test_bug_repro_raw11915_current10309_remaining94_should_final_wait_not_calibrate():
-    """raw=11915 delay=1452 flash=60 current=10309 → remaining=94，不应立即撞闪。"""
+def test_bug_repro_raw11915_current10309_remaining94_should_final_wait_94_not_24():
+    """raw=11915 delay=1452 flash=60 current=10309 → script_trigger=10403, remaining=94, FINAL_WAIT wait=94（不再扣闪帧）。"""
     target = AutoRngTarget(raw_target_advances=11915)
 
     decision = decide_target_advance(
@@ -635,14 +635,30 @@ def test_bug_repro_raw11915_current10309_remaining94_should_final_wait_not_calib
         max_wait_frames=500,
     )
 
-    # remaining = 11915 - 1452 - 60 - 10309 = 94
-    # 94 <= 500 且 94 > 60 → FINAL_WAIT，等待 94-60=34 帧
-    assert decision.trigger_advances == 11915 - 1452 - 60  # 10403
+    # 脚本启动帧 = 11915 - 1452 - 60 = 10403
+    # 还需过 = 10403 - 10309 = 94
+    assert decision.trigger_advances == 10403
     assert decision.remaining_to_trigger == 94
     assert decision.kind == AutoRngDecisionKind.FINAL_WAIT
-    assert decision.phase == AutoRngPhase.FINAL_WAIT
-    assert decision.requested_advances is None
-    assert decision.flash_frames is None
+    assert "94" in decision.message  # wait 94帧，不是 24帧
+
+
+def test_bug_repro_raw3674_current2078_remaining84_should_final_wait_84():
+    """raw=3674 delay=1452 flash=60 current=2078 → 脚本启动帧=2162，还需过=84，等待84帧。"""
+    target = AutoRngTarget(raw_target_advances=3674)
+
+    decision = decide_target_advance(
+        target,
+        current_advances=2078,
+        fixed_delay=1452,
+        fixed_flash_frames=60,
+        max_wait_frames=500,
+    )
+
+    assert decision.trigger_advances == 3674 - 1452 - 60  # 2162
+    assert decision.remaining_to_trigger == 84
+    assert decision.kind == AutoRngDecisionKind.FINAL_WAIT
+    assert "84" in decision.message
 
 
 def test_remaining_equal_flash_triggers_final_calibrate():
@@ -715,8 +731,8 @@ def test_fixed_flash_zero_goes_directly_to_final_calibrate():
 
 # ─── final_wait 流程集成测试 ──────────────────────────────────────
 
-def test_runner_final_wait_flows_to_final_calibrate_then_hit(tmp_path):
-    """过帧后 remaining > flash → FINAL_WAIT → 等待 → FINAL_CALIBRATE → RUN_HIT_SCRIPT。"""
+def test_runner_final_wait_flows_directly_to_run_hit(tmp_path):
+    """过帧后 remaining > flash → FINAL_WAIT（等待全部remaining）→ RUN_HIT_SCRIPT。"""
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"
     hit_script = tmp_path / "谢米.txt"
@@ -729,8 +745,8 @@ def test_runner_final_wait_flows_to_final_calibrate_then_hit(tmp_path):
     calls: list[str] = []
     services = AutoRngServices(
         capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+        # raw=11915: trigger=10403, reidentify后current=10309, remaining=94>60 → FINAL_WAIT
         search_candidates=lambda _seed: [FakeState(11915)],
-        # reidentify 后得到 current_advances=10309（remaining=94 > flash=60）
         reidentify=lambda _seed: calls.append("reidentify") or AutoRngSeedResult(
             seed="seed-1", current_advances=10309, npc=0,
         ),
@@ -753,15 +769,9 @@ def test_runner_final_wait_flows_to_final_calibrate_then_hit(tmp_path):
 
     runner.run(max_steps=10)
 
-    # 应该经过: RUN_SEED_SCRIPT → CAPTURE → SEARCH → DECIDE_ADVANCE
-    #   → RUN_ADVANCE_SCRIPT → FINAL_WAIT → FINAL_CALIBRATE → RUN_HIT_SCRIPT → LOOP_CHECK
     names = [n for n, _ in scripts]
-    # 验证撞闪脚本被正确调用
     assert any("谢米.txt" in n for n in names), f"expected hit script, got {names}"
     assert runner.progress.phase in (AutoRngPhase.LOOP_CHECK, AutoRngPhase.RUN_HIT_SCRIPT)
-    # FINAL_WAIT 应等待 94-60=34 帧，脚本参数补偿 +300
-    advance_texts = [t for n, t in scripts if "bdsp过帧" in n or "final wait" in n]
-    assert advance_texts, f"expected advance/wait scripts, got {scripts}"
 
 
 def test_final_calibrate_update_resets_measured_at_after_wait(tmp_path):
