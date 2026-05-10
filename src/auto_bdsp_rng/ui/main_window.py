@@ -2051,9 +2051,10 @@ class MainWindow(QMainWindow):
 
     def _characteristic_text(self, state: State8) -> str:
         max_iv = max(state.ivs)
-        start = state.pid % 6
+        # PokeFinder 兼容：个性由 EC 决定，不是 PID 或 max_iv
+        start = state.ec % 6
         stat_index = next(index for offset in range(6) for index in ((start + offset) % 6,) if state.ivs[index] == max_iv)
-        characteristic_index = max_iv % 5
+        characteristic_index = state.ec % 5
         if self.lang == "zh":
             return CHARACTERISTICS_ZH[stat_index][characteristic_index]
         return f"{IV_LABELS[stat_index]} {max_iv}"
