@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -133,8 +133,10 @@ class AutoRngPanel(QWidget):
         self._scripts: list[Path] = []
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoRngWorker | None = None
+        self._settings = QSettings("auto-bdsp-rng", "AutoRngPanel")
         self._build_ui()
         self.refresh_scripts()
+        self._restore_panel_state()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -386,6 +388,7 @@ class AutoRngPanel(QWidget):
         )
 
     def _start_clicked(self) -> None:
+        self._save_panel_state()
         config = self.build_config()
         try:
             validate_auto_scripts(
@@ -465,6 +468,94 @@ class AutoRngPanel(QWidget):
             return
         index = combo.findData(str(path))
         combo.setCurrentIndex(max(0, index))
+
+    def _save_panel_state(self) -> None:
+        """持久化当前面板设置。"""
+        s = self._settings
+        s.setValue("mode_index", self.mode_combo.currentIndex())
+        s.setValue("loop_count", self.loop_count.value())
+        s.setValue("max_advances", self.max_advances.value())
+        s.setValue("fixed_delay", self.fixed_delay.value())
+        s.setValue("max_wait_frames", self.max_wait_frames.value())
+        s.setValue("shiny_threshold", self.shiny_threshold_seconds.value())
+        seed_path = self._selected_path(self.seed_script_combo)
+        advance_path = self._selected_path(self.advance_script_combo)
+        hit_path = self._selected_path(self.hit_script_combo)
+        if seed_path is not None:
+            s.setValue("seed_script", str(seed_path))
+        if advance_path is not None:
+            s.setValue("advance_script", str(advance_path))
+        if hit_path is not None:
+            s.setValue("hit_script", str(hit_path))
+        # 目标精灵设置
+        tf = self.target_form
+        s.setValue("target_category", tf.category_combo.currentIndex())
+        s.setValue("target_encounter", tf.encounter_combo.currentIndex())
+        s.setValue("target_shiny_filter", tf.shiny_filter.currentIndex())
+        s.setValue("target_ability_filter", tf.ability_filter.currentIndex())
+        s.setValue("target_gender_filter", tf.gender_filter.currentIndex())
+        s.setValue("target_nature", tf.nature_combo.currentIndex())
+        s.setValue("target_skip_filter", tf.skip_filter.isChecked())
+
+    def _restore_panel_state(self) -> None:
+        """恢复上次持久化的面板设置。"""
+        s = self._settings
+        if s.contains("mode_index"):
+            idx = int(s.value("mode_index", 0))
+            if 0 <= idx < self.mode_combo.count():
+                self.mode_combo.setCurrentIndex(idx)
+        if s.contains("loop_count"):
+            self.loop_count.setValue(int(s.value("loop_count", 1)))
+        if s.contains("max_advances"):
+            self.max_advances.setValue(int(s.value("max_advances", 100_000)))
+        if s.contains("fixed_delay"):
+            self.fixed_delay.setValue(int(s.value("fixed_delay", 100)))
+        if s.contains("max_wait_frames"):
+            self.max_wait_frames.setValue(int(s.value("max_wait_frames", 300)))
+        if s.contains("shiny_threshold"):
+            self.shiny_threshold_seconds.setValue(float(s.value("shiny_threshold", 0.0)))
+        # 恢复脚本选择（脚本列表已通过 refresh_scripts 加载）
+        if s.contains("seed_script"):
+            self._select_script_by_path(self.seed_script_combo, str(s.value("seed_script", "")))
+        if s.contains("advance_script"):
+            self._select_script_by_path(self.advance_script_combo, str(s.value("advance_script", "")))
+        if s.contains("hit_script"):
+            self._select_script_by_path(self.hit_script_combo, str(s.value("hit_script", "")))
+        # 目标精灵设置
+        tf = self.target_form
+        if s.contains("target_category"):
+            idx = int(s.value("target_category", 0))
+            if 0 <= idx < tf.category_combo.count():
+                tf.category_combo.setCurrentIndex(idx)
+        if s.contains("target_encounter"):
+            idx = int(s.value("target_encounter", 0))
+            if 0 <= idx < tf.encounter_combo.count():
+                tf.encounter_combo.setCurrentIndex(idx)
+        if s.contains("target_shiny_filter"):
+            idx = int(s.value("target_shiny_filter", 0))
+            if 0 <= idx < tf.shiny_filter.count():
+                tf.shiny_filter.setCurrentIndex(idx)
+        if s.contains("target_ability_filter"):
+            idx = int(s.value("target_ability_filter", 0))
+            if 0 <= idx < tf.ability_filter.count():
+                tf.ability_filter.setCurrentIndex(idx)
+        if s.contains("target_gender_filter"):
+            idx = int(s.value("target_gender_filter", 0))
+            if 0 <= idx < tf.gender_filter.count():
+                tf.gender_filter.setCurrentIndex(idx)
+        if s.contains("target_nature"):
+            idx = int(s.value("target_nature", 0))
+            if 0 <= idx < tf.nature_combo.count():
+                tf.nature_combo.setCurrentIndex(idx)
+        if s.contains("target_skip_filter"):
+            tf.skip_filter.setChecked(s.value("target_skip_filter") == "true")
+
+    def _select_script_by_path(self, combo: QComboBox, path_str: str) -> None:
+        if not path_str:
+            return
+        index = combo.findData(path_str)
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()

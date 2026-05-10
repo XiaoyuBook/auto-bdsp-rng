@@ -1657,6 +1657,7 @@ class EasyConPanel(QWidget):
         self.task_state_text = "已完成"
         self._append_log("info", f"已连接伊机控: {port}")
         self.easycon_status.showMessage("已长期连接")
+        self._show_connection_toast(port)
         self._update_bridge_controls()
         self._update_run_enabled()
 
@@ -1673,6 +1674,34 @@ class EasyConPanel(QWidget):
         self.easycon_status.showMessage("已断开")
         self._update_bridge_controls()
         self._update_run_enabled()
+
+    def _show_connection_toast(self, port: str) -> None:
+        """连接成功弹出提示窗口，2秒后自动消失。"""
+        toast = QLabel(f" 已连接单片机\n{port}", self)
+        toast.setStyleSheet("""
+            QLabel {
+                background-color: #27ae60;
+                color: white;
+                padding: 14px 28px;
+                border-radius: 10px;
+                font-size: 15px;
+                font-weight: bold;
+            }
+        """)
+        toast.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        toast.adjustSize()
+        # 定位在主窗口中央
+        window = self.window()
+        if window is not None:
+            center = window.geometry().center()
+            toast.move(center.x() - toast.width() // 2, center.y() - toast.height() // 2)
+        toast.show()
+        QTimer.singleShot(2000, toast.deleteLater)
 
     def send_controller_press(self, button: str) -> None:
         duration = self.controller_duration.value()

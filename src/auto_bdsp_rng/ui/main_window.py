@@ -2247,8 +2247,34 @@ class MainWindow(QMainWindow):
     def _start_auto_rng(self, config: AutoRngConfig) -> None:
         if not self._ensure_preview_for_auto_rng():
             return
+        # 自动连接伊机控（如果尚未连接）
+        if not self._ensure_bridge_connected():
+            return
         services = self._build_auto_rng_services(config)
         self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services))
+
+    def _ensure_bridge_connected(self) -> bool:
+        """确保伊机控 Bridge 已连接；未连接时尝试自动连接。"""
+        bridge_status = self.easycon_tab.bridge_status
+        if bridge_status == EasyConStatus.BRIDGE_CONNECTED:
+            return True
+        if bridge_status == EasyConStatus.RUNNING:
+            self.easycon_tab.stop_bridge_script()
+            return True
+        # 未连接，尝试自动连接
+        port = self.easycon_tab.port_combo.currentText()
+        if not port:
+            port = self.easycon_tab.config.last_port or ""
+            if port and self.easycon_tab.port_combo.findText(port) >= 0:
+                self.easycon_tab.port_combo.setCurrentText(port)
+        if not port:
+            self._show_error("自动连接失败", "请先在伊机控面板选择串口并连接单片机")
+            return False
+        self.easycon_tab.connect_bridge()
+        if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+            self._show_error("自动连接失败", "无法连接到单片机，请检查串口和连接")
+            return False
+        return True
 
     def _handle_auto_capture_frame(self, frame: object) -> None:
         self._display_frame(frame)
