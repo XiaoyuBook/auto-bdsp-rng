@@ -7,24 +7,28 @@ from typing import Any
 
 
 class AutoRngPhase(str, Enum):
-    IDLE = "Idle"
-    CAPTURE_SEED = "CaptureSeed"
-    SEARCH_TARGET = "SearchTarget"
-    RUN_SEED_SCRIPT = "RunSeedScript"
-    DECIDE_ADVANCE = "DecideAdvance"
-    RUN_ADVANCE_SCRIPT = "RunAdvanceScript"
-    REIDENTIFY = "Reidentify"
-    FINAL_CALIBRATE = "FinalCalibrate"
-    RUN_HIT_SCRIPT = "RunHitScript"
-    LOOP_CHECK = "LoopCheck"
-    COMPLETED = "Completed"
-    FAILED = "Failed"
+    IDLE = "空闲"
+    CAPTURE_SEED = "捕获Seed"
+    SEARCH_TARGET = "搜索目标"
+    RUN_SEED_SCRIPT = "运行测种脚本"
+    DECIDE_ADVANCE = "决策过帧"
+    RUN_ADVANCE_SCRIPT = "运行过帧脚本"
+    REIDENTIFY = "重新识别位置"
+    FINAL_CALIBRATE = "最终校准"
+    FINAL_WAIT = "等待触发"
+    FINAL_ADJUST = "动态调整闪帧"
+    RUN_HIT_SCRIPT = "运行撞闪脚本"
+    LOOP_CHECK = "循环检查"
+    COMPLETED = "已完成"
+    FAILED = "失败"
 
 
 class AutoRngDecisionKind(str, Enum):
     RUN_SEED_SCRIPT = "run_seed_script"
     RUN_ADVANCE_SCRIPT = "run_advance_script"
     FINAL_CALIBRATE = "final_calibrate"
+    FINAL_WAIT = "final_wait"
+    FINAL_ADJUST = "final_adjust"
     RUN_HIT_SCRIPT = "run_hit_script"
     REIDENTIFY = "reidentify"
     CAPTURE_SEED = "capture_seed"
@@ -60,6 +64,7 @@ class AutoRngConfig:
     loop_count: int = 1
     max_advances: int = 100_000
     shiny_threshold_seconds: float | None = None
+    debug_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +74,7 @@ class AutoRngSeedResult:
     npc: int = 0
     seed_text: str = ""
     measured_at: float | None = None
+    expected_advances_hint: int | None = None
 
 
 @dataclass(frozen=True)

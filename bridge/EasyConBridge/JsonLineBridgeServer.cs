@@ -141,13 +141,15 @@ public sealed class JsonLineBridgeServer
 
         var scriptText = RequiredString(request.Payload, "script_text");
         var name = OptionalString(request.Payload, "name") ?? "script";
+        var highResolution = OptionalBool(request.Payload, "high_resolution") ?? false;
+        var requestedAt = OptionalString(request.Payload, "requested_at");
         var token = _currentRunCts.Token;
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = _session.RunScript(scriptText, name, token);
+                var result = _session.RunScript(scriptText, name, highResolution, requestedAt, token);
                 await WriteResponseAsync(request.Id, true, new
                 {
                     exit_code = result.ExitCode,
@@ -226,10 +228,22 @@ public sealed class JsonLineBridgeServer
 
     private static bool RequiredBool(JsonElement payload, string name)
     {
-        if (payload.ValueKind == JsonValueKind.Object
-            && payload.TryGetProperty(name, out var value)
-            && (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False))
-            return value.GetBoolean();
-        throw new InvalidOperationException($"missing payload field: {name}");
+        var value = OptionalBool(payload, name);
+        if (value is null)
+            throw new InvalidOperationException($"missing payload field: {name}");
+        return value.Value;
+    }
+
+    private static bool? OptionalBool(JsonElement payload, string name)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            return null;
+        if (!payload.TryGetProperty(name, out var value))
+            return null;
+        if (value.ValueKind == JsonValueKind.True)
+            return true;
+        if (value.ValueKind == JsonValueKind.False)
+            return false;
+        return null;
     }
 }

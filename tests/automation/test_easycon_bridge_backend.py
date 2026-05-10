@@ -138,3 +138,32 @@ def test_bridge_backend_virtual_controller_uses_down_up_commands():
         ("stick_direction", {"side": "left", "direction": "Up", "down": True}),
         ("stick_direction", {"side": "left", "direction": "Up", "down": False}),
     ]
+
+
+def test_run_script_passes_high_resolution_false_by_default():
+    """默认 high_resolution=False（匹配原版 EasyCon 默认值）发送到 Bridge。"""
+    transport = FakeBridgeTransport()
+    backend = BridgeEasyConBackend(transport=transport)
+    backend._connected_port = "COM7"
+
+    backend.run_script_text("A 100\nWAIT 1000\nA 100\n", name="timing-test")
+
+    assert len(transport.commands) >= 1
+    cmd, payload = transport.commands[-1]
+    assert cmd == "run_script"
+    assert payload.get("high_resolution") is False
+    assert payload.get("name") == "timing-test"
+    assert "A 100" in str(payload.get("script_text"))
+
+
+def test_run_script_can_enable_high_resolution():
+    """high_resolution=True 应正确传递到 Bridge。"""
+    transport = FakeBridgeTransport()
+    backend = BridgeEasyConBackend(transport=transport)
+    backend._connected_port = "COM7"
+
+    backend.run_script_text("A 100\n", name="high-res", high_resolution=True)
+
+    cmd, payload = transport.commands[-1]
+    assert cmd == "run_script"
+    assert payload.get("high_resolution") is True

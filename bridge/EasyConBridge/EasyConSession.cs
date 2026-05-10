@@ -53,9 +53,23 @@ public sealed class EasyConSession : IEasyConSession
         _log("disconnected");
     }
 
-    public ScriptRunResult RunScript(string scriptText, string name, CancellationToken token)
+    public ScriptRunResult RunScript(string scriptText, string name, bool highResolution, string? requestedAt, CancellationToken token)
     {
         EnsureConnected();
+        _log($"run_script [{name}] start, highResolution={highResolution}");
+
+        // ── 诊断：IPC 延迟 ──
+        if (requestedAt is not null && DateTime.TryParse(requestedAt, out var pyRequested))
+        {
+            var ipcDelay = (DateTime.UtcNow - pyRequested.ToUniversalTime()).TotalMilliseconds;
+            _log($"IPC delay: Python → Bridge {ipcDelay:F0}ms (~{(int)(ipcDelay * (1 + 0) / 1018)} 帧 @ npc=0)");
+        }
+
+        // 原版 EasyCon 只在 HasKeyAction 且 RemoteStop 成功时才继续，否则弹窗让用户手动停止。
+        // Bridge 无法检测单片机是否正在运行烧录脚本，无条件 RemoteStop 会在无脚本时
+        // 每次阻塞 200ms（SendSync 超时），导致脚本首键延迟和串口状态不一致。
+        // 对齐原版行为：不主动 RemoteStop，由用户自行确保无烧录脚本在运行。
+
         var scripter = new Scripter();
         var output = new BridgeOutputAdapter(JsonLineBridgeServer.WriteLog);
         var diagnostics = scripter.Parse(scriptText, fileName: null!, externalGetters: []);
@@ -68,11 +82,20 @@ public sealed class EasyConSession : IEasyConSession
             return new ScriptRunResult(1, output.Stdout, output.Stderr);
         }
 
-        var pad = new GamePadAdapter(_switch!);
+        // 与原版 EasyCon 一致：传入 highResolution 参数
+        var pad = new GamePadAdapter(_switch, highResolution);
         try
         {
+            var startedAt = DateTime.Now;
+            var parseDuration = (startedAt - (requestedAt is not null && DateTime.TryParse(requestedAt, out var pyReq) ? pyReq.ToUniversalTime() : startedAt)).TotalMilliseconds;
+            _log($"script [{name}] Scripter.Run start at {startedAt:HH:mm:ss.fff} (解析+准备耗时 {parseDuration:F0}ms)");
+
             scripter.Run(output, pad, token);
-            output.Info("script completed");
+
+            var endedAt = DateTime.Now;
+            var scriptMs = (endedAt - startedAt).TotalMilliseconds;
+            _log($"script [{name}] completed at {endedAt:HH:mm:ss.fff}, script耗时={scriptMs:F0}ms (~{(int)(scriptMs / 1018)} 帧 @ npc=0)");
+            output.Info($"script completed in {scriptMs:F0}ms");
             return new ScriptRunResult(0, output.Stdout, output.Stderr);
         }
         catch (OperationCanceledException)
@@ -85,17 +108,22 @@ public sealed class EasyConSession : IEasyConSession
             output.Error(ex.Message);
             return new ScriptRunResult(1, output.Stdout, output.Stderr);
         }
+        finally
+        {
+            // 脚本结束后释放所有按键/摇杆状态
+            ReleaseAllControllerState();
+        }
     }
 
     public void Press(string button, int durationMs)
     {
-        RunScript($"{button} {durationMs}", $"press-{button}", CancellationToken.None);
+        RunScript($"{button} {durationMs}", $"press-{button}", highResolution: true, requestedAt: null, CancellationToken.None);
     }
 
     public void Stick(string side, string direction, int? durationMs)
     {
         var script = durationMs is null ? $"{side} {direction}" : $"{side} {direction} {durationMs.Value}";
-        RunScript(script, $"stick-{side}", CancellationToken.None);
+        RunScript(script, $"stick-{side}", highResolution: true, requestedAt: null, CancellationToken.None);
     }
 
     public void KeyDown(string button)
@@ -130,6 +158,27 @@ public sealed class EasyConSession : IEasyConSession
     public void Dispose()
     {
         Disconnect();
+    }
+
+    private void ReleaseAllControllerState()
+    {
+        // 释放所有可能的按键，摇杆归中
+        foreach (SwitchButton button in Enum.GetValues(typeof(SwitchButton)))
+        {
+            _switch!.Up(button);
+        }
+        _switch!.LeftDirection(DirectionKey.Up, false);
+        _switch!.LeftDirection(DirectionKey.Down, false);
+        _switch!.LeftDirection(DirectionKey.Left, false);
+        _switch!.LeftDirection(DirectionKey.Right, false);
+        _switch!.RightDirection(DirectionKey.Up, false);
+        _switch!.RightDirection(DirectionKey.Down, false);
+        _switch!.RightDirection(DirectionKey.Left, false);
+        _switch!.RightDirection(DirectionKey.Right, false);
+        _switch!.HatDirection(DirectionKey.Up, false);
+        _switch!.HatDirection(DirectionKey.Down, false);
+        _switch!.HatDirection(DirectionKey.Left, false);
+        _switch!.HatDirection(DirectionKey.Right, false);
     }
 
     private void EnsureConnected()

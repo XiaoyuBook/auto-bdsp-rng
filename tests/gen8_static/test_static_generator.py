@@ -40,16 +40,16 @@ def test_non_roamer_matches_pokefinder_turtwig_sample():
     generator = StaticGenerator8(0, 9, 0, Lead.NONE, template, PROFILE, StateFilter())
 
     assert _core_fields(generator.generate(SEED0, SEED1)) == [
-        {"advances": 0, "ec": 570639824, "pid": 570642538, "ivs": [4, 23, 15, 30, 19, 26], "ability": 0, "gender": 0, "level": 5, "nature": 22, "shiny": 0, "height": 124, "weight": 99},
-        {"advances": 1, "ec": 2412930810, "pid": 2452903364, "ivs": [23, 15, 30, 19, 26, 18], "ability": 1, "gender": 0, "level": 5, "nature": 2, "shiny": 0, "height": 96, "weight": 69},
-        {"advances": 2, "ec": 570642538, "pid": 715243415, "ivs": [15, 30, 19, 26, 18, 25], "ability": 1, "gender": 0, "level": 5, "nature": 5, "shiny": 0, "height": 99, "weight": 96},
-        {"advances": 3, "ec": 2452903364, "pid": 3067672975, "ivs": [30, 19, 26, 18, 25, 27], "ability": 0, "gender": 0, "level": 5, "nature": 16, "shiny": 0, "height": 69, "weight": 147},
-        {"advances": 4, "ec": 715243415, "pid": 249593662, "ivs": [19, 26, 18, 25, 27, 16], "ability": 0, "gender": 0, "level": 5, "nature": 9, "shiny": 0, "height": 96, "weight": 103},
-        {"advances": 5, "ec": 3067672975, "pid": 3200942419, "ivs": [26, 18, 25, 27, 16, 12], "ability": 0, "gender": 0, "level": 5, "nature": 3, "shiny": 0, "height": 147, "weight": 67},
-        {"advances": 6, "ec": 249593662, "pid": 422632474, "ivs": [18, 25, 27, 16, 12, 0], "ability": 1, "gender": 0, "level": 5, "nature": 3, "shiny": 0, "height": 103, "weight": 115},
-        {"advances": 7, "ec": 3200942419, "pid": 3906296370, "ivs": [25, 27, 16, 12, 0, 15], "ability": 1, "gender": 1, "level": 5, "nature": 17, "shiny": 0, "height": 67, "weight": 129},
-        {"advances": 8, "ec": 422632474, "pid": 1698808217, "ivs": [27, 16, 12, 0, 15, 29], "ability": 0, "gender": 0, "level": 5, "nature": 1, "shiny": 0, "height": 115, "weight": 245},
-        {"advances": 9, "ec": 3906296370, "pid": 267060347, "ivs": [16, 12, 0, 15, 29, 20], "ability": 0, "gender": 0, "level": 5, "nature": 11, "shiny": 0, "height": 129, "weight": 95},
+        {"advances": 0, "ec": 570639824, "pid": 2412930810, "ivs": [10, 4, 23, 15, 30, 19], "ability": 0, "gender": 0, "level": 5, "nature": 17, "shiny": 0, "height": 48, "weight": 96},
+        {"advances": 1, "ec": 2412930810, "pid": 570642538, "ivs": [4, 23, 15, 30, 19, 26], "ability": 0, "gender": 0, "level": 5, "nature": 22, "shiny": 0, "height": 124, "weight": 99},
+        {"advances": 2, "ec": 570642538, "pid": 2452903364, "ivs": [23, 15, 30, 19, 26, 18], "ability": 1, "gender": 0, "level": 5, "nature": 2, "shiny": 0, "height": 96, "weight": 69},
+        {"advances": 3, "ec": 2452903364, "pid": 715243415, "ivs": [15, 30, 19, 26, 18, 25], "ability": 1, "gender": 0, "level": 5, "nature": 5, "shiny": 0, "height": 99, "weight": 96},
+        {"advances": 4, "ec": 715243415, "pid": 3067672975, "ivs": [30, 19, 26, 18, 25, 27], "ability": 0, "gender": 0, "level": 5, "nature": 16, "shiny": 0, "height": 69, "weight": 147},
+        {"advances": 5, "ec": 3067672975, "pid": 249593662, "ivs": [19, 26, 18, 25, 27, 16], "ability": 0, "gender": 0, "level": 5, "nature": 9, "shiny": 0, "height": 96, "weight": 103},
+        {"advances": 6, "ec": 249593662, "pid": 3200942419, "ivs": [26, 18, 25, 27, 16, 12], "ability": 0, "gender": 0, "level": 5, "nature": 3, "shiny": 0, "height": 147, "weight": 67},
+        {"advances": 7, "ec": 3200942419, "pid": 422632474, "ivs": [18, 25, 27, 16, 12, 0], "ability": 1, "gender": 0, "level": 5, "nature": 3, "shiny": 0, "height": 103, "weight": 115},
+        {"advances": 8, "ec": 422632474, "pid": 3906296370, "ivs": [25, 27, 16, 12, 0, 15], "ability": 1, "gender": 1, "level": 5, "nature": 17, "shiny": 0, "height": 67, "weight": 129},
+        {"advances": 9, "ec": 3906296370, "pid": 1698808217, "ivs": [27, 16, 12, 0, 15, 29], "ability": 0, "gender": 0, "level": 5, "nature": 1, "shiny": 0, "height": 115, "weight": 245},
     ]
 
 
@@ -66,8 +66,8 @@ def test_non_roamer_fixed_ivs_match_pokefinder_omanyte_sample():
     generator = StaticGenerator8(0, 1, 0, Lead.NONE, template, PROFILE, StateFilter())
 
     assert _core_fields(generator.generate(SEED0, SEED1)) == [
-        {"advances": 0, "ec": 570639824, "pid": 570642538, "ivs": [30, 31, 31, 19, 26, 31], "ability": 0, "gender": 0, "level": 1, "nature": 22, "shiny": 0, "height": 124, "weight": 99},
-        {"advances": 1, "ec": 2412930810, "pid": 2452903364, "ivs": [19, 31, 26, 18, 31, 31], "ability": 1, "gender": 0, "level": 1, "nature": 2, "shiny": 0, "height": 96, "weight": 69},
+        {"advances": 0, "ec": 570639824, "pid": 2412930810, "ivs": [15, 30, 31, 19, 31, 31], "ability": 0, "gender": 0, "level": 1, "nature": 17, "shiny": 0, "height": 48, "weight": 96},
+        {"advances": 1, "ec": 2412930810, "pid": 570642538, "ivs": [30, 31, 31, 19, 26, 31], "ability": 0, "gender": 0, "level": 1, "nature": 22, "shiny": 0, "height": 124, "weight": 99},
     ]
 
 

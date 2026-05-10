@@ -761,6 +761,17 @@ class EasyConPanel(QWidget):
         self.connect_button.clicked.connect(self.toggle_bridge_connection)
         layout.addWidget(self.connect_button)
 
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("连接模式"))
+        self.backend_mode = QComboBox()
+        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
+        self.backend_mode.addItem("CLI 诊断", "cli")
+        self.backend_mode.setStyleSheet(combo_style)
+        self.backend_mode.setCurrentIndex(0)
+        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
+        mode_row.addWidget(self.backend_mode, 1)
+        layout.addLayout(mode_row)
+
         serial_row = QHBoxLayout()
         self.port_combo = QComboBox()
         self.port_combo.setEditable(True)
@@ -790,10 +801,6 @@ class EasyConPanel(QWidget):
         self.browse_bridge_button = QPushButton()
         self.browse_bridge_button.clicked.connect(self.choose_bridge)
         self.version_label = QLabel("EasyCon: 未检测")
-        self.backend_mode = QComboBox()
-        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
-        self.backend_mode.addItem("CLI 诊断", "cli")
-        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
         self.backend_label = QLabel("单片机: 未连接")
         self.connection_state_label = QLabel("连接: 未检测")
         self.task_state_label = QLabel("任务: 未检测")
@@ -1065,6 +1072,8 @@ class EasyConPanel(QWidget):
                 self._append_log("error", f"保存脚本失败: {exc}")
                 return None
             self._saved_editor_text = self.editor.toPlainText()
+            # 同步持久化参数值到当前编辑器状态，避免下次打开时旧参数覆盖新内容
+            self._sync_persisted_params_from_editor()
             self._update_dirty_indicator()
             self._append_log("info", f"已保存: {self.current_script_path.name}")
             return self.current_script_path
@@ -1129,6 +1138,17 @@ class EasyConPanel(QWidget):
         key = self._script_config_key(self.current_script_path)
         script_parameters = {item_key: dict(values) for item_key, values in self.config.script_parameters.items()}
         script_parameters.setdefault(key, {})[name] = value
+        self.config = replace(self.config, script_parameters=script_parameters)
+        save_config(self.config)
+
+    def _sync_persisted_params_from_editor(self) -> None:
+        """保存时同步持久化参数到编辑器当前值，避免下次加载时旧值覆盖。"""
+        if self.current_script_path is None:
+            return
+        key = self._script_config_key(self.current_script_path)
+        script_parameters = {item_key: dict(values) for item_key, values in self.config.script_parameters.items()}
+        editor_params = {p.name: p.value for p in parse_script_parameters(self.editor.toPlainText())}
+        script_parameters[key] = editor_params
         self.config = replace(self.config, script_parameters=script_parameters)
         save_config(self.config)
 
@@ -1265,6 +1285,8 @@ class EasyConPanel(QWidget):
         self.bridge_status = EasyConStatus.RUNNING
         self.task_state_text = "执行中"
         self._update_bridge_controls()
+        # 释放虚拟手柄状态，避免 eventFilter 残留输入影响脚本时序
+        self._release_virtual_controller_keys()
         self._append_log("info", "通过常驻连接运行脚本")
         thread = QThread(self)
         worker = BridgeScriptWorker(self._ensure_bridge_backend(), script_text, self.current_script_name)
@@ -1642,6 +1664,7 @@ class EasyConPanel(QWidget):
         self.task_state_text = "已完成"
         self._append_log("info", f"已连接伊机控: {port}")
         self.easycon_status.showMessage("已长期连接")
+        self._show_connection_toast(port)
         self._update_bridge_controls()
         self._update_run_enabled()
 
@@ -1658,6 +1681,34 @@ class EasyConPanel(QWidget):
         self.easycon_status.showMessage("已断开")
         self._update_bridge_controls()
         self._update_run_enabled()
+
+    def _show_connection_toast(self, port: str) -> None:
+        """连接成功弹出提示窗口，2秒后自动消失。"""
+        toast = QLabel(f" 已连接单片机\n{port}", self)
+        toast.setStyleSheet("""
+            QLabel {
+                background-color: #27ae60;
+                color: white;
+                padding: 14px 28px;
+                border-radius: 10px;
+                font-size: 15px;
+                font-weight: bold;
+            }
+        """)
+        toast.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        toast.adjustSize()
+        # 定位在主窗口中央
+        window = self.window()
+        if window is not None:
+            center = window.geometry().center()
+            toast.move(center.x() - toast.width() // 2, center.y() - toast.height() // 2)
+        toast.show()
+        QTimer.singleShot(2000, toast.deleteLater)
 
     def send_controller_press(self, button: str) -> None:
         duration = self.controller_duration.value()
@@ -1840,7 +1891,7 @@ class EasyConPanel(QWidget):
         return Path(bridge_text) if bridge_text else None
 
     def _is_bridge_mode(self) -> bool:
-        return not hasattr(self, "backend_mode") or self.backend_mode.currentData() == "bridge"
+        return self.backend_mode.currentData() == "bridge"
 
     def _backend_mode_changed(self) -> None:
         self._update_bridge_controls()

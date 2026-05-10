@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from auto_bdsp_rng.automation.easycon.scripts import (
@@ -15,6 +16,7 @@ AUTO_ADVANCE_PARAMETER = "_目标帧数"
 AUTO_HIT_PARAMETER = "_闪帧"
 DEFAULT_SEED_SCRIPT_NAME = "BDSP测种.txt"
 DEFAULT_ADVANCE_SCRIPT_NAME = "bdsp过帧.txt"
+_ADVANCE_SCRIPT_OFFSET_RE = re.compile(r"_目标帧数\s*-\s*(\d+)")
 
 
 class AutoScriptError(ValueError):
@@ -80,6 +82,18 @@ def validate_auto_scripts(
         raise AutoScriptError("请选择撞闪脚本")
     require_parameter(advance_script_path, AUTO_ADVANCE_PARAMETER)
     require_integer_parameter(hit_script_path, AUTO_HIT_PARAMETER)
+
+
+def read_advance_script_offset(path: Path) -> int:
+    """从过帧脚本中读取 _目标帧数 的内部偏移量（例如 `_目标帧数 - 300` 返回 300）。
+
+    如果找不到偏移量，返回 0。
+    """
+    text = path.read_text(encoding="utf-8")
+    match = _ADVANCE_SCRIPT_OFFSET_RE.search(text)
+    if match is None:
+        return 0
+    return int(match.group(1))
 
 
 def require_parameter(path: Path, parameter_name: str) -> None:

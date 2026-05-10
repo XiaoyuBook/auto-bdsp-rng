@@ -176,13 +176,18 @@ class BridgeEasyConBackend(EasyConBackend):
         script_text = task.script_path.read_text(encoding="utf-8")
         return self.run_script_text(script_text, name=task.name or task.script_path.name)
 
-    def run_script_text(self, script_text: str, name: str | None = None) -> EasyConRunResult:
+    def run_script_text(self, script_text: str, name: str | None = None, *, high_resolution: bool = False) -> EasyConRunResult:
         if self._connected_port is None:
             raise RuntimeError("Bridge is not connected to a port")
         started_at = datetime.now()
         self._status = EasyConStatus.RUNNING
         try:
-            response = self._request("run_script", {"script_text": script_text, "name": name or "script"})
+            response = self._request("run_script", {
+                "script_text": script_text,
+                "name": name or "script",
+                "high_resolution": high_resolution,
+                "requested_at": started_at.isoformat(),
+            })
         except Exception:
             self._status = EasyConStatus.FAILED
             raise
