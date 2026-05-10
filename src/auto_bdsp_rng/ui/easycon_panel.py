@@ -1065,6 +1065,8 @@ class EasyConPanel(QWidget):
                 self._append_log("error", f"保存脚本失败: {exc}")
                 return None
             self._saved_editor_text = self.editor.toPlainText()
+            # 同步持久化参数值到当前编辑器状态，避免下次打开时旧参数覆盖新内容
+            self._sync_persisted_params_from_editor()
             self._update_dirty_indicator()
             self._append_log("info", f"已保存: {self.current_script_path.name}")
             return self.current_script_path
@@ -1129,6 +1131,17 @@ class EasyConPanel(QWidget):
         key = self._script_config_key(self.current_script_path)
         script_parameters = {item_key: dict(values) for item_key, values in self.config.script_parameters.items()}
         script_parameters.setdefault(key, {})[name] = value
+        self.config = replace(self.config, script_parameters=script_parameters)
+        save_config(self.config)
+
+    def _sync_persisted_params_from_editor(self) -> None:
+        """保存时同步持久化参数到编辑器当前值，避免下次加载时旧值覆盖。"""
+        if self.current_script_path is None:
+            return
+        key = self._script_config_key(self.current_script_path)
+        script_parameters = {item_key: dict(values) for item_key, values in self.config.script_parameters.items()}
+        editor_params = {p.name: p.value for p in parse_script_parameters(self.editor.toPlainText())}
+        script_parameters[key] = editor_params
         self.config = replace(self.config, script_parameters=script_parameters)
         save_config(self.config)
 

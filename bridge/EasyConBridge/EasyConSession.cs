@@ -68,10 +68,6 @@ public sealed class EasyConSession : IEasyConSession
             _log("RemoteStop OK");
         }
 
-        // 2) 释放所有按键/摇杆，确保从 neutral report 开始
-        ReleaseAllControllerState();
-        _log("released all controller state to neutral");
-
         var scripter = new Scripter();
         var output = new BridgeOutputAdapter(JsonLineBridgeServer.WriteLog);
         var diagnostics = scripter.Parse(scriptText, fileName: null!, externalGetters: []);
