@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -180,10 +181,13 @@ class AutoRngPanel(QWidget):
         self.stop_button.setMinimumWidth(68)
         self.start_button.clicked.connect(self._start_clicked)
         self.stop_button.clicked.connect(self._stop_clicked)
+        self.debug_output_check = QCheckBox("调试")
+        self.debug_output_check.setToolTip("输出 CLI 耗时、时间戳等调试信息")
         row.addWidget(QLabel("运行模式"))
         row.addWidget(self.mode_combo)
         row.addWidget(QLabel("次数"))
         row.addWidget(self.loop_count)
+        row.addWidget(self.debug_output_check)
         row.addStretch(1)
         row.addWidget(self.status_badge)
         row.addWidget(self.start_button)
@@ -420,6 +424,7 @@ class AutoRngPanel(QWidget):
             loop_count=self.loop_count.value(),
             max_advances=self.max_advances.value(),
             shiny_threshold_seconds=self.shiny_threshold_seconds.value() or None,
+            debug_output=self.debug_output_check.isChecked(),
         )
 
     def run_with_runner(self, runner: object) -> None:
@@ -445,8 +450,9 @@ class AutoRngPanel(QWidget):
         thread.start()
 
     def _runner_finished(self, progress: object) -> None:
+        # 不重复 apply_progress：最后一条进度已通过 progressChanged 信号输出
         if isinstance(progress, AutoRngProgress):
-            self.apply_progress(progress)
+            self.set_phase_text("已完成")
         self._clear_runner_thread()
 
     def _runner_failed(self, message: str) -> None:

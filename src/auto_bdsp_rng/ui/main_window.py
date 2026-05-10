@@ -866,6 +866,7 @@ class MainWindow(QMainWindow):
         self.select_roi_button.clicked.connect(self.start_roi_selection)
         self.calibrate_shiny_threshold_button = QPushButton()
         self.calibrate_shiny_threshold_button.clicked.connect(self.calibrate_shiny_threshold)
+        self.calibrate_shiny_threshold_button.hide()
 
         self.monitor_window = QCheckBox()
         self.reidentify_1_pk_npc = QCheckBox()
@@ -2560,10 +2561,11 @@ class MainWindow(QMainWindow):
             self.autoScriptStarted.emit(name)
             try:
                 result = _get_cli_backend().run_script_text(script_text, name, port=port)
-                # 从 stdout 提取 CLI 诊断行并输出到自动流程日志
-                diag_lines = [line for line in result.stdout.splitlines() if line.startswith("CLI 模式")]
-                for line in diag_lines:
-                    self.auto_rng_tab.add_log(line)
+                # 调试模式下从 stdout 提取 CLI 诊断行
+                if config.debug_output:
+                    diag_lines = [line for line in result.stdout.splitlines() if line.startswith("CLI 模式")]
+                    for line in diag_lines:
+                        self.auto_rng_tab.add_log(line)
             except Exception as exc:
                 self.autoScriptFailed.emit(str(exc))
                 raise

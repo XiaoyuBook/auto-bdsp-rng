@@ -64,6 +64,7 @@ class AutoRngConfig:
     loop_count: int = 1
     max_advances: int = 100_000
     shiny_threshold_seconds: float | None = None
+    debug_output: bool = False
 
 
 @dataclass(frozen=True)

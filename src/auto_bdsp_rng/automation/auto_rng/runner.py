@@ -407,11 +407,11 @@ class AutoRngRunner:
         )
         time.sleep(wait_seconds)
         new_current = seed.current_advances + remaining
-        now_str = time.strftime("%H:%M:%S")
         self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
-        self._set_progress(
-            AutoRngPhase.RUN_HIT_SCRIPT,
-            f"[{now_str}] 定时触发——目前帧数 ≈{new_current} 帧，启动撞闪脚本（撞闪_闪帧 {fixed_flash}）",
+        msg = f"定时触发——目前帧数 ≈{new_current} 帧，启动撞闪脚本（撞闪_闪帧 {fixed_flash}）"
+        if self.config.debug_output:
+            msg = f"[{time.strftime('%H:%M:%S')}] {msg}"
+        self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, msg,
             current_advances=new_current,
             final_flash_frames=fixed_flash,
         )
@@ -491,12 +491,13 @@ class AutoRngRunner:
         elapsed_from_ref_to_service = max(0.0, t_before_service - ref_time)
         diag_frames_to_service = int(elapsed_from_ref_to_service / 1.018) * (seed.npc + 1)
         # 记录提交撞闪脚本时的时序诊断
-        now_str = time.strftime("%H:%M:%S")
         commit_log = (
-            f"[{now_str}] 启动撞闪脚本——估算帧数 {decision.current_advances + diag_frames_since_ref} 帧"
+            f"启动撞闪脚本——估算帧数 {decision.current_advances + diag_frames_since_ref} 帧"
             f"（基准 {decision.current_advances} + 已过 {diag_frames_since_ref} 帧），"
             f"撞闪_闪帧 {decision.flash_frames}"
         )
+        if self.config.debug_output:
+            commit_log = f"[{time.strftime('%H:%M:%S')}] {commit_log}"
         self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, commit_log,
             current_advances=decision.current_advances,
             remaining_to_trigger=decision.remaining_to_trigger,
@@ -511,10 +512,12 @@ class AutoRngRunner:
         if shiny_result is not None:
             self._handle_shiny_check_result(shiny_result, path)
             return
-        now_str = time.strftime("%H:%M:%S")
+        msg = f"撞闪脚本完成——{path.name}"
+        if self.config.debug_output:
+            msg = f"[{time.strftime('%H:%M:%S')}] {msg}"
         self._set_progress(
             AutoRngPhase.LOOP_CHECK,
-            f"[{now_str}] 撞闪脚本完成——{path.name}",
+            msg,
             last_script_path=path,
             current_advances=decision.current_advances,
             remaining_to_trigger=decision.remaining_to_trigger,
