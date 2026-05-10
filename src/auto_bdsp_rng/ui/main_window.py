@@ -2584,13 +2584,18 @@ class MainWindow(QMainWindow):
                     pass
 
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
-            # 先运行撞闪脚本，不并行 OCR，避免任何可能的资源竞争影响脚本时序
             self._capture_cancel.clear()
-            try:
-                run_script_text_service(script_text, name)
-            except Exception:
-                raise
-            # 脚本结束后再启动 OCR 检测闪符（遇敌动画在脚本 A 键之后才开始）
+            errors: list[BaseException] = []
+
+            def run_script() -> None:
+                try:
+                    run_script_text_service(script_text, name)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            # 脚本和 OCR 并行：脚本线程运行撞闪，主线程监测闪符
+            script_thread = threading.Thread(target=run_script, daemon=True)
+            script_thread.start()
             try:
                 timing = measure_keyword_interval(
                     lambda: capture_preview_frame(tracking_config.capture),
@@ -2600,8 +2605,15 @@ class MainWindow(QMainWindow):
                     poll_interval_seconds=0.1,
                 )
             except Exception:
+                stop_current_script_service()
+                script_thread.join(timeout=5.0)
                 raise
             is_shiny = timing.interval_seconds >= threshold_seconds
+            if not is_shiny:
+                stop_current_script_service()
+            script_thread.join(timeout=5.0)
+            if errors and is_shiny:
+                raise errors[0]
             return ShinyCheckResult(is_shiny=is_shiny, interval_seconds=timing.interval_seconds)
 
         return AutoRngServices(
