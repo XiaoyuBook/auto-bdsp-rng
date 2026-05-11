@@ -661,8 +661,7 @@ class AutoRngRunner:
                 last_script_path=path,
             )
             return
-        self._locked_target = None
-        # 自动反查：未出闪时先反查个体再进入下一轮
+        # 自动反查：未出闪时先反查个体再进入下一轮（反查需要 _locked_target，先不清除）
         if self.config.auto_reverse and self.config.reverse_script_path is not None:
             self._last_shiny_interval = result.interval_seconds
             self._last_used_delay = used_delay
@@ -673,6 +672,7 @@ class AutoRngRunner:
                 last_script_path=path,
             )
             return
+        self._locked_target = None
         self._history("cycle_result", False, result.interval_seconds, trigger, used_delay)
         self._cycle_started = False
         if self.config.loop_mode == "infinite":
@@ -701,7 +701,10 @@ class AutoRngRunner:
     def _reverse_lookup(self) -> None:
         """运行反查脚本 → OCR → 搜索 → 输出候选个体。"""
         seed = self._require_seed()
-        target = self._require_target()
+        target = self._locked_target
+        if target is None:
+            self._set_progress(AutoRngPhase.LOOP_CHECK, "目标尚未锁定，跳过反查")
+            return
         service = self.services.run_reverse_lookup
         interval = self._last_shiny_interval
         used_delay = self._last_used_delay
@@ -718,10 +721,12 @@ class AutoRngRunner:
         try:
             service(seed, target)
         except Exception as exc:
+            self._locked_target = None
             self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, f"反查失败: {exc}")
             return
+        self._locked_target = None
         self._history("cycle_result", False, interval, None, used_delay)
         self._cycle_started = False
         self._loop_check()
