@@ -669,6 +669,7 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self._capture_pokemon_info)
+        self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
@@ -2670,13 +2671,17 @@ class MainWindow(QMainWindow):
         self.timer_value.setText("0")
 
     def _capture_pokemon_info(self) -> None:
-        """临时功能：手动触发精灵信息捕获。
+        """临时功能：手动触发精灵信息捕获（后台线程）。"""
+        import threading
 
-        在笔记页调用 → OCR 性格+个性 → 按 RIGHT 切换到能力页 → OCR 能力值 → 输出合并结果。
-        """
+        self.auto_rng_tab.add_log("[捕获精灵信息] 开始…")
+        thread = threading.Thread(target=self._do_capture_pokemon_info, daemon=True)
+        thread.start()
+
+    def _do_capture_pokemon_info(self) -> None:
         import time
 
-        log = self.auto_rng_tab.add_log
+        log = self.auto_rng_tab.captureLog.emit  # Signal 跨线程安全
 
         try:
             capture_config = self._config_from_form().capture
