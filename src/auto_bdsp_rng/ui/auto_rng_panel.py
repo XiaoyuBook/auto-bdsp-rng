@@ -327,6 +327,7 @@ class AutoRngPanel(QWidget):
         layout = QVBoxLayout(group)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.log_view.setFont(QFont("Consolas", 10))
         self.log_view.setStyleSheet("QPlainTextEdit { padding: 12px; }")
         layout.addWidget(self.log_view)
