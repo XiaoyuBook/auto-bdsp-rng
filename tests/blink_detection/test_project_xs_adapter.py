@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import sys
 import types
 
@@ -49,6 +51,21 @@ class FakeRng:
 
     def rangefloat(self, minimum, maximum):
         return 0.5
+
+
+def test_project_xs_tracking_blink_exposes_capture_control_callbacks(monkeypatch):
+    pytest.importorskip("cv2")
+    project_xs_src = project_xs_module.PROJECT_XS_SRC
+    monkeypatch.syspath_prepend(str(project_xs_src))
+    sys.modules.pop("_project_xs_rngtool_signature", None)
+    spec = importlib.util.spec_from_file_location("_project_xs_rngtool_signature", project_xs_src / "rngtool.py")
+    assert spec is not None and spec.loader is not None
+    rngtool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rngtool)
+
+    parameters = inspect.signature(rngtool.tracking_blink).parameters
+
+    assert {"should_stop", "frame_callback", "progress_callback", "show_window"} <= set(parameters)
 
 
 class FakeVideoCapture:
