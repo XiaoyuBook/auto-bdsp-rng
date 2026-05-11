@@ -240,34 +240,39 @@ def _extract_stats(rows: list[dict[str, object]]) -> dict[str, int]:
         elif re.match(r"^\d{1,3}$", text) or re.match(r"^\d{1,3}/\d{1,3}$", text):
             number_rows.append(row)
 
-    # 对每个标签，找下方最近的数值行
-    for name, label_row in label_rows.items():
-        _, label_cy = _row_center(label_row.get("bbox"))
-        bx, _ = _row_center(label_row.get("bbox"))
-        best_val: int | None = None
+    # 为每个数值行提取数值和坐标
+    num_entries: list[tuple[float, float, int]] = []  # (cx, cy, value)
+    for num_row in number_rows:
+        num_text = str(num_row["text"]).strip()
+        nx, ny = _row_center(num_row.get("bbox"))
+        match = re.match(r"(\d{1,3})", num_text)
+        if match:
+            val = int(match.group(1))
+            if 0 <= val <= 999:
+                num_entries.append((nx, ny, val))
+
+    # 贪心匹配：每个标签找最近的数值（上下双向），数值不重复分配
+    used_num: set[int] = set()
+    # 按标签的 x 坐标排序，左列优先匹配左列数值
+    label_items = sorted(label_rows.items(), key=lambda kv: _row_center(kv[1].get("bbox"))[0])
+    for name, label_row in label_items:
+        lx, ly = _row_center(label_row.get("bbox"))
+        best_idx: int | None = None
         best_dist = float("inf")
-        for num_row in number_rows:
-            num_text = str(num_row["text"]).strip()
-            nx, num_cy = _row_center(num_row.get("bbox"))
-            # 数值必须在标签下方（或同一行偏下），且 x 坐标接近
-            if num_cy < label_cy - 5:
+        for i, (nx, ny, val) in enumerate(num_entries):
+            if i in used_num:
                 continue
-            if abs(nx - bx) > 150:
+            if abs(nx - lx) > 150:
                 continue
-            dist = num_cy - label_cy
+            dist = abs(ny - ly)  # 上下均可
+            if dist > 60:  # 距离太远忽略
+                continue
             if dist < best_dist:
-                # 提取数值
-                if name == "HP":
-                    match = re.match(r"(\d{1,3})", num_text)
-                else:
-                    match = re.match(r"^(\d{1,3})$", num_text)
-                if match:
-                    val = int(match.group(1))
-                    if 0 <= val <= 999:
-                        best_val = val
-                        best_dist = dist
-        if best_val is not None:
-            stats[name] = best_val
+                best_dist = dist
+                best_idx = i
+        if best_idx is not None:
+            stats[name] = num_entries[best_idx][2]
+            used_num.add(best_idx)
     return stats
 
 
