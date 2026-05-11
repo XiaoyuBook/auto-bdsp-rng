@@ -158,14 +158,16 @@ class HistoryPanel(QWidget):
 
     # ── 事件方法 ───────────────────────────────────────────────
 
-    def cycle_start(self, cycle_index: int, seed_text: str, initial_advances: int, npc: int, max_advances: int) -> None:
+    def cycle_start(self, cycle_index: int) -> None:
         self._cycle_index = cycle_index
         self._pid_ec_seen.clear()
         self._w()
         self._w(SEPARATOR_THICK)
         self._w(f"第 {cycle_index} 轮  {_now()}")
         self._w(SEPARATOR_THICK)
-        self._w(f"[{_now()}] Seed: {seed_text}  初始帧: {initial_advances}  NPC: {npc}  最大搜索: {max_advances}")
+
+    def seed_captured(self, seed_text: str, initial_advances: int, npc: int, max_advances: int) -> None:
+        self._w(f"[{_now()}] 测种完成，Seed: {seed_text}  初始帧: {initial_advances}  NPC: {npc}  最大搜索: {max_advances}")
 
     def candidates_found(self, candidates: list[object], locked_index: int) -> None:
         self._pid_ec_seen.clear()

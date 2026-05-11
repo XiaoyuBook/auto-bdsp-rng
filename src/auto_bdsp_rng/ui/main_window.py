@@ -2275,8 +2275,10 @@ class MainWindow(QMainWindow):
 
         def history_callback(event: str, args: tuple[object, ...]) -> None:
             h = self.history_tab
-            if event == "cycle_start" and len(args) >= 5:
-                h.cycle_start(int(args[0]), str(args[1]), int(args[2]), int(args[3]), int(args[4]))
+            if event == "cycle_start" and len(args) >= 1:
+                h.cycle_start(int(args[0]))
+            elif event == "seed_captured" and len(args) >= 4:
+                h.seed_captured(str(args[0]), int(args[1]), int(args[2]), int(args[3]))
             elif event == "candidates_found" and len(args) >= 2:
                 h.candidates_found(list(args[0]), int(args[1]))  # type: ignore[arg-type]
             elif event == "candidates_refiltered" and len(args) >= 2:

@@ -298,17 +298,13 @@ class AutoRngRunner:
 
     def _capture_seed(self) -> None:
         self._seed_result = self._with_measurement_time(self.services.capture_seed())
-        if not self._cycle_started:
-            self._cycle_started = True
-            seed = self._seed_result
-            self._history("cycle_start", self._completed_loops + 1,
-                         seed.seed_text, seed.current_advances, seed.npc,
-                         self.config.max_advances)
+        seed = self._seed_result
+        self._history("seed_captured", seed.seed_text, seed.current_advances, seed.npc, self.config.max_advances)
         self._set_progress(
             AutoRngPhase.SEARCH_TARGET,
             "seed 捕获完成",
-            current_advances=self._seed_result.current_advances,
-            seed_text=self._seed_result.seed_text,
+            current_advances=seed.current_advances,
+            seed_text=seed.seed_text,
         )
 
     def _search_target(self) -> None:
@@ -352,9 +348,14 @@ class AutoRngRunner:
         if path is None:
             raise RuntimeError("测种脚本未配置")
         self._missed_target_advance = None
+        self._completed_loops += 1
+        self._cycle_started = True
+        self._history("cycle_start", self._completed_loops)
         text = path.read_text(encoding="utf-8")
         self.services.run_script_text(text, path.name)
-        self._set_progress(AutoRngPhase.CAPTURE_SEED, f"测种脚本完成——{path.name}", last_script_path=path)
+        self._set_progress(AutoRngPhase.CAPTURE_SEED, f"测种脚本完成——{path.name}",
+                          loop_index=self._completed_loops,
+                          last_script_path=path)
 
     def _decide_advance(self) -> None:
         target = self._require_target()
@@ -561,7 +562,6 @@ class AutoRngRunner:
         trigger = self.progress.trigger_advances
         used_delay = self.progress.remaining_to_trigger
         if result.is_shiny:
-            self._completed_loops += 1
             self._locked_target = None
             self._history("cycle_result", True, result.interval_seconds, trigger, used_delay)
             self._cycle_started = False
@@ -572,7 +572,6 @@ class AutoRngRunner:
                 last_script_path=path,
             )
             return
-        self._completed_loops += 1
         self._locked_target = None
         # 自动反查：未出闪时先反查个体再进入下一轮
         if self.config.auto_reverse and self.config.reverse_script_path is not None:
@@ -635,7 +634,6 @@ class AutoRngRunner:
         self._loop_check()
 
     def _loop_check(self) -> None:
-        self._completed_loops += 1
         if self.config.loop_mode == "infinite":
             self._locked_target = None
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "进入下一轮无限循环，运行测种脚本", loop_index=self._completed_loops)
