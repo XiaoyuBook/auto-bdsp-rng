@@ -68,6 +68,7 @@ from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncou
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
+from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 
 
@@ -666,6 +667,7 @@ class MainWindow(QMainWindow):
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel()
         self.auto_rng_tab = AutoRngPanel()
+        self.history_tab = HistoryPanel()
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self._capture_pokemon_info)
@@ -675,6 +677,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
+        self.tabs.addTab(self.history_tab, "历史记录")
         root_layout.addWidget(self.tabs, 1)
 
         self.setCentralWidget(root)
@@ -2269,7 +2272,27 @@ class MainWindow(QMainWindow):
         if not self._ensure_bridge_connected():
             return
         services = self._build_auto_rng_services(config)
-        self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services))
+
+        def history_callback(event: str, args: tuple[object, ...]) -> None:
+            h = self.history_tab
+            if event == "cycle_start" and len(args) >= 5:
+                h.cycle_start(int(args[0]), str(args[1]), int(args[2]), int(args[3]), int(args[4]))
+            elif event == "candidates_found" and len(args) >= 2:
+                h.candidates_found(list(args[0]), int(args[1]))  # type: ignore[arg-type]
+            elif event == "candidates_refiltered" and len(args) >= 2:
+                h.candidates_refiltered(list(args[0]), int(args[1]))  # type: ignore[arg-type]
+            elif event == "target_missed" and len(args) >= 2:
+                h.target_missed(int(args[0]) if args[0] is not None else 0, int(args[1]) if args[1] is not None else 0)
+            elif event == "cycle_result" and len(args) >= 3:
+                is_shiny = bool(args[0])
+                interval = float(args[1]) if args[1] is not None else None
+                used_delay = int(args[3]) if len(args) >= 4 and args[3] is not None else None
+                h.cycle_result(is_shiny, interval, used_delay)
+            elif event == "reverse_lookup_results" and len(args) >= 1:
+                chara = str(args[1]) if len(args) >= 2 and args[1] is not None else None
+                h.reverse_lookup_results(list(args[0]), chara)  # type: ignore[arg-type]
+
+        self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
 
     def _ensure_bridge_connected(self) -> bool:
         """确保伊机控连接就绪；CLI 模式只需串口可用，Bridge 模式需要连接。"""
@@ -2711,7 +2734,9 @@ class MainWindow(QMainWindow):
             # 输出结果
             if not candidates:
                 log("[自动反查] 未找到匹配个体")
+                self.history_tab.reverse_lookup_results([], characteristic)
             else:
+                self.history_tab.reverse_lookup_results(candidates, characteristic)
                 for state in candidates:
                     adv = int(getattr(state, "advances", 0))
                     actual_delay = adv - target.raw_target_advances if target.raw_target_advances else adv

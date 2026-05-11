@@ -31,69 +31,11 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     validate_auto_scripts,
 )
-from auto_bdsp_rng.ui.static_target_form import NATURES_ZH, StaticTargetForm
+from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = PROJECT_ROOT / "script"
-IV_LABELS_ZH = ("HP", "攻击", "防御", "特攻", "特防", "速度")
-
-
-class LockedTargetView(QGroupBox):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("锁定目标", parent)
-        self.values: dict[str, QLabel] = {}
-        self.setMaximumHeight(82)
-        layout = QGridLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setHorizontalSpacing(18)
-        layout.setVerticalSpacing(6)
-        fields = (
-            ("状态", "Status"),
-            ("PID", "PID"),
-            ("异色", "Shiny"),
-            ("性格", "Nature"),
-            ("特性", "Ability"),
-            ("性别", "Gender"),
-            ("IVs", "IVs"),
-            ("身高", "Height"),
-            ("体重", "Weight"),
-        )
-        for index, (label_text, key) in enumerate(fields):
-            label = QLabel(label_text)
-            label.setObjectName("MutedLabel")
-            value = QLabel("-")
-            value.setObjectName("Badge")
-            value.setWordWrap(False)
-            value.setMinimumWidth(220 if key == "IVs" else 48)
-            self.values[key] = value
-            layout.addWidget(label, 0, index)
-            layout.addWidget(value, 1, index)
-            layout.setColumnStretch(index, 5 if key == "IVs" else 1)
-        self.clear()
-
-    def clear(self, status: str = "未锁定") -> None:
-        for key, label in self.values.items():
-            label.setText(status if key == "Status" else "-")
-
-    def apply_progress(self, progress: AutoRngProgress) -> None:
-        target = progress.locked_target
-        if target is None:
-            self.clear()
-            return
-        state = target.state
-        self.values["Status"].setText("已锁定")
-        if state is None:
-            return
-        self.values["PID"].setText(_hex32(getattr(state, "pid", None)))
-        self.values["Shiny"].setText(_shiny_text(getattr(state, "shiny", None)))
-        self.values["Nature"].setText(_nature_text(getattr(state, "nature", None)))
-        self.values["Ability"].setText(_display_value(getattr(state, "ability", None)))
-        self.values["Gender"].setText(_gender_text(getattr(state, "gender", None)))
-        ivs = getattr(state, "ivs", None)
-        self.values["IVs"].setText(_ivs_text(ivs))
-        self.values["Height"].setText(_display_value(getattr(state, "height", None)))
-        self.values["Weight"].setText(_display_value(getattr(state, "weight", None)))
 
 
 class AutoRngWorker(QObject):
@@ -291,8 +233,6 @@ class AutoRngPanel(QWidget):
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(8)
         top_layout.addWidget(self._build_summary_group())
-        self.locked_target_view = LockedTargetView()
-        top_layout.addWidget(self.locked_target_view)
         layout.addWidget(top)
         layout.addWidget(self._build_target_form_group())
         return panel
@@ -374,7 +314,6 @@ class AutoRngPanel(QWidget):
         self.summary_delay.setText(_display_value(progress.fixed_delay))
         self.summary_current.setText(_display_value(progress.current_advances))
         self.summary_flash.setText(_display_value(progress.final_flash_frames))
-        self.locked_target_view.apply_progress(progress)
         if progress.log_message:
             self.add_log(progress.log_message)
 
@@ -606,33 +545,3 @@ class AutoRngPanel(QWidget):
 
 def _display_value(value: object) -> str:
     return "-" if value is None else str(value)
-
-
-def _hex32(value: object) -> str:
-    return "-" if value is None else f"{int(value):08X}"
-
-
-def _shiny_text(value: object) -> str:
-    return {0: "否", 1: "星闪", 2: "方闪"}.get(value, _display_value(value))
-
-
-def _gender_text(value: object) -> str:
-    return {0: "雄", 1: "雌", 2: "-"}.get(value, _display_value(value))
-
-
-def _nature_text(value: object) -> str:
-    if value is None:
-        return "-"
-    index = int(value)
-    if 0 <= index < len(NATURES_ZH):
-        return NATURES_ZH[index]
-    return str(value)
-
-
-def _ivs_text(ivs: object) -> str:
-    if ivs is None:
-        return "-"
-    values = tuple(int(value) for value in ivs)
-    if len(values) != 6:
-        return "-"
-    return " / ".join(f"{label} {value}" for label, value in zip(IV_LABELS_ZH, values))

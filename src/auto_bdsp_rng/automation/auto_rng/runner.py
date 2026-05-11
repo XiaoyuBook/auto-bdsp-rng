@@ -216,11 +216,13 @@ class AutoRngRunner:
         services: AutoRngServices | None = None,
         progress_callback: Callable[[AutoRngProgress], None] | None = None,
         log_callback: Callable[[str], None] | None = None,
+        history_callback: Callable[[str, tuple[object, ...]], None] | None = None,
     ) -> None:
         self.config = config
         self.services = services or AutoRngServices()
         self.progress_callback = progress_callback
         self.log_callback = log_callback
+        self.history_callback = history_callback
         self._stop_requested = False
         self.progress = AutoRngProgress(phase=AutoRngPhase.IDLE)
         self._seed_result: AutoRngSeedResult | None = None
@@ -228,6 +230,8 @@ class AutoRngRunner:
         self._missed_target_advance: int | None = None
         self._requested_advances = 0
         self._completed_loops = 0
+        self._cycle_started = False
+        self._all_candidates: list[object] = []  # 本轮所有候选
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -288,8 +292,18 @@ class AutoRngRunner:
         if self.progress_callback is not None:
             self.progress_callback(progress)
 
+    def _history(self, event: str, *args: object) -> None:
+        if self.history_callback is not None:
+            self.history_callback(event, args)
+
     def _capture_seed(self) -> None:
         self._seed_result = self._with_measurement_time(self.services.capture_seed())
+        if not self._cycle_started:
+            self._cycle_started = True
+            seed = self._seed_result
+            self._history("cycle_start", self._completed_loops + 1,
+                         seed.seed_text, seed.current_advances, seed.npc,
+                         self.config.max_advances)
         self._set_progress(
             AutoRngPhase.SEARCH_TARGET,
             "seed 捕获完成",
@@ -302,16 +316,24 @@ class AutoRngRunner:
         candidates = self.services.search_candidates(seed)
         # 过滤已过帧：只保留可达候选
         min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
-        # 如果上一目标已错过，跳过它防止死循环
+        was_missed = self._missed_target_advance is not None
         if self._missed_target_advance is not None:
             min_reachable = max(min_reachable, self._missed_target_advance + 1)
         reachable = [c for c in candidates if c.advances >= min_reachable]
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
+            self._history("cycle_result", False, None, None)  # 无候选，本轮结束
+            self._cycle_started = False
             return
         self._locked_target = decision.target
         self._missed_target_advance = None
+        locked_adv = decision.target.raw_target_advances if decision.target else 0
+        locked_idx = next((i for i, c in enumerate(reachable) if getattr(c, "advances", 0) == locked_adv), 0)
+        if was_missed:
+            self._history("candidates_refiltered", reachable, locked_idx)
+        else:
+            self._history("candidates_found", reachable, locked_idx)
         flash = self._fixed_flash_frames()
         trigger = decision.raw_target_advances - self.config.fixed_delay - flash
         self._set_progress(
@@ -536,9 +558,13 @@ class AutoRngRunner:
 
     def _handle_shiny_check_result(self, result: ShinyCheckResult, path: object) -> None:
         interval_text = "-" if result.interval_seconds is None else f"{result.interval_seconds:.3f}s"
+        trigger = self.progress.trigger_advances
+        used_delay = self.progress.remaining_to_trigger
         if result.is_shiny:
             self._completed_loops += 1
             self._locked_target = None
+            self._history("cycle_result", True, result.interval_seconds, trigger, used_delay)
+            self._cycle_started = False
             self._set_progress(
                 AutoRngPhase.COMPLETED,
                 f"疑似出闪，间隔 {interval_text}，已停止自动流程",
@@ -557,6 +583,8 @@ class AutoRngRunner:
                 last_script_path=path,
             )
             return
+        self._history("cycle_result", False, result.interval_seconds, trigger, used_delay)
+        self._cycle_started = False
         if self.config.loop_mode == "infinite":
             self._set_progress(
                 AutoRngPhase.RUN_SEED_SCRIPT,
@@ -586,16 +614,24 @@ class AutoRngRunner:
         target = self._require_target()
         service = self.services.run_reverse_lookup
         if service is None:
+            self._history("cycle_result", False, None, None, None)
+            self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, "无反查服务，跳过反查")
             return
         if self.config.reverse_script_path is None:
+            self._history("cycle_result", False, None, None, None)
+            self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, "未配置反查脚本，跳过反查")
             return
         try:
             service(seed, target)
         except Exception as exc:
+            self._history("cycle_result", False, None, None, None)
+            self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, f"反查失败: {exc}")
             return
+        self._history("cycle_result", False, None, None, None)
+        self._cycle_started = False
         self._loop_check()
 
     def _loop_check(self) -> None:
@@ -617,6 +653,7 @@ class AutoRngRunner:
                 self._missed_target_advance = decision.raw_target_advances
             self._locked_target = None
             locked_target: object | None = None
+            self._history("target_missed", decision.raw_target_advances, decision.current_advances)
         else:
             locked_target = decision.target or self._locked_target
         self._set_progress(
