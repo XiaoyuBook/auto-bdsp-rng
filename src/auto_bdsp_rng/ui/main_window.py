@@ -2733,24 +2733,23 @@ class MainWindow(QMainWindow):
             log("[捕获精灵信息] 能力: 未识别")
 
     def _send_easycon_right(self) -> None:
-        """通过伊机控发送 RIGHT d-pad 按钮（与反查脚本相同格式）。"""
+        """通过伊机控发送 RIGHT d-pad 按钮。"""
         log = self.auto_rng_tab.add_log
-        # 反查脚本中切换页面的格式：RIGHT 换行 WAIT 200
-        script_text = "RIGHT\nWAIT 200\n"
+        script_text = "RIGHT 200\n"
         if self.easycon_tab._is_bridge_mode():
-            log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT + WAIT 200")
+            log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT 200")
             backend = self.easycon_tab._ensure_bridge_backend()
             result = backend.run_script_text(script_text, "right_press")
             log(f"[捕获精灵信息] Bridge 脚本完成: exit_code={result.exit_code}")
         else:
-            log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT + WAIT 200")
+            log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT 200")
             port = self.easycon_tab.port_combo.currentText()
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             from auto_bdsp_rng.automation.easycon import CliEasyConBackend
             cli = CliEasyConBackend()
             result = cli.run_script_text(script_text, "right_press", port=port)
-            log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:100] if result.stdout else '无'}")
+            log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:150] if result.stdout else '无'}")
 
     def _advance_tick(self) -> None:
         self._tracked_advances += self._advance_step
