@@ -226,20 +226,18 @@ class AutoRngPanel(QWidget):
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待窗口", self.max_wait_frames)
         form.addRow("闪光阈值(秒)", self.shiny_threshold_seconds)
-        # 同步开关（三态按钮）
-        self.sync_button = QPushButton("同步：关闭")
-        self.sync_button.setFixedHeight(34)
-        self.sync_button.setMinimumWidth(220)
-        self.sync_button.clicked.connect(self._cycle_sync_state)
-        self._sync_state = 0
-        form.addRow(self.sync_button)
-        # 自动反查开关
-        self.auto_reverse_check = QPushButton("自动反查：关闭")
-        self.auto_reverse_check.setFixedHeight(34)
-        self.auto_reverse_check.setMinimumWidth(220)
-        self.auto_reverse_check.setCheckable(True)
-        self.auto_reverse_check.toggled.connect(self._toggle_auto_reverse)
-        form.addRow(self.auto_reverse_check)
+        # 同步开关（三态下拉框）
+        self.sync_combo = QComboBox()
+        self.sync_combo.addItems(["同步：关闭", "同步：首位普通精灵", "同步：首位同步精灵"])
+        self.sync_combo.setFixedHeight(34)
+        self.sync_combo.setMinimumWidth(220)
+        form.addRow(self.sync_combo)
+        # 自动反查下拉框
+        self.auto_reverse_combo = QComboBox()
+        self.auto_reverse_combo.addItems(["自动反查：关闭", "自动反查：开启"])
+        self.auto_reverse_combo.setFixedHeight(34)
+        self.auto_reverse_combo.setMinimumWidth(220)
+        form.addRow(self.auto_reverse_combo)
         return group
 
     def _build_script_group(self) -> QGroupBox:
@@ -256,18 +254,18 @@ class AutoRngPanel(QWidget):
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.reverse_script_combo):
             combo.setFixedHeight(34)
-            combo.setFixedWidth(170)
+            combo.setFixedWidth(160)
         self.refresh_scripts_button.setFixedHeight(34)
         self.refresh_scripts_button.setMaximumWidth(250)
         layout.addWidget(QLabel("测种脚本"), 0, 0)
         layout.addWidget(self.seed_script_combo, 0, 1)
-        layout.addWidget(QLabel("过帧脚本"), 1, 0)
-        layout.addWidget(self.advance_script_combo, 1, 1)
-        layout.addWidget(QLabel("撞闪脚本"), 2, 0)
-        layout.addWidget(self.hit_script_combo, 2, 1)
-        layout.addWidget(QLabel("反查脚本"), 3, 0)
-        layout.addWidget(self.reverse_script_combo, 3, 1)
-        layout.addWidget(self.refresh_scripts_button, 4, 0, 1, 2)
+        layout.addWidget(QLabel("过帧脚本"), 0, 2)
+        layout.addWidget(self.advance_script_combo, 0, 3)
+        layout.addWidget(QLabel("撞闪脚本"), 1, 0)
+        layout.addWidget(self.hit_script_combo, 1, 1)
+        layout.addWidget(QLabel("反查脚本"), 1, 2)
+        layout.addWidget(self.reverse_script_combo, 1, 3)
+        layout.addWidget(self.refresh_scripts_button, 2, 0, 1, 4)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
@@ -503,8 +501,8 @@ class AutoRngPanel(QWidget):
         reverse_path = self._selected_path(self.reverse_script_combo)
         if reverse_path is not None:
             s.setValue("reverse_script", str(reverse_path))
-        s.setValue("sync_state", self._sync_state)
-        s.setValue("auto_reverse", self.auto_reverse_check.isChecked())
+        s.setValue("sync_state", self.sync_combo.currentIndex())
+        s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
         # 目标精灵设置
         tf = self.target_form
         s.setValue("target_category", tf.category_combo.currentIndex())
@@ -542,12 +540,13 @@ class AutoRngPanel(QWidget):
         if s.contains("reverse_script"):
             self._select_script_by_path(self.reverse_script_combo, str(s.value("reverse_script", "")))
         if s.contains("sync_state"):
-            self._sync_state = int(s.value("sync_state", 0))
-            labels = {0: "同步：关闭", 1: "同步：首位普通精灵", 2: "同步：首位同步精灵"}
-            self.sync_button.setText(labels[self._sync_state])
+            idx = int(s.value("sync_state", 0))
+            if 0 <= idx < self.sync_combo.count():
+                self.sync_combo.setCurrentIndex(idx)
         if s.contains("auto_reverse"):
-            checked = s.value("auto_reverse") == "true"
-            self.auto_reverse_check.setChecked(checked)
+            idx = int(s.value("auto_reverse", 0))
+            if 0 <= idx < self.auto_reverse_combo.count():
+                self.auto_reverse_combo.setCurrentIndex(idx)
         # 目标精灵设置
         tf = self.target_form
         if s.contains("target_category"):
@@ -583,14 +582,6 @@ class AutoRngPanel(QWidget):
         index = combo.findData(path_str)
         if index >= 0:
             combo.setCurrentIndex(index)
-
-    def _cycle_sync_state(self) -> None:
-        self._sync_state = (self._sync_state + 1) % 3
-        labels = {0: "同步：关闭", 1: "同步：首位普通精灵", 2: "同步：首位同步精灵"}
-        self.sync_button.setText(labels[self._sync_state])
-
-    def _toggle_auto_reverse(self, checked: bool) -> None:
-        self.auto_reverse_check.setText(f"自动反查：{'开启' if checked else '关闭'}")
 
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
