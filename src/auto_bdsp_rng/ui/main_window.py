@@ -60,7 +60,7 @@ from auto_bdsp_rng.blink_detection import (
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
-from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
+from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info, _ocr_rows, _extract_stats, STATS_ROI
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
@@ -2714,8 +2714,15 @@ class MainWindow(QMainWindow):
             log(f"[捕获精灵信息] 截图能力页失败: {exc}")
             return
         log("[捕获精灵信息] 能力页截图完成，OCR 识别中…")
-        stats_result = extract_pokemon_info(stats_image=stats_frame)
-        stats = stats_result.get("stats")
+        # 临时诊断：输出 OCR 识别的原始行
+        h, w = stats_frame.shape[:2]
+        log(f"[捕获精灵信息] 能力页截图尺寸: {w}x{h}")
+        stats_rows = _ocr_rows(stats_frame, STATS_ROI)
+        log(f"[捕获精灵信息] 能力页 OCR 行数: {len(stats_rows)}")
+        for r in stats_rows:
+            log(f"[捕获精灵信息]   [{r['confidence']:.2f}] \"{r['text']}\"")
+        stats = _extract_stats(stats_rows) if stats_rows else {}
+        stats_result = {"stats": stats if len(stats) >= 3 else None, "nature": None, "characteristic": None}
 
         # 4) 合并输出
         result = {
