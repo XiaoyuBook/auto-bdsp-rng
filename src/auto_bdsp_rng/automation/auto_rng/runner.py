@@ -197,6 +197,7 @@ class AutoRngServices:
     search_candidates: Callable[[AutoRngSeedResult], Sequence[object]] = _missing_service  # type: ignore[assignment]
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
     run_hit_script_with_shiny_check: Callable[[str, str, float], ShinyCheckResult] | None = None
+    run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], None] | None = None
     stop_current_script: Callable[[], None] | None = None
     monotonic: Callable[[], float] = time.monotonic
 
@@ -273,6 +274,8 @@ class AutoRngRunner:
                 self._final_adjust()
             elif phase == AutoRngPhase.RUN_HIT_SCRIPT:
                 self._run_hit_script()
+            elif phase == AutoRngPhase.REVERSE_LOOKUP:
+                self._reverse_lookup()
             elif phase == AutoRngPhase.LOOP_CHECK:
                 self._loop_check()
             else:
@@ -545,6 +548,15 @@ class AutoRngRunner:
             return
         self._completed_loops += 1
         self._locked_target = None
+        # 自动反查：未出闪时先反查个体再进入下一轮
+        if self.config.auto_reverse and self.config.reverse_script_path is not None:
+            self._set_progress(
+                AutoRngPhase.REVERSE_LOOKUP,
+                f"未出闪，间隔 {interval_text}，启动自动反查",
+                loop_index=self._completed_loops,
+                last_script_path=path,
+            )
+            return
         if self.config.loop_mode == "infinite":
             self._set_progress(
                 AutoRngPhase.RUN_SEED_SCRIPT,
@@ -567,6 +579,24 @@ class AutoRngRunner:
             loop_index=self._completed_loops,
             last_script_path=path,
         )
+
+    def _reverse_lookup(self) -> None:
+        """运行反查脚本 → OCR → 搜索 → 输出候选个体。"""
+        seed = self._require_seed()
+        target = self._require_target()
+        service = self.services.run_reverse_lookup
+        if service is None:
+            self._set_progress(AutoRngPhase.LOOP_CHECK, "无反查服务，跳过反查")
+            return
+        if self.config.reverse_script_path is None:
+            self._set_progress(AutoRngPhase.LOOP_CHECK, "未配置反查脚本，跳过反查")
+            return
+        try:
+            service(seed, target)
+        except Exception as exc:
+            self._set_progress(AutoRngPhase.LOOP_CHECK, f"反查失败: {exc}")
+            return
+        self._loop_check()
 
     def _loop_check(self) -> None:
         self._completed_loops += 1

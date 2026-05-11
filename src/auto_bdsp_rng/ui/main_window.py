@@ -2633,12 +2633,100 @@ class MainWindow(QMainWindow):
                 raise errors[0]
             return ShinyCheckResult(is_shiny=is_shiny, interval_seconds=timing.interval_seconds)
 
+        def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> None:
+            import time
+
+            log = self.auto_rng_tab.captureLog.emit
+            path = config.reverse_script_path
+            if path is None:
+                raise RuntimeError("反查脚本未配置")
+            text = path.read_text(encoding="utf-8")
+            log("[自动反查] 运行反查脚本…")
+            run_script_text_service(text, path.name)
+            time.sleep(1.0)
+
+            # OCR 笔记页 → 性格 + 个性
+            log("[自动反查] 截图笔记页…")
+            notes_frame = capture_preview_frame(tracking_config.capture)
+            notes_result = extract_pokemon_info(notes_image=notes_frame)
+            nature = notes_result.get("nature")
+            characteristic = notes_result.get("characteristic")
+            log(f"[自动反查] 性格={nature}, 个性={characteristic}")
+
+            # RIGHT → 能力页
+            script_text = "RIGHT 200\n"
+            if self.easycon_tab._is_bridge_mode():
+                self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, "reverse_right")
+            else:
+                port = self.easycon_tab.port_combo.currentText()
+                if port:
+                    from auto_bdsp_rng.automation.easycon import CliEasyConBackend
+                    CliEasyConBackend().run_script_text(script_text, "reverse_right", port=port)
+            time.sleep(2.0)
+
+            # OCR 能力页
+            log("[自动反查] 截图能力页…")
+            stats_frame = capture_preview_frame(tracking_config.capture)
+            stats_result = extract_pokemon_info(stats_image=stats_frame)
+            stats = stats_result.get("stats")
+            if not stats:
+                log("[自动反查] 能力值识别失败")
+                return
+
+            # 构造搜索条件
+            from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import compute_characteristic
+            from auto_bdsp_rng.gen8_static import StateFilter
+            criteria = _build_search_criteria(seed_result, auto_rng_config=config)
+            # 用 OCR 结果覆盖筛选项
+            iv_min = [stats.get(name, 0) for name in ["HP", "攻击", "防御", "特攻", "特防", "速度"]]
+            iv_max = list(iv_min)
+            reverse_filter = StateFilter(
+                iv_min=eval(str(iv_min)),
+                iv_max=eval(str(iv_max)),
+                nature=nature if nature else criteria.state_filter.nature,
+            )
+            reverse_criteria = replace(criteria,
+                state_filter=reverse_filter,
+                shiny_mode="any",
+                initial_advances=max(0, target.raw_target_advances - 500),
+                max_advances=target.raw_target_advances + 500,
+            )
+            candidates = generate_static_candidates(reverse_criteria)
+            log(f"[自动反查] PokeFinder 搜索结果: {len(candidates)} 个候选")
+
+            # 后置比对个性
+            if characteristic:
+                matched: list[object] = []
+                for state in candidates:
+                    state_ivs = [int(v) for v in (getattr(state, "ivs", None) or [])]
+                    if len(state_ivs) != 6:
+                        state_ivs = [0] * 6
+                    pid_val = int(getattr(state, "pid", 0))
+                    comp_char = compute_characteristic(pid_val, state_ivs)
+                    if comp_char == characteristic:
+                        matched.append(state)
+                log(f"[自动反查] 个性({characteristic})匹配: {len(matched)} 个")
+                candidates = matched
+
+            # 输出结果
+            if not candidates:
+                log("[自动反查] 未找到匹配个体")
+            else:
+                for state in candidates:
+                    adv = int(getattr(state, "advances", 0))
+                    actual_delay = adv - target.raw_target_advances if target.raw_target_advances else adv
+                    state_ivs = getattr(state, "ivs", None)
+                    iv_text = " / ".join(f"{name}={int(state_ivs[i])}" for i, name in enumerate(["HP","攻击","防御","特攻","特防","速度"])) if state_ivs is not None and len(state_ivs) == 6 else "?"
+                    pid_val = int(getattr(state, "pid", 0))
+                    log(f"[自动反查] advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
+
         return AutoRngServices(
             capture_seed=capture_seed_service,
             reidentify=reidentify_service,
             search_candidates=search_candidates_service,
             run_script_text=run_script_text_service,
             run_hit_script_with_shiny_check=run_hit_script_with_shiny_check,
+            run_reverse_lookup=reverse_lookup_service,
             stop_current_script=stop_current_script_service,
         )
 

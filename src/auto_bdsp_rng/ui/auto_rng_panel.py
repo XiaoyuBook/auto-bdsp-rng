@@ -432,6 +432,8 @@ class AutoRngPanel(QWidget):
             seed_script_path=self._selected_path(self.seed_script_combo),
             advance_script_path=self._selected_path(self.advance_script_combo),
             hit_script_path=self._selected_path(self.hit_script_combo),
+            reverse_script_path=self._selected_path(self.reverse_script_combo),
+            auto_reverse=self.auto_reverse_combo.currentIndex() == 1,
             fixed_delay=self.fixed_delay.value(),
             max_wait_frames=self.max_wait_frames.value(),
             loop_mode=str(self.mode_combo.currentData()),

@@ -482,6 +482,36 @@ def _load_image(image_input: str | Path | np.ndarray) -> np.ndarray:
 
 # ── CLI 测试入口 ───────────────────────────────────────────────────
 
+# ── 个性计算（PID + IVs → 中文个性） ──────────────────────────────
+
+# 30 种个性，按 PID%6 分6组，每组按 IV[PID%6]%5 分5个子消息
+_CHARACTERISTIC_TABLE: list[str] = [
+    # HP (PID%6=0)
+    "喜欢睡午觉", "经常打瞌睡", "经常懒床", "经常犯困", "喜欢懒床",
+    # 攻击 (PID%6=1)
+    "喜欢打架", "血气方刚", "喜欢乱闹", "有点暴躁", "喜欢硬干",
+    # 防御 (PID%6=2)
+    "很有耐心", "非常坚韧", "很有干劲", "非常努力", "很有毅力",
+    # 速度 (PID%6=3)
+    "喜欢快跑", "经常乱窜", "毛手毛脚", "有点慢性子", "优哉游哉",
+    # 特攻 (PID%6=4)
+    "好奇心强", "喜欢深究", "经常想事", "非常细心", "貌似冷静",
+    # 特防 (PID%6=5)
+    "非常听话", "有点顽固", "非常可靠", "喜欢耍赖", "非常实在",
+]
+
+
+def compute_characteristic(pid: int, ivs: list[int]) -> str:
+    """根据 PID 和 IVs 计算宝可梦的中文个性（特性描述）。"""
+    pid = pid & 0xFFFFFFFF
+    group = pid % 6
+    value = ivs[group] % 5 if group < len(ivs) else 0
+    index = group * 5 + value
+    if 0 <= index < len(_CHARACTERISTIC_TABLE):
+        return _CHARACTERISTIC_TABLE[index]
+    return ""
+
+
 if __name__ == "__main__":
     import json
     import sys
