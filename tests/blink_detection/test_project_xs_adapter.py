@@ -68,6 +68,48 @@ def test_project_xs_tracking_blink_exposes_capture_control_callbacks(monkeypatch
     assert {"should_stop", "frame_callback", "progress_callback", "show_window"} <= set(parameters)
 
 
+def test_project_xs_tracking_blink_can_stop_without_tk_window_or_cv_preview(monkeypatch):
+    pytest.importorskip("cv2")
+    project_xs_src = project_xs_module.PROJECT_XS_SRC
+    monkeypatch.syspath_prepend(str(project_xs_src))
+    spec = importlib.util.spec_from_file_location("_project_xs_rngtool_stop", project_xs_src / "rngtool.py")
+    assert spec is not None and spec.loader is not None
+    rngtool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rngtool)
+
+    class FakeCv2:
+        CAP_ANY = 0
+        CAP_V4L = 1
+        CAP_PROP_FRAME_WIDTH = 3
+        CAP_PROP_FRAME_HEIGHT = 4
+        CAP_PROP_BUFFERSIZE = 5
+
+        class VideoCapture:
+            def __init__(self, *_args):
+                self.released = False
+
+            def set(self, *_args):
+                pass
+
+            def read(self):
+                return True, np.zeros((4, 4, 3), dtype=np.uint8)
+
+            def release(self):
+                self.released = True
+
+    monkeypatch.setattr(rngtool, "cv2", FakeCv2)
+
+    assert rngtool.tracking_blink(
+        np.zeros((1, 1), dtype=np.uint8),
+        0,
+        0,
+        1,
+        1,
+        should_stop=lambda: True,
+        show_window=False,
+    ) == ([], [], 0)
+
+
 class FakeVideoCapture:
     last_instance = None
 
