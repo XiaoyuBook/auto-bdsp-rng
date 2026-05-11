@@ -83,35 +83,51 @@ def _ocr_rows(
         debug_raw.append(raw)
 
     rows: list[dict[str, object]] = []
-    if isinstance(raw, list):
+    # 新版 PaddleOCR predict() 返回 list[OCRResult]
+    if isinstance(raw, list) and len(raw) >= 1 and isinstance(raw[0], dict):
+        first = raw[0]
+        # 检测是否为 OCRResult（有 rec_texts / rec_scores / dt_polys 等并行列表字段）
+        if isinstance(first.get("rec_texts"), list) or isinstance(first.get("dt_polys"), list):
+            rows = _parse_ocr_result(first)  # type: ignore[arg-type]
+        else:
+            for item in raw:
+                parsed = _parse_ocr_item(item)
+                if parsed is not None:
+                    rows.append(parsed)
+    elif isinstance(raw, list):
         for item in raw:
             parsed = _parse_ocr_item(item)
             if parsed is not None:
-                # 将 ROI 坐标还原为原图坐标
-                bbox = parsed.get("bbox")
-                if isinstance(bbox, list) and len(bbox) == 4:
-                    adjusted: list[list[float]] = []
-                    for pt in bbox:  # type: ignore[assignment]
-                        if isinstance(pt, (list, tuple)) and len(pt) == 2:
-                            adjusted.append([float(pt[0]) + x1, float(pt[1]) + y1])
-                    parsed["bbox"] = adjusted
                 rows.append(parsed)
+    # 将 ROI 坐标还原为原图坐标
+    for row in rows:
+        bbox = row.get("bbox")
+        if isinstance(bbox, list) and len(bbox) >= 4:
+            adjusted: list[list[float]] = []
+            for pt in bbox:  # type: ignore[assignment]
+                if isinstance(pt, (list, tuple)) and len(pt) == 2:
+                    adjusted.append([float(pt[0]) + x1, float(pt[1]) + y1])
+            row["bbox"] = adjusted
     return rows
+
+
+def _to_list_bbox(bbox: object) -> list[list[float]]:
+    """将 numpy 数组或嵌套列表转为统一的 list[list[float]] 格式。"""
+    if hasattr(bbox, "tolist"):
+        bbox = bbox.tolist()  # type: ignore[union-attr]
+    result: list[list[float]] = []
+    if isinstance(bbox, (list, tuple)):
+        for pt in bbox:  # type: ignore[assignment]
+            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                result.append([float(pt[0]), float(pt[1])])
+    return result
 
 
 def _parse_ocr_item(item: object) -> dict[str, object] | None:
     """解析单个 PaddleOCR 行结果为 {text, bbox, confidence}。"""
     if item is None:
         return None
-    # 格式: [[[x1,y1],[x2,y2],[x3,y3],[x4,y4]], (text, confidence)]
-    # 或 PaddleOCR 新版 predict 格式: {"rec_text": ..., "dt_polys": ..., "rec_score": ...}
-    if isinstance(item, dict):
-        text = item.get("rec_text") or item.get("text")
-        if not text or not isinstance(text, str):
-            return None
-        bbox = item.get("dt_polys") or item.get("bbox")
-        confidence = item.get("rec_score") or item.get("confidence") or 0.0
-        return {"text": str(text).strip(), "bbox": bbox, "confidence": float(confidence)}  # type: ignore[arg-type]
+    # 旧版格式: [[[x1,y1],[x2,y2],[x3,y3],[x4,y4]], (text, confidence)]
     if isinstance(item, (list, tuple)) and len(item) >= 2:
         bbox_raw, text_info = item[0], item[1]
         if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
@@ -121,6 +137,37 @@ def _parse_ocr_item(item: object) -> dict[str, object] | None:
                 "confidence": float(text_info[1]),
             }
     return None
+
+
+def _parse_ocr_result(item: dict[str, object]) -> list[dict[str, object]]:
+    """解析新版 PaddleOCR predict() 返回的 OCRResult 字典。
+
+    格式: {"rec_texts": [...], "rec_scores": [...], "dt_polys": [...], "rec_polys": [...]}
+    每个列表的索引一一对应，转换为行级结果列表。
+    """
+    texts = item.get("rec_texts") or item.get("rec_text") or []
+    if isinstance(texts, str):
+        texts = [texts]
+    scores = item.get("rec_scores") or item.get("rec_score") or []
+    if isinstance(scores, (int, float)):
+        scores = [float(scores)]
+    polys = item.get("rec_polys") or item.get("dt_polys") or item.get("bbox") or []
+    if isinstance(polys, dict):
+        polys = [polys]
+
+    rows: list[dict[str, object]] = []
+    for i, text in enumerate(texts):
+        text_str = str(text).strip() if text else ""
+        if not text_str:
+            continue
+        confidence = float(scores[i]) if i < len(scores) else 0.0
+        bbox = polys[i] if i < len(polys) else None
+        rows.append({
+            "text": text_str,
+            "bbox": _to_list_bbox(bbox) if bbox is not None else None,
+            "confidence": confidence,
+        })
+    return rows
 
 
 def _norm(text: str) -> str:
@@ -157,45 +204,70 @@ def _detect_page_type(rows: list[dict[str, object]]) -> str:
 # ── 能力页提取 ────────────────────────────────────────────────────
 
 _STAT_NAMES = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
-_STAT_PATTERNS: dict[str, str] = {
-    "HP": r"HP\D*(\d{1,3})",
-    "攻击": r"攻击\D*(\d{1,3})",
-    "防御": r"防御\D*(\d{1,3})",
-    "特攻": r"特攻\D*(\d{1,3})",
-    "特防": r"特防\D*(\d{1,3})",
-    "速度": r"速度\D*(\d{1,3})",
-}
-# HP 特殊格式：HP 109/109 → 取 109
-_HP_SLASH = re.compile(r"HP\D*(\d{1,3})\s*/\s*\d{1,3}")
-# 容错：OCR 把 HP 识别成 HP
-_HP_ALT = re.compile(r"HP\D*(\d{1,3})")
+
+
+def _row_center(bbox: object) -> tuple[float, float]:
+    """返回 bbox 的中心坐标 (cx, cy)。"""
+    if isinstance(bbox, list) and len(bbox) >= 4:
+        xs = [float(pt[0]) for pt in bbox[:4]]  # type: ignore[index]
+        ys = [float(pt[1]) for pt in bbox[:4]]  # type: ignore[index]
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+    return (0.0, 0.0)
+
+
+def _match_stat_name(text: str) -> str | None:
+    """匹配文本中的能力名，返回标准化名称。"""
+    norm = _norm(text)
+    for name in _STAT_NAMES:
+        if _norm(name) in norm:
+            return name
+    return None
 
 
 def _extract_stats(rows: list[dict[str, object]]) -> dict[str, int]:
-    """从 OCR 行中提取六项能力值。"""
+    """从 OCR 行中提取六项能力值（基于空间位置关联标签与数值）。"""
+    if not rows:
+        return {}
     stats: dict[str, int] = {}
-    # 拼接所有文本行，保留换行以辅助 HP 特殊匹配
-    full = "\n".join(str(r["text"]) for r in rows)
-    norm = re.sub(r"\s+", "", full)
+    # 分类行：标签行 vs 数值行
+    label_rows: dict[str, dict[str, object]] = {}
+    number_rows: list[dict[str, object]] = []
+    for row in rows:
+        text = str(row["text"]).strip()
+        stat_name = _match_stat_name(text)
+        if stat_name is not None:
+            label_rows[stat_name] = row
+        elif re.match(r"^\d{1,3}$", text) or re.match(r"^\d{1,3}/\d{1,3}$", text):
+            number_rows.append(row)
 
-    for name in _STAT_NAMES:
-        pattern = _STAT_PATTERNS[name]
-        match = re.search(pattern, norm)
-        if match:
-            val = int(match.group(1))
-            if 0 <= val <= 999:
-                stats[name] = val
-        # HP 特殊处理：HP 109/109 格式
-        if name == "HP" and "HP" not in stats:
-            hp_match = _HP_SLASH.search(norm)
-            if hp_match:
-                stats["HP"] = int(hp_match.group(1))
-            else:
-                hp_alt = _HP_ALT.search(norm)
-                if hp_alt:
-                    val = int(hp_alt.group(1))
+    # 对每个标签，找下方最近的数值行
+    for name, label_row in label_rows.items():
+        _, label_cy = _row_center(label_row.get("bbox"))
+        bx, _ = _row_center(label_row.get("bbox"))
+        best_val: int | None = None
+        best_dist = float("inf")
+        for num_row in number_rows:
+            num_text = str(num_row["text"]).strip()
+            nx, num_cy = _row_center(num_row.get("bbox"))
+            # 数值必须在标签下方（或同一行偏下），且 x 坐标接近
+            if num_cy < label_cy - 5:
+                continue
+            if abs(nx - bx) > 150:
+                continue
+            dist = num_cy - label_cy
+            if dist < best_dist:
+                # 提取数值
+                if name == "HP":
+                    match = re.match(r"(\d{1,3})", num_text)
+                else:
+                    match = re.match(r"^(\d{1,3})$", num_text)
+                if match:
+                    val = int(match.group(1))
                     if 0 <= val <= 999:
-                        stats["HP"] = val
+                        best_val = val
+                        best_dist = dist
+        if best_val is not None:
+            stats[name] = best_val
     return stats
 
 

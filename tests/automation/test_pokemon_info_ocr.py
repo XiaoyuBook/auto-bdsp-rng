@@ -54,13 +54,16 @@ def _row(text: str) -> dict:
     return {"text": text, "bbox": [[0, 0], [10, 0], [10, 10], [0, 10]], "confidence": 0.99}
 
 
+def _row_at(text: str, x: float, y: float, w: float = 100.0, h: float = 20.0) -> dict:
+    return {"text": text, "bbox": [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], "confidence": 0.99}
+
+
 def test_detect_stats_page():
     rows = [_row("HP 109"), _row("攻击 67"), _row("防御 69"), _row("特攻 74"), _row("特防 81"), _row("速度 66")]
     assert _detect_page_type(rows) == "stats"
 
 
 def test_detect_stats_page_with_fewer_keywords():
-    # 3个关键词即可
     rows = [_row("HP"), _row("攻击"), _row("特性 叶绿素")]
     assert _detect_page_type(rows) == "stats"
 
@@ -80,45 +83,57 @@ def test_detect_unknown():
     assert _detect_page_type(rows) == "unknown"
 
 
-# ── _extract_stats ────────────────────────────────────────────────
+# ── _extract_stats（空间位置提取）────────────────────────────────
 
-def test_extract_all_six_stats():
-    rows = [_row("HP"), _row("109"), _row("攻击 67"), _row("防御 69"), _row("特攻 74"), _row("特防 81"), _row("速度 66")]
+def test_extract_all_six_stats_spatial():
+    """标签在数值上方，同列排列。"""
+    rows = [
+        _row_at("HP", 200, 20),
+        _row_at("109/109", 200, 45),   # HP 下方
+        _row_at("特攻", 100, 90),
+        _row_at("攻击", 350, 90),
+        _row_at("74", 100, 115),       # 特攻下方
+        _row_at("67", 350, 115),       # 攻击下方
+        _row_at("特防", 100, 210),
+        _row_at("防御", 350, 210),
+        _row_at("81", 100, 235),
+        _row_at("69", 350, 235),
+        _row_at("速度", 200, 270),
+        _row_at("66", 200, 295),
+    ]
     stats = _extract_stats(rows)
     assert stats == {"HP": 109, "攻击": 67, "防御": 69, "特攻": 74, "特防": 81, "速度": 66}
 
 
-def test_extract_stats_hp_slash_format():
+def test_extract_stats_hp_slash():
     """HP 109/109 格式提取最大 HP。"""
-    rows = [_row("HP 109/109"), _row("攻击 67"), _row("防御 69"), _row("特攻 74"), _row("特防 81"), _row("速度 66")]
-    stats = _extract_stats(rows)
-    assert stats["HP"] == 109
-
-
-def test_extract_stats_hp_multi_line():
-    """HP 上下两行格式。"""
-    rows = [_row("HP"), _row("109/109"), _row("攻击 67"), _row("防御 69")]
+    rows = [
+        _row_at("HP", 200, 20),
+        _row_at("109/109", 200, 45),
+        _row_at("攻击", 100, 90),
+        _row_at("67", 100, 115),
+        _row_at("防御", 100, 210),
+        _row_at("69", 100, 235),
+    ]
     stats = _extract_stats(rows)
     assert stats["HP"] == 109
     assert stats["攻击"] == 67
-
-
-def test_extract_stats_ocr_noise():
-    """OCR 识别偏差容错。"""
-    rows = [_row("HP1O9"), _row("攻击6 7"), _row("防御 69"), _row("特攻 74"), _row("特防 81"), _row("速度 66")]
-    stats = _extract_stats(rows)
-    # HP 和 攻击 OCR 偏差可能无法匹配，但其他应该能提取
-    assert stats.get("防御") == 69
-    assert stats.get("特攻") == 74
 
 
 def test_extract_stats_partial():
     """部分能力未识别时不抛异常。"""
-    rows = [_row("攻击 67"), _row("防御 69")]
+    rows = [
+        _row_at("攻击", 100, 90),
+        _row_at("67", 100, 115),
+        _row_at("防御", 100, 210),
+        _row_at("69", 100, 235),
+    ]
     stats = _extract_stats(rows)
-    assert len(stats) == 2
-    assert stats["攻击"] == 67
-    assert stats["防御"] == 69
+    assert stats == {"攻击": 67, "防御": 69}
+
+
+def test_extract_stats_empty():
+    assert _extract_stats([]) == {}
 
 
 # ── _extract_nature_and_characteristic ────────────────────────────
