@@ -1,0 +1,30 @@
+WAIT 10000
+X  # 打开精灵球界面
+WAIT 400
+FOR 1 # 选择大师球，根据需求修改次数
+RIGHT
+WAIT 200
+NEXT
+A  # 扔球
+WAIT 200
+FOR 65
+B
+WAIT 300
+NEXT
+WAIT 2000
+X # 打开背包
+WAIT 400
+RIGHT # 选择精灵界面
+WAIT 400
+A 
+WAIT 1500
+UP # 选择目标个体
+WAIT 400
+A 
+WAIT 400
+A 
+WAIT 1500
+RIGHT
+WAIT 1000 #查看性格和特性
+RIGHT
+WAIT 1000 #查看能力值
