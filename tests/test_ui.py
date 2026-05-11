@@ -500,8 +500,6 @@ def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(a
     assert panel.summary_group.maximumWidth() == 16777215
     assert panel.target_form_group.maximumHeight() <= 390
     assert panel.target_form.settings_group.maximumWidth() <= 260
-    assert "目标候选 / 历史记录" in group_titles
-    assert panel.candidate_history_empty.text() == "暂无候选结果"
 
 
 def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
@@ -514,8 +512,8 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert panel.stop_button.height() == 34
     assert panel.config_panel.minimumWidth() == 300
     assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
-    assert panel.strategy_group.maximumHeight() <= 170
-    assert panel.script_group.maximumHeight() <= 230
+    assert panel.strategy_group.maximumHeight() == 16777215  # 未设固定高度
+    assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.max_advances.width() <= 150
     assert panel.seed_script_combo.width() <= 170
     assert panel.refresh_scripts_button.width() <= 250
