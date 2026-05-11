@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -178,12 +179,21 @@ class AutoRngPanel(QWidget):
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待窗口", self.max_wait_frames)
         form.addRow("闪光阈值(秒)", self.shiny_threshold_seconds)
-        # 同步开关（三态下拉框）
+        # 同步开关（三态下拉框 + 性格输入）
+        sync_row = QHBoxLayout()
         self.sync_combo = QComboBox()
         self.sync_combo.addItems(["同步：关闭", "同步：首位普通精灵", "同步：首位同步精灵"])
         self.sync_combo.setFixedHeight(34)
-        self.sync_combo.setMinimumWidth(220)
-        form.addRow(self.sync_combo)
+        self.sync_combo.setMinimumWidth(160)
+        self.sync_combo.currentIndexChanged.connect(self._on_sync_changed)
+        self.sync_nature_input = QLineEdit()
+        self.sync_nature_input.setPlaceholderText("性格")
+        self.sync_nature_input.setFixedHeight(34)
+        self.sync_nature_input.setFixedWidth(72)
+        self.sync_nature_input.setEnabled(False)
+        sync_row.addWidget(self.sync_combo)
+        sync_row.addWidget(self.sync_nature_input)
+        form.addRow(sync_row)
         # 自动反查下拉框
         self.auto_reverse_combo = QComboBox()
         self.auto_reverse_combo.addItems(["自动反查：关闭", "自动反查：开启"])
@@ -453,6 +463,7 @@ class AutoRngPanel(QWidget):
         if reverse_path is not None:
             s.setValue("reverse_script", str(reverse_path))
         s.setValue("sync_state", self.sync_combo.currentIndex())
+        s.setValue("sync_nature", self.sync_nature_input.text())
         s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
         # 目标精灵设置
         tf = self.target_form
@@ -494,6 +505,8 @@ class AutoRngPanel(QWidget):
             idx = int(s.value("sync_state", 0))
             if 0 <= idx < self.sync_combo.count():
                 self.sync_combo.setCurrentIndex(idx)
+        if s.contains("sync_nature"):
+            self.sync_nature_input.setText(str(s.value("sync_nature", "")))
         if s.contains("auto_reverse"):
             idx = int(s.value("auto_reverse", 0))
             if 0 <= idx < self.auto_reverse_combo.count():
@@ -533,6 +546,14 @@ class AutoRngPanel(QWidget):
         index = combo.findData(path_str)
         if index >= 0:
             combo.setCurrentIndex(index)
+
+    def _on_sync_changed(self, index: int) -> None:
+        """同步状态改变时启用/禁用性格输入框。"""
+        if index == 0:  # 关闭
+            self.sync_nature_input.setEnabled(False)
+            self.sync_nature_input.clear()
+        else:
+            self.sync_nature_input.setEnabled(True)
 
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
