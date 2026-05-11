@@ -2709,25 +2709,32 @@ class MainWindow(QMainWindow):
                 log("[自动反查] 能力值识别失败")
                 return
 
-            # 构造搜索条件
+            # 构造搜索条件（沿用 search_criteria 模板 + OCR 结果覆盖）
             from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import compute_characteristic
-            from auto_bdsp_rng.gen8_static import StateFilter
-            criteria = _build_search_criteria(seed_result, auto_rng_config=config)
+            from auto_bdsp_rng.gen8_static.models import StateFilter
+            from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
+            criteria = replace(search_criteria, seed=seed_pair_from_result(seed_result),
+                              shiny_mode="any",
+                              initial_advances=max(0, target.raw_target_advances - 500),
+                              max_advances=target.raw_target_advances + 500)
             # 用 OCR 结果覆盖筛选项
             iv_min = [stats.get(name, 0) for name in ["HP", "攻击", "防御", "特攻", "特防", "速度"]]
             iv_max = list(iv_min)
+            natures_locked = (True,) * 25
+            if nature:
+                ni = _NATURE_MAP.get(str(nature))
+                if ni is not None and 0 <= ni < 25:
+                    natures_locked = tuple(i == ni for i in range(25))
             reverse_filter = StateFilter(
-                iv_min=eval(str(iv_min)),
-                iv_max=eval(str(iv_max)),
-                nature=nature if nature else criteria.state_filter.nature,
+                iv_min=tuple(iv_min),
+                iv_max=tuple(iv_max),
+                natures=natures_locked,
+                ability=criteria.state_filter.ability,
+                gender=criteria.state_filter.gender,
+                shiny=criteria.state_filter.shiny,
             )
-            reverse_criteria = replace(criteria,
-                state_filter=reverse_filter,
-                shiny_mode="any",
-                initial_advances=max(0, target.raw_target_advances - 500),
-                max_advances=target.raw_target_advances + 500,
-            )
-            candidates = generate_static_candidates(reverse_criteria)
+            criteria = replace(criteria, state_filter=reverse_filter)
+            candidates = generate_static_candidates(criteria)
             log(f"[自动反查] PokeFinder 搜索结果: {len(candidates)} 个候选")
 
             # 后置比对个性
