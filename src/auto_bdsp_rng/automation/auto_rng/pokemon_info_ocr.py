@@ -393,3 +393,42 @@ def _load_image(image_input: str | Path | np.ndarray) -> np.ndarray:
     if img is None:
         raise FileNotFoundError(f"Cannot load image: {image_input}")
     return img
+
+
+# ── CLI 测试入口 ───────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import json
+    import sys
+
+    stats_path: str | None = None
+    notes_path: str | None = None
+
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--stats" and i + 1 < len(args):
+            stats_path = args[i + 1]
+            i += 2
+        elif args[i] == "--notes" and i + 1 < len(args):
+            notes_path = args[i + 1]
+            i += 2
+        elif stats_path is None:
+            stats_path = args[i]
+            i += 1
+        elif notes_path is None:
+            notes_path = args[i]
+            i += 1
+        else:
+            i += 1
+
+    if stats_path is None and notes_path is None:
+        print("用法: python -m auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr [--stats 能力页.png] [--notes 笔记页.png]")
+        print("      也可直接传位置参数: python ... 能力页.png 笔记页.png")
+        sys.exit(1)
+
+    print(f"能力页: {stats_path or '(未提供)'}")
+    print(f"笔记页: {notes_path or '(未提供)'}")
+    print("正在 OCR 识别...")
+    result = extract_pokemon_info(stats_image=stats_path, notes_image=notes_path)
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
