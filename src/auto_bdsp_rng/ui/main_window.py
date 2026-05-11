@@ -60,7 +60,7 @@ from auto_bdsp_rng.blink_detection import (
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
-from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info, _ocr_rows, _extract_stats, STATS_ROI
+from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
@@ -2674,11 +2674,9 @@ class MainWindow(QMainWindow):
 
         在笔记页调用 → OCR 性格+个性 → 按 RIGHT 切换到能力页 → OCR 能力值 → 输出合并结果。
         """
-        import json
         import time
 
         log = self.auto_rng_tab.add_log
-        log("[捕获精灵信息] 开始…")
 
         try:
             capture_config = self._config_from_form().capture
@@ -2692,11 +2690,9 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             log(f"[捕获精灵信息] 截图笔记页失败: {exc}")
             return
-        log("[捕获精灵信息] 笔记页截图完成，OCR 识别中…")
         notes_result = extract_pokemon_info(notes_image=notes_frame)
         nature = notes_result.get("nature")
         characteristic = notes_result.get("characteristic")
-        log(f"[捕获精灵信息] 性格={nature}, 个性={characteristic}")
 
         # 2) 发送 RIGHT 按钮切换到能力页
         try:
@@ -2704,7 +2700,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             log(f"[捕获精灵信息] 发送 RIGHT 指令失败: {exc}")
             return
-        log("[捕获精灵信息] 已发送 RIGHT 指令，等待页面切换…")
         time.sleep(2.0)
 
         # 3) 捕获能力页 → OCR stats
@@ -2713,31 +2708,22 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             log(f"[捕获精灵信息] 截图能力页失败: {exc}")
             return
-        log("[捕获精灵信息] 能力页截图完成，OCR 识别中…")
-        # 临时诊断：输出 OCR 识别的原始行
-        h, w = stats_frame.shape[:2]
-        log(f"[捕获精灵信息] 能力页截图尺寸: {w}x{h}")
-        stats_rows = _ocr_rows(stats_frame, STATS_ROI)
-        log(f"[捕获精灵信息] 能力页 OCR 行数: {len(stats_rows)}")
-        for r in stats_rows:
-            log(f"[捕获精灵信息]   [{r['confidence']:.2f}] \"{r['text']}\"")
-        stats = _extract_stats(stats_rows) if stats_rows else {}
-        stats_result = {"stats": stats if len(stats) >= 3 else None, "nature": None, "characteristic": None}
+        stats_result = extract_pokemon_info(stats_image=stats_frame)
+        stats = stats_result.get("stats")
 
-        # 4) 合并输出
-        result = {
-            "stats": stats,
-            "nature": nature,
-            "characteristic": characteristic,
-        }
-        log(f"[捕获精灵信息] 完成: {json.dumps(result, ensure_ascii=False, default=str)}")
-
-        # 格式化输出
-        if stats:
-            stat_text = " / ".join(f"{k}={v}" for k, v in stats.items())
-            log(f"[捕获精灵信息] 能力: {stat_text}")
-        else:
-            log("[捕获精灵信息] 能力: 未识别")
+        # 4) 按顺序输出
+        stat_order = ["性格", "个性", "HP", "攻击", "防御", "特攻", "特防", "速度"]
+        parts: list[str] = []
+        for key in stat_order:
+            if key == "性格":
+                parts.append(f"性格={nature}")
+            elif key == "个性":
+                parts.append(f"个性={characteristic}")
+            elif stats and key in stats:
+                parts.append(f"{key}={stats[key]}")
+            else:
+                parts.append(f"{key}=?")
+        log(f"[捕获精灵信息] {' / '.join(parts)}")
 
     def _send_easycon_right(self) -> None:
         """通过伊机控发送 RIGHT d-pad 按钮。"""
