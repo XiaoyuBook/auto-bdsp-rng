@@ -1,53 +1,29 @@
 # auto_bdsp_rng
 
-`auto_bdsp_rng` 目标是把 BDSP 眨眼识别、Seed 推算和 Gen 8 定点乱数生成整合到同一个工具里，减少当前在 Project_Xs 和 PokeFinder 之间手动复制 Seed 的操作。
+`auto_bdsp_rng` 是一个面向《宝可梦 晶灿钻石 / 明亮珍珠》（BDSP）的 Windows 桌面乱数辅助工具。它把 Project_Xs 的眨眼测种、PokeFinder 的 Gen 8 BDSP 定点生成逻辑、EasyCon / 伊机控脚本执行和自动定点乱数流程整合到同一个 PySide6 应用里，目标是减少在多个工具之间复制 Seed、手动过帧和人工判断撞闪时机的成本。
 
-## 项目来源
+当前项目已经从最初的“Seed 捕捉 + 定点搜索”规划，演进为一个包含以下工作区的桌面应用：
 
-- Project_Xs_CHN: https://github.com/HaKu76/Project_Xs_CHN
-  - 提供 BDSP 眨眼检测、窗口或摄像头画面捕获、Seed 推算、Advances 追踪等功能。
-  - 当前重点使用其输出的 `Seed[0-3]` 和 `Seed[0-1]`。
-  - 本仓库以 submodule 形式放在 `third_party/Project_Xs_CHN`。
-- PokeFinder: https://github.com/Admiral-Fish/PokeFinder
-  - 提供 Gen 8 BDSP 定点乱数生成逻辑。
-  - 第一阶段重点参考 `Core/Gen8/Generators/StaticGenerator8.cpp` 和相关 RNG、Template、State、Filter 逻辑。
-  - 本仓库以 submodule 形式放在 `third_party/PokeFinder`。
+- Seed 捕捉：复用 Project_Xs 的画面捕获、眼部模板、眨眼识别、Seed 恢复、重新识别和时间线能力。
+- 定点数据区：在本仓库内实现 BDSP Gen 8 Static 生成、筛选、结果表格、存档信息和个体值计算器。
+- 伊机控：提供 EasyCon 风格的脚本编辑、串口选择、Bridge 常驻连接、CLI 诊断后端、虚拟手柄和按键映射。
+- 自动定点乱数：串联测种、目标搜索、过帧脚本、reidentify / 重新测种、最终撞闪脚本和 OCR 闪光判定。
 
-## 上游源码管理
+## 适用范围
 
-两个上游项目先作为 Git submodule 固定版本引入，方便后续对照实现、追踪差异和更新上游。
+本项目优先服务 Windows 64-bit 环境，默认使用 Python 3.12、PySide6、OpenCV、Project_Xs_CHN、PokeFinder 参考实现，以及 EasyCon / 伊机控相关工具链。仓库内的 `third_party` 目录用于固定上游版本和对照实现，项目自身代码位于 `src/auto_bdsp_rng`。
 
-首次克隆本仓库后，需要执行：
+> 这不是通用的宝可梦乱数工具，而是围绕 BDSP 定点 / 游走定点、眨眼测种、EasyCon 自动执行流程做的集成工作台。
 
-```powershell
-git submodule update --init --recursive
-```
+## 功能概览
 
-更新上游源码时，进入对应目录拉取目标版本，然后在主仓库提交 submodule 指针变更：
+### Seed 捕捉
 
-```powershell
-Set-Location 'third_party/Project_Xs_CHN'
-git fetch --tags
-git checkout <target-ref>
-
-Set-Location '..\..\third_party\PokeFinder'
-git fetch --tags
-git checkout <target-ref>
-
-Set-Location '..\..'
-git status
-```
-
-后续真正集成功能时，优先在本仓库自己的模块中实现稳定接口；`third_party` 目录只作为上游参考和对照测试来源。
-
-## 第一阶段目标
-
-第一阶段先实现一个完整闭环：
-
-1. 通过 Project_Xs 的眨眼检测流程生成 4 个 32-bit RNG state。
-2. 自动转换成 PokeFinder Gen 8 定点使用的 2 个 64-bit seed。
-3. 在本软件内直接调用 BDSP Gen 8 定点生成逻辑。
-4. 输出候选结果列表，不再需要手动复制粘贴到 PokeFinder。
+- 读取 Project_Xs 配置，支持窗口捕获和摄像头捕获。
+- 预览画面、截取眼睛模板、拖拽框选 ROI。
+- 捕捉玩家眨眼并恢复 `Seed[0-3]`。
+- 自动转换为 PokeFinder / Gen 8 定点使用的 `Seed[0-1]`。
+- 支持 reidentify、手动推进、TID/SID 流程、眨眼监控和 timeline 规划。
 
 Seed 转换关系：
 
@@ -56,7 +32,7 @@ seed0 = S0S1
 seed1 = S2S3
 ```
 
-例如：
+示例：
 
 ```text
 Seed[0-3]
@@ -70,76 +46,193 @@ seed0 = 123456789ABCDEF0
 seed1 = 1111111122222222
 ```
 
-## 建议模块划分
+### BDSP 定点搜索
+
+- Python 移植 BDSP Gen 8 Static RNG 核心。
+- 支持初始帧、最大帧数、Offset、队首特性、版本、TID/SID/TSV、闪符等输入。
+- 支持定点目标、游走目标、固定 IV、性格、特性、性别、身高、体重、异色筛选。
+- 结果表格支持复制、导出 CSV / TXT、列展示和中文化显示。
+- 个体值计算器参考 PokeFinder IVChecker 逻辑，支持中文宝可梦名搜索。
+
+### 伊机控 / EasyCon
+
+- 提供浅色桌面风格的脚本编辑界面。
+- 支持 `.txt` / `.ecs` 脚本加载、编辑、保存、未保存标记和 `Ctrl+S`。
+- 支持脚本参数扫描、生成临时脚本、日志保留和文本选择。
+- 支持串口自动选择、CLI 模式诊断、Bridge 常驻连接模式。
+- Bridge 通过 UTF-8 JSON Lines 协议复用同一个串口连接，避免每次脚本执行都重连。
+- 支持按键映射对话框、手柄背景图定位、键盘虚拟手柄、按键按下/释放与摇杆方向事件。
+
+### 自动定点乱数
+
+- 自动执行“测 seed -> 搜索目标 -> 过帧 -> 重新识别 / 重新测 seed -> 最终撞闪”的状态机。
+- 支持单次、循环 N 次和无限循环。
+- 可选择测种脚本、过帧脚本、撞闪脚本。
+- 以 `fixed_delay`、脚本内固定 `_闪帧` 和目标帧计算撞闪脚本启动点。
+- 最终等待阶段通过计时和实时 advances 修正，避免重复扣除闪帧或错过目标。
+- 支持过帧过头后的跳过防死循环逻辑。
+- 可选 OCR 闪光判定间隔校准和并行监测。
+- 自动面板会保存最近设置，并可在连接成功后自动连接伊机控。
+
+核心公式：
+
+```text
+trigger_advances = raw_target_advances - fixed_delay - fixed_flash_frames
+remaining_to_trigger = trigger_advances - current_advances
+```
+
+## 安装
+
+首次克隆后先初始化子模块：
+
+```powershell
+git submodule update --init --recursive
+```
+
+创建虚拟环境并安装项目：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .[dev]
+```
+
+如果需要 OCR 闪光判定能力，再安装可选依赖：
+
+```powershell
+python -m pip install -e .[ocr]
+```
+
+## 运行
+
+启动图形界面：
+
+```powershell
+python -m auto_bdsp_rng gui
+```
+
+安装为 editable 后，也可以运行脚本入口：
+
+```powershell
+auto-bdsp-rng gui
+```
+
+常用 CLI：
+
+```powershell
+# 查看版本
+python -m auto_bdsp_rng --version
+
+# 读取 Project_Xs 配置
+python -m auto_bdsp_rng blink-config --project-xs-config config_camera.json
+
+# 转换 Seed[0-3] / Seed[0-1]
+python -m auto_bdsp_rng convert-seed --seed 12345678 9ABCDEF0 11111111 22222222
+
+# 从当前配置捕获一帧预览图
+python -m auto_bdsp_rng capture-frame --project-xs-config config_camera.json --output preview.png
+
+# 捕捉眨眼并恢复 seed
+python -m auto_bdsp_rng capture-blinks --project-xs-config config_camera.json --blink-count 40
+
+# 对已有 seed 做重新识别
+python -m auto_bdsp_rng reidentify --project-xs-config config_camera.json --seed 12345678 9ABCDEF0 11111111 22222222
+```
+
+## EasyCon Bridge
+
+仓库内包含 `bridge/EasyConBridge`，它是 Python 应用和 EasyCon 串口会话之间的常驻后端。Bridge 连接一次串口后，会复用同一个会话运行多个脚本、发送按键和处理虚拟手柄事件。
+
+构建示例：
+
+```powershell
+dotnet build .\bridge\EasyConBridge\EasyConBridge.csproj -p:EasyConSourceRoot=D:\path\to\EasyCon
+```
+
+Mock session 可用于协议和连接生命周期冒烟测试：
+
+```powershell
+.\bridge\EasyConBridge\bin\Debug\net10.0\EasyConBridge.exe --mock-session
+```
+
+协议细节见：
+
+- `docs/easycon_bridge_protocol.md`
+- `bridge/EasyConBridge/README.md`
+
+## 目录结构
 
 ```text
 auto_bdsp_rng/
-  blink_detection/      Project_Xs 眨眼检测、画面捕获、Seed 推算
-  rng_core/             Xorshift、XoroshiroBDSP、RNGList 等基础 RNG
-  gen8_static/          BDSP Gen 8 定点乱数生成器
-  profiles/             游戏版本、TID、SID、TSV、玩家配置
-  data/                 定点宝可梦模板、种族数据、性别比例、版本数据
-  ui/                   主界面、结果表格、筛选条件
-  tests/                Seed 转换、RNG、生成器对照测试
+  bridge/EasyConBridge/             EasyCon 常驻 Bridge 后端
+  docs/                             设计文档、协议说明和验证记录
+  script/                           内置测种、过帧、撞闪脚本
+  src/auto_bdsp_rng/
+    automation/
+      auto_rng/                     自动定点乱数状态机、脚本处理、搜索封装
+      easycon/                      EasyCon CLI / Bridge 后端、发现、脚本生成
+    blink_detection/                Project_Xs 捕获、眨眼、reidentify 适配
+    data/                           BDSP 定点数据加载
+    gen8_static/                    Gen 8 BDSP 定点生成器
+    rng_core/                       Seed、Xorshift、Xoroshiro 等 RNG 基础
+    ui/                             PySide6 主窗口、自动页、伊机控页、目标表单
+  tests/                            pytest 测试
+  third_party/
+    Project_Xs_CHN/                 上游 Project_Xs_CHN 子模块
+    PokeFinder/                     上游 PokeFinder 子模块
 ```
 
-## 核心流程
+## 测试
 
-```text
-画面捕获
-  -> 眨眼检测
-  -> Seed[0-3] 推算
-  -> Seed[0-1] 转换
-  -> Gen 8 定点生成
-  -> 筛选
-  -> 结果展示
+运行全部 Python 测试：
+
+```powershell
+python -m pytest
 ```
 
-## 功能范围
+测试覆盖重点包括：
 
-### 需要保留的 Project_Xs 功能
+- Seed 数据模型和转换。
+- RNG 核心与 BDSP Static 生成器。
+- Project_Xs 适配层。
+- BDSP 数据表加载校验。
+- EasyCon 脚本、CLI 后端、Bridge 后端和串口发现。
+- 自动定点乱数状态机、脚本参数和最终等待逻辑。
+- PySide6 界面启动、布局和信号层。
 
-- 窗口捕获和摄像头捕获。
-- 眼部模板选择和预览。
-- Monitor Blinks。
-- Reidentify。
-- TID/SID。
-- Timeline。
-- Advances 追踪和手动增加。
-- 配置保存和读取。
+## 开发脉络
 
-### 需要接入的 PokeFinder 功能
+README 依据当前仓库完整提交历史整理。项目大致经历了以下阶段：
 
-- BDSP Gen 8 Static 非游走定点生成。
-- BDSP Gen 8 Static 游走定点生成。
-- 初始 Advances、最大 Advances、Offset。
-- 闪光判定。
-- IV 固定项和随机项。
-- 性格、特性、性别、身高、体重。
-- 定点宝可梦模板。
-- 结果筛选器。
+| 时间 | 重点变化 |
+| --- | --- |
+| 2026-05-04 | 建立项目规划，引入 Project_Xs_CHN 和 PokeFinder 子模块。 |
+| 2026-05-05 | 接入 Project_Xs 画面捕获、眼部预览、眨眼捕获、reidentify、TID/SID、眨眼监控、配置保存和 timeline。 |
+| 2026-05-05 | 增加 Seed 模型、RNG 核心、BDSP Static 生成器、数据表加载校验和初版 UI 整合。 |
+| 2026-05-05 | 完善捕捉界面、ROI 选择、结果表格、筛选、闪光验证、存档管理和定点页面布局。 |
+| 2026-05-05 至 2026-05-06 | 规划并实现伊机控后端、常驻 Bridge 协议、CLI 诊断、串口选择、日志和脚本体验。 |
+| 2026-05-07 | 大幅重做桌面 UI：窗口自由缩放、浅色原生风格、EasyCon 风格脚本面板、按键映射和虚拟手柄。 |
+| 2026-05-07 | 重构定点数据区、修复多处中文布局问题，并恢复 PokeFinder 原版个体值计算器逻辑。 |
+| 2026-05-08 | 新增自动定点乱数基础流程、状态机、UI 信号层、真实流程接入和目标锁定展示。 |
+| 2026-05-08 至 2026-05-09 | 调整过帧、reidentify、最终撞闪校准、脚本闪帧口径和 OCR 闪光判定。 |
+| 2026-05-10 | 集中修正自动撞闪触发时机、FINAL_WAIT、Bridge 执行时序、CLI 模式、诊断日志和 RNG 细节。 |
 
-## 第一阶段最小可交付版本
+最近的修正重点集中在自动流程的实机时序：保持 reidentify 后原始 seed 基准、修正非游走定点 SID/TID RNG 序列、使用 EC 计算个性、避免 FINAL_WAIT 双重扣除闪帧、在 CLI / Bridge 路径上减少额外延迟，并修复定点结果个性显示偏差。
 
-第一阶段完成后，用户应该可以：
+## 上游依赖与许可
 
-1. 打开软件并完成眨眼检测配置。
-2. 点击捕捉眨眼。
-3. 软件自动识别 Seed。
-4. 软件自动把 Seed 传给 BDSP 定点生成器。
-5. 在同一界面看到定点候选结果。
+- Project_Xs_CHN: https://github.com/HaKu76/Project_Xs_CHN
+  - 当前子模块版本：`b6cfaaeca8aa6a95e2f07ccaef606e301fa8ad7a`
+  - 许可：MIT License
+- PokeFinder: https://github.com/Admiral-Fish/PokeFinder
+  - 当前子模块版本：`2d5c6afed9240f2bdb98634b5b8b1fab352aefa5`（v4.3.2）
+  - 许可：GPL-3.0 License
 
-## 后续功能预留
+本项目 `pyproject.toml` 声明为 `GPL-3.0-or-later`。如果分发包含或移植自 PokeFinder 的实现，需要遵守 GPL-3.0 及相关源代码开放要求。
 
-第三个新功能暂未定义，建议后续作为独立模块接入，避免和眨眼识别、Seed 转换、定点生成逻辑耦合。
+## 当前注意事项
 
-预留入口：
-
-```text
-features/
-  new_feature/
-```
-
-## 许可注意
-
-Project_Xs_CHN 使用 MIT License。PokeFinder 使用 GPL-3.0 License。如果直接移植、修改或分发 PokeFinder 代码，需要按 GPL-3.0 的要求处理源代码开放和许可声明。
+- 该工具强依赖 Windows 桌面环境、游戏画面捕获、脚本执行时序和本机串口状态，实机运行前请先用小脚本确认伊机控连接正常。
+- 自动定点乱数流程对 `fixed_delay`、脚本内 `_闪帧`、OCR 阈值和实际画面响应时间敏感，建议先做少量目标校准。
+- `third_party` 目录主要用于上游参考和对照，不建议直接在子模块内改业务逻辑。
