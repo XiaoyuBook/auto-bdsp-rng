@@ -327,21 +327,59 @@ STATS_ROI = (0.02, 0.52, 0.15, 0.80)
 # 笔记页 ROI：左侧笔记区 (左2%, 右52%, 上15%, 下75%)
 NOTES_ROI = (0.02, 0.52, 0.15, 0.75)
 
+ImageInput = str | Path | np.ndarray
 
-def extract_pokemon_info(image_input: str | Path | np.ndarray) -> dict[str, object]:
+
+def extract_pokemon_info(
+    stats_image: ImageInput | None = None,
+    notes_image: ImageInput | None = None,
+) -> dict[str, object]:
     """从宝可梦详情页截图中提取结构化信息。
 
+    需要两张截图：
+    - stats_image: 能力页截图，提取六项能力值
+    - notes_image: 训练家笔记页截图，提取性格和个性
+
+    任一图片为 None 时，对应字段返回 None。
+
     Args:
-        image_input: 图片文件路径 或 numpy 数组 (H, W, 3)
+        stats_image: 能力页图片路径 或 numpy 数组
+        notes_image: 笔记页图片路径 或 numpy 数组
 
     Returns:
         {"stats": {...} or None, "nature": str or None, "characteristic": str or None}
     """
-    try:
-        image = _load_image(image_input)
-        return _extract_pokemon_info_impl(image)
-    except Exception:
-        return {"stats": None, "nature": None, "characteristic": None}
+    result: dict[str, object] = {"stats": None, "nature": None, "characteristic": None}
+    # 能力页 → stats
+    if stats_image is not None:
+        try:
+            img = _load_image(stats_image)
+            stats_rows = _ocr_rows(img, STATS_ROI)
+            if _detect_page_type(stats_rows) == "unknown":
+                # 也可能放进错了，用笔记 ROI 再试
+                alt_rows = _ocr_rows(img, NOTES_ROI)
+                if _detect_page_type(alt_rows) == "stats":
+                    stats_rows = alt_rows
+            stats = _extract_stats(stats_rows)
+            if len(stats) >= 3:
+                result["stats"] = stats
+        except Exception:
+            pass
+    # 笔记页 → nature + characteristic
+    if notes_image is not None:
+        try:
+            img = _load_image(notes_image)
+            notes_rows = _ocr_rows(img, NOTES_ROI)
+            if _detect_page_type(notes_rows) == "unknown":
+                alt_rows = _ocr_rows(img, STATS_ROI)
+                if _detect_page_type(alt_rows) == "notes":
+                    notes_rows = alt_rows
+            nature, chara = _extract_nature_and_characteristic(img, notes_rows)
+            result["nature"] = nature
+            result["characteristic"] = chara
+        except Exception:
+            pass
+    return result
 
 
 def _load_image(image_input: str | Path | np.ndarray) -> np.ndarray:
@@ -355,37 +393,3 @@ def _load_image(image_input: str | Path | np.ndarray) -> np.ndarray:
     if img is None:
         raise FileNotFoundError(f"Cannot load image: {image_input}")
     return img
-
-
-def _extract_pokemon_info_impl(image: np.ndarray) -> dict[str, object]:
-    # 对两种 ROI 分别 OCR
-    stats_rows = _ocr_rows(image, STATS_ROI)
-    notes_rows = _ocr_rows(image, NOTES_ROI)
-
-    # 判断页面类型
-    page_type = _detect_page_type(stats_rows)
-    if page_type == "unknown":
-        page_type = _detect_page_type(notes_rows)
-
-    if page_type == "stats":
-        stats = _extract_stats(stats_rows)
-        result: dict[str, object] = {"stats": stats if len(stats) >= 3 else None, "nature": None, "characteristic": None}
-        if result["stats"] is None:
-            # 尝试也从笔记行提取
-            nature, chara = _extract_nature_and_characteristic(image, notes_rows)
-            result["nature"] = nature
-            result["characteristic"] = chara
-        return result
-
-    if page_type == "notes":
-        nature, chara = _extract_nature_and_characteristic(image, notes_rows)
-        return {"stats": None, "nature": nature, "characteristic": chara}
-
-    # unknown: 两种都试
-    stats = _extract_stats(stats_rows)
-    nature, chara = _extract_nature_and_characteristic(image, notes_rows)
-    return {
-        "stats": stats if len(stats) >= 3 else None,
-        "nature": nature,
-        "characteristic": chara,
-    }
