@@ -161,13 +161,24 @@ class HistoryPanel(QWidget):
     def cycle_start(self, cycle_index: int) -> None:
         self._cycle_index = cycle_index
         self._pid_ec_seen.clear()
+        self._is_first_seed = True
+        self._original_seed_text = ""
+        self._original_seed_advances = 0
         self._w()
         self._w(SEPARATOR_THICK)
         self._w(f"第 {cycle_index} 轮  {_now()}")
         self._w(SEPARATOR_THICK)
 
     def seed_captured(self, seed_text: str, initial_advances: int, npc: int, max_advances: int) -> None:
-        self._w(f"[{_now()}] 测种完成，Seed: {seed_text}  初始帧: {initial_advances}  NPC: {npc}  最大搜索: {max_advances}")
+        if self._is_first_seed:
+            self._is_first_seed = False
+            self._original_seed_text = seed_text
+            self._original_seed_advances = initial_advances
+            self._w(f"[{_now()}] 原始 Seed: {seed_text}  初始帧: {initial_advances}  NPC: {npc}  最大搜索: {max_advances}")
+        else:
+            self._w(SEPARATOR_THIN)
+            self._w(f"[{_now()}] 重新测种，当前 Seed: {seed_text}  初始帧: {initial_advances}  (原始 Seed: {self._original_seed_text})")
+            self._w(SEPARATOR_THIN)
 
     def candidates_found(self, candidates: list[object], locked_index: int) -> None:
         self._pid_ec_seen.clear()
