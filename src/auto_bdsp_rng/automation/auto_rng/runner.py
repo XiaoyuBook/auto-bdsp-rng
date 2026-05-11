@@ -232,6 +232,8 @@ class AutoRngRunner:
         self._completed_loops = 0
         self._cycle_started = False
         self._all_candidates: list[object] = []  # 本轮所有候选
+        self._last_shiny_interval: float | None = None
+        self._last_used_delay: int | None = None
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -575,6 +577,8 @@ class AutoRngRunner:
         self._locked_target = None
         # 自动反查：未出闪时先反查个体再进入下一轮
         if self.config.auto_reverse and self.config.reverse_script_path is not None:
+            self._last_shiny_interval = result.interval_seconds
+            self._last_used_delay = used_delay
             self._set_progress(
                 AutoRngPhase.REVERSE_LOOKUP,
                 f"未出闪，间隔 {interval_text}，启动自动反查",
@@ -612,24 +616,26 @@ class AutoRngRunner:
         seed = self._require_seed()
         target = self._require_target()
         service = self.services.run_reverse_lookup
+        interval = self._last_shiny_interval
+        used_delay = self._last_used_delay
         if service is None:
-            self._history("cycle_result", False, None, None, None)
+            self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, "无反查服务，跳过反查")
             return
         if self.config.reverse_script_path is None:
-            self._history("cycle_result", False, None, None, None)
+            self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, "未配置反查脚本，跳过反查")
             return
         try:
             service(seed, target)
         except Exception as exc:
-            self._history("cycle_result", False, None, None, None)
+            self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, f"反查失败: {exc}")
             return
-        self._history("cycle_result", False, None, None, None)
+        self._history("cycle_result", False, interval, None, used_delay)
         self._cycle_started = False
         self._loop_check()
 
