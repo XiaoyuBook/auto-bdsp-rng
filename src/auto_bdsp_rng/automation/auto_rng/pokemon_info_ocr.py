@@ -400,11 +400,13 @@ def _load_image(image_input: str | Path | np.ndarray) -> np.ndarray:
 if __name__ == "__main__":
     import json
     import sys
+    import traceback
 
     stats_path: str | None = None
     notes_path: str | None = None
+    debug = "--debug" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--debug"]
 
-    args = sys.argv[1:]
     i = 0
     while i < len(args):
         if args[i] == "--stats" and i + 1 < len(args):
@@ -423,12 +425,49 @@ if __name__ == "__main__":
             i += 1
 
     if stats_path is None and notes_path is None:
-        print("用法: python -m auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr [--stats 能力页.png] [--notes 笔记页.png]")
+        print("用法: python -m auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr [--debug] [--stats 能力页.png] [--notes 笔记页.png]")
         print("      也可直接传位置参数: python ... 能力页.png 笔记页.png")
         sys.exit(1)
 
     print(f"能力页: {stats_path or '(未提供)'}")
     print(f"笔记页: {notes_path or '(未提供)'}")
     print("正在 OCR 识别...")
-    result = extract_pokemon_info(stats_image=stats_path, notes_image=notes_path)
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+    if not debug:
+        result = extract_pokemon_info(stats_image=stats_path, notes_image=notes_path)
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    else:
+        # 诊断模式：逐步执行并输出中间结果
+        if stats_path:
+            print(f"\n--- 加载能力页: {stats_path} ---")
+            try:
+                img = _load_image(stats_path)
+                print(f"图片尺寸: {img.shape}")
+                rows = _ocr_rows(img, STATS_ROI)
+                print(f"OCR 行数 (STATS_ROI): {len(rows)}")
+                for r in rows:
+                    print(f"  [{r['confidence']:.2f}] \"{r['text']}\"")
+                page = _detect_page_type(rows)
+                print(f"页面类型: {page}")
+                stats = _extract_stats(rows)
+                print(f"提取能力: {stats}")
+            except Exception:
+                traceback.print_exc()
+        if notes_path:
+            print(f"\n--- 加载笔记页: {notes_path} ---")
+            try:
+                img = _load_image(notes_path)
+                print(f"图片尺寸: {img.shape}")
+                rows = _ocr_rows(img, NOTES_ROI)
+                print(f"OCR 行数 (NOTES_ROI): {len(rows)}")
+                for r in rows:
+                    print(f"  [{r['confidence']:.2f}] \"{r['text']}\"")
+                page = _detect_page_type(rows)
+                print(f"页面类型: {page}")
+                nature, chara = _extract_nature_and_characteristic(img, rows)
+                print(f"性格: {nature}, 个性: {chara}")
+            except Exception:
+                traceback.print_exc()
+        print(f"\n--- 最终合并结果 ---")
+        result = extract_pokemon_info(stats_image=stats_path, notes_image=notes_path)
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
