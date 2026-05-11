@@ -129,6 +129,7 @@ class AutoRngPanel(QWidget):
     ivCalculatorRequested = Signal()
     captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
     captureLog = Signal(str)  # 临时：后台线程日志输出
+    requestStatsCapture = Signal(object, object)  # 临时：后台请求主线程截图能力页(nature, characteristic)
 
     def __init__(self, parent: QWidget | None = None, script_dir: Path = SCRIPT_DIR) -> None:
         super().__init__(parent)

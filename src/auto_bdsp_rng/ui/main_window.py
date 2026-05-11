@@ -670,6 +670,7 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self._capture_pokemon_info)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
+        self.auto_rng_tab.requestStatsCapture.connect(self._on_request_stats_capture)
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
@@ -2671,35 +2672,43 @@ class MainWindow(QMainWindow):
         self.timer_value.setText("0")
 
     def _capture_pokemon_info(self) -> None:
-        """临时功能：手动触发精灵信息捕获（后台线程）。"""
+        """临时功能：手动触发精灵信息捕获。
+
+        主线程截图 → 后台 OCR + RIGHT → 主线程再截图 → 后台 OCR → 输出。
+        截图始终在主线程，避免摄像头多线程闪退。
+        """
         import threading
 
         self.auto_rng_tab.add_log("[捕获精灵信息] 开始…")
-        thread = threading.Thread(target=self._do_capture_pokemon_info, daemon=True)
-        thread.start()
-
-    def _do_capture_pokemon_info(self) -> None:
-        import time
-
-        log = self.auto_rng_tab.captureLog.emit  # Signal 跨线程安全
 
         try:
             capture_config = self._config_from_form().capture
         except Exception as exc:
-            log(f"[捕获精灵信息] 获取截图配置失败: {exc}")
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] 获取截图配置失败: {exc}")
             return
 
-        # 1) 捕获笔记页 → OCR 性格 + 个性
+        # 主线程截图笔记页
         try:
             notes_frame = capture_preview_frame(capture_config)
         except Exception as exc:
-            log(f"[捕获精灵信息] 截图笔记页失败: {exc}")
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图笔记页失败: {exc}")
             return
+
+        self._capture_config = capture_config  # 暂存供后续用
+        thread = threading.Thread(target=self._do_capture_pokemon_info, args=(notes_frame,), daemon=True)
+        thread.start()
+
+    def _do_capture_pokemon_info(self, notes_frame: object) -> None:
+        import time
+
+        log = self.auto_rng_tab.captureLog.emit
+
+        # 1) OCR 笔记页
         notes_result = extract_pokemon_info(notes_image=notes_frame)
         nature = notes_result.get("nature")
         characteristic = notes_result.get("characteristic")
 
-        # 2) 发送 RIGHT 按钮切换到能力页
+        # 2) 发送 RIGHT 切换页面
         try:
             self._send_easycon_right()
         except Exception as exc:
@@ -2707,16 +2716,20 @@ class MainWindow(QMainWindow):
             return
         time.sleep(2.0)
 
-        # 3) 捕获能力页 → OCR stats
+        # 3) 请求主线程截图能力页
+        self.auto_rng_tab.requestStatsCapture.emit(nature, characteristic)
+
+    def _on_request_stats_capture(self, nature: str | None, characteristic: str | None) -> None:
+        """主线程回调：截图能力页 → OCR → 输出。"""
+        log = self.auto_rng_tab.add_log
         try:
-            stats_frame = capture_preview_frame(capture_config)
+            stats_frame = capture_preview_frame(self._capture_config)
         except Exception as exc:
             log(f"[捕获精灵信息] 截图能力页失败: {exc}")
             return
         stats_result = extract_pokemon_info(stats_image=stats_frame)
         stats = stats_result.get("stats")
 
-        # 4) 按顺序输出
         stat_order = ["性格", "个性", "HP", "攻击", "防御", "特攻", "特防", "速度"]
         parts: list[str] = []
         for key in stat_order:
