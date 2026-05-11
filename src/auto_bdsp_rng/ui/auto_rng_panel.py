@@ -127,6 +127,7 @@ class AutoRngPanel(QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
     ivCalculatorRequested = Signal()
+    captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
 
     def __init__(self, parent: QWidget | None = None, script_dir: Path = SCRIPT_DIR) -> None:
         super().__init__(parent)
@@ -192,6 +193,13 @@ class AutoRngPanel(QWidget):
         row.addWidget(self.status_badge)
         row.addWidget(self.start_button)
         row.addWidget(self.stop_button)
+        # 临时按钮：手动捕获精灵信息
+        self.capture_info_button = QPushButton("捕获精灵信息")
+        self.capture_info_button.setFixedHeight(34)
+        self.capture_info_button.setMinimumWidth(110)
+        self.capture_info_button.setToolTip("在笔记页点击，自动切换能力页并提取全部信息")
+        self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
+        row.addWidget(self.capture_info_button)
         return toolbar
 
     def _build_config_panel(self) -> QWidget:

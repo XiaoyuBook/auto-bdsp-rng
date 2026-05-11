@@ -60,6 +60,7 @@ from auto_bdsp_rng.blink_detection import (
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
+from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
@@ -667,6 +668,7 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab = AutoRngPanel()
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
+        self.auto_rng_tab.captureInfoRequested.connect(self._capture_pokemon_info)
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
@@ -2666,6 +2668,82 @@ class MainWindow(QMainWindow):
         self._tracked_advances = 0
         self.advances_value.setText("0")
         self.timer_value.setText("0")
+
+    def _capture_pokemon_info(self) -> None:
+        """临时功能：手动触发精灵信息捕获。
+
+        在笔记页调用 → OCR 性格+个性 → 按 RIGHT 切换到能力页 → OCR 能力值 → 输出合并结果。
+        """
+        import json
+        import time
+
+        log = self.auto_rng_tab.add_log
+        log("[捕获精灵信息] 开始…")
+
+        try:
+            capture_config = self._config_from_form().capture
+        except Exception as exc:
+            log(f"[捕获精灵信息] 获取截图配置失败: {exc}")
+            return
+
+        # 1) 捕获笔记页 → OCR 性格 + 个性
+        try:
+            notes_frame = capture_preview_frame(capture_config)
+        except Exception as exc:
+            log(f"[捕获精灵信息] 截图笔记页失败: {exc}")
+            return
+        log("[捕获精灵信息] 笔记页截图完成，OCR 识别中…")
+        notes_result = extract_pokemon_info(notes_image=notes_frame)
+        nature = notes_result.get("nature")
+        characteristic = notes_result.get("characteristic")
+        log(f"[捕获精灵信息] 性格={nature}, 个性={characteristic}")
+
+        # 2) 发送 RIGHT 按钮切换到能力页
+        try:
+            self._send_easycon_right()
+        except Exception as exc:
+            log(f"[捕获精灵信息] 发送 RIGHT 指令失败: {exc}")
+            return
+        log("[捕获精灵信息] 已发送 RIGHT 指令，等待页面切换…")
+        time.sleep(1.5)
+
+        # 3) 捕获能力页 → OCR stats
+        try:
+            stats_frame = capture_preview_frame(capture_config)
+        except Exception as exc:
+            log(f"[捕获精灵信息] 截图能力页失败: {exc}")
+            return
+        log("[捕获精灵信息] 能力页截图完成，OCR 识别中…")
+        stats_result = extract_pokemon_info(stats_image=stats_frame)
+        stats = stats_result.get("stats")
+
+        # 4) 合并输出
+        result = {
+            "stats": stats,
+            "nature": nature,
+            "characteristic": characteristic,
+        }
+        log(f"[捕获精灵信息] 完成: {json.dumps(result, ensure_ascii=False, default=str)}")
+
+        # 格式化输出
+        if stats:
+            stat_text = " / ".join(f"{k}={v}" for k, v in stats.items())
+            log(f"[捕获精灵信息] 能力: {stat_text}")
+        else:
+            log("[捕获精灵信息] 能力: 未识别")
+
+    def _send_easycon_right(self) -> None:
+        """通过伊机控发送 RIGHT 按钮。"""
+        if self.easycon_tab._is_bridge_mode():
+            backend = self.easycon_tab._ensure_bridge_backend()
+            backend.press("RIGHT", 100)
+        else:
+            # CLI 模式：通过脚本发送
+            from auto_bdsp_rng.automation.easycon import CliEasyConBackend
+            port = self.easycon_tab.port_combo.currentText()
+            if not port:
+                raise RuntimeError("CLI 模式需要先选择串口")
+            CliEasyConBackend().run_script_text("R 0.1\n", "right_press", port=port)
 
     def _advance_tick(self) -> None:
         self._tracked_advances += self._advance_step
