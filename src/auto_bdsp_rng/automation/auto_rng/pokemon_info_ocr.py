@@ -43,7 +43,12 @@ def _create_paddle_ocr(factory: Any) -> object:
     raise RuntimeError("Cannot initialize PaddleOCR") from last_error
 
 
-def _ocr_rows(image: np.ndarray, roi_bounds: tuple[float, float, float, float]) -> list[dict[str, object]]:
+def _ocr_rows(
+    image: np.ndarray,
+    roi_bounds: tuple[float, float, float, float],
+    *,
+    debug_raw: list[object] | None = None,
+) -> list[dict[str, object]]:
     """对 ROI 区域做 OCR，返回行级结果列表。
 
     每行: {"text": str, "bbox": [[x1,y1],[x2,y2],[x3,y3],[x4,y4]], "confidence": float}
@@ -73,6 +78,9 @@ def _ocr_rows(image: np.ndarray, roi_bounds: tuple[float, float, float, float]) 
             raw = legacy(roi, cls=False)
         except TypeError:
             raw = legacy(roi)
+
+    if debug_raw is not None:
+        debug_raw.append(raw)
 
     rows: list[dict[str, object]] = []
     if isinstance(raw, list):
@@ -438,34 +446,69 @@ if __name__ == "__main__":
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     else:
         # 诊断模式：逐步执行并输出中间结果
-        if stats_path:
-            print(f"\n--- 加载能力页: {stats_path} ---")
+        for label, path, roi_bounds in (
+            ("能力页", stats_path, STATS_ROI),
+            ("笔记页", notes_path, NOTES_ROI),
+        ):
+            if not path:
+                continue
+            print(f"\n--- 加载{label}: {path} ---")
             try:
-                img = _load_image(stats_path)
-                print(f"图片尺寸: {img.shape}")
-                rows = _ocr_rows(img, STATS_ROI)
-                print(f"OCR 行数 (STATS_ROI): {len(rows)}")
+                img = _load_image(path)
+                h, w = img.shape[:2]
+                print(f"图片尺寸: {img.shape} (宽={w}, 高={h})")
+                x1 = int(w * roi_bounds[0]); x2 = int(w * roi_bounds[1])
+                y1 = int(h * roi_bounds[2]); y2 = int(h * roi_bounds[3])
+                print(f"ROI 裁剪: x=[{x1}:{x2}], y=[{y1}:{y2}] ({x2-x1}x{y2-y1})")
+
+                # 1) 先跑 ROI OCR
+                raw_holder: list[object] = []
+                rows = _ocr_rows(img, roi_bounds, debug_raw=raw_holder)
+                print(f"ROI OCR 行数: {len(rows)}")
                 for r in rows:
-                    print(f"  [{r['confidence']:.2f}] \"{r['text']}\"")
+                    bbox = r.get("bbox")
+                    print(f"  [{r['confidence']:.2f}] bbox={bbox} \"{r['text']}\"")
+                if raw_holder:
+                    raw = raw_holder[0]
+                    print(f"PaddleOCR 原始输出类型: {type(raw).__name__}, "
+                          f"list={isinstance(raw, list)}, "
+                          f"len={len(raw) if isinstance(raw, (list, tuple)) else 'N/A'}")
+                    if isinstance(raw, list) and len(raw) > 0:
+                        first = raw[0]
+                        print(f"第一条类型: {type(first).__name__}")
+                        if isinstance(first, dict):
+                            print(f"第一条 keys: {list(first.keys())}")
+                            print(f"第一条: {first}")
+                        elif isinstance(first, (list, tuple)) and len(first) >= 2:
+                            print(f"第一条[0]类型: {type(first[0]).__name__}")
+                            print(f"第一条[1]类型: {type(first[1]).__name__}")
+                            print(f"第一条: {first}")
+                        else:
+                            print(f"第一条: {first}")
+                else:
+                    print("PaddleOCR 原始输出为空或 None")
+
+                # 2) 页面判断
                 page = _detect_page_type(rows)
-                print(f"页面类型: {page}")
-                stats = _extract_stats(rows)
-                print(f"提取能力: {stats}")
-            except Exception:
-                traceback.print_exc()
-        if notes_path:
-            print(f"\n--- 加载笔记页: {notes_path} ---")
-            try:
-                img = _load_image(notes_path)
-                print(f"图片尺寸: {img.shape}")
-                rows = _ocr_rows(img, NOTES_ROI)
-                print(f"OCR 行数 (NOTES_ROI): {len(rows)}")
-                for r in rows:
+                print(f"页面类型判断: {page}")
+
+                # 3) 提取
+                if "stats" in label.lower() or page == "stats":
+                    stats = _extract_stats(rows)
+                    print(f"提取能力: {stats}")
+                if "笔记" in label or page == "notes":
+                    nature, chara = _extract_nature_and_characteristic(img, rows)
+                    print(f"性格: {nature}, 个性: {chara}")
+
+                # 4) 全图 OCR 验证
+                print(f"\n全图 OCR 测试...")
+                full_raw = _ocr_rows(img, (0.0, 1.0, 0.0, 1.0))
+                print(f"全图 OCR 行数: {len(full_raw)}")
+                for r in full_raw[:20]:
                     print(f"  [{r['confidence']:.2f}] \"{r['text']}\"")
-                page = _detect_page_type(rows)
-                print(f"页面类型: {page}")
-                nature, chara = _extract_nature_and_characteristic(img, rows)
-                print(f"性格: {nature}, 个性: {chara}")
+                if len(full_raw) > 20:
+                    print(f"  ... 共 {len(full_raw)} 行，仅显示前20")
+
             except Exception:
                 traceback.print_exc()
         print(f"\n--- 最终合并结果 ---")
