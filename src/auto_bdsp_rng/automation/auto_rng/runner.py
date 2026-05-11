@@ -543,6 +543,17 @@ class AutoRngRunner:
         if shiny_result is not None:
             self._handle_shiny_check_result(shiny_result, path)
             return
+        # 无闪符检测结果时，若开启了自动反查仍然执行
+        if self.config.auto_reverse and self.config.reverse_script_path is not None:
+            self._last_shiny_interval = None
+            self._last_used_delay = None
+            self._set_progress(
+                AutoRngPhase.REVERSE_LOOKUP,
+                "未出闪(无OCR检测)，启动自动反查",
+                loop_index=self._completed_loops,
+                last_script_path=path,
+            )
+            return
         self._set_progress(
             AutoRngPhase.LOOP_CHECK,
             f"撞闪脚本完成——{path.name}（动态闪帧 {new_flash}）",
@@ -604,6 +615,17 @@ class AutoRngRunner:
         total_diag_frames = int(total_elapsed / 1.018) * (seed.npc + 1)
         if shiny_result is not None:
             self._handle_shiny_check_result(shiny_result, path)
+            return
+        # 无闪符检测结果时，若开启了自动反查仍然执行
+        if self.config.auto_reverse and self.config.reverse_script_path is not None:
+            self._last_shiny_interval = None
+            self._last_used_delay = None
+            self._set_progress(
+                AutoRngPhase.REVERSE_LOOKUP,
+                "未出闪(无OCR检测)，启动自动反查",
+                loop_index=self._completed_loops,
+                last_script_path=path,
+            )
             return
         msg = f"撞闪脚本完成——{path.name}"
         if self.config.debug_output:
