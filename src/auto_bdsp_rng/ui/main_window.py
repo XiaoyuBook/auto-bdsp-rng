@@ -2709,29 +2709,70 @@ class MainWindow(QMainWindow):
                 log("[自动反查] 能力值识别失败")
                 return
 
-            # 构造搜索条件（沿用 search_criteria 模板 + OCR 结果覆盖）
+            # 能力值 → 个体值 反算
+            import math
             from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import compute_characteristic
             from auto_bdsp_rng.gen8_static.models import StateFilter
             from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
+
+            base_stats = search_criteria.record.species_info.stats  # (HP,Atk,Def,SpA,SpD,Spe)
+            level = search_criteria.record.template.level
+
+            # 性格修正系数
+            ni = _NATURE_MAP.get(str(nature)) if nature else None
+            # 性格修正映射：boost=nature//5, nerf=nature%5
+            # 对应能力索引：0=Atk→IV[1], 1=Def→IV[2], 2=Spe→IV[5], 3=SpA→IV[3], 4=SpD→IV[4]
+            _NAT_TO_IV = {0: 1, 1: 2, 2: 5, 3: 3, 4: 4}
+
+            def _nature_mod_for_stat(nature_idx: int | None, iv_idx: int) -> float:
+                if nature_idx is None:
+                    return 1.0
+                boost = nature_idx // 5
+                nerf = nature_idx % 5
+                if boost == nerf:
+                    return 1.0
+                if iv_idx == _NAT_TO_IV.get(boost, -1):
+                    return 1.1
+                if iv_idx == _NAT_TO_IV.get(nerf, -1):
+                    return 0.9
+                return 1.0
+
+            def _stat_to_iv_range(stat_val: int, base: int, lv: int, nat_mod: float, is_hp: bool) -> tuple[int, int]:
+                """能力值 → 个体值范围。"""
+                possible = []
+                for iv in range(32):
+                    if is_hp:
+                        computed = (2 * base + iv) * lv // 100 + lv + 10
+                    else:
+                        raw = (2 * base + iv) * lv // 100
+                        computed = int(raw * nat_mod) if nat_mod != 1.0 else raw
+                    if computed == int(stat_val):
+                        possible.append(iv)
+                return (min(possible), max(possible)) if possible else (0, 31)
+
+            iv_min = [0, 0, 0, 0, 0, 0]
+            iv_max = [31, 31, 31, 31, 31, 31]
+            stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
+            for i, name in enumerate(stat_names):
+                sv = stats.get(name)
+                if sv is not None and 0 <= i < 6:
+                    nm = _nature_mod_for_stat(ni, i)
+                    lo, hi = _stat_to_iv_range(sv, base_stats[i], level, nm, i == 0)
+                    iv_min[i], iv_max[i] = lo, hi
+                    log(f"[自动反查] {name}={sv} → IV {lo}-{hi} (基础{base_stats[i]} Lv{level} 修正{nm})")
+
+            natures_locked = (True,) * 25
+            if ni is not None and 0 <= ni < 25:
+                natures_locked = tuple(i == ni for i in range(25))
+
             criteria = replace(search_criteria, seed=seed_pair_from_result(seed_result),
                               shiny_mode="any",
                               initial_advances=max(0, target.raw_target_advances - 500),
                               max_advances=target.raw_target_advances + 500)
-            # 用 OCR 结果覆盖筛选项
-            iv_min = [stats.get(name, 0) for name in ["HP", "攻击", "防御", "特攻", "特防", "速度"]]
-            iv_max = list(iv_min)
-            natures_locked = (True,) * 25
-            if nature:
-                ni = _NATURE_MAP.get(str(nature))
-                if ni is not None and 0 <= ni < 25:
-                    natures_locked = tuple(i == ni for i in range(25))
             reverse_filter = StateFilter(
                 iv_min=tuple(iv_min),
                 iv_max=tuple(iv_max),
                 natures=natures_locked,
-                ability=criteria.state_filter.ability,
-                gender=criteria.state_filter.gender,
-                shiny=criteria.state_filter.shiny,
             )
             criteria = replace(criteria, state_filter=reverse_filter)
             candidates = generate_static_candidates(criteria)
