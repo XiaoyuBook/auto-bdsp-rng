@@ -2705,7 +2705,7 @@ class MainWindow(QMainWindow):
             log(f"[捕获精灵信息] 发送 RIGHT 指令失败: {exc}")
             return
         log("[捕获精灵信息] 已发送 RIGHT 指令，等待页面切换…")
-        time.sleep(1.5)
+        time.sleep(2.0)
 
         # 3) 捕获能力页 → OCR stats
         try:
@@ -2733,22 +2733,24 @@ class MainWindow(QMainWindow):
             log("[捕获精灵信息] 能力: 未识别")
 
     def _send_easycon_right(self) -> None:
-        """通过伊机控发送 RIGHT d-pad 按钮。"""
+        """通过伊机控发送 RIGHT d-pad 按钮（与反查脚本相同格式）。"""
         log = self.auto_rng_tab.add_log
-        script_text = "RIGHT 100\n"
+        # 反查脚本中切换页面的格式：RIGHT 换行 WAIT 200
+        script_text = "RIGHT\nWAIT 200\n"
         if self.easycon_tab._is_bridge_mode():
-            log(f"[捕获精灵信息] Bridge 模式, 发送脚本: {script_text.strip()}")
+            log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT + WAIT 200")
             backend = self.easycon_tab._ensure_bridge_backend()
             result = backend.run_script_text(script_text, "right_press")
             log(f"[捕获精灵信息] Bridge 脚本完成: exit_code={result.exit_code}")
         else:
-            log(f"[捕获精灵信息] CLI 模式, 发送脚本: {script_text.strip()}")
+            log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT + WAIT 200")
             port = self.easycon_tab.port_combo.currentText()
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             from auto_bdsp_rng.automation.easycon import CliEasyConBackend
-            result = CliEasyConBackend().run_script_text(script_text, "right_press", port=port)
-            log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}")
+            cli = CliEasyConBackend()
+            result = cli.run_script_text(script_text, "right_press", port=port)
+            log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:100] if result.stdout else '无'}")
 
     def _advance_tick(self) -> None:
         self._tracked_advances += self._advance_step
