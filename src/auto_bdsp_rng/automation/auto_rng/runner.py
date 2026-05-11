@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -190,11 +191,25 @@ def _missing_service(*_args: object, **_kwargs: object) -> object:
     raise RuntimeError("AutoRngRunner service is not configured")
 
 
+_NATURE_MAP: dict[str, int] = {
+    "勤奋": 0, "怕寂寞": 1, "勇敢": 2, "固执": 3, "顽皮": 4,
+    "大胆": 5, "坦率": 6, "悠闲": 7, "淘气": 8, "乐天": 9,
+    "胆小": 10, "急躁": 11, "认真": 12, "爽朗": 13, "天真": 14,
+    "害羞": 15, "温顺": 16, "冷静": 17, "内敛": 18, "慢吞吞": 19,
+    "马虎": 20, "温和": 21, "自大": 22, "慎重": 23, "浮躁": 24,
+}
+
+
+def _nature_index(name: str) -> int | None:
+    return _NATURE_MAP.get(name)
+
+
 @dataclass(frozen=True)
 class AutoRngServices:
     capture_seed: Callable[[], AutoRngSeedResult] = _missing_service  # type: ignore[assignment]
     reidentify: Callable[[AutoRngSeedResult], AutoRngSeedResult] = _missing_service  # type: ignore[assignment]
     search_candidates: Callable[[AutoRngSeedResult], Sequence[object]] = _missing_service  # type: ignore[assignment]
+    search_sync: Callable[[AutoRngSeedResult, int, int | None], list[object]] | None = None
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
     run_hit_script_with_shiny_check: Callable[[str, str, float], ShinyCheckResult] | None = None
     run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], None] | None = None
@@ -234,6 +249,9 @@ class AutoRngRunner:
         self._all_candidates: list[object] = []  # 本轮所有候选
         self._last_shiny_interval: float | None = None
         self._last_used_delay: int | None = None
+        self._is_sync_active: bool = False  # 当前队首是否为同步精灵
+        self._sync_initial: bool = False  # 本轮初始同步状态（每轮重置）
+        self._need_sync_switch: bool = False  # 本次过帧是否需要切换同步状态
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -311,22 +329,59 @@ class AutoRngRunner:
 
     def _search_target(self) -> None:
         seed = self._require_seed()
-        candidates = self.services.search_candidates(seed)
-        # 过滤已过帧：只保留可达候选
-        min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
+        sync_enabled = self.config.sync_mode >= 1
+        nature_idx: int | None = None
+        if sync_enabled and self.config.sync_nature:
+            nature_idx = _nature_index(self.config.sync_nature)
         was_missed = self._missed_target_advance is not None
+
+        # 双重搜索：按当前同步状态先搜，再搜另一状态
+        from auto_bdsp_rng.gen8_static.models import Lead
+        results_primary: list[object] = []
+        results_secondary: list[object] = []
+
+        lead_primary = nature_idx if self._is_sync_active and nature_idx is not None else int(Lead.NONE)
+        if sync_enabled and self.services.search_sync is not None:
+            results_primary = self.services.search_sync(seed, lead_primary, nature_idx if self._is_sync_active else None)
+            # 另一状态
+            lead_secondary = nature_idx if not self._is_sync_active and nature_idx is not None else int(Lead.NONE)
+            nature_secondary = nature_idx if not self._is_sync_active else None
+            results_secondary = self.services.search_sync(seed, lead_secondary, nature_secondary)
+        else:
+            results_primary = list(self.services.search_candidates(seed))
+
+        # 合并去重（按 advances 排序，PID+EC 相同取低帧）
+        seen_keys: set[str] = set()
+        merged: list[object] = []
+        for state in sorted(results_primary + results_secondary, key=lambda s: getattr(s, "advances", 0)):
+            key = f"{getattr(state, 'pid', 0):08X}:{getattr(state, 'ec', 0):08X}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                merged.append(state)
+
+        # 过滤已过帧
+        min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
         if self._missed_target_advance is not None:
             min_reachable = max(min_reachable, self._missed_target_advance + 1)
-        reachable = [c for c in candidates if c.advances >= min_reachable]
+        reachable = [c for c in merged if getattr(c, "advances", 0) >= min_reachable]
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
-            self._history("cycle_result", False, None, None)  # 无候选，本轮结束
+            self._history("cycle_result", False, None, None, None)
             self._cycle_started = False
             return
         self._locked_target = decision.target
         self._missed_target_advance = None
+        # 判断目标是否需要切换同步状态
         locked_adv = decision.target.raw_target_advances if decision.target else 0
+        if sync_enabled and self.services.search_sync is not None:
+            in_primary = any(getattr(c, "advances", 0) == locked_adv for c in results_primary)
+            if in_primary:
+                self._need_sync_switch = False  # 目标在当前同步状态下找到，无需切换
+            else:
+                self._need_sync_switch = True   # 目标在另一同步状态下找到，需要切换
+        else:
+            self._need_sync_switch = False
         locked_idx = next((i for i, c in enumerate(reachable) if getattr(c, "advances", 0) == locked_adv), 0)
         if was_missed:
             self._history("candidates_refiltered", reachable, locked_idx)
@@ -352,6 +407,8 @@ class AutoRngRunner:
         self._missed_target_advance = None
         self._completed_loops += 1
         self._cycle_started = True
+        self._sync_initial = self.config.sync_mode >= 2  # 首位同步精灵
+        self._is_sync_active = self._sync_initial
         self._history("cycle_start", self._completed_loops)
         text = path.read_text(encoding="utf-8")
         self.services.run_script_text(text, path.name)
@@ -376,8 +433,16 @@ class AutoRngRunner:
         path = self.config.advance_script_path
         if path is None:
             raise RuntimeError("过帧脚本未配置")
-        text = prepare_advance_script_text(path.read_text(encoding="utf-8"), self._requested_advances)
+        text = path.read_text(encoding="utf-8")
+        # 同步切换：目标在另一同步状态下找到，需要翻转队首
+        if self._need_sync_switch and self.config.sync_mode >= 1:
+            text = re.sub(r"\$精灵切换开关\s*=\s*\d+", "$精灵切换开关 = 1", text)
+        text = prepare_advance_script_text(text, self._requested_advances)
         self.services.run_script_text(text, path.name)
+        # 执行后翻转内部同步状态
+        if self._need_sync_switch:
+            self._is_sync_active = not self._is_sync_active
+            self._need_sync_switch = False
         decision = decide_after_advance_script(
             self._requested_advances,
             reseed_threshold_frames=self.config.reseed_threshold_frames,

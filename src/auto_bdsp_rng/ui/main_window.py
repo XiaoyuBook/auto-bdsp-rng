@@ -2566,6 +2566,17 @@ class MainWindow(QMainWindow):
                 self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，最低帧 Adv={locked}")
             return candidates
 
+        def search_sync_service(seed_result: AutoRngSeedResult, lead: int, nature_locked: int | None) -> list[State8]:
+            """按指定 lead 和锁定性格搜索。lead=255 为无同步，0-24 为同步对应性格值。"""
+            from auto_bdsp_rng.gen8_static.models import Lead
+            crit = replace(search_criteria, seed=seed_pair_from_result(seed_result),
+                          lead=int(lead))
+            if nature_locked is not None and 0 <= nature_locked <= 24:
+                natures = tuple(i == nature_locked for i in range(25))
+                crit = replace(crit, state_filter=replace(crit.state_filter, natures=natures))
+            candidates = generate_static_candidates(crit)
+            return list(candidates)
+
         # CLI 后端（按需创建，复用同一个实例以便 stop_current_script 生效）
         _cli_backend: CliEasyConBackend | None = None
 
@@ -2751,6 +2762,7 @@ class MainWindow(QMainWindow):
             capture_seed=capture_seed_service,
             reidentify=reidentify_service,
             search_candidates=search_candidates_service,
+            search_sync=search_sync_service,
             run_script_text=run_script_text_service,
             run_hit_script_with_shiny_check=run_hit_script_with_shiny_check,
             run_reverse_lookup=reverse_lookup_service,
