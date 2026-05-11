@@ -2595,12 +2595,15 @@ class MainWindow(QMainWindow):
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
             self._capture_cancel.clear()
             errors: list[BaseException] = []
+            script_done = threading.Event()
 
             def run_script() -> None:
                 try:
                     run_script_text_service(script_text, name)
                 except BaseException as exc:
                     errors.append(exc)
+                finally:
+                    script_done.set()
 
             # 脚本和 OCR 并行：脚本线程运行撞闪，主线程监测闪符
             script_thread = threading.Thread(target=run_script, daemon=True)
@@ -2610,8 +2613,9 @@ class MainWindow(QMainWindow):
                     lambda: capture_preview_frame(tracking_config.capture),
                     read_ocr_text,
                     should_stop=self._capture_cancel.is_set,
-                    timeout_seconds=max(45.0, threshold_seconds + 10.0),
                     poll_interval_seconds=0.1,
+                    script_done=script_done,
+                    grace_seconds=30.0,
                 )
             except Exception:
                 stop_current_script_service()
