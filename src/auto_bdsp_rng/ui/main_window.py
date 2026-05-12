@@ -2495,6 +2495,15 @@ class MainWindow(QMainWindow):
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
 
+            # 测种前先暂停预览，避免抢摄像头；测完后恢复
+            preview_was_running = self._preview_timer.isActive()
+            if preview_was_running:
+                self._preview_timer.stop()
+                self.preview_button.setText(self._text("preview_button"))
+                self.preview_label.clear()
+                self.preview_label.setText(self._text("no_preview"))
+                time.sleep(0.3)  # 等摄像头释放
+
             observation = capture_player_blinks(
                 tracking_config.capture,
                 should_stop=self._capture_cancel.is_set,
@@ -2515,6 +2524,10 @@ class MainWindow(QMainWindow):
                 measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(seed_result)
+            # 测种完成后恢复预览（如果之前是开着的）
+            if preview_was_running and not self._preview_timer.isActive():
+                self._preview_timer.start()
+                self.preview_button.setText(self._text("stop_preview"))
             return seed_result
 
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
@@ -2525,6 +2538,15 @@ class MainWindow(QMainWindow):
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
+
+            # 测种前暂停预览，避免抢摄像头
+            preview_was_running = self._preview_timer.isActive()
+            if preview_was_running:
+                self._preview_timer.stop()
+                self.preview_button.setText(self._text("preview_button"))
+                self.preview_label.clear()
+                self.preview_label.setText(self._text("no_preview"))
+                time.sleep(0.3)
 
             # 约束 reidentify 搜索范围：按预期位置缩小 search_min
             search_max = max(100_000, config.max_advances, search_criteria.max_advances)
@@ -2563,6 +2585,9 @@ class MainWindow(QMainWindow):
                 measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(reidentified)
+            if preview_was_running and not self._preview_timer.isActive():
+                self._preview_timer.start()
+                self.preview_button.setText(self._text("stop_preview"))
             return reidentified
 
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
