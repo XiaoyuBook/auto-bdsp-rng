@@ -3272,33 +3272,42 @@ class MainWindow(QMainWindow):
 def _compute_iv_range(base_stats, stats, levels, nature, characteristic, hidden_power):
     """基于 PokeFinder IVChecker 算法计算个体值范围"""
     iv_order = [0, 1, 2, 5, 3, 4]
-    labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+
+    try:
+        from auto_bdsp_rng.rng_core._native import compute_iv_ranges as _native_iv_ranges
+    except ImportError:
+        _native_iv_ranges = None
 
     def _calc_single(bs, st, lv, nat, charac):
-        min_ivs = [31] * 6
-        max_ivs = [0] * 6
-        for i in range(6):
-            for iv in range(32):
-                if nat != 255:
-                    increased, decreased = NATURE_MODIFIERS[nat]
-                    base = ((2 * bs[i] + iv) * lv) // 100 + 5
-                    if i == 0:
-                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
-                    if i == increased:
-                        base = (base * 110) // 100
-                    elif i == decreased:
-                        base = (base * 90) // 100
-                    if base == st[i]:
-                        min_ivs[i] = min(iv, min_ivs[i])
-                        max_ivs[i] = max(iv, max_ivs[i])
-                else:
-                    if i == 0:
-                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
-                    else:
+        if _native_iv_ranges is not None:
+            ranges = _native_iv_ranges(list(bs), list(st), nat, lv)
+            min_ivs = [max(0, r[0]) for r in ranges]
+            max_ivs = [min(31, r[1]) for r in ranges]
+        else:
+            min_ivs = [31] * 6
+            max_ivs = [0] * 6
+            for i in range(6):
+                for iv in range(32):
+                    if nat != 255:
+                        increased, decreased = NATURE_MODIFIERS[nat]
                         base = ((2 * bs[i] + iv) * lv) // 100 + 5
-                    if base == st[i] or (i != 0 and (int(base * 0.9) == st[i] or int(base * 1.1) == st[i])):
-                        min_ivs[i] = min(iv, min_ivs[i])
-                        max_ivs[i] = max(iv, max_ivs[i])
+                        if i == 0:
+                            base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                        if i == increased:
+                            base = (base * 110) // 100
+                        elif i == decreased:
+                            base = (base * 90) // 100
+                        if base == st[i]:
+                            min_ivs[i] = min(iv, min_ivs[i])
+                            max_ivs[i] = max(iv, max_ivs[i])
+                    else:
+                        if i == 0:
+                            base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                        else:
+                            base = ((2 * bs[i] + iv) * lv) // 100 + 5
+                        if base == st[i] or (i != 0 and (int(base * 0.9) == st[i] or int(base * 1.1) == st[i])):
+                            min_ivs[i] = min(iv, min_ivs[i])
+                            max_ivs[i] = max(iv, max_ivs[i])
 
         possible = [[] for _ in range(6)]
         char_high = 31
