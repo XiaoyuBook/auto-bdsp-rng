@@ -23,6 +23,12 @@ from auto_bdsp_rng.gen8_static.models import (
 from auto_bdsp_rng.rng_core.generators import BDSPXorshift, RNGList, XoroshiroBDSP
 from auto_bdsp_rng.rng_core.seed import SeedPair64, U32_MAX
 
+try:
+    from auto_bdsp_rng.rng_core._native import generate_static as _native_generate
+    _HAS_NATIVE = True
+except ImportError:
+    _HAS_NATIVE = False
+
 
 def _gen_static_ec(rng: BDSPXorshift) -> int:
     return ((rng.next() % U32_MAX) + 0x80000000) & U32_MAX
@@ -147,6 +153,35 @@ class StaticGenerator8:
         if self.offset < 0:
             raise ValueError("offset must be non-negative")
 
+    def _generate_native(self, seed0: int, seed1: int, roamer: bool) -> list[State8]:
+        """使用 C++ 原生扩展生成（高速路径），输出与 Python 完全一致。"""
+        sf = self.state_filter
+        template = self.template
+        profile = self.profile
+        results_raw = _native_generate(
+            seed0, seed1,
+            self.initial_advances, self.max_advances, self.offset,
+            int(self.lead), roamer,
+            int(template.shiny), template.fateful,
+            template.iv_count, template.ability,
+            template.info.gender_ratio if not roamer else 0,
+            template.info.ability_count,
+            profile.tid, profile.sid,
+            sf.skip, sf.ability, sf.gender, sf.shiny,
+            sf.height_min, sf.height_max, sf.weight_min, sf.weight_max,
+            tuple(sf.iv_min), tuple(sf.iv_max),
+            tuple(sf.natures), tuple(sf.hidden_powers),
+        )
+        return [
+            State8(
+                advances=r[0], ec=r[1], sidtid=r[2], pid=r[3],
+                ivs=tuple(r[4]),
+                ability=r[5], gender=r[6], level=r[7],
+                nature=r[8], shiny=r[9], height=r[10], weight=r[11],
+            )
+            for r in results_raw
+        ]
+
     def generate(self, seed0: int | SeedPair64, seed1: int | None = None) -> list[State8]:
         if isinstance(seed0, SeedPair64):
             if seed1 is not None:
@@ -156,6 +191,10 @@ class StaticGenerator8:
             raise ValueError("seed1 is required")
         seed0 = validate_seed64(seed0, "seed0")
         seed1 = validate_seed64(seed1, "seed1")
+
+        if _HAS_NATIVE:
+            return self._generate_native(seed0, seed1, self.template.roamer)
+
         if self.template.roamer:
             return self.generate_roamer(seed0, seed1)
         return self.generate_non_roamer(seed0, seed1)
