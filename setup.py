@@ -1,5 +1,10 @@
+import sys
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
+
+extra_compile_args = []
+if sys.platform == "win32":
+    extra_compile_args.append("/utf-8")  # MSVC 中文环境强制 UTF-8 源文件编码
 
 ext_modules = [
     Pybind11Extension(
@@ -10,6 +15,7 @@ ext_modules = [
         ],
         cxx_std=17,
         include_dirs=["src/auto_bdsp_rng/rng_core/native"],
+        extra_compile_args=extra_compile_args,
     ),
 ]
 
