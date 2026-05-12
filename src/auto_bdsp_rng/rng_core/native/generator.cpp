@@ -90,14 +90,13 @@ std::vector<StateResult> generate_non_roamer(
     const FilterParams& filter)
 {
     u16 tsv = tid ^ sid;
-    bool need_shiny = filter.shiny_mask != 255;
 
     Xorshift rng(seed0, seed1);
     rng.jump(initial_advances + offset);
     RNGList<u32, Xorshift, 32, gen_ec> rng_list(rng);
 
     std::vector<StateResult> results;
-    for (u32 cnt = 0; cnt <= max_advances; cnt++) {
+    for (u32 cnt = 0; cnt <= max_advances; cnt++, rng_list.advanceState()) {
         u32 ec = rng_list.next();
         u32 sidtid = rng_list.next();
         u32 pid = rng_list.next();
@@ -115,12 +114,6 @@ std::vector<StateResult> generate_non_roamer(
             } else {
                 pid = force_non_shiny(pid, tsv);
             }
-        }
-
-        // 第1关：shiny 提前拒绝
-        if (need_shiny && !(filter.shiny_mask & shiny)) {
-            rng_list.advanceState();
-            continue;
         }
 
         // IV 生成
@@ -168,26 +161,7 @@ std::vector<StateResult> generate_non_roamer(
         u8 height = rng_list.next(129) + rng_list.next(128);
         u8 weight = rng_list.next(129) + rng_list.next(128);
 
-        // 第2关：ability/gender/nature/height/weight 提前拒绝
-        if (quick_reject_shiny_a_g_n_h_w(shiny, ability, gender, nature, height, weight, filter)) {
-            rng_list.advanceState();
-            continue;
-        }
-
-        // 第3关：IV + hidden power（需要先获得完整 ivs）
-        if (!filter.skip) {
-            bool iv_pass = true;
-            for (int i = 0; i < 6; i++) {
-                if (ivs[i] < filter.iv_min[i] || ivs[i] > filter.iv_max[i]) {
-                    iv_pass = false; break;
-                }
-            }
-            if (!iv_pass || !filter.hidden_powers[hidden_power(ivs)]) {
-                rng_list.advanceState();
-                continue;
-            }
-        }
-
+        // Filter at end (same as PokeFinder)
         StateResult r{};
         r.advances = initial_advances + cnt;
         r.ec = ec; r.sidtid = sidtid; r.pid = pid;
@@ -195,9 +169,10 @@ std::vector<StateResult> generate_non_roamer(
         r.ability = ability; r.gender = gender; r.level = 1;
         r.nature = nature; r.shiny = shiny;
         r.height = height; r.weight = weight;
-        results.push_back(r);
 
-        rng_list.advanceState();
+        if (pass_filter(r, filter)) {
+            results.push_back(r);
+        }
     }
     return results;
 }
