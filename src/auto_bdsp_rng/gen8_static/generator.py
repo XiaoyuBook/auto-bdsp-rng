@@ -16,6 +16,7 @@ from auto_bdsp_rng.gen8_static.models import (
     StateFilter,
     StaticTemplate8,
     get_shiny,
+    hidden_power,
     is_shiny,
     validate_seed64,
 )
@@ -163,6 +164,7 @@ class StaticGenerator8:
         rng = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         rng.advance(self.initial_advances + self.offset)
         rng_list: RNGList[int] = RNGList(rng, size=32, generate=_gen_static_ec)
+        sf = self.state_filter
 
         states: list[State8] = []
         for count in range(self.max_advances + 1):
@@ -175,22 +177,26 @@ class StaticGenerator8:
             gender = _generate_gender(rng_list, self.template, self.lead)
             nature = _generate_nature(rng_list, self.lead)
             height, weight = _generate_height_weight(rng_list)
+
+            # 快速预筛选：在创建 State8 之前先过滤，大幅减少对象分配
+            if sf.quick_reject(shiny, ability, gender, nature, height, weight):
+                rng_list.advance_state()
+                continue
+            # 检查 IV 和隐藏力量（需要 IV 数据）
+            if not all(min_iv <= iv <= max_iv for iv, min_iv, max_iv in zip(ivs, sf.iv_min, sf.iv_max)):
+                rng_list.advance_state()
+                continue
+            if not sf.hidden_powers[hidden_power(ivs)]:
+                rng_list.advance_state()
+                continue
+
             state = State8(
                 advances=self.initial_advances + count,
-                ec=ec,
-                sidtid=sidtid,
-                pid=pid,
-                ivs=ivs,
-                ability=ability,
-                gender=gender,
-                level=self.template.level,
-                nature=nature,
-                shiny=shiny,
-                height=height,
-                weight=weight,
+                ec=ec, sidtid=sidtid, pid=pid, ivs=ivs,
+                ability=ability, gender=gender, level=self.template.level,
+                nature=nature, shiny=shiny, height=height, weight=weight,
             )
-            if self.state_filter.compare_state(state):
-                states.append(state)
+            states.append(state)
             rng_list.advance_state()
         return states
 
@@ -198,6 +204,7 @@ class StaticGenerator8:
         gender = GENDER_FEMALE if self.template.species == 488 else GENDER_GENDERLESS
         roamer = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         roamer.advance(self.initial_advances + self.offset)
+        sf = self.state_filter
 
         states: list[State8] = []
         for count in range(self.max_advances + 1):
@@ -210,20 +217,19 @@ class StaticGenerator8:
             ability = rng.next_uint(2)
             nature = _generate_nature(rng, self.lead)
             height, weight = _generate_height_weight(rng)
+
+            if sf.quick_reject(shiny, ability, gender, nature, height, weight):
+                continue
+            if not all(min_iv <= iv <= max_iv for iv, min_iv, max_iv in zip(ivs, sf.iv_min, sf.iv_max)):
+                continue
+            if not sf.hidden_powers[hidden_power(ivs)]:
+                continue
+
             state = State8(
                 advances=self.initial_advances + count,
-                ec=ec,
-                sidtid=sidtid,
-                pid=pid,
-                ivs=ivs,
-                ability=ability,
-                gender=gender,
-                level=self.template.level,
-                nature=nature,
-                shiny=shiny,
-                height=height,
-                weight=weight,
+                ec=ec, sidtid=sidtid, pid=pid, ivs=ivs,
+                ability=ability, gender=gender, level=self.template.level,
+                nature=nature, shiny=shiny, height=height, weight=weight,
             )
-            if self.state_filter.compare_state(state):
-                states.append(state)
+            states.append(state)
         return states
