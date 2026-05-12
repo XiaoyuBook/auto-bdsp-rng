@@ -161,6 +161,7 @@ class StaticGenerator8:
         return self.generate_non_roamer(seed0, seed1)
 
     def generate_non_roamer(self, seed0: int, seed1: int) -> list[State8]:
+        import time as _time
         rng = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         rng.advance(self.initial_advances + self.offset)
         rng_list: RNGList[int] = RNGList(rng, size=32, generate=_gen_static_ec)
@@ -168,7 +169,10 @@ class StaticGenerator8:
         need_shiny = sf.shiny != 255
 
         states: list[State8] = []
+        _yield_every = 50000
         for count in range(self.max_advances + 1):
+            if count % _yield_every == 0:
+                _time.sleep(0)  # 释放 GIL，让 Qt UI 线程有机会处理事件
             ec = rng_list.next()
             sidtid = rng_list.next()
             pid = rng_list.next()
@@ -222,6 +226,7 @@ class StaticGenerator8:
         return states
 
     def generate_roamer(self, seed0: int, seed1: int) -> list[State8]:
+        import time as _time
         gender = GENDER_FEMALE if self.template.species == 488 else GENDER_GENDERLESS
         roamer = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         roamer.advance(self.initial_advances + self.offset)
@@ -229,7 +234,10 @@ class StaticGenerator8:
         need_shiny = sf.shiny != 255
 
         states: list[State8] = []
+        _yield_every = 50000
         for count in range(self.max_advances + 1):
+            if count % _yield_every == 0:
+                _time.sleep(0)
             ec = _gen_static_ec(roamer)
             rng = XoroshiroBDSP(ec)
             sidtid = rng.next_uint(U32_MAX)
