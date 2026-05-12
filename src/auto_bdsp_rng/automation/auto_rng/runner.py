@@ -374,9 +374,12 @@ class AutoRngRunner:
                 reachable_flags.append(sync_flags[i])
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
-            self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
             self._history("cycle_result", False, None, None, None)
             self._cycle_started = False
+            if self.config.loop_mode == "single":
+                self._set_progress(AutoRngPhase.COMPLETED, "无候选，单次模式已完成")
+            else:
+                self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
             return
         self._locked_target = decision.target
         self._missed_target_advance = None
