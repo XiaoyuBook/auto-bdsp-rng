@@ -1593,7 +1593,12 @@ class EasyConPanel(QWidget):
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
 
     def _log_context_menu(self, pos):
-        self.log_view.createStandardContextMenu().exec(self.log_view.mapToGlobal(pos))
+        menu = self.log_view.createStandardContextMenu()
+        if menu is None or menu.isEmpty():
+            menu = QMenu(self)
+            menu.addAction("复制", self.log_view.copy, QKeySequence("Ctrl+C"))
+            menu.addAction("全选", self.log_view.selectAll, QKeySequence("Ctrl+A"))
+        menu.exec(self.log_view.mapToGlobal(pos))
 
     def copy_all_logs(self) -> None:
         QApplication.clipboard().setText(self.log_view.toPlainText())

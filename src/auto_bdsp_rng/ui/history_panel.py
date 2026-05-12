@@ -23,9 +23,18 @@ class _CopyableTextEdit(QPlainTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
+        self.setUndoRedoEnabled(False)
 
     def contextMenuEvent(self, event):
-        self.createStandardContextMenu().exec(event.globalPos())
+        menu = self.createStandardContextMenu()
+        if menu is None or menu.isEmpty():
+            from PySide6.QtWidgets import QMenu
+            from PySide6.QtGui import QAction
+            menu = QMenu(self)
+            menu.addAction("复制", self.copy, QAction.Shortcut("Ctrl+C"))
+            menu.addAction("全选", self.selectAll, QAction.Shortcut("Ctrl+A"))
+        menu.exec(event.globalPos())
 
 SEPARATOR_THICK = "═" * 54
 SEPARATOR_THIN = "─" * 54
