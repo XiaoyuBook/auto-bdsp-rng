@@ -18,6 +18,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+class _CopyableTextEdit(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+
+    def contextMenuEvent(self, event):
+        self.createStandardContextMenu().exec(event.globalPos())
+
 SEPARATOR_THICK = "═" * 54
 SEPARATOR_THIN = "─" * 54
 SEPARATOR_END = "─" * 4 + "\n"
@@ -135,9 +144,7 @@ class HistoryPanel(QWidget):
         layout.addLayout(toolbar)
 
         # 文本区
-        self.text_view = QPlainTextEdit()
-        self.text_view.setReadOnly(True)
-        self.text_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.text_view = _CopyableTextEdit()
         self.text_view.setFont(QFont("Consolas", 10))
         self.text_view.setStyleSheet("QPlainTextEdit { padding: 12px; }")
         layout.addWidget(self.text_view, 1)

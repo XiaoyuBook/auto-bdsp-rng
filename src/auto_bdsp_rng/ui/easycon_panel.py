@@ -576,6 +576,8 @@ class EasyConPanel(QWidget):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.log_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.log_view.customContextMenuRequested.connect(self._log_context_menu)
         self.log_view.setStyleSheet(
             f"""
             QTextEdit {{
@@ -765,9 +767,9 @@ class EasyConPanel(QWidget):
         mode_row.addWidget(QLabel("连接模式"))
         self.backend_mode = QComboBox()
         self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
-        self.backend_mode.addItem("CLI 诊断", "cli")
+        self.backend_mode.addItem("CLI 模式", "cli")
         self.backend_mode.setStyleSheet(combo_style)
-        self.backend_mode.setCurrentIndex(0)
+        self.backend_mode.setCurrentIndex(1)  # 默认 CLI 模式
         self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
         mode_row.addWidget(self.backend_mode, 1)
         layout.addLayout(mode_row)
@@ -1589,6 +1591,9 @@ class EasyConPanel(QWidget):
         for line in message.splitlines() or [""]:
             self.log_view.append(f'<span style="color:{color}">[{level}] {line}</span>')
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _log_context_menu(self, pos):
+        self.log_view.createStandardContextMenu().exec(self.log_view.mapToGlobal(pos))
 
     def copy_all_logs(self) -> None:
         QApplication.clipboard().setText(self.log_view.toPlainText())

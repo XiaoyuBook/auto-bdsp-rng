@@ -2436,34 +2436,25 @@ class MainWindow(QMainWindow):
 
     def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
         tracking_config = self._config_from_form()
+        self.auto_rng_tab.target_form.set_version(self._profile_version)
+        record = self.auto_rng_tab.target_form.selected_record()
+        state_filter, shiny_mode = self.auto_rng_tab.target_form.current_filter()
         try:
             initial_seed = self._current_seed_pair()
         except ValueError:
             initial_seed = SeedPair64(0, 0)
-        profile = self._current_profile()
-
-        # 获取所有目标（兜底：旧表单）
-        targets = self.auto_rng_tab.get_targets()
-        if not targets:
-            try:
-                self.auto_rng_tab.target_form.set_version(self._profile_version)
-                record = self.auto_rng_tab.target_form.selected_record()
-                sf, sm = self.auto_rng_tab.target_form.current_filter()
-                targets = [(record, sf, sm)]
-            except AttributeError:
-                pass
-
-        # 构建首个目标的 search_criteria（兼容反查服务等旧引用）
-        search_criteria: StaticSearchCriteria | None = None
-        if targets:
-            search_criteria = StaticSearchCriteria(
-                seed=initial_seed, profile=profile, record=targets[0][0],
-                state_filter=targets[0][1], initial_advances=0,
-                max_advances=config.max_advances, offset=0, lead=Lead.NONE,
-                shiny_mode=targets[0][2],
-            )
-        if search_criteria is not None:
-            self._update_auto_rng_search_summary(search_criteria)
+        search_criteria = StaticSearchCriteria(
+            seed=initial_seed,
+            profile=self._current_profile(),
+            record=record,
+            state_filter=state_filter,
+            initial_advances=0,
+            max_advances=config.max_advances,
+            offset=0,
+            lead=Lead.NONE,
+            shiny_mode=shiny_mode,
+        )
+        self._update_auto_rng_search_summary(search_criteria)
 
         def seed_pair_from_result(seed_result: AutoRngSeedResult) -> SeedPair64:
             seed = seed_result.seed
@@ -2566,53 +2557,25 @@ class MainWindow(QMainWindow):
             self.autoSeedCaptured.emit(reidentified)
             return reidentified
 
-        def _merge_candidates(all_candidates: list[State8]) -> list[State8]:
-            seen: set[str] = set()
-            merged: list[State8] = []
-            for c in sorted(all_candidates, key=lambda s: s.advances):
-                key = f"{c.pid:08X}:{c.ec:08X}"
-                if key not in seen:
-                    seen.add(key)
-                    merged.append(c)
-            return merged
-
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
-            if not targets:
-                return []
-            seed = seed_pair_from_result(seed_result)
-            all_candidates: list[State8] = []
-            for record, sf, sm in targets:
-                crit = StaticSearchCriteria(
-                    seed=seed, profile=profile, record=record, state_filter=sf,
-                    initial_advances=0, max_advances=config.max_advances, offset=0,
-                    lead=Lead.NONE, shiny_mode=sm,
-                )
-                all_candidates.extend(generate_static_candidates(crit))
-            merged = _merge_candidates(all_candidates)
-            if not merged:
+            candidates = generate_static_candidates(replace(search_criteria, seed=seed_pair_from_result(seed_result)))
+            locked = candidates[0].advances if candidates else None
+            if locked is None:
                 self.auto_rng_tab.add_log("找到 0 个候选")
             else:
-                self.auto_rng_tab.add_log(f"找到 {len(merged)} 个候选，最低帧 Adv={merged[0].advances}")
-            return merged
+                self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，最低帧 Adv={locked}")
+            return candidates
 
         def search_sync_service(seed_result: AutoRngSeedResult, lead: int, nature_locked: int | None) -> list[State8]:
             """按指定 lead 和锁定性格搜索。lead=255 为无同步，0-24 为同步对应性格值。"""
-            if not targets:
-                return []
             from auto_bdsp_rng.gen8_static.models import Lead
-            seed = seed_pair_from_result(seed_result)
-            all_candidates: list[State8] = []
-            for record, sf, sm in targets:
-                crit = StaticSearchCriteria(
-                    seed=seed, profile=profile, record=record, state_filter=sf,
-                    initial_advances=0, max_advances=config.max_advances, offset=0,
-                    lead=int(lead), shiny_mode=sm,
-                )
-                if nature_locked is not None and 0 <= nature_locked <= 24:
-                    natures = tuple(i == nature_locked for i in range(25))
-                    crit = replace(crit, state_filter=replace(crit.state_filter, natures=natures))
-                all_candidates.extend(generate_static_candidates(crit))
-            return _merge_candidates(all_candidates)
+            crit = replace(search_criteria, seed=seed_pair_from_result(seed_result),
+                          lead=int(lead))
+            if nature_locked is not None and 0 <= nature_locked <= 24:
+                natures = tuple(i == nature_locked for i in range(25))
+                crit = replace(crit, state_filter=replace(crit.state_filter, natures=natures))
+            candidates = generate_static_candidates(crit)
+            return list(candidates)
 
         # CLI 后端（按需创建，复用同一个实例以便 stop_current_script 生效）
         _cli_backend: CliEasyConBackend | None = None
