@@ -2729,7 +2729,7 @@ class MainWindow(QMainWindow):
                     if is_hp:
                         computed = (2 * base + iv) * lv // 100 + lv + 10
                     else:
-                        raw = (2 * base + iv) * lv // 100
+                        raw = (2 * base + iv) * lv // 100 + 5
                         computed = int(raw * nat_mod) if nat_mod != 1.0 else raw
                     if computed == int(stat_val):
                         possible.append(iv)
