@@ -665,9 +665,14 @@ class AutoRngRunner:
             self._locked_target = None
             self._history("cycle_result", True, result.interval_seconds, trigger, used_delay)
             self._cycle_started = False
+            # 判定出闪后自动录像 5 秒
+            try:
+                self.services.run_script_text("Capture 5000\n", "auto_capture")
+            except Exception:
+                pass
             self._set_progress(
                 AutoRngPhase.COMPLETED,
-                f"疑似出闪，间隔 {interval_text}，已停止自动流程",
+                f"疑似出闪，间隔 {interval_text}，已录像并停止自动流程",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
