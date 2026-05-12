@@ -2681,7 +2681,7 @@ class MainWindow(QMainWindow):
             run_script_text_service(text, path.name)
             time.sleep(1.0)
 
-            # OCR 笔记页 → 性格 + 个性
+            # OCR 笔记页 → 性格 + 个性（只做一次，识别可靠）
             log("[自动反查] 截图笔记页…")
             notes_frame = capture_preview_frame(tracking_config.capture)
             notes_result = extract_pokemon_info(notes_image=notes_frame)
@@ -2700,35 +2700,21 @@ class MainWindow(QMainWindow):
                     CliEasyConBackend().run_script_text(script_text, "reverse_right", port=port)
             time.sleep(2.0)
 
-            # OCR 能力页
-            log("[自动反查] 截图能力页…")
-            stats_frame = capture_preview_frame(tracking_config.capture)
-            stats_result = extract_pokemon_info(stats_image=stats_frame)
-            stats = stats_result.get("stats")
-            if not stats:
-                log("[自动反查] 能力值识别失败")
-                return
-
-            # 能力值 → 个体值 反算
+            # 能力值 → 个体值 反算（用到的辅助函数只定义一次）
             import math
             from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import compute_characteristic
             from auto_bdsp_rng.gen8_static.models import StateFilter
             from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
 
-            base_stats = search_criteria.record.species_info.stats  # (HP,Atk,Def,SpA,SpD,Spe)
+            base_stats = search_criteria.record.species_info.stats
             level = search_criteria.record.template.level
-
-            # 性格修正系数
             ni = _NATURE_MAP.get(str(nature)) if nature else None
-            # 性格修正映射：boost=nature//5, nerf=nature%5
-            # 对应能力索引：0=Atk→IV[1], 1=Def→IV[2], 2=Spe→IV[5], 3=SpA→IV[3], 4=SpD→IV[4]
             _NAT_TO_IV = {0: 1, 1: 2, 2: 5, 3: 3, 4: 4}
 
             def _nature_mod_for_stat(nature_idx: int | None, iv_idx: int) -> float:
                 if nature_idx is None:
                     return 1.0
-                boost = nature_idx // 5
-                nerf = nature_idx % 5
+                boost = nature_idx // 5; nerf = nature_idx % 5
                 if boost == nerf:
                     return 1.0
                 if iv_idx == _NAT_TO_IV.get(boost, -1):
@@ -2738,7 +2724,6 @@ class MainWindow(QMainWindow):
                 return 1.0
 
             def _stat_to_iv_range(stat_val: int, base: int, lv: int, nat_mod: float, is_hp: bool) -> tuple[int, int]:
-                """能力值 → 个体值范围。"""
                 possible = []
                 for iv in range(32):
                     if is_hp:
@@ -2750,51 +2735,69 @@ class MainWindow(QMainWindow):
                         possible.append(iv)
                 return (min(possible), max(possible)) if possible else (0, 31)
 
-            iv_min = [0, 0, 0, 0, 0, 0]
-            iv_max = [31, 31, 31, 31, 31, 31]
-            stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
-            for i, name in enumerate(stat_names):
-                sv = stats.get(name)
-                if sv is not None and 0 <= i < 6:
-                    nm = _nature_mod_for_stat(ni, i)
-                    lo, hi = _stat_to_iv_range(sv, base_stats[i], level, nm, i == 0)
-                    iv_min[i], iv_max[i] = lo, hi
-                    log(f"[自动反查] {name}={sv} → IV {lo}-{hi} (基础{base_stats[i]} Lv{level} 修正{nm})")
-
+            # 构建搜索条件模板（性格+个性锁定，帧数范围±500）
             natures_locked = (True,) * 25
             if ni is not None and 0 <= ni < 25:
                 natures_locked = tuple(i == ni for i in range(25))
-
             criteria = replace(search_criteria, seed=seed_pair_from_result(seed_result),
                               shiny_mode="any",
                               initial_advances=max(0, target.raw_target_advances - 500),
                               max_advances=target.raw_target_advances + 500)
-            reverse_filter = StateFilter(
-                iv_min=tuple(iv_min),
-                iv_max=tuple(iv_max),
-                natures=natures_locked,
-            )
-            criteria = replace(criteria, state_filter=reverse_filter)
-            candidates = generate_static_candidates(criteria)
-            log(f"[自动反查] PokeFinder 搜索结果: {len(candidates)} 个候选")
 
-            # 后置比对个性
-            if characteristic:
-                matched: list[object] = []
-                for state in candidates:
-                    state_ivs = [int(v) for v in (getattr(state, "ivs", None) or [])]
-                    if len(state_ivs) != 6:
-                        state_ivs = [0] * 6
-                    pid_val = int(getattr(state, "pid", 0))
-                    comp_char = compute_characteristic(pid_val, state_ivs)
-                    if comp_char == characteristic:
-                        matched.append(state)
-                log(f"[自动反查] 个性({characteristic})匹配: {len(matched)} 个")
-                candidates = matched
+            # 能力页 OCR 重试逻辑（最多3次）
+            stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
+            candidates: list[object] = []
+            for attempt in range(1, 4):
+                log(f"[自动反查] 能力页 OCR 第{attempt}次…")
+                stats_frame = capture_preview_frame(tracking_config.capture)
+                stats_result = extract_pokemon_info(stats_image=stats_frame)
+                stats = stats_result.get("stats")
+                if not stats:
+                    log(f"[自动反查] 第{attempt}次能力值识别失败")
+                    if attempt < 3:
+                        time.sleep(0.5)
+                    continue
+
+                # 能力值 → 个体值 反算
+                iv_min = [0, 0, 0, 0, 0, 0]
+                iv_max = [31, 31, 31, 31, 31, 31]
+                for i, name in enumerate(stat_names):
+                    sv = stats.get(name)
+                    if sv is not None and 0 <= i < 6:
+                        nm = _nature_mod_for_stat(ni, i)
+                        lo, hi = _stat_to_iv_range(sv, base_stats[i], level, nm, i == 0)
+                        iv_min[i], iv_max[i] = lo, hi
+                        log(f"[自动反查] {name}={sv} → IV {lo}-{hi} (基础{base_stats[i]} Lv{level} 修正{nm})")
+
+                reverse_filter = StateFilter(
+                    iv_min=tuple(iv_min), iv_max=tuple(iv_max),
+                    natures=natures_locked,
+                )
+                attempt_criteria = replace(criteria, state_filter=reverse_filter)
+                attempt_candidates = generate_static_candidates(attempt_criteria)
+                log(f"[自动反查] 第{attempt}次 PokeFinder 搜索: {len(attempt_candidates)} 个候选")
+
+                # 后置比对个性
+                if characteristic and attempt_candidates:
+                    matched: list[object] = []
+                    for state in attempt_candidates:
+                        state_ivs = [int(v) for v in (getattr(state, "ivs", None) or [])]
+                        if len(state_ivs) != 6:
+                            state_ivs = [0] * 6
+                        pid_val = int(getattr(state, "pid", 0))
+                        if compute_characteristic(pid_val, state_ivs) == characteristic:
+                            matched.append(state)
+                    log(f"[自动反查] 第{attempt}次 个性({characteristic})匹配: {len(matched)} 个")
+                    attempt_candidates = matched
+
+                if attempt_candidates:
+                    candidates = attempt_candidates
+                    break
+                log(f"[自动反查] 第{attempt}次未找到匹配个体，{'重试…' if attempt < 3 else '已达上限'}")
 
             # 输出结果
             if not candidates:
-                log("[自动反查] 未找到匹配个体")
+                log("[自动反查] 3次尝试均未找到匹配个体")
                 self.history_tab.reverse_lookup_results([], characteristic)
             else:
                 self.history_tab.reverse_lookup_results(candidates, characteristic)
