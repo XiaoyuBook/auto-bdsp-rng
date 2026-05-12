@@ -2671,6 +2671,10 @@ class MainWindow(QMainWindow):
 
         def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> None:
             import time
+            try:
+                from auto_bdsp_rng.rng_core._native import compute_iv_ranges as _compute_iv_ranges
+            except ImportError:
+                _compute_iv_ranges = None
 
             log = self.auto_rng_tab.captureLog.emit
             path = config.reverse_script_path
@@ -2709,32 +2713,6 @@ class MainWindow(QMainWindow):
             base_stats = search_criteria.record.species_info.stats
             level = search_criteria.record.template.level
             ni = _NATURE_MAP.get(str(nature)) if nature else None
-            _NAT_TO_IV = {0: 1, 1: 2, 2: 5, 3: 3, 4: 4}
-
-            def _nature_mod_for_stat(nature_idx: int | None, iv_idx: int) -> float:
-                if nature_idx is None:
-                    return 1.0
-                boost = nature_idx // 5; nerf = nature_idx % 5
-                if boost == nerf:
-                    return 1.0
-                if iv_idx == _NAT_TO_IV.get(boost, -1):
-                    return 1.1
-                if iv_idx == _NAT_TO_IV.get(nerf, -1):
-                    return 0.9
-                return 1.0
-
-            def _stat_to_iv_range(stat_val: int, base: int, lv: int, nat_mod: float, is_hp: bool) -> tuple[int, int]:
-                possible = []
-                for iv in range(32):
-                    if is_hp:
-                        computed = (2 * base + iv) * lv // 100 + lv + 10
-                    else:
-                        raw = (2 * base + iv) * lv // 100 + 5
-                        computed = int(raw * nat_mod) if nat_mod != 1.0 else raw
-                    if computed == int(stat_val):
-                        possible.append(iv)
-                return (min(possible), max(possible)) if possible else (0, 31)
-
             # 构建搜索条件模板（性格+个性锁定，帧数范围±500）
             natures_locked = (True,) * 25
             if ni is not None and 0 <= ni < 25:
@@ -2758,16 +2736,28 @@ class MainWindow(QMainWindow):
                         time.sleep(0.5)
                     continue
 
-                # 能力值 → 个体值 反算
-                iv_min = [0, 0, 0, 0, 0, 0]
-                iv_max = [31, 31, 31, 31, 31, 31]
+                # 能力值 → 个体值反算（使用 C++ PokeFinder Nature::computeStat 公式）
+                stat_vals = [int(stats.get(n, 0)) for n in stat_names]
+                use_nature = ni if (ni is not None and 0 <= ni < 25) else 255
+                if _compute_iv_ranges is not None:
+                    ranges = _compute_iv_ranges(list(base_stats), stat_vals, use_nature, level)
+                else:
+                    # Python fallback（C++ 未编译时）
+                    ranges = []
+                    for i, name in enumerate(stat_names):
+                        possible = []
+                        for iv in range(32):
+                            if i == 0:
+                                c = (2 * base_stats[i] + iv) * level // 100 + level + 10
+                            else:
+                                c = (2 * base_stats[i] + iv) * level // 100 + 5
+                            if c == stat_vals[i]:
+                                possible.append(iv)
+                        ranges.append((min(possible), max(possible)) if possible else (0, 31))
+                iv_min = [r[0] for r in ranges]
+                iv_max = [r[1] for r in ranges]
                 for i, name in enumerate(stat_names):
-                    sv = stats.get(name)
-                    if sv is not None and 0 <= i < 6:
-                        nm = _nature_mod_for_stat(ni, i)
-                        lo, hi = _stat_to_iv_range(sv, base_stats[i], level, nm, i == 0)
-                        iv_min[i], iv_max[i] = lo, hi
-                        log(f"[自动反查] {name}={sv} → IV {lo}-{hi} (基础{base_stats[i]} Lv{level} 修正{nm})")
+                    log(f"[自动反查] {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{base_stats[i]} Lv{level})")
 
                 reverse_filter = StateFilter(
                     iv_min=tuple(iv_min), iv_max=tuple(iv_max),

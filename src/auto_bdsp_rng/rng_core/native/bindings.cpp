@@ -85,6 +85,85 @@ static py::list generate_static_py(
     return out;
 }
 
+// ── IVChecker：PokeFinder Nature::computeStat 公式 ──
+
+static const float nature_modifiers[25][5] = {
+    {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}, // 0: Hardy
+    {1.1f, 0.9f, 1.0f, 1.0f, 1.0f}, // 1: Lonely
+    {1.1f, 1.0f, 1.0f, 1.0f, 0.9f}, // 2: Brave
+    {1.1f, 1.0f, 0.9f, 1.0f, 1.0f}, // 3: Adamant
+    {1.1f, 1.0f, 1.0f, 0.9f, 1.0f}, // 4: Naughty
+    {0.9f, 1.1f, 1.0f, 1.0f, 1.0f}, // 5: Bold
+    {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}, // 6: Docile
+    {1.0f, 1.1f, 1.0f, 1.0f, 0.9f}, // 7: Relaxed
+    {1.0f, 1.1f, 0.9f, 1.0f, 1.0f}, // 8: Impish
+    {1.0f, 1.1f, 1.0f, 0.9f, 1.0f}, // 9: Lax
+    {0.9f, 1.0f, 1.0f, 1.0f, 1.1f}, // 10: Timid
+    {1.0f, 0.9f, 1.0f, 1.0f, 1.1f}, // 11: Hasty
+    {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}, // 12: Serious
+    {1.0f, 1.0f, 0.9f, 1.0f, 1.1f}, // 13: Jolly
+    {1.0f, 1.0f, 1.0f, 0.9f, 1.1f}, // 14: Naive
+    {0.9f, 1.0f, 1.1f, 1.0f, 1.0f}, // 15: Modest
+    {1.0f, 0.9f, 1.1f, 1.0f, 1.0f}, // 16: Mild
+    {1.0f, 1.0f, 1.1f, 1.0f, 0.9f}, // 17: Quiet
+    {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}, // 18: Bashful
+    {1.0f, 1.0f, 1.1f, 0.9f, 1.0f}, // 19: Rash
+    {0.9f, 1.0f, 1.0f, 1.1f, 1.0f}, // 20: Calm
+    {1.0f, 0.9f, 1.0f, 1.1f, 1.0f}, // 21: Gentle
+    {1.0f, 1.0f, 1.0f, 1.1f, 0.9f}, // 22: Sassy
+    {1.0f, 1.0f, 0.9f, 1.1f, 1.0f}, // 23: Careful
+    {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}, // 24: Quirky
+};
+
+static u16 compute_stat_pf(u16 base, u8 iv, u8 nature, u8 level, u8 index) {
+    u16 s = (2 * base + iv) * level / 100;
+    if (index == 0) return s + level + 10; // HP
+    if (nature >= 25) return s + 5;
+    return static_cast<u16>((s + 5) * nature_modifiers[nature][index - 1]);
+}
+
+// 返回 (minIV, maxIV) — 与 PokeFinder IVChecker 完全一致
+static py::tuple compute_iv_range(u16 base, u16 stat_val, u8 nature, u8 level, u8 index) {
+    u8 min_iv = 31, max_iv = 0;
+    if (nature >= 25) {
+        // 未知性格：尝试全部三种修正（1.0, 0.9, 1.1）
+        const float mods[3] = {1.0f, 0.9f, 1.1f};
+        for (u8 iv = 0; iv < 32; iv++) {
+            u16 s = (2 * base + iv) * level / 100;
+            if (index == 0) {
+                u16 hp = s + level + 10;
+                if (hp == stat_val) { if (iv < min_iv) min_iv = iv; if (iv > max_iv) max_iv = iv; }
+            } else {
+                for (float m : mods) {
+                    if (static_cast<u16>((s + 5) * m) == stat_val) {
+                        if (iv < min_iv) min_iv = iv; if (iv > max_iv) max_iv = iv;
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        for (u8 iv = 0; iv < 32; iv++) {
+            if (compute_stat_pf(base, iv, nature, level, index) == stat_val) {
+                if (iv < min_iv) min_iv = iv;
+                if (iv > max_iv) max_iv = iv;
+            }
+        }
+    }
+    return py::make_tuple(min_iv, max_iv);
+}
+
+// 批量计算 6 项能力 → 返回 [(min0,max0), ..., (min5,max5)]
+static py::list compute_iv_ranges_py(py::list bases_py, py::list stats_py, int nature, int level) {
+    py::list out;
+    for (int i = 0; i < 6; i++) {
+        u16 base = bases_py[i].cast<u16>();
+        u16 sv = stats_py[i].cast<u16>();
+        out.append(compute_iv_range(base, sv, static_cast<u8>(nature), static_cast<u8>(level), static_cast<u8>(i)));
+    }
+    return out;
+}
+
 PYBIND11_MODULE(_native, m) {
     m.doc() = "BDSP RNG static generator (C++ native extension)";
     m.def("generate_static", &generate_static_py,
@@ -102,4 +181,7 @@ PYBIND11_MODULE(_native, m) {
           py::arg("iv_min"), py::arg("iv_max"),
           py::arg("natures"), py::arg("hidden_powers"),
           "Generate BDSP static encounter states (C++ native).");
+    m.def("compute_iv_ranges", &compute_iv_ranges_py,
+          py::arg("bases"), py::arg("stats"), py::arg("nature"), py::arg("level"),
+          "Compute IV ranges from stats using PokeFinder's Nature::computeStat formula.");
 }
