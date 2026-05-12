@@ -1844,6 +1844,12 @@ class MainWindow(QMainWindow):
             time.sleep(0.2)
             waited += 0.2
             self._update_preview_frame()
+        # 首帧到达后立即停止预览，避免与后续 blink 捕捉抢摄像头资源
+        if self._latest_preview_frame is not None and self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+            self.preview_label.clear()
+            self.preview_label.setText(self._text("no_preview"))
         return self._latest_preview_frame is not None
 
     def start_roi_selection(self) -> None:
