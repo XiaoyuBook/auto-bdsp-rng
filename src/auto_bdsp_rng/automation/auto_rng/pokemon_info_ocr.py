@@ -502,10 +502,17 @@ _CHARACTERISTIC_TABLE: list[str] = [
 
 
 def compute_characteristic(pid: int, ivs: list[int]) -> str:
-    """根据 PID 和 IVs 计算宝可梦的中文个性（特性描述）。"""
+    """根据 PID 和 IVs 计算宝可梦的中文个性（特性描述）。
+
+    PokeFinder/gen4+ 个性顺序: HP(0), Atk(1), Def(2), Spe(3), SpA(4), SpD(5)
+    对应 ivs 索引:            [0],     [1],     [2],     [5],    [3],    [4]
+    """
     pid = pid & 0xFFFFFFFF
     group = pid % 6
-    value = ivs[group] % 5 if group < len(ivs) else 0
+    # PokeFinder ivOrder 映射
+    iv_order = [0, 1, 2, 5, 3, 4]
+    stat_idx = iv_order[group] if group < len(iv_order) else 0
+    value = ivs[stat_idx] % 5 if stat_idx < len(ivs) else 0
     index = group * 5 + value
     if 0 <= index < len(_CHARACTERISTIC_TABLE):
         return _CHARACTERISTIC_TABLE[index]
