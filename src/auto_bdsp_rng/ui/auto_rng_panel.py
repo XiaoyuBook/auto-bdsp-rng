@@ -32,7 +32,8 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     validate_auto_scripts,
 )
-from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
+from auto_bdsp_rng.ui.static_target_form import StaticTargetForm  # noqa: F401  # 保留兼容旧引用
+from auto_bdsp_rng.ui.target_dialog import TargetDialog
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -81,6 +82,7 @@ class AutoRngPanel(QWidget):
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoRngWorker | None = None
         self._settings = QSettings("auto-bdsp-rng", "AutoRngPanel")
+        self._targets: list[tuple[object, object, str]] = []
         self._build_ui()
         self.refresh_scripts()
         self._restore_panel_state()
@@ -134,6 +136,16 @@ class AutoRngPanel(QWidget):
         row.addWidget(QLabel("次数"))
         row.addWidget(self.loop_count)
         row.addWidget(self.debug_output_check)
+        self.target_button = QPushButton("目标精灵设置...")
+        self.target_button.setFixedHeight(34)
+        self.target_button.setMinimumWidth(130)
+        self.target_button.clicked.connect(self._open_target_dialog)
+        self.target_summary = QLabel("")
+        self.target_summary.setObjectName("MutedLabel")
+        self.target_summary.setMaximumWidth(180)
+        self.target_summary.setWordWrap(False)
+        row.addWidget(self.target_button)
+        row.addWidget(self.target_summary)
         row.addStretch(1)
         row.addWidget(self.status_badge)
         row.addWidget(self.start_button)
@@ -235,7 +247,6 @@ class AutoRngPanel(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
-        # 脚本区（从左侧移入，位于右侧顶部）
         self.script_group = self._build_script_group()
         layout.addWidget(self.script_group)
         top = QWidget()
@@ -244,8 +255,21 @@ class AutoRngPanel(QWidget):
         top_layout.setSpacing(8)
         top_layout.addWidget(self._build_summary_group())
         layout.addWidget(top)
-        layout.addWidget(self._build_target_form_group())
         return panel
+
+    def _open_target_dialog(self) -> None:
+        dlg = TargetDialog(self)
+        dlg.set_targets(self._targets)
+        if dlg.exec() == TargetDialog.Accepted:
+            self._targets = dlg.get_targets()
+            if self._targets:
+                names = [r.description for r, _, _ in self._targets]
+                self.target_summary.setText(f"{len(self._targets)}个目标: {', '.join(names)}")
+            else:
+                self.target_summary.setText("")
+
+    def get_targets(self) -> list[tuple[object, object, str]]:
+        return self._targets
 
     def _build_summary_group(self) -> QGroupBox:
         group = QGroupBox("运行摘要")
@@ -272,17 +296,6 @@ class AutoRngPanel(QWidget):
             grid.addWidget(QLabel(label_text), row, column)
             grid.addWidget(label, row, column + 1)
             grid.setColumnStretch(column + 1, 1)
-        return group
-
-    def _build_target_form_group(self) -> QGroupBox:
-        group = QGroupBox("目标精灵设置")
-        group.setMaximumHeight(390)
-        layout = QVBoxLayout(group)
-        self.target_form = StaticTargetForm(self)
-        self.target_form.show_stats_check.hide()
-        self.target_form.iv_calculator_button.hide()
-        layout.addWidget(self.target_form)
-        self.target_form_group = group
         return group
 
     def _build_log_group(self) -> QGroupBox:
@@ -467,15 +480,27 @@ class AutoRngPanel(QWidget):
         s.setValue("sync_state", self.sync_combo.currentIndex())
         s.setValue("sync_nature", self.sync_nature_input.text())
         s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
-        # 目标精灵设置
-        tf = self.target_form
-        s.setValue("target_category", tf.category_combo.currentIndex())
-        s.setValue("target_encounter", tf.encounter_combo.currentIndex())
-        s.setValue("target_shiny_filter", tf.shiny_filter.currentIndex())
-        s.setValue("target_ability_filter", tf.ability_filter.currentIndex())
-        s.setValue("target_gender_filter", tf.gender_filter.currentIndex())
-        s.setValue("target_nature", tf.nature_combo.currentIndex())
-        s.setValue("target_skip_filter", tf.skip_filter.isChecked())
+        # 目标精灵设置持久化
+        s.setValue("target_count", len(self._targets))
+        for i, (record, sf, sm) in enumerate(self._targets):
+            s.setValue(f"target_{i}_name", record.description)
+            s.setValue(f"target_{i}_shiny", sm)
+            s.setValue(f"target_{i}_iv_min", list(sf.iv_min))
+            s.setValue(f"target_{i}_iv_max", list(sf.iv_max))
+            locked_natures = [i for i, v in enumerate(sf.natures) if v]
+            if len(locked_natures) == 25:
+                s.setValue(f"target_{i}_nature", -1)
+            elif len(locked_natures) == 1:
+                s.setValue(f"target_{i}_nature", locked_natures[0])
+            else:
+                s.setValue(f"target_{i}_nature", -2)
+            s.setValue(f"target_{i}_ability", sf.ability)
+            s.setValue(f"target_{i}_gender", sf.gender)
+            s.setValue(f"target_{i}_height_min", sf.height_min)
+            s.setValue(f"target_{i}_height_max", sf.height_max)
+            s.setValue(f"target_{i}_weight_min", sf.weight_min)
+            s.setValue(f"target_{i}_weight_max", sf.weight_max)
+            s.setValue(f"target_{i}_skip", sf.skip)
 
     def _restore_panel_state(self) -> None:
         """恢复上次持久化的面板设置。"""
@@ -513,34 +538,42 @@ class AutoRngPanel(QWidget):
             idx = int(s.value("auto_reverse", 0))
             if 0 <= idx < self.auto_reverse_combo.count():
                 self.auto_reverse_combo.setCurrentIndex(idx)
-        # 目标精灵设置
-        tf = self.target_form
-        if s.contains("target_category"):
-            idx = int(s.value("target_category", 0))
-            if 0 <= idx < tf.category_combo.count():
-                tf.category_combo.setCurrentIndex(idx)
-        if s.contains("target_encounter"):
-            idx = int(s.value("target_encounter", 0))
-            if 0 <= idx < tf.encounter_combo.count():
-                tf.encounter_combo.setCurrentIndex(idx)
-        if s.contains("target_shiny_filter"):
-            idx = int(s.value("target_shiny_filter", 0))
-            if 0 <= idx < tf.shiny_filter.count():
-                tf.shiny_filter.setCurrentIndex(idx)
-        if s.contains("target_ability_filter"):
-            idx = int(s.value("target_ability_filter", 0))
-            if 0 <= idx < tf.ability_filter.count():
-                tf.ability_filter.setCurrentIndex(idx)
-        if s.contains("target_gender_filter"):
-            idx = int(s.value("target_gender_filter", 0))
-            if 0 <= idx < tf.gender_filter.count():
-                tf.gender_filter.setCurrentIndex(idx)
-        if s.contains("target_nature"):
-            idx = int(s.value("target_nature", 0))
-            if 0 <= idx < tf.nature_combo.count():
-                tf.nature_combo.setCurrentIndex(idx)
-        if s.contains("target_skip_filter"):
-            tf.skip_filter.setChecked(s.value("target_skip_filter") == "true")
+        # 目标精灵设置恢复
+        if s.contains("target_count"):
+            from auto_bdsp_rng.data import get_static_encounters
+            from auto_bdsp_rng.gen8_static import StateFilter
+            count = int(s.value("target_count", 0))
+            self._targets = []
+            all_records = {r.description: r for r in get_static_encounters()}
+            for i in range(count):
+                name = str(s.value(f"target_{i}_name", ""))
+                sm = str(s.value(f"target_{i}_shiny", "any"))
+                record = all_records.get(name)
+                if record is None:
+                    continue
+                iv_min_raw = s.value(f"target_{i}_iv_min")
+                iv_max_raw = s.value(f"target_{i}_iv_max")
+                iv_min = tuple(int(v) for v in (iv_min_raw if isinstance(iv_min_raw, list) else [0]*6))
+                iv_max = tuple(int(v) for v in (iv_max_raw if isinstance(iv_max_raw, list) else [31]*6))
+                nature_idx = int(s.value(f"target_{i}_nature", -1))
+                if 0 <= nature_idx < 25:
+                    natures = tuple(j == nature_idx for j in range(25))
+                else:
+                    natures = (True,) * 25
+                sf = StateFilter(
+                    iv_min=iv_min, iv_max=iv_max, natures=natures,
+                    ability=int(s.value(f"target_{i}_ability", 255)),
+                    gender=int(s.value(f"target_{i}_gender", 255)),
+                    height_min=int(s.value(f"target_{i}_height_min", 0)),
+                    height_max=int(s.value(f"target_{i}_height_max", 255)),
+                    weight_min=int(s.value(f"target_{i}_weight_min", 0)),
+                    weight_max=int(s.value(f"target_{i}_weight_max", 255)),
+                    skip=s.value(f"target_{i}_skip") == "true",
+                )
+                self._targets.append((record, sf, sm))
+            if self._targets:
+                names = [r.description for r, _, _ in self._targets]
+                self.target_summary.setText(f"{len(self._targets)}个目标: {', '.join(names)}")
 
     def _select_script_by_path(self, combo: QComboBox, path_str: str) -> None:
         if not path_str:
