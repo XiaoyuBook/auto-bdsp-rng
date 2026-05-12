@@ -165,6 +165,7 @@ class StaticGenerator8:
         rng.advance(self.initial_advances + self.offset)
         rng_list: RNGList[int] = RNGList(rng, size=32, generate=_gen_static_ec)
         sf = self.state_filter
+        need_shiny = sf.shiny != 255
 
         states: list[State8] = []
         for count in range(self.max_advances + 1):
@@ -172,27 +173,47 @@ class StaticGenerator8:
             sidtid = rng_list.next()
             pid = rng_list.next()
             shiny, pid = _apply_non_roamer_shiny(self.template, self.profile, sidtid, pid)
-            ivs = _fill_random_ivs(rng_list, _next_unique_fixed_iv_indices(rng_list, self.template.iv_count))
+
+            # 第1关：shiny——最严格的筛选，提前跳过可省掉 IV/ability/gender/nature 的计算
+            if need_shiny and not (sf.shiny & shiny):
+                rng_list.advance_state()
+                continue
+
+            # 计算 IV（用原地列表，避免每帧创建 tuple）
+            fixed_count = self.template.iv_count
+            ivs: list[int] = [255] * 6
+            fixed = 0
+            while fixed < fixed_count:
+                idx = _next_mod(rng_list, 6)
+                if ivs[idx] == 255:
+                    ivs[idx] = 31
+                    fixed += 1
+            for iv_idx in range(6):
+                if ivs[iv_idx] == 255:
+                    ivs[iv_idx] = _next_mod(rng_list, 32)
+
             ability = _generate_ability(rng_list, self.template)
             gender = _generate_gender(rng_list, self.template, self.lead)
             nature = _generate_nature(rng_list, self.lead)
             height, weight = _generate_height_weight(rng_list)
 
-            # 快速预筛选：在创建 State8 之前先过滤，大幅减少对象分配
+            # 第2关：ability / gender / nature / height / weight
             if sf.quick_reject(shiny, ability, gender, nature, height, weight):
                 rng_list.advance_state()
                 continue
-            # 检查 IV 和隐藏力量（需要 IV 数据）
-            if not all(min_iv <= iv <= max_iv for iv, min_iv, max_iv in zip(ivs, sf.iv_min, sf.iv_max)):
+
+            # 第3关：IV（用原地列表检查，避免创建 tuple）
+            if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
                 rng_list.advance_state()
                 continue
             if not sf.hidden_powers[hidden_power(ivs)]:
                 rng_list.advance_state()
                 continue
 
+            # 全部通过 → 创建 State8（此时才分配 tuple）
             state = State8(
                 advances=self.initial_advances + count,
-                ec=ec, sidtid=sidtid, pid=pid, ivs=ivs,
+                ec=ec, sidtid=sidtid, pid=pid, ivs=tuple(ivs),
                 ability=ability, gender=gender, level=self.template.level,
                 nature=nature, shiny=shiny, height=height, weight=weight,
             )
@@ -205,6 +226,7 @@ class StaticGenerator8:
         roamer = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         roamer.advance(self.initial_advances + self.offset)
         sf = self.state_filter
+        need_shiny = sf.shiny != 255
 
         states: list[State8] = []
         for count in range(self.max_advances + 1):
@@ -213,21 +235,35 @@ class StaticGenerator8:
             sidtid = rng.next_uint(U32_MAX)
             pid = rng.next_uint(U32_MAX)
             shiny, pid = _apply_roamer_shiny(self.profile, sidtid, pid)
-            ivs = _fill_random_ivs(rng, _next_unique_fixed_iv_indices(rng, 3))
+
+            if need_shiny and not (sf.shiny & shiny):
+                continue
+
+            ivs = [255] * 6
+            fixed = 0
+            while fixed < 3:
+                idx = _next_mod(rng, 6)
+                if ivs[idx] == 255:
+                    ivs[idx] = 31
+                    fixed += 1
+            for iv_idx in range(6):
+                if ivs[iv_idx] == 255:
+                    ivs[iv_idx] = _next_mod(rng, 32)
+
             ability = rng.next_uint(2)
             nature = _generate_nature(rng, self.lead)
             height, weight = _generate_height_weight(rng)
 
             if sf.quick_reject(shiny, ability, gender, nature, height, weight):
                 continue
-            if not all(min_iv <= iv <= max_iv for iv, min_iv, max_iv in zip(ivs, sf.iv_min, sf.iv_max)):
+            if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
                 continue
             if not sf.hidden_powers[hidden_power(ivs)]:
                 continue
 
             state = State8(
                 advances=self.initial_advances + count,
-                ec=ec, sidtid=sidtid, pid=pid, ivs=ivs,
+                ec=ec, sidtid=sidtid, pid=pid, ivs=tuple(ivs),
                 ability=ability, gender=gender, level=self.template.level,
                 nature=nature, shiny=shiny, height=height, weight=weight,
             )
