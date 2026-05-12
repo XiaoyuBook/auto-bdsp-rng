@@ -200,33 +200,23 @@ class StaticGenerator8:
         return self.generate_non_roamer(seed0, seed1)
 
     def generate_non_roamer(self, seed0: int, seed1: int) -> list[State8]:
-        import time as _time
         rng = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         rng.advance(self.initial_advances + self.offset)
         rng_list: RNGList[int] = RNGList(rng, size=32, generate=_gen_static_ec)
         sf = self.state_filter
-        need_shiny = sf.shiny != 255
 
         states: list[State8] = []
-        _yield_every = 50000
         for count in range(self.max_advances + 1):
-            if count % _yield_every == 0:
-                _time.sleep(0)  # 释放 GIL，让 Qt UI 线程有机会处理事件
+            rng_list.advance_state()
             ec = rng_list.next()
             sidtid = rng_list.next()
             pid = rng_list.next()
             shiny, pid = _apply_non_roamer_shiny(self.template, self.profile, sidtid, pid)
 
-            # 第1关：shiny——最严格的筛选，提前跳过可省掉 IV/ability/gender/nature 的计算
-            if need_shiny and not (sf.shiny & shiny):
-                rng_list.advance_state()
-                continue
-
-            # 计算 IV（用原地列表，避免每帧创建 tuple）
-            fixed_count = self.template.iv_count
+            # IV
             ivs: list[int] = [255] * 6
             fixed = 0
-            while fixed < fixed_count:
+            while fixed < self.template.iv_count:
                 idx = _next_mod(rng_list, 6)
                 if ivs[idx] == 255:
                     ivs[idx] = 31
@@ -240,28 +230,31 @@ class StaticGenerator8:
             nature = _generate_nature(rng_list, self.lead)
             height, weight = _generate_height_weight(rng_list)
 
-            # 第2关：ability / gender / nature / height / weight
-            if sf.quick_reject(shiny, ability, gender, nature, height, weight):
-                rng_list.advance_state()
-                continue
+            # 统一过滤（与 PokeFinder 一致）
+            if not sf.skip:
+                if sf.ability != 255 and sf.ability != ability:
+                    continue
+                if sf.gender != 255 and sf.gender != gender:
+                    continue
+                if sf.shiny != 255 and not (sf.shiny & shiny):
+                    continue
+                if not sf.natures[nature]:
+                    continue
+                if not sf.hidden_powers[hidden_power(ivs)]:
+                    continue
+                if height < sf.height_min or height > sf.height_max:
+                    continue
+                if weight < sf.weight_min or weight > sf.weight_max:
+                    continue
+                if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
+                    continue
 
-            # 第3关：IV（用原地列表检查，避免创建 tuple）
-            if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
-                rng_list.advance_state()
-                continue
-            if not sf.hidden_powers[hidden_power(ivs)]:
-                rng_list.advance_state()
-                continue
-
-            # 全部通过 → 创建 State8（此时才分配 tuple）
-            state = State8(
+            states.append(State8(
                 advances=self.initial_advances + count,
                 ec=ec, sidtid=sidtid, pid=pid, ivs=tuple(ivs),
                 ability=ability, gender=gender, level=self.template.level,
                 nature=nature, shiny=shiny, height=height, weight=weight,
-            )
-            states.append(state)
-            rng_list.advance_state()
+            ))
         return states
 
     def generate_roamer(self, seed0: int, seed1: int) -> list[State8]:
