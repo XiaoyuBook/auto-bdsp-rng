@@ -649,7 +649,7 @@ class AutoRngRunner:
     def _handle_shiny_check_result(self, result: ShinyCheckResult, path: object) -> None:
         interval_text = "-" if result.interval_seconds is None else f"{result.interval_seconds:.3f}s"
         trigger = self.progress.trigger_advances
-        used_delay = self.progress.remaining_to_trigger
+        used_delay = self.config.fixed_delay
         if result.is_shiny:
             self._locked_target = None
             self._history("cycle_result", True, result.interval_seconds, trigger, used_delay)

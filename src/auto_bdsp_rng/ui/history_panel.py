@@ -271,7 +271,7 @@ class HistoryPanel(QWidget):
             self._w(f"[{_now()}] 本轮结果: 未出闪  间隔: {interval_text}{delay_text}")
         self._w(SEPARATOR_THIN)
 
-    def reverse_lookup_results(self, candidates: list[object], characteristic: str | None = None) -> None:
+    def reverse_lookup_results(self, candidates: list[object], characteristic: str | None = None, delays: list[int] | None = None) -> None:
         count = len(candidates)
         if count == 0:
             self._w(f"[{_now()}] 反查结果: 未找到匹配个体")
@@ -280,7 +280,7 @@ class HistoryPanel(QWidget):
             self._w()
             for i, state in enumerate(candidates):
                 adv = _get_int(state, "advances")
-                delay = adv  # 由调用者提供
+                delay = delays[i] if delays else adv
                 self._w(f"  ── 反查候选 {i + 1} ──")
                 self._w(f"  advances: {adv}  delay: {delay}  EC: {_state_ec(state)}  PID: {_state_pid(state)}")
                 ivs = getattr(state, "ivs", None)

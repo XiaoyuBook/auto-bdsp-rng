@@ -2800,10 +2800,13 @@ class MainWindow(QMainWindow):
                 log("[自动反查] 3次尝试均未找到匹配个体")
                 self.history_tab.reverse_lookup_results([], characteristic)
             else:
-                self.history_tab.reverse_lookup_results(candidates, characteristic)
+                delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + config.fixed_delay
+                          if target.raw_target_advances else int(getattr(s, "advances", 0))
+                          for s in candidates]
+                self.history_tab.reverse_lookup_results(candidates, characteristic, delays)
                 for state in candidates:
                     adv = int(getattr(state, "advances", 0))
-                    actual_delay = adv - target.raw_target_advances if target.raw_target_advances else adv
+                    actual_delay = adv - target.raw_target_advances + config.fixed_delay if target.raw_target_advances else adv
                     state_ivs = getattr(state, "ivs", None)
                     iv_text = " / ".join(f"{name}={int(state_ivs[i])}" for i, name in enumerate(["HP","攻击","防御","特攻","特防","速度"])) if state_ivs is not None and len(state_ivs) == 6 else "?"
                     pid_val = int(getattr(state, "pid", 0))
