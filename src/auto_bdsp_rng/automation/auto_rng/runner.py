@@ -353,17 +353,25 @@ class AutoRngRunner:
         # 合并去重（按 advances 排序，PID+EC 相同取低帧）
         seen_keys: set[str] = set()
         merged: list[object] = []
+        sync_flags: list[str] = []  # 记录每个候选的同步来源
         for state in sorted(results_primary + results_secondary, key=lambda s: getattr(s, "advances", 0)):
             key = f"{getattr(state, 'pid', 0):08X}:{getattr(state, 'ec', 0):08X}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 merged.append(state)
+                in_p = any(getattr(s, "advances", 0) == getattr(state, "advances", 0) for s in results_primary)
+                sync_flags.append("no_sync" if in_p else "sync")
 
-        # 过滤已过帧
+        # 过滤已过帧——同时过滤 sync_flags
         min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
         if self._missed_target_advance is not None:
             min_reachable = max(min_reachable, self._missed_target_advance + 1)
-        reachable = [c for c in merged if getattr(c, "advances", 0) >= min_reachable]
+        reachable = []
+        reachable_flags = []
+        for i, c in enumerate(merged):
+            if getattr(c, "advances", 0) >= min_reachable:
+                reachable.append(c)
+                reachable_flags.append(sync_flags[i])
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
@@ -377,16 +385,16 @@ class AutoRngRunner:
         if sync_enabled and self.services.search_sync is not None:
             in_primary = any(getattr(c, "advances", 0) == locked_adv for c in results_primary)
             if in_primary:
-                self._need_sync_switch = False  # 目标在当前同步状态下找到，无需切换
+                self._need_sync_switch = False
             else:
-                self._need_sync_switch = True   # 目标在另一同步状态下找到，需要切换
+                self._need_sync_switch = True
         else:
             self._need_sync_switch = False
         locked_idx = next((i for i, c in enumerate(reachable) if getattr(c, "advances", 0) == locked_adv), 0)
         if was_missed:
-            self._history("candidates_refiltered", reachable, locked_idx)
+            self._history("candidates_refiltered", reachable, locked_idx, reachable_flags)
         else:
-            self._history("candidates_found", reachable, locked_idx)
+            self._history("candidates_found", reachable, locked_idx, reachable_flags)
         flash = self._fixed_flash_frames()
         trigger = decision.raw_target_advances - self.config.fixed_delay - flash
         self._set_progress(

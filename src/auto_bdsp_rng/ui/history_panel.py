@@ -196,35 +196,26 @@ class HistoryPanel(QWidget):
             self._w(f"[{_now()}] 重新测种，当前 Seed: {seed_text}  初始帧: {initial_advances}  (原始 Seed: {self._original_seed_text})")
             self._w(SEPARATOR_THIN)
 
-    def candidates_found(self, candidates: list[object], locked_index: int) -> None:
+    def candidates_found(self, candidates: list[object], locked_index: int, sync_flags: list[str] | None = None) -> None:
         self._pid_ec_seen.clear()
         self._w(f"[{_now()}] 搜索到 {len(candidates)} 个候选")
-        self._w()
         for i, state in enumerate(candidates):
             adv = _get_int(state, "advances")
-            delay = adv  # runner 层会传入正确 delay
-            tag = ""
+            tags = []
             if i == locked_index:
-                tag = "最低帧, 已锁定"
+                tags.append("锁定")
+            if sync_flags and i < len(sync_flags) and sync_flags[i] == "sync":
+                tags.append("同步")
             key = _pid_ec_key(state)
             if key in self._pid_ec_seen:
-                tag = f"同个体: 候选{self._pid_ec_seen[key]}"
+                tags.append(f"同候选{self._pid_ec_seen[key]}")
             else:
                 self._pid_ec_seen[key] = i + 1
-            label = f"  ── 候选 {i + 1}"
-            if tag:
-                label += f" ({tag})"
-            label += " ──"
-            self._w(label)
-            self._w(f"  advances: {adv}  delay: {delay}")
-            self._w(f"  EC: {_state_ec(state)}  PID: {_state_pid(state)}")
-            ivs = getattr(state, "ivs", None)
-            self._w(f"  {_state_iv_text(ivs)}")
-            self._w(f"  性格: {_nature_text(state)}  特性: {_get_int(state, 'ability')}  性别: {_gender_text(state)}  异色: {_shiny_text(state)}")
-            h = _get_int(state, "height")
-            w = _get_int(state, "weight")
-            self._w(f"  身高: {h}  体重: {w}")
-            self._w()
+            tag_str = f"({', '.join(tags)})" if tags else ""
+            self._w(f"  候选{i+1}{tag_str}: adv={adv} delay={adv} EC={_state_ec(state)} PID={_state_pid(state)} "
+                    f"{_state_iv_text(getattr(state, 'ivs', None))} "
+                    f"性格={_nature_text(state)} 异色={_shiny_text(state)} "
+                    f"身高={_get_int(state, 'height')} 体重={_get_int(state, 'weight')}")
 
     def target_missed(self, missed_advances: int, current_advances: int) -> None:
         self._w(SEPARATOR_THIN)
@@ -232,34 +223,27 @@ class HistoryPanel(QWidget):
         self._w(f"[{_now()}] 重新搜索，排除已过帧...")
         self._w(SEPARATOR_THIN)
 
-    def candidates_refiltered(self, candidates: list[object], locked_index: int) -> None:
+    def candidates_refiltered(self, candidates: list[object], locked_index: int, sync_flags: list[str] | None = None) -> None:
         """错过目标后，重新筛选的候选列表。"""
         self._pid_ec_seen.clear()
         self._w(f"[{_now()}] 剩余 {len(candidates)} 个候选")
-        self._w()
         for i, state in enumerate(candidates):
             adv = _get_int(state, "advances")
-            delay = adv
-            tag = ""
+            tags = []
             if i == locked_index:
-                tag = "最低帧, 已锁定"
+                tags.append("锁定")
+            if sync_flags and i < len(sync_flags) and sync_flags[i] == "sync":
+                tags.append("同步")
             key = _pid_ec_key(state)
             if key in self._pid_ec_seen:
-                tag = f"同个体: 候选{self._pid_ec_seen[key]}"
+                tags.append(f"同候选{self._pid_ec_seen[key]}")
             else:
                 self._pid_ec_seen[key] = i + 1
-            label = f"  ── 候选 {i + 1}"
-            if tag:
-                label += f" ({tag})"
-            label += " ──"
-            self._w(label)
-            self._w(f"  advances: {adv}  delay: {delay}")
-            self._w(f"  EC: {_state_ec(state)}  PID: {_state_pid(state)}")
-            ivs = getattr(state, "ivs", None)
-            self._w(f"  {_state_iv_text(ivs)}")
-            self._w(f"  性格: {_nature_text(state)}  特性: {_get_int(state, 'ability')}  性别: {_gender_text(state)}  异色: {_shiny_text(state)}")
-            self._w(f"  身高: {_get_int(state, 'height')}  体重: {_get_int(state, 'weight')}")
-            self._w()
+            tag_str = f"({', '.join(tags)})" if tags else ""
+            self._w(f"  候选{i+1}{tag_str}: adv={adv} delay={adv} EC={_state_ec(state)} PID={_state_pid(state)} "
+                    f"{_state_iv_text(getattr(state, 'ivs', None))} "
+                    f"性格={_nature_text(state)} 异色={_shiny_text(state)} "
+                    f"身高={_get_int(state, 'height')} 体重={_get_int(state, 'weight')}")
 
     def cycle_result(self, is_shiny: bool, interval: float | None, used_delay: int | None = None) -> None:
         self._w(SEPARATOR_THIN)
