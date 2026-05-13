@@ -11,7 +11,7 @@ pytest.importorskip("PySide6")
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton
+from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
@@ -120,6 +120,7 @@ def test_auto_rng_reverse_lookup_window_is_configurable(app, tmp_path):
 
     assert config.reverse_lookup_window == 500
     assert panel.reverse_lookup_window.maximum() == 10_000
+    assert panel.reverse_lookup_window.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons
 
 
 def test_reverse_lookup_search_span_uses_symmetric_window():

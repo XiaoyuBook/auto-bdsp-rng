@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -223,6 +224,7 @@ class AutoRngPanel(QWidget):
         self.reverse_lookup_window.setValue(500)
         self.reverse_lookup_window.setPrefix("±")
         self.reverse_lookup_window.setSuffix(" 帧")
+        self.reverse_lookup_window.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.reverse_lookup_window.setFixedHeight(34)
         self.reverse_lookup_window.setFixedWidth(100)
         reverse_row = QHBoxLayout()
