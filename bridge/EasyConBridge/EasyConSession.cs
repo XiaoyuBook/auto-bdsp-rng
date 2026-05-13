@@ -165,7 +165,7 @@ public sealed class EasyConSession : IEasyConSession
         // 释放所有可能的按键，摇杆归中
         foreach (SwitchButton button in Enum.GetValues(typeof(SwitchButton)))
         {
-            _switch!.Up(button);
+            _switch!.Up(ECKeyUtil.Button(button));
         }
         _switch!.LeftDirection(DirectionKey.Up, false);
         _switch!.LeftDirection(DirectionKey.Down, false);

@@ -10,6 +10,7 @@ from struct import unpack_from
 from typing import Iterable
 
 from auto_bdsp_rng.gen8_static.models import PersonalInfo8, Shiny, StaticTemplate8
+from auto_bdsp_rng.resources import resource_path
 
 
 class GameVersion(StrEnum):
@@ -123,12 +124,8 @@ _STATIC_TEMPLATE_ROWS: tuple[tuple[str, str, str, int, int, Shiny, int, int, int
 )
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
 def _personal_bdsp_path() -> Path:
-    return _repo_root() / "third_party" / "PokeFinder" / "Core" / "Resources" / "Personal" / "Gen8" / "personal_bdsp.bin"
+    return resource_path("third_party", "PokeFinder", "Core", "Resources", "Personal", "Gen8", "personal_bdsp.bin")
 
 
 def _normalize_version(version: GameVersion | str) -> GameVersion:

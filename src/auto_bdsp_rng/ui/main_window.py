@@ -72,13 +72,13 @@ from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
+from auto_bdsp_rng.resources import resource_path
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-PROJECT_XS_CONFIGS = PROJECT_ROOT / "third_party" / "Project_Xs_CHN" / "configs"
+PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
 DEFAULT_BLINK_COUNT = 40
 REIDENTIFY_BLINK_COUNT = 7
 NOISY_REIDENTIFY_BLINK_COUNT = 20
@@ -2062,7 +2062,7 @@ class MainWindow(QMainWindow):
             eye = frame[top:bottom, left:right]
             if len(eye.shape) == 3:
                 eye = cv2.cvtColor(eye, cv2.COLOR_BGR2GRAY)
-            output_dir = PROJECT_ROOT / "third_party" / "Project_Xs_CHN" / "images" / "custom"
+            output_dir = resource_path("third_party", "Project_Xs_CHN", "images", "custom")
             output_dir.mkdir(parents=True, exist_ok=True)
             config_name = Path(self._selected_config_path()).stem or "current"
             output_path = output_dir / f"{config_name}_eye.png"
@@ -3622,7 +3622,7 @@ class _IVCalculatorDialog(QDialog):
         if cls._SPECIES_NAMES is not None:
             return cls._SPECIES_NAMES
         cls._SPECIES_NAMES = {}
-        names_path = Path(__file__).resolve().parents[3] / "third_party" / "PokeFinder" / "Core" / "Resources" / "i18n" / "zh" / "species_zh.txt"
+        names_path = resource_path("third_party", "PokeFinder", "Core", "Resources", "i18n", "zh", "species_zh.txt")
         if names_path.exists():
             with open(names_path, encoding="utf-8-sig") as f:
                 for i, line in enumerate(f, start=1):

@@ -4,6 +4,22 @@
   <img src="docs/assets/app-icon.png" alt="auto_bdsp_rng 图标" width="220">
 </p>
 
+## 下载与使用
+
+普通用户请不要下载 GitHub 绿色 `Code` 按钮里的源码压缩包。请到 [GitHub Releases](https://github.com/XiaoyuBook/auto-bdsp-rng/releases) 下载：
+
+```text
+auto-bdsp-rng-v1.0.0-windows-x64.zip
+```
+
+下载后解压 zip，进入 `auto-bdsp-rng` 文件夹，双击：
+
+```text
+auto-bdsp-rng.exe
+```
+
+目标电脑不需要安装 Python。请保留 exe 旁边的 `_internal`、`script`、`bridge`、`docs` 等目录，不要只复制单独的 exe。
+
 `auto_bdsp_rng` 是一个面向《宝可梦 晶灿钻石 / 明亮珍珠》（BDSP）的 Windows 桌面乱数辅助工具。它把 Project_Xs 的眨眼测种、PokeFinder 的 Gen 8 BDSP 定点生成逻辑、EasyCon / 伊机控脚本执行和自动定点乱数流程整合到同一个 PySide6 应用里，目标是减少在多个工具之间复制 Seed、手动过帧和人工判断撞闪时机的成本。
 
 当前项目已经从最初的“Seed 捕捉 + 定点搜索”规划，演进为一个包含以下工作区的桌面应用：

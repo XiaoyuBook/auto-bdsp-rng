@@ -11,6 +11,7 @@ from types import ModuleType
 from typing import Iterator
 from typing import Any
 
+from auto_bdsp_rng.resources import resource_path
 from auto_bdsp_rng.blink_detection.models import (
     AdvanceEvent,
     BlinkCaptureConfig,
@@ -27,8 +28,8 @@ from auto_bdsp_rng.blink_detection.models import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-PROJECT_XS_SRC = PROJECT_ROOT / "third_party" / "Project_Xs_CHN" / "src"
+PROJECT_XS_ROOT = resource_path("third_party", "Project_Xs_CHN")
+PROJECT_XS_SRC = PROJECT_XS_ROOT / "src"
 
 
 class ProjectXsIntegrationError(RuntimeError):
@@ -107,7 +108,7 @@ def _resolve_project_xs_config_path(config: str | Path) -> Path:
     path = Path(config)
     if path.is_absolute():
         return path
-    configs_dir = PROJECT_ROOT / "third_party" / "Project_Xs_CHN" / "configs"
+    configs_dir = PROJECT_XS_ROOT / "configs"
     return configs_dir / path
 
 

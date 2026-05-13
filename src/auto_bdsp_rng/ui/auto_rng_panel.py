@@ -40,6 +40,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
 )
 from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import StateFilter
+from auto_bdsp_rng.resources import resource_path
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
 
@@ -63,8 +64,7 @@ class _CopyableTextEdit(QPlainTextEdit):
         menu.exec(event.globalPos())
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCRIPT_DIR = PROJECT_ROOT / "script"
+SCRIPT_DIR = resource_path("script")
 
 
 class AutoRngWorker(QObject):

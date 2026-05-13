@@ -55,10 +55,10 @@ from auto_bdsp_rng.automation.easycon import (
     save_config,
     scan_builtin_scripts,
 )
+from auto_bdsp_rng.resources import bundled_easycon_bridge_path, resource_path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCRIPT_DIR = PROJECT_ROOT / "script"
+SCRIPT_DIR = resource_path("script")
 GENERATED_DIR = SCRIPT_DIR / ".generated"
 
 # ── 可配置按键映射 ──────────────────────────────────
@@ -107,6 +107,11 @@ def _resolve_vpad_button(key: int, mapping: dict[str, int]) -> tuple[str, str, s
         if mapping.get(name, 0) == key:
             return ("button", name, None)
     return None
+
+
+def _default_bridge_path() -> Path | None:
+    candidate = bundled_easycon_bridge_path()
+    return candidate if candidate.exists() else None
 
 
 class LineNumberArea(QWidget):
@@ -796,7 +801,8 @@ class EasyConPanel(QWidget):
         """创建隐藏的配置控件，保留原有业务逻辑所需的所有属性"""
         self.ezcon_path = QLineEdit(str(self.config.ezcon_path or ""))
         self.ezcon_path.setVisible(False)
-        self.bridge_path = QLineEdit(str(self.config.bridge_path or ""))
+        bridge_default = self.config.bridge_path or _default_bridge_path()
+        self.bridge_path = QLineEdit(str(bridge_default or ""))
         self.bridge_path.setVisible(False)
         self.browse_ezcon_button = QPushButton()
         self.browse_ezcon_button.clicked.connect(self.choose_ezcon)
