@@ -612,6 +612,8 @@ class MainWindow(QMainWindow):
     autoScriptStarted = Signal(str)
     autoScriptFinished = Signal(object)
     autoScriptFailed = Signal(str)
+    autoHistoryEvent = Signal(str, object)
+    uiCallRequested = Signal(object, object, object, object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -667,6 +669,34 @@ class MainWindow(QMainWindow):
         self.autoScriptStarted.connect(self.easycon_tab.begin_external_bridge_script)
         self.autoScriptFinished.connect(self.easycon_tab.finish_external_bridge_script)
         self.autoScriptFailed.connect(self.easycon_tab.fail_external_bridge_script)
+        self.autoHistoryEvent.connect(self._handle_auto_history_event)
+        self.uiCallRequested.connect(self._handle_ui_call_requested)
+
+    def _call_on_ui_thread(self, callback: object) -> object:
+        if QThread.currentThread() == self.thread():
+            return callback()  # type: ignore[operator]
+        done = threading.Event()
+        result: list[object] = []
+        errors: list[BaseException] = []
+        self.uiCallRequested.emit(callback, result, errors, done)
+        done.wait()
+        if errors:
+            raise errors[0]
+        return result[0] if result else None
+
+    def _handle_ui_call_requested(
+        self,
+        callback: object,
+        result: list[object],
+        errors: list[BaseException],
+        done: threading.Event,
+    ) -> None:
+        try:
+            result.append(callback())  # type: ignore[operator]
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
 
     def _build_actions(self) -> None:
         generate = QAction("Generate", self)
@@ -2315,6 +2345,20 @@ class MainWindow(QMainWindow):
     def _ensure_preview_for_auto_rng(self) -> bool:
         return self._ensure_preview_frame_before_capture()
 
+    def _pause_auto_preview_for_capture(self) -> bool:
+        preview_was_running = self._preview_timer.isActive()
+        if preview_was_running:
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+            self.preview_label.clear()
+            self.preview_label.setText(self._text("no_preview"))
+        return preview_was_running
+
+    def _restore_auto_preview_after_capture(self, preview_was_running: bool) -> None:
+        if preview_was_running and not self._preview_timer.isActive():
+            self._preview_timer.start()
+            self.preview_button.setText(self._text("stop_preview"))
+
     def _start_auto_rng(self, config: AutoRngConfig) -> None:
         if not self._ensure_preview_for_auto_rng():
             return
@@ -2324,29 +2368,37 @@ class MainWindow(QMainWindow):
         services = self._build_auto_rng_services(config)
 
         def history_callback(event: str, args: tuple[object, ...]) -> None:
-            h = self.history_tab
-            if event == "cycle_start" and len(args) >= 1:
-                h.cycle_start(int(args[0]))
-            elif event == "seed_captured" and len(args) >= 4:
-                h.seed_captured(str(args[0]), int(args[1]), int(args[2]), int(args[3]))
-            elif event == "candidates_found" and len(args) >= 2:
-                flags = list(args[2]) if len(args) >= 3 else None
-                h.candidates_found(list(args[0]), int(args[1]), flags)  # type: ignore[arg-type]
-            elif event == "candidates_refiltered" and len(args) >= 2:
-                flags = list(args[2]) if len(args) >= 3 else None
-                h.candidates_refiltered(list(args[0]), int(args[1]), flags)  # type: ignore[arg-type]
-            elif event == "target_missed" and len(args) >= 2:
-                h.target_missed(int(args[0]) if args[0] is not None else 0, int(args[1]) if args[1] is not None else 0)
-            elif event == "cycle_result" and len(args) >= 3:
-                is_shiny = bool(args[0])
-                interval = float(args[1]) if args[1] is not None else None
-                used_delay = int(args[3]) if len(args) >= 4 and args[3] is not None else None
-                h.cycle_result(is_shiny, interval, used_delay)
-            elif event == "reverse_lookup_results" and len(args) >= 1:
-                chara = str(args[1]) if len(args) >= 2 and args[1] is not None else None
-                h.reverse_lookup_results(list(args[0]), chara)  # type: ignore[arg-type]
+            self.autoHistoryEvent.emit(event, args)
 
         self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
+
+    def _handle_auto_history_event(self, event: str, args: object) -> None:
+        values = tuple(args) if isinstance(args, tuple) else tuple()
+        h = self.history_tab
+        if event == "cycle_start" and len(values) >= 1:
+            h.cycle_start(int(values[0]))
+        elif event == "seed_captured" and len(values) >= 4:
+            h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
+        elif event == "candidates_found" and len(values) >= 2:
+            flags = list(values[2]) if len(values) >= 3 else None
+            h.candidates_found(list(values[0]), int(values[1]), flags)  # type: ignore[arg-type]
+        elif event == "candidates_refiltered" and len(values) >= 2:
+            flags = list(values[2]) if len(values) >= 3 else None
+            h.candidates_refiltered(list(values[0]), int(values[1]), flags)  # type: ignore[arg-type]
+        elif event == "target_missed" and len(values) >= 2:
+            h.target_missed(int(values[0]) if values[0] is not None else 0, int(values[1]) if values[1] is not None else 0)
+        elif event == "cycle_result" and len(values) >= 3:
+            is_shiny = bool(values[0])
+            interval = float(values[1]) if values[1] is not None else None
+            used_delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
+            h.cycle_result(is_shiny, interval, used_delay)
+        elif event == "reverse_lookup_results" and len(values) >= 1:
+            chara = str(values[1]) if len(values) >= 2 and values[1] is not None else None
+            delays = list(values[2]) if len(values) >= 3 and values[2] is not None else None
+            if delays is None:
+                h.reverse_lookup_results(list(values[0]), chara)  # type: ignore[arg-type]
+            else:
+                h.reverse_lookup_results(list(values[0]), chara, delays)  # type: ignore[arg-type]
 
     def _ensure_bridge_connected(self) -> bool:
         """确保伊机控连接就绪；CLI 模式只需串口可用，Bridge 模式需要连接。"""
@@ -2539,12 +2591,8 @@ class MainWindow(QMainWindow):
                 self.autoCaptureProgressChanged.emit(done, total)
 
             # 测种前先暂停预览，避免抢摄像头；测完后恢复
-            preview_was_running = self._preview_timer.isActive()
+            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
             if preview_was_running:
-                self._preview_timer.stop()
-                self.preview_button.setText(self._text("preview_button"))
-                self.preview_label.clear()
-                self.preview_label.setText(self._text("no_preview"))
                 time.sleep(0.3)  # 等摄像头释放
 
             observation = capture_player_blinks(
@@ -2568,9 +2616,7 @@ class MainWindow(QMainWindow):
             )
             self.autoSeedCaptured.emit(seed_result)
             # 测种完成后恢复预览（如果之前是开着的）
-            if preview_was_running and not self._preview_timer.isActive():
-                self._preview_timer.start()
-                self.preview_button.setText(self._text("stop_preview"))
+            self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
             return seed_result
 
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
@@ -2583,12 +2629,8 @@ class MainWindow(QMainWindow):
                 self.autoCaptureProgressChanged.emit(done, total)
 
             # 测种前暂停预览，避免抢摄像头
-            preview_was_running = self._preview_timer.isActive()
+            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
             if preview_was_running:
-                self._preview_timer.stop()
-                self.preview_button.setText(self._text("preview_button"))
-                self.preview_label.clear()
-                self.preview_label.setText(self._text("no_preview"))
                 time.sleep(0.3)
 
             # 约束 reidentify 搜索范围：按预期位置缩小 search_min
@@ -2614,7 +2656,7 @@ class MainWindow(QMainWindow):
             )
             # 校验 reidentify 结果与预期的偏差
             if hint is not None and abs(result.advances - hint) > 20_000:
-                self.auto_rng_tab.add_log(
+                self.auto_rng_tab.captureLog.emit(
                     f"reidentify 结果 {result.advances} 偏离预期 {hint} 超过 20000，"
                     f"可能识别错误，但仍继续（由上层决策判断）"
                 )
@@ -2628,9 +2670,7 @@ class MainWindow(QMainWindow):
                 measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(reidentified)
-            if preview_was_running and not self._preview_timer.isActive():
-                self._preview_timer.start()
-                self.preview_button.setText(self._text("stop_preview"))
+            self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
             return reidentified
 
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
@@ -2640,9 +2680,9 @@ class MainWindow(QMainWindow):
             )
             locked = candidates[0].advances if candidates else None
             if locked is None:
-                self.auto_rng_tab.add_log("找到 0 个候选")
+                self.auto_rng_tab.captureLog.emit("找到 0 个候选")
             else:
-                self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，最低帧 Adv={locked}")
+                self.auto_rng_tab.captureLog.emit(f"找到 {len(candidates)} 个候选，最低帧 Adv={locked}")
             return candidates
 
         def search_sync_service(seed_result: AutoRngSeedResult, lead: int, nature_locked: int | None) -> list[State8]:
@@ -2695,7 +2735,7 @@ class MainWindow(QMainWindow):
                 if config.debug_output:
                     diag_lines = [line for line in result.stdout.splitlines() if line.startswith("CLI 模式")]
                     for line in diag_lines:
-                        self.auto_rng_tab.add_log(line)
+                        self.auto_rng_tab.captureLog.emit(line)
             except Exception as exc:
                 self.autoScriptFailed.emit(str(exc))
                 raise
@@ -2877,12 +2917,12 @@ class MainWindow(QMainWindow):
             # 输出结果
             if not candidates:
                 log("[自动反查] 3次尝试均未找到匹配个体")
-                self.history_tab.reverse_lookup_results([], characteristic)
+                self.autoHistoryEvent.emit("reverse_lookup_results", ([], characteristic))
             else:
                 delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + config.fixed_delay
                           if target.raw_target_advances else int(getattr(s, "advances", 0))
                           for s in candidates]
-                self.history_tab.reverse_lookup_results(candidates, characteristic, delays)
+                self.autoHistoryEvent.emit("reverse_lookup_results", (candidates, characteristic, delays))
                 for state in candidates:
                     adv = int(getattr(state, "advances", 0))
                     actual_delay = adv - target.raw_target_advances + config.fixed_delay if target.raw_target_advances else adv
@@ -2981,7 +3021,7 @@ class MainWindow(QMainWindow):
 
     def _on_request_stats_capture(self, nature: str | None, characteristic: str | None) -> None:
         """主线程回调：截图能力页 → OCR → 输出。"""
-        log = self.auto_rng_tab.add_log
+        log = self.auto_rng_tab.captureLog.emit
         try:
             stats_frame = capture_preview_frame(self._capture_config)
         except Exception as exc:
@@ -3005,7 +3045,7 @@ class MainWindow(QMainWindow):
 
     def _send_easycon_right(self) -> None:
         """通过伊机控发送 RIGHT d-pad 按钮。"""
-        log = self.auto_rng_tab.add_log
+        log = self.auto_rng_tab.captureLog.emit
         script_text = "RIGHT 200\n"
         if self.easycon_tab._is_bridge_mode():
             log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT 200")

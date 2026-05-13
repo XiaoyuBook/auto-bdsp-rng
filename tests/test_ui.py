@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThread, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
 
@@ -821,6 +821,65 @@ def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_p
     assert len(generated) >= 1
     assert generated[-1].seed == seed_state.to_seed_pair64()
     assert generated[-1].state_filter.iv_min[0] == 31
+
+
+def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
+    observation = SimpleNamespace(offset_time=100.0)
+    ui_thread = window.thread()
+    touched: list[str] = []
+
+    def assert_ui_thread(name: str) -> None:
+        assert QThread.currentThread() == ui_thread
+        touched.append(name)
+
+    window._preview_timer.start()
+    original_stop_preview = window._preview_timer.stop
+    original_start_preview = window._preview_timer.start
+
+    def stop_preview() -> None:
+        assert_ui_thread("stop_preview")
+        original_stop_preview()
+
+    def start_preview() -> None:
+        assert_ui_thread("start_preview")
+        original_start_preview()
+
+    monkeypatch.setattr(window._preview_timer, "stop", stop_preview)
+    monkeypatch.setattr(window._preview_timer, "start", start_preview)
+    monkeypatch.setattr(window.preview_label, "clear", lambda: assert_ui_thread("clear_preview"))
+    monkeypatch.setattr(window.preview_button, "setText", lambda _text: assert_ui_thread("set_preview_text"))
+    monkeypatch.setattr(window.preview_label, "setText", lambda _text: assert_ui_thread("set_preview_label"))
+    monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 100.0)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", lambda *_args, **_kwargs: observation)
+    monkeypatch.setattr(
+        main_window_module,
+        "recover_seed_from_observation",
+        lambda actual_observation, npc: SimpleNamespace(state=seed_state, advances=0),
+    )
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    class CaptureRunner:
+        def run(self):
+            services.capture_seed()
+            return AutoRngProgress(phase=AutoRngPhase.IDLE)
+
+        def stop(self) -> None:
+            pass
+
+    window.auto_rng_tab.run_with_runner(CaptureRunner())
+    deadline = time.monotonic() + 2.0
+    while window.auto_rng_tab._runner_thread is not None and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    QApplication.processEvents()
+
+    assert window.auto_rng_tab._runner_thread is None
+    assert "stop_preview" in touched
+    assert "start_preview" in touched
+    window._preview_timer.stop()
+    window.close()
 
 
 def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, monkeypatch):
