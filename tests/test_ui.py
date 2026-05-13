@@ -23,6 +23,7 @@ import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
 from auto_bdsp_rng.ui.main_window import NATURES_ZH, _normalize_iv_ranges, _reverse_lookup_search_span
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
+from auto_bdsp_rng.ui.history_panel import HistoryPanel
 
 
 @pytest.fixture
@@ -676,6 +677,36 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
 
     assert panel.status_badge.text() == "运行撞闪脚本"
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
+
+
+def test_history_panel_reverse_lookup_candidates_are_single_line(app):
+    panel = HistoryPanel()
+    state = SimpleNamespace(
+        advances=1234,
+        ec=0xAABBCCDD,
+        pid=0x11223344,
+        ivs=(31, 30, 29, 28, 27, 26),
+        ability=1,
+        gender=0,
+        nature=0,
+        shiny=2,
+        height=255,
+        weight=12,
+    )
+
+    panel.reverse_lookup_results([state], characteristic="喜欢吃东西", delays=[99])
+
+    lines = [line for line in panel.text_view.toPlainText().splitlines() if line.strip()]
+    reverse_lines = [line for line in lines if "反查候选" in line]
+    assert len(reverse_lines) == 1
+    assert "adv=1234" in reverse_lines[0]
+    assert "delay=99" in reverse_lines[0]
+    assert "EC=AABBCCDD" in reverse_lines[0]
+    assert "PID=11223344" in reverse_lines[0]
+    assert "HP=31" in reverse_lines[0]
+    assert "身高=255" in reverse_lines[0]
+    assert "体重=12" in reverse_lines[0]
+    assert not any(line.strip().startswith("EC:") for line in lines)
 
 
 

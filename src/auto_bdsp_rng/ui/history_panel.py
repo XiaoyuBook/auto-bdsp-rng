@@ -261,17 +261,13 @@ class HistoryPanel(QWidget):
             self._w(f"[{_now()}] 反查结果: 未找到匹配个体")
         else:
             self._w(f"[{_now()}] 反查结果 ({count} 个匹配):")
-            self._w()
             for i, state in enumerate(candidates):
                 adv = _get_int(state, "advances")
                 delay = delays[i] if delays else adv
-                self._w(f"  ── 反查候选 {i + 1} ──")
-                self._w(f"  advances: {adv}  delay: {delay}  EC: {_state_ec(state)}  PID: {_state_pid(state)}")
-                ivs = getattr(state, "ivs", None)
-                self._w(f"  {_state_iv_text(ivs)}")
-                nature = _nature_text(state)
-                chara_text = f"  个性: {characteristic}" if characteristic else ""
-                self._w(f"  性格: {nature}{chara_text}")
-                self._w(f"  特性: {_get_int(state, 'ability')}  性别: {_gender_text(state)}  身高: {_get_int(state, 'height')}  体重: {_get_int(state, 'weight')}")
-                self._w()
+                chara_text = f" 个性={characteristic}" if characteristic else ""
+                self._w(f"  反查候选{i + 1}: adv={adv} delay={delay} EC={_state_ec(state)} PID={_state_pid(state)} "
+                        f"{_state_iv_text(getattr(state, 'ivs', None))} "
+                        f"性格={_nature_text(state)}{chara_text} 特性={_get_int(state, 'ability')} "
+                        f"性别={_gender_text(state)} 异色={_shiny_text(state)} "
+                        f"身高={_get_int(state, 'height')} 体重={_get_int(state, 'weight')}")
         self._w(SEPARATOR_END)
