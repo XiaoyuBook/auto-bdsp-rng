@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -25,6 +26,7 @@ ICON_PNG = ROOT / "docs" / "assets" / "app-icon.png"
 ICON_ICO = ROOT / "docs" / "assets" / "app-icon.ico"
 BRIDGE_PROJECT = ROOT / "bridge" / "EasyConBridge" / "EasyConBridge.csproj"
 BRIDGE_DIST = DIST_DIR / "bridge" / "EasyConBridge"
+PROJECT_XS_ROOT = ROOT / "third_party" / "Project_Xs_CHN"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     build_icon(python)
     build_pyinstaller(python)
     copy_release_files()
+    verify_project_xs_assets()
     build_easycon_bridge()
     create_release_zip()
     print()
@@ -164,6 +167,8 @@ def copy_release_files() -> None:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     copy_optional_tree(ROOT / "script", DIST_DIR / "script")
     copy_optional_tree(ROOT / "docs" / "assets", DIST_DIR / "docs" / "assets")
+    copy_optional_tree(PROJECT_XS_ROOT / "configs", DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs")
+    copy_optional_tree(PROJECT_XS_ROOT / "images", DIST_DIR / "third_party" / "Project_Xs_CHN" / "images")
     write_user_readme(DIST_DIR / "README.txt")
     license_source = ROOT / "LICENSE"
     license_txt_source = ROOT / "LICENSE.txt"
@@ -212,6 +217,30 @@ def create_release_zip() -> None:
                 archive.write(path, Path(APP_NAME) / path.relative_to(DIST_DIR))
     if not ZIP_PATH.exists():
         raise SystemExit(f"Release zip was not created: {ZIP_PATH}")
+
+
+def verify_project_xs_assets() -> None:
+    config_root = DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs"
+    asset_root = DIST_DIR / "third_party" / "Project_Xs_CHN"
+    if not config_root.exists():
+        raise SystemExit(f"Project_Xs configs were not copied: {config_root}")
+    missing: list[Path] = []
+    for config_path in config_root.glob("*.json"):
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"Cannot parse Project_Xs config: {config_path}") from exc
+        image = data.get("image")
+        if not isinstance(image, str) or not image.strip():
+            continue
+        image_path = Path(image)
+        if not image_path.is_absolute():
+            image_path = asset_root / image.replace("\\", "/").lstrip("./")
+        if not image_path.exists():
+            missing.append(image_path)
+    if missing:
+        formatted = "\n".join(f"- {path}" for path in missing)
+        raise SystemExit(f"Project_Xs config image assets are missing:\n{formatted}")
 
 
 def clean_outputs() -> None:

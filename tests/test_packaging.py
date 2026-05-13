@@ -20,6 +20,15 @@ def test_pyinstaller_spec_collects_project_xs_win32ui_dependency():
     assert '"win32ui"' in spec
 
 
+def test_build_script_copies_project_xs_user_resources_next_to_exe():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "build_exe.py").read_text(encoding="utf-8")
+
+    assert 'DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs"' in script
+    assert 'DIST_DIR / "third_party" / "Project_Xs_CHN" / "images"' in script
+    assert "verify_project_xs_assets" in script
+
+
 def test_qt_application_and_window_use_project_identity(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     app = QApplication.instance() or QApplication([])

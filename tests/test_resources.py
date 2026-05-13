@@ -30,3 +30,14 @@ def test_app_path_uses_executable_directory_when_frozen(monkeypatch, tmp_path):
 def test_app_icon_path_points_to_packaged_icon_source():
     assert resources.app_icon_path().name == "app-icon.png"
     assert resources.app_icon_path().exists()
+
+
+def test_resource_path_prefers_exe_adjacent_resource_when_frozen(monkeypatch, tmp_path):
+    exe = tmp_path / "auto-bdsp-rng.exe"
+    project_xs = tmp_path / "third_party" / "Project_Xs_CHN" / "images"
+    project_xs.mkdir(parents=True)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_internal"), raising=False)
+
+    assert resources.resource_path("third_party", "Project_Xs_CHN", "images") == project_xs
