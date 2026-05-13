@@ -41,12 +41,13 @@ def test_main_window_generates_static_results(app):
     window = MainWindow()
 
     assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
+        "自动定点乱数",
         "Seed 捕捉",
         "定点数据区",
         "伊机控",
-        "自动定点乱数",
+        "历史记录",
     ]
-    assert window.tabs.tabText(window.tabs.currentIndex()) == "Seed 捕捉"
+    assert window.tabs.tabText(window.tabs.currentIndex()) == "自动定点乱数"
 
     window.tabs.setCurrentWidget(window.bdsp_tab)
     _set_bdsp_seed(window)
