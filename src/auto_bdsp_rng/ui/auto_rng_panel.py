@@ -119,12 +119,21 @@ class AutoRngPanel(QWidget):
         self.toolbar = self._build_toolbar()
         layout.addWidget(self.toolbar)
 
-        splitter = QSplitter()
+        content = QWidget(self)
+        self.content_grid = QGridLayout(content)
+        self.content_grid.setContentsMargins(0, 0, 0, 0)
+        self.content_grid.setHorizontalSpacing(12)
+        self.content_grid.setVerticalSpacing(12)
         self.config_panel = self._build_config_panel()
-        splitter.addWidget(self.config_panel)
-        splitter.addWidget(self._build_runtime_panel())
-        splitter.setSizes([300, 1120])
-        layout.addWidget(splitter, 1)
+        self.runtime_panel = self._build_runtime_panel()
+        self.content_grid.addWidget(self.config_panel, 0, 0)
+        self.content_grid.addWidget(self.runtime_panel, 0, 1)
+        self.content_grid.addWidget(self._build_log_group(), 1, 0, 1, 2)
+        self.content_grid.setColumnStretch(0, 0)
+        self.content_grid.setColumnStretch(1, 1)
+        self.content_grid.setRowStretch(0, 0)
+        self.content_grid.setRowStretch(1, 1)
+        layout.addWidget(content, 1)
 
     def _build_toolbar(self) -> QWidget:
         toolbar = QFrame()
@@ -176,18 +185,19 @@ class AutoRngPanel(QWidget):
 
     def _build_config_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(300)
-        panel.setMaximumWidth(300)
+        panel.setMinimumWidth(450)
+        panel.setMaximumWidth(450)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         self.strategy_group = self._build_strategy_group()
-        layout.addWidget(self.strategy_group)
-        layout.addStretch(1)
+        layout.addWidget(self.strategy_group, 1)
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
         group = QGroupBox("自动策略")
+        group.setMinimumHeight(420)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         form = QFormLayout(group)
         form.setContentsMargins(12, 12, 12, 12)
         form.setVerticalSpacing(8)
@@ -200,8 +210,8 @@ class AutoRngPanel(QWidget):
         self.shiny_threshold_seconds.setSingleStep(0.1)
         self.shiny_threshold_seconds.setValue(0.0)
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
-            spin.setFixedWidth(145)
-        self.shiny_threshold_seconds.setFixedWidth(145)
+            spin.setFixedWidth(215)
+        self.shiny_threshold_seconds.setFixedWidth(215)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待窗口", self.max_wait_frames)
