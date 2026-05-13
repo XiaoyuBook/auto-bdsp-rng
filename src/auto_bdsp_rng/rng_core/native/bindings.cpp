@@ -52,7 +52,7 @@ static py::list generate_static_py(
     int shiny_template, bool fateful,
     int iv_count, int ability_template,
     int gender_ratio, int ability_count,
-    int tid, int sid,
+    int tid, int sid, int level,
     // Filter params
     bool filter_skip, int filter_ability, int filter_gender, int filter_shiny,
     int height_min, int height_max, int weight_min, int weight_max,
@@ -68,14 +68,16 @@ static py::list generate_static_py(
     if (roamer) {
         results = generate_roamer(
             seed0, seed1, initial_advances, max_advances, offset,
-            lead, static_cast<u16>(tid), static_cast<u16>(sid), 0, filter);
+            lead, static_cast<u16>(tid), static_cast<u16>(sid), 0,
+            static_cast<u8>(level), filter);
     } else {
         results = generate_non_roamer(
             seed0, seed1, initial_advances, max_advances, offset,
             lead, static_cast<ShinyTemplate>(shiny_template), fateful,
             static_cast<u8>(iv_count), static_cast<u8>(ability_template),
             static_cast<u8>(gender_ratio), static_cast<u8>(ability_count),
-            static_cast<u16>(tid), static_cast<u16>(sid), filter);
+            static_cast<u16>(tid), static_cast<u16>(sid),
+            static_cast<u8>(level), filter);
     }
 
     py::list out;
@@ -173,7 +175,7 @@ PYBIND11_MODULE(_native, m) {
           py::arg("shiny_template"), py::arg("fateful"),
           py::arg("iv_count"), py::arg("ability_template"),
           py::arg("gender_ratio"), py::arg("ability_count"),
-          py::arg("tid"), py::arg("sid"),
+          py::arg("tid"), py::arg("sid"), py::arg("level"),
           py::arg("filter_skip"), py::arg("filter_ability"),
           py::arg("filter_gender"), py::arg("filter_shiny"),
           py::arg("height_min"), py::arg("height_max"),

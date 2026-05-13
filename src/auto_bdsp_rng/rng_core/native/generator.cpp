@@ -86,7 +86,7 @@ std::vector<StateResult> generate_non_roamer(
     u32 initial_advances, u32 max_advances, u32 offset,
     int lead, ShinyTemplate shiny_template, bool fateful,
     u8 iv_count, u8 ability_template, u8 gender_ratio, u8 ability_count,
-    u16 tid, u16 sid,
+    u16 tid, u16 sid, u8 level,
     const FilterParams& filter)
 {
     u16 tsv = tid ^ sid;
@@ -166,7 +166,7 @@ std::vector<StateResult> generate_non_roamer(
         r.advances = initial_advances + cnt;
         r.ec = ec; r.sidtid = sidtid; r.pid = pid;
         for (int i = 0; i < 6; i++) r.ivs[i] = ivs[i];
-        r.ability = ability; r.gender = gender; r.level = 1;
+        r.ability = ability; r.gender = gender; r.level = level;
         r.nature = nature; r.shiny = shiny;
         r.height = height; r.weight = weight;
 
@@ -180,7 +180,7 @@ std::vector<StateResult> generate_non_roamer(
 std::vector<StateResult> generate_roamer(
     u64 seed0, u64 seed1,
     u32 initial_advances, u32 max_advances, u32 offset,
-    int lead, u16 tid, u16 sid, u16 species,
+    int lead, u16 tid, u16 sid, u16 species, u8 level,
     const FilterParams& filter)
 {
     u16 tsv = tid ^ sid;
@@ -245,7 +245,7 @@ std::vector<StateResult> generate_roamer(
         r.advances = initial_advances + cnt;
         r.ec = ec; r.sidtid = sidtid; r.pid = pid;
         for (int i = 0; i < 6; i++) r.ivs[i] = ivs[i];
-        r.ability = ability; r.gender = gender; r.level = 1;
+        r.ability = ability; r.gender = gender; r.level = level;
         r.nature = nature; r.shiny = shiny;
         r.height = height; r.weight = weight;
         results.push_back(r);

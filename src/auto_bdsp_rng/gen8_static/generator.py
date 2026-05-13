@@ -158,7 +158,7 @@ class StaticGenerator8:
         sf = self.state_filter
         template = self.template
         profile = self.profile
-        results_raw = _native_generate(
+        args = (
             seed0, seed1,
             self.initial_advances, self.max_advances, self.offset,
             int(self.lead), roamer,
@@ -172,11 +172,15 @@ class StaticGenerator8:
             tuple(sf.iv_min), tuple(sf.iv_max),
             tuple(sf.natures), tuple(sf.hidden_powers),
         )
+        try:
+            results_raw = _native_generate(*args[:15], template.level, *args[15:])
+        except TypeError:
+            results_raw = _native_generate(*args)
         return [
             State8(
                 advances=r[0], ec=r[1], sidtid=r[2], pid=r[3],
                 ivs=tuple(r[4]),
-                ability=r[5], gender=r[6], level=r[7],
+                ability=r[5], gender=r[6], level=template.level,
                 nature=r[8], shiny=r[9], height=r[10], weight=r[11],
             )
             for r in results_raw
