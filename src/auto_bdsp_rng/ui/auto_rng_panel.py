@@ -196,7 +196,6 @@ class AutoRngPanel(QWidget):
 
     def _build_strategy_group(self) -> QGroupBox:
         group = QGroupBox("自动策略")
-        group.setMinimumHeight(420)
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         form = QFormLayout(group)
         form.setContentsMargins(12, 12, 12, 12)
@@ -287,7 +286,6 @@ class AutoRngPanel(QWidget):
         self.script_group = self._build_script_group()
         layout.addWidget(self.script_group)
         layout.addWidget(self._build_target_summary_group())
-        layout.addWidget(self._build_log_group(), 1)
         return panel
 
     def _build_target_summary_group(self) -> QGroupBox:

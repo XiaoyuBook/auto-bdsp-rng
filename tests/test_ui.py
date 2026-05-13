@@ -530,6 +530,7 @@ def test_auto_rng_panel_uses_full_width_log_without_summary_group(app):
     assert not hasattr(panel, "summary_remaining")
     assert not hasattr(panel, "summary_target")
     assert panel.log_group.maximumWidth() == 16777215
+    assert len([group for group in panel.findChildren(QGroupBox) if group.title() == "日志"]) == 1
     assert panel.content_grid.itemAtPosition(1, 0).widget() is panel.log_group
     index = panel.content_grid.indexOf(panel.log_group)
     assert index >= 0
@@ -549,7 +550,7 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert panel.stop_button.height() == 34
     assert panel.config_panel.minimumWidth() >= 430
     assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
-    assert panel.strategy_group.minimumHeight() >= 400
+    assert panel.strategy_group.minimumHeight() < 400
     assert panel.strategy_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
     assert panel.strategy_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
