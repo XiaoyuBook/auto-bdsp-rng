@@ -100,6 +100,28 @@ def _reverse_lookup_search_span(target_advances: int, window: int) -> tuple[int,
     end = int(target_advances) + clamped_window
     return start, end, end - start
 
+
+def _normalize_iv_ranges(ranges: object) -> tuple[list[int], list[int]] | None:
+    iv_min: list[int] = []
+    iv_max: list[int] = []
+    try:
+        items = list(ranges)  # type: ignore[arg-type]
+    except TypeError:
+        return None
+    if len(items) != 6:
+        return None
+    for item in items:
+        try:
+            low = int(item[0])  # type: ignore[index]
+            high = int(item[1])  # type: ignore[index]
+        except (TypeError, ValueError, IndexError):
+            return None
+        if low < 0 or high > 31 or low > high:
+            return None
+        iv_min.append(low)
+        iv_max.append(high)
+    return iv_min, iv_max
+
 NATURES = (
     "Hardy",
     "Lonely",
@@ -2766,7 +2788,6 @@ class MainWindow(QMainWindow):
             time.sleep(2.0)
 
             # 能力值 → 个体值 反算（用到的辅助函数只定义一次）
-            import math
             from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import compute_characteristic
             from auto_bdsp_rng.gen8_static.models import StateFilter
             from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
@@ -2813,15 +2834,17 @@ class MainWindow(QMainWindow):
                     for i, name in enumerate(stat_names):
                         possible = []
                         for iv in range(32):
-                            if i == 0:
-                                c = (2 * base_stats[i] + iv) * level // 100 + level + 10
-                            else:
-                                c = (2 * base_stats[i] + iv) * level // 100 + 5
+                            c = _compute_stat(base_stats[i], iv, level, use_nature, i)
                             if c == stat_vals[i]:
                                 possible.append(iv)
-                        ranges.append((min(possible), max(possible)) if possible else (0, 31))
-                iv_min = [r[0] for r in ranges]
-                iv_max = [r[1] for r in ranges]
+                        ranges.append((min(possible), max(possible)) if possible else (31, 0))
+                normalized_ranges = _normalize_iv_ranges(ranges)
+                if normalized_ranges is None:
+                    log(f"[自动反查] 第{attempt}次能力值与性格/等级不匹配，可能 OCR 误读，重试…")
+                    if attempt < 3:
+                        time.sleep(0.5)
+                    continue
+                iv_min, iv_max = normalized_ranges
                 for i, name in enumerate(stat_names):
                     log(f"[自动反查] {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{base_stats[i]} Lv{level})")
 

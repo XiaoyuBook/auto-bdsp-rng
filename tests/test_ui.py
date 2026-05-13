@@ -20,7 +20,8 @@ from auto_bdsp_rng.gen8_static import State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
-from auto_bdsp_rng.ui.main_window import _reverse_lookup_search_span
+from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
+from auto_bdsp_rng.ui.main_window import NATURES_ZH, _normalize_iv_ranges, _reverse_lookup_search_span
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
 
 
@@ -127,6 +128,19 @@ def test_reverse_lookup_search_span_uses_symmetric_window():
     assert _reverse_lookup_search_span(500, 500) == (0, 1000, 1000)
     assert _reverse_lookup_search_span(2000, 500) == (1500, 2500, 1000)
     assert _reverse_lookup_search_span(20_000, 20_000) == (10_000, 30_000, 20_000)
+
+
+def test_auto_rng_nature_map_matches_ui_nature_order():
+    assert [_NATURE_MAP[name] for name in NATURES_ZH] == list(range(25))
+    assert _NATURE_MAP["温顺"] == 21
+
+
+def test_normalize_iv_ranges_rejects_impossible_native_sentinel():
+    assert _normalize_iv_ranges([(30, 31), (31, 0), (0, 3), (24, 26), (30, 31), (30, 31)]) is None
+    assert _normalize_iv_ranges([(30, 31), (10, 13), (17, 23), (30, 31), (27, 29), (30, 31)]) == (
+        [30, 10, 17, 30, 27, 30],
+        [31, 13, 23, 31, 29, 31],
+    )
 
 
 def test_bdsp_characteristic_matches_pokefinder_tie_break_and_translation(app):
