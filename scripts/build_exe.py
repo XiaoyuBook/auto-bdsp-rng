@@ -6,14 +6,16 @@ import platform
 import shutil
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
 
 APP_NAME = "auto-bdsp-rng"
-VERSION = "v1.0.0"
-ZIP_NAME = f"{APP_NAME}-{VERSION}-windows-x64.zip"
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+VERSION = f"v{PROJECT_VERSION}"
+ZIP_NAME = f"{APP_NAME}-{VERSION}-windows-x64.zip"
 VENV = ROOT / ".venv"
 DIST_DIR = ROOT / "dist" / APP_NAME
 RELEASE_DIR = ROOT / "release"
@@ -177,12 +179,12 @@ def write_user_readme(path: Path) -> None:
     path.write_text(
         "\n".join(
             [
-                "auto-bdsp-rng v1.0.0",
+                f"auto-bdsp-rng {VERSION}",
                 "",
                 "启动方式：双击 auto-bdsp-rng.exe。",
                 "",
                 "请不要只复制 exe。必须保留 auto-bdsp-rng.exe 旁边的 _internal、script、bridge、docs 等目录。",
-                "普通用户不要下载 GitHub 绿色 Code 按钮里的 Source code zip，请下载 Release 里的 auto-bdsp-rng-v1.0.0-windows-x64.zip。",
+                f"普通用户不要下载 GitHub 绿色 Code 按钮里的 Source code zip，请下载 Release 里的 {ZIP_NAME}。",
                 "首次启动可能较慢，这是正常现象。",
                 "",
                 "Windows SmartScreen 如果提示未知发布者，可以点击“更多信息”，确认来源是本项目 Release 后再选择“仍要运行”。",

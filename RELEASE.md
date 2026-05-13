@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for `v1.0.0` and future Windows releases.
+Use this checklist for `v0.0.2` and future Windows releases.
 
 ## Version
 
@@ -8,9 +8,9 @@ Update the version in:
 
 - `pyproject.toml`
 - `src/auto_bdsp_rng/__init__.py`
-- release docs and build script constants when the zip name changes
+- release docs when examples need to mention a concrete version
 
-For this release, the version is `v1.0.0`.
+For this release, the version is `v0.0.2`.
 
 ## Build And Test
 
@@ -32,33 +32,33 @@ Confirm:
 - scripts and Project_Xs configs can be found,
 - `_native` imports,
 - EasyConBridge is present if it was publishable,
-- `release/auto-bdsp-rng-v1.0.0-windows-x64.zip` exists.
+- `release/auto-bdsp-rng-v0.0.2-windows-x64.zip` exists.
 
 ## Tag
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.0.2
+git push origin v0.0.2
 ```
 
 ## GitHub Release
 
 Create a new GitHub Release:
 
-- tag: `v1.0.0`
-- title: `auto-bdsp-rng v1.0.0`
-- asset: `auto-bdsp-rng-v1.0.0-windows-x64.zip`
+- tag: `v0.0.2`
+- title: `auto-bdsp-rng v0.0.2`
+- asset: `auto-bdsp-rng-v0.0.2-windows-x64.zip`
 
 Do not tell normal users to download the Source code zip.
 
 ## Release Notes Template
 
 ```markdown
-## auto-bdsp-rng v1.0.0
+## auto-bdsp-rng v0.0.2
 
 ### 下载
 
-请下载 `auto-bdsp-rng-v1.0.0-windows-x64.zip`，不要下载 GitHub 自动生成的 Source code zip。
+请下载 `auto-bdsp-rng-v0.0.2-windows-x64.zip`，不要下载 GitHub 自动生成的 Source code zip。
 
 ### 使用
 
@@ -72,4 +72,3 @@ Do not tell normal users to download the Source code zip.
 - 自动乱数流程仍需要游戏窗口/采集环境、串口/驱动、EasyCon 或兼容后端。
 - 基础版不包含 paddle OCR 依赖。
 ```
-

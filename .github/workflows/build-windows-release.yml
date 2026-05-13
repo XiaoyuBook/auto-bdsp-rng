@@ -37,11 +37,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: auto-bdsp-rng-windows-x64
-          path: release/auto-bdsp-rng-v1.0.0-windows-x64.zip
+          path: release/auto-bdsp-rng-v*-windows-x64.zip
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/auto-bdsp-rng-v1.0.0-windows-x64.zip
-
+          files: release/auto-bdsp-rng-v*-windows-x64.zip

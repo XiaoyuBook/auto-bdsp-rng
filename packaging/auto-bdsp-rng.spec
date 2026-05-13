@@ -46,6 +46,7 @@ hiddenimports = [
     "win32con",
     "win32gui",
     "win32process",
+    "win32ui",
 ]
 
 for package in ("PySide6", "cv2", "numpy", "PIL", "pyautogui"):

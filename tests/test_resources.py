@@ -26,3 +26,7 @@ def test_app_path_uses_executable_directory_when_frozen(monkeypatch, tmp_path):
 
     assert resources.app_path("bridge") == tmp_path / "bridge"
 
+
+def test_app_icon_path_points_to_packaged_icon_source():
+    assert resources.app_icon_path().name == "app-icon.png"
+    assert resources.app_icon_path().exists()

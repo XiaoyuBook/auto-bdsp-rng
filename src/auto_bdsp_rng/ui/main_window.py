@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import csv
+import sys
 import threading
 import time
 from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QImage, QIntValidator, QPainter, QPen, QPixmap
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QImage, QIntValidator, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -42,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     ProjectXsIntegrationError,
@@ -72,16 +74,38 @@ from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
-from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.resources import app_icon_path, resource_path
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
+APP_TITLE = "珍钻复刻定点自动乱数"
+APP_DISPLAY_TITLE = f"{APP_TITLE} v{__version__}"
+APP_USER_MODEL_ID = "XiaoyuBook.auto-bdsp-rng"
 DEFAULT_BLINK_COUNT = 40
 REIDENTIFY_BLINK_COUNT = 7
 NOISY_REIDENTIFY_BLINK_COUNT = 20
+
+
+def configure_application_identity(app: QApplication) -> QIcon:
+    app.setApplicationName(APP_DISPLAY_TITLE)
+    app.setApplicationDisplayName(APP_DISPLAY_TITLE)
+    app.setOrganizationName("XiaoyuBook")
+    if app_icon_path().exists():
+        icon = QIcon(str(app_icon_path()))
+        app.setWindowIcon(icon)
+    else:
+        icon = QIcon()
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+        except Exception:
+            pass
+    return icon
 
 
 def _make_labels_copyable(root: QWidget) -> None:
@@ -617,7 +641,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("auto_bdsp_rng")
+        self.setWindowTitle(APP_DISPLAY_TITLE)
+        if app_icon_path().exists():
+            self.setWindowIcon(QIcon(str(app_icon_path())))
         self.setMinimumSize(1150, 900)
         self.resize(1150, 900)
         self.lang = "zh"
@@ -3918,6 +3944,7 @@ def create_window() -> MainWindow:
 
 def run() -> int:
     app = QApplication.instance() or QApplication([])
+    configure_application_identity(app)
     window = create_window()
     window.show()
     return app.exec()

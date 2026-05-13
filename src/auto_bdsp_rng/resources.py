@@ -30,6 +30,10 @@ def resource_path(*parts: str | os.PathLike[str]) -> Path:
     return package_base_dir().joinpath(*parts)
 
 
+def app_icon_path() -> Path:
+    return resource_path("docs", "assets", "app-icon.png")
+
+
 def app_path(*parts: str | os.PathLike[str]) -> Path:
     return app_base_dir().joinpath(*parts)
 
