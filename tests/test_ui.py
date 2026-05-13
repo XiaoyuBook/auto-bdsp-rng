@@ -20,6 +20,7 @@ from auto_bdsp_rng.gen8_static import State8
 from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
+from auto_bdsp_rng.ui.main_window import _reverse_lookup_search_span
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
 
 
@@ -98,6 +99,33 @@ def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     assert "HP能力" in window._result_headers()
     assert "HP" not in window._result_headers()
     assert window._result_headers()[7:13] == ["HP能力", "攻击能力", "防御能力", "特攻能力", "特防能力", "速度能力"]
+
+
+def test_main_window_tab_labels_are_copyable(app):
+    window = MainWindow()
+    for tab_index in range(window.tabs.count()):
+        tab = window.tabs.widget(tab_index)
+        labels = [label for label in tab.findChildren(QLabel) if label.text()]
+        for label in labels:
+            flags = label.textInteractionFlags()
+            assert flags & Qt.TextInteractionFlag.TextSelectableByMouse
+            assert flags & Qt.TextInteractionFlag.TextSelectableByKeyboard
+
+
+def test_auto_rng_reverse_lookup_window_is_configurable(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path)
+
+    panel.reverse_lookup_window.setValue(500)
+    config = panel.build_config()
+
+    assert config.reverse_lookup_window == 500
+    assert panel.reverse_lookup_window.maximum() == 10_000
+
+
+def test_reverse_lookup_search_span_uses_symmetric_window():
+    assert _reverse_lookup_search_span(500, 500) == (0, 1000, 1000)
+    assert _reverse_lookup_search_span(2000, 500) == (1500, 2500, 1000)
+    assert _reverse_lookup_search_span(20_000, 20_000) == (10_000, 30_000, 20_000)
 
 
 def test_bdsp_characteristic_matches_pokefinder_tie_break_and_translation(app):

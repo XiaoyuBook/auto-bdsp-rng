@@ -78,6 +78,23 @@ DEFAULT_BLINK_COUNT = 40
 REIDENTIFY_BLINK_COUNT = 7
 NOISY_REIDENTIFY_BLINK_COUNT = 20
 
+
+def _make_labels_copyable(root: QWidget) -> None:
+    flags = (
+        Qt.TextInteractionFlag.TextSelectableByMouse
+        | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        | Qt.TextInteractionFlag.LinksAccessibleByMouse
+    )
+    for label in root.findChildren(QLabel):
+        label.setTextInteractionFlags(label.textInteractionFlags() | flags)
+
+
+def _reverse_lookup_search_span(target_advances: int, window: int) -> tuple[int, int, int]:
+    clamped_window = max(0, min(10_000, int(window)))
+    start = max(0, int(target_advances) - clamped_window)
+    end = int(target_advances) + clamped_window
+    return start, end, end - start
+
 NATURES = (
     "Hardy",
     "Lonely",
@@ -631,7 +648,6 @@ class MainWindow(QMainWindow):
         self.addAction(generate)
 
         copy = QAction("Copy Results", self)
-        copy.setShortcut("Ctrl+C")
         copy.triggered.connect(self.copy_results)
         self.addAction(copy)
 
@@ -679,6 +695,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
         self.tabs.addTab(self.history_tab, "历史记录")
         root_layout.addWidget(self.tabs, 1)
+        _make_labels_copyable(self.tabs)
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
@@ -2746,14 +2763,19 @@ class MainWindow(QMainWindow):
             base_stats = search_criteria.record.species_info.stats
             level = search_criteria.record.template.level
             ni = _NATURE_MAP.get(str(nature)) if nature else None
-            # 构建搜索条件模板（性格+个性锁定，帧数范围±500）
+            # 构建搜索条件模板（性格+个性锁定，帧数范围可配置）
             natures_locked = (True,) * 25
             if ni is not None and 0 <= ni < 25:
                 natures_locked = tuple(i == ni for i in range(25))
+            reverse_start, reverse_end, reverse_count = _reverse_lookup_search_span(
+                target.raw_target_advances,
+                config.reverse_lookup_window,
+            )
             criteria = replace(search_criteria, seed=seed_pair_from_result(seed_result),
                               shiny_mode="any",
-                              initial_advances=max(0, target.raw_target_advances - 500),
-                              max_advances=target.raw_target_advances + 500)
+                              initial_advances=reverse_start,
+                              max_advances=reverse_count)
+            log(f"[自动反查] 搜索范围: Adv {reverse_start}-{reverse_end} (±{min(10_000, max(0, int(config.reverse_lookup_window)))})")
 
             # 能力页 OCR 重试逻辑（最多3次）
             stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]

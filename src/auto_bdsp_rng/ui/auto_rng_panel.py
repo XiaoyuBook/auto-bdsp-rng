@@ -217,8 +217,18 @@ class AutoRngPanel(QWidget):
         self.auto_reverse_combo = QComboBox()
         self.auto_reverse_combo.addItems(["自动反查：关闭", "自动反查：开启"])
         self.auto_reverse_combo.setFixedHeight(34)
-        self.auto_reverse_combo.setMinimumWidth(220)
-        form.addRow(self.auto_reverse_combo)
+        self.auto_reverse_combo.setMinimumWidth(150)
+        self.reverse_lookup_window = QSpinBox()
+        self.reverse_lookup_window.setRange(0, 10_000)
+        self.reverse_lookup_window.setValue(500)
+        self.reverse_lookup_window.setPrefix("±")
+        self.reverse_lookup_window.setSuffix(" 帧")
+        self.reverse_lookup_window.setFixedHeight(34)
+        self.reverse_lookup_window.setFixedWidth(100)
+        reverse_row = QHBoxLayout()
+        reverse_row.addWidget(self.auto_reverse_combo)
+        reverse_row.addWidget(self.reverse_lookup_window)
+        form.addRow(reverse_row)
         return group
 
     def _build_script_group(self) -> QGroupBox:
@@ -400,6 +410,7 @@ class AutoRngPanel(QWidget):
             hit_script_path=self._selected_path(self.hit_script_combo),
             reverse_script_path=self._selected_path(self.reverse_script_combo),
             auto_reverse=self.auto_reverse_combo.currentIndex() == 1,
+            reverse_lookup_window=self.reverse_lookup_window.value(),
             sync_mode=self.sync_combo.currentIndex(),
             sync_nature=self.sync_nature_input.text().strip(),
             fixed_delay=self.fixed_delay.value(),
@@ -484,6 +495,7 @@ class AutoRngPanel(QWidget):
         s.setValue("sync_state", self.sync_combo.currentIndex())
         s.setValue("sync_nature", self.sync_nature_input.text())
         s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
+        s.setValue("reverse_lookup_window", self.reverse_lookup_window.value())
         # 目标精灵设置
         tf = self.target_form
         s.setValue("target_category", tf.category_combo.currentIndex())
@@ -530,6 +542,8 @@ class AutoRngPanel(QWidget):
             idx = int(s.value("auto_reverse", 0))
             if 0 <= idx < self.auto_reverse_combo.count():
                 self.auto_reverse_combo.setCurrentIndex(idx)
+        if s.contains("reverse_lookup_window"):
+            self.reverse_lookup_window.setValue(int(s.value("reverse_lookup_window", 500)))
         # 目标精灵设置
         tf = self.target_form
         if s.contains("target_category"):

@@ -58,6 +58,7 @@ class AutoRngConfig:
     hit_script_path: Path | None = None
     reverse_script_path: Path | None = None
     auto_reverse: bool = False
+    reverse_lookup_window: int = 500
     sync_mode: int = 0  # 0=关闭, 1=首位普通精灵, 2=首位同步精灵
     sync_nature: str = ""  # 同步时锁定的性格名称
     fixed_delay: int = 100
