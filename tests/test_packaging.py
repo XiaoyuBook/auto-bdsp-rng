@@ -26,7 +26,16 @@ def test_build_script_copies_project_xs_user_resources_next_to_exe():
 
     assert 'DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs"' in script
     assert 'DIST_DIR / "third_party" / "Project_Xs_CHN" / "images"' in script
+    assert "PROJECT_XS_OVERRIDES" in script
+    assert "overlay_optional_tree" in script
     assert "verify_project_xs_assets" in script
+
+
+def test_pyinstaller_spec_names_chinese_executable():
+    root = Path(__file__).resolve().parents[1]
+    spec = (root / "packaging" / "auto-bdsp-rng.spec").read_text(encoding="utf-8")
+
+    assert 'name="珍钻复刻定点自动乱数"' in spec
 
 
 def test_qt_application_and_window_use_project_identity(monkeypatch):

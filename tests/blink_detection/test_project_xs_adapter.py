@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
-import inspect
 import sys
 import types
 
@@ -53,30 +51,7 @@ class FakeRng:
         return 0.5
 
 
-def test_project_xs_tracking_blink_exposes_capture_control_callbacks(monkeypatch):
-    pytest.importorskip("cv2")
-    project_xs_src = project_xs_module.PROJECT_XS_SRC
-    monkeypatch.syspath_prepend(str(project_xs_src))
-    sys.modules.pop("_project_xs_rngtool_signature", None)
-    spec = importlib.util.spec_from_file_location("_project_xs_rngtool_signature", project_xs_src / "rngtool.py")
-    assert spec is not None and spec.loader is not None
-    rngtool = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(rngtool)
-
-    parameters = inspect.signature(rngtool.tracking_blink).parameters
-
-    assert {"should_stop", "frame_callback", "progress_callback", "show_window"} <= set(parameters)
-
-
-def test_project_xs_tracking_blink_can_stop_without_tk_window_or_cv_preview(monkeypatch):
-    pytest.importorskip("cv2")
-    project_xs_src = project_xs_module.PROJECT_XS_SRC
-    monkeypatch.syspath_prepend(str(project_xs_src))
-    spec = importlib.util.spec_from_file_location("_project_xs_rngtool_stop", project_xs_src / "rngtool.py")
-    assert spec is not None and spec.loader is not None
-    rngtool = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(rngtool)
-
+def test_capture_player_blinks_can_stop_without_project_xs_control_kwargs(monkeypatch, tmp_path):
     class FakeCv2:
         CAP_ANY = 0
         CAP_V4L = 1
@@ -97,17 +72,35 @@ def test_project_xs_tracking_blink_can_stop_without_tk_window_or_cv_preview(monk
             def release(self):
                 self.released = True
 
-    monkeypatch.setattr(rngtool, "cv2", FakeCv2)
+        IMREAD_GRAYSCALE = 0
+        COLOR_RGB2GRAY = 1
+        TM_CCOEFF_NORMED = 2
 
-    assert rngtool.tracking_blink(
-        np.zeros((1, 1), dtype=np.uint8),
-        0,
-        0,
-        1,
-        1,
-        should_stop=lambda: True,
-        show_window=False,
-    ) == ([], [], 0)
+        imdecode = staticmethod(lambda *_args: np.zeros((1, 1), dtype=np.uint8))
+        cvtColor = staticmethod(lambda frame, _mode: frame[:, :, 0])
+        matchTemplate = staticmethod(lambda *_args: np.array([[0.0]], dtype=np.float32))
+        minMaxLoc = staticmethod(lambda _result: (0.0, 0.0, (0, 0), (0, 0)))
+        rectangle = staticmethod(lambda *_args: None)
+        destroyAllWindows = staticmethod(lambda: None)
+
+    eye = tmp_path / "eye.png"
+    eye.write_bytes(b"fake")
+    monkeypatch.setitem(sys.modules, "cv2", FakeCv2)
+    monkeypatch.setitem(sys.modules, "numpy", np)
+    monkeypatch.setitem(
+        sys.modules,
+        "rngtool",
+        types.SimpleNamespace(tracking_blink=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unused"))),
+    )
+
+    with pytest.raises(ProjectXsIntegrationError, match="stopped"):
+        capture_player_blinks(
+            BlinkCaptureConfig(eye_image_path=eye, roi=(0, 0, 1, 1)),
+            should_stop=lambda: True,
+            frame_callback=lambda _frame: None,
+            progress_callback=lambda _done, _total: None,
+            show_window=False,
+        )
 
 
 class FakeVideoCapture:
@@ -284,6 +277,25 @@ def test_capture_player_blinks_keeps_project_xs_src_importable_during_tracking(m
 
     assert observation.intervals == (0, 12)
     assert project_xs_src not in sys.path
+
+
+def test_load_eye_template_supports_unicode_windows_paths(tmp_path):
+    cv2 = pytest.importorskip("cv2")
+    unicode_dir = tmp_path / "中文路径"
+    unicode_dir.mkdir()
+    eye_path = unicode_dir / "eye.png"
+    image = np.full((3, 4), 255, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    encoded.tofile(str(eye_path))
+    config = BlinkCaptureConfig(
+        eye_image_path=eye_path,
+        roi=(0, 0, 4, 3),
+    )
+
+    loaded = project_xs_module._load_eye_template(config)
+
+    assert loaded.shape == (3, 4)
 
 
 def test_capture_pokemon_blinks_keeps_project_xs_src_importable_during_tracking(monkeypatch, tmp_path):

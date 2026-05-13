@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for `v0.0.2` and future Windows releases.
+Use this checklist for `v0.0.3` and future Windows releases.
 
 ## Version
 
@@ -10,7 +10,7 @@ Update the version in:
 - `src/auto_bdsp_rng/__init__.py`
 - release docs when examples need to mention a concrete version
 
-For this release, the version is `v0.0.2`.
+For this release, the version is `v0.0.3`.
 
 ## Build And Test
 
@@ -22,47 +22,47 @@ python -m pytest
 Then test:
 
 ```powershell
-.\dist\auto-bdsp-rng\auto-bdsp-rng.exe
+.\dist\auto-bdsp-rng\珍钻复刻定点自动乱数.exe
 ```
 
 Confirm:
 
-- `dist/auto-bdsp-rng/auto-bdsp-rng.exe` starts the GUI,
+- `dist/auto-bdsp-rng/珍钻复刻定点自动乱数.exe` starts the GUI,
 - no console window appears for normal GUI launch,
 - scripts and Project_Xs configs can be found,
 - `_native` imports,
 - EasyConBridge is present if it was publishable,
-- `release/auto-bdsp-rng-v0.0.2-windows-x64.zip` exists.
+- `release/auto-bdsp-rng-v0.0.3-windows-x64.zip` exists.
 
 ## Tag
 
 ```powershell
-git tag v0.0.2
-git push origin v0.0.2
+git tag v0.0.3
+git push origin v0.0.3
 ```
 
 ## GitHub Release
 
 Create a new GitHub Release:
 
-- tag: `v0.0.2`
-- title: `auto-bdsp-rng v0.0.2`
-- asset: `auto-bdsp-rng-v0.0.2-windows-x64.zip`
+- tag: `v0.0.3`
+- title: `auto-bdsp-rng v0.0.3`
+- asset: `auto-bdsp-rng-v0.0.3-windows-x64.zip`
 
 Do not tell normal users to download the Source code zip.
 
 ## Release Notes Template
 
 ```markdown
-## auto-bdsp-rng v0.0.2
+## auto-bdsp-rng v0.0.3
 
 ### 下载
 
-请下载 `auto-bdsp-rng-v0.0.2-windows-x64.zip`，不要下载 GitHub 自动生成的 Source code zip。
+请下载 `auto-bdsp-rng-v0.0.3-windows-x64.zip`，不要下载 GitHub 自动生成的 Source code zip。
 
 ### 使用
 
-解压 zip，进入 `auto-bdsp-rng` 文件夹，双击 `auto-bdsp-rng.exe`。
+解压 zip，进入 `auto-bdsp-rng` 文件夹，双击 `珍钻复刻定点自动乱数.exe`。
 
 ### 说明
 

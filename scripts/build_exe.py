@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 APP_NAME = "auto-bdsp-rng"
+EXE_NAME = "珍钻复刻定点自动乱数"
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 VERSION = f"v{PROJECT_VERSION}"
@@ -27,6 +28,7 @@ ICON_ICO = ROOT / "docs" / "assets" / "app-icon.ico"
 BRIDGE_PROJECT = ROOT / "bridge" / "EasyConBridge" / "EasyConBridge.csproj"
 BRIDGE_DIST = DIST_DIR / "bridge" / "EasyConBridge"
 PROJECT_XS_ROOT = ROOT / "third_party" / "Project_Xs_CHN"
+PROJECT_XS_OVERRIDES = ROOT / "packaging" / "project_xs_overrides"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -121,7 +123,7 @@ def build_icon(python: Path) -> None:
 
 def build_pyinstaller(python: Path) -> None:
     run([str(python), "-m", "PyInstaller", "--noconfirm", "--clean", str(SPEC_PATH)], cwd=ROOT)
-    exe = DIST_DIR / f"{APP_NAME}.exe"
+    exe = DIST_DIR / f"{EXE_NAME}.exe"
     if not exe.exists():
         raise SystemExit(f"PyInstaller did not create {exe}")
 
@@ -169,6 +171,7 @@ def copy_release_files() -> None:
     copy_optional_tree(ROOT / "docs" / "assets", DIST_DIR / "docs" / "assets")
     copy_optional_tree(PROJECT_XS_ROOT / "configs", DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs")
     copy_optional_tree(PROJECT_XS_ROOT / "images", DIST_DIR / "third_party" / "Project_Xs_CHN" / "images")
+    overlay_optional_tree(PROJECT_XS_OVERRIDES, DIST_DIR / "third_party" / "Project_Xs_CHN")
     write_user_readme(DIST_DIR / "README.txt")
     license_source = ROOT / "LICENSE"
     license_txt_source = ROOT / "LICENSE.txt"
@@ -186,9 +189,9 @@ def write_user_readme(path: Path) -> None:
             [
                 f"auto-bdsp-rng {VERSION}",
                 "",
-                "启动方式：双击 auto-bdsp-rng.exe。",
+                f"启动方式：双击 {EXE_NAME}.exe。",
                 "",
-                "请不要只复制 exe。必须保留 auto-bdsp-rng.exe 旁边的 _internal、script、bridge、docs 等目录。",
+                f"请不要只复制 exe。必须保留 {EXE_NAME}.exe 旁边的 _internal、script、bridge、docs 等目录。",
                 f"普通用户不要下载 GitHub 绿色 Code 按钮里的 Source code zip，请下载 Release 里的 {ZIP_NAME}。",
                 "首次启动可能较慢，这是正常现象。",
                 "",
@@ -261,6 +264,18 @@ def copy_tree(source: Path, target: Path) -> None:
 def copy_optional_tree(source: Path, target: Path) -> None:
     if source.exists():
         copy_tree(source, target)
+
+
+def overlay_optional_tree(source: Path, target: Path) -> None:
+    if not source.exists():
+        return
+    for path in source.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(source)
+        output = target / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, output)
 
 
 def run(command: list[str], cwd: Path = ROOT) -> None:

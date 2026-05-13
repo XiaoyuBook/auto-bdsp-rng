@@ -2042,12 +2042,10 @@ class MainWindow(QMainWindow):
         old_roi = self._roi_before_selection or (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
         try:
-            import cv2
-
             config = self._config_from_form().capture
-            eye_image = cv2.imread(str(config.eye_image_path), cv2.IMREAD_GRAYSCALE)
-            if eye_image is None:
-                raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
+            from auto_bdsp_rng.blink_detection.project_xs import _load_eye_template
+
+            eye_image = _load_eye_template(config)
             eye_width, eye_height = eye_image.shape[::-1]
             if width < eye_width or height < eye_height:
                 raise ValueError(self._text("roi_too_small"))

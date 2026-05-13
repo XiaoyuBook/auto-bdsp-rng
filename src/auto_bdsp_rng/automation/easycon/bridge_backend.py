@@ -13,6 +13,7 @@ from typing import Callable, Protocol
 from auto_bdsp_rng.automation.easycon.backend import EasyConBackend
 from auto_bdsp_rng.automation.easycon.discovery import discover_ezcon
 from auto_bdsp_rng.automation.easycon.models import EasyConInstallation, EasyConRunResult, EasyConRunTask, EasyConStatus
+from auto_bdsp_rng.automation.easycon.process import no_window_subprocess_kwargs
 
 
 class BridgeProtocolError(RuntimeError):
@@ -41,6 +42,7 @@ class JsonLineBridgeTransport:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **no_window_subprocess_kwargs(),
         )
         self._lock = threading.Lock()
         self._pending: dict[int, queue.Queue[dict[str, object] | BaseException]] = {}

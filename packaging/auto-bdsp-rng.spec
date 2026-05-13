@@ -91,7 +91,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="auto-bdsp-rng",
+    name="珍钻复刻定点自动乱数",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -1,0 +1,27 @@
+{
+    "MonitorWindow": true,
+    "WindowPrefix": "PotPlayer",
+    "image": "./images/custom/config_bebe_eye.png",
+    "view": [
+        518,
+        378,
+        35,
+        45
+    ],
+    "thresh": 0.7,
+    "white_delay": 0.0,
+    "advance_delay": 0,
+    "advance_delay_2": 0,
+    "npc": 0,
+    "pokemon_npc": 0,
+    "timeline_npc": 0,
+    "reident_1_pk_npc": false,
+    "crop": [
+        0,
+        0,
+        0,
+        0
+    ],
+    "camera": 0,
+    "display_percent": 80
+}

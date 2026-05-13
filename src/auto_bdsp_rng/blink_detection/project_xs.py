@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import heapq
 import importlib
 import json
+import heapq
 import sys
+import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -89,6 +90,19 @@ def _load_cv2() -> ModuleType:
         return importlib.import_module("cv2")
     except ImportError as exc:
         raise ProjectXsIntegrationError("OpenCV is required for Project_Xs blink capture") from exc
+
+
+def _read_grayscale_image(path: Path) -> Any:
+    cv2 = _load_cv2()
+    try:
+        np = importlib.import_module("numpy")
+        data = np.fromfile(str(path), dtype=np.uint8)
+        image = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
+    except Exception:
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise ProjectXsIntegrationError(f"Cannot read eye template image: {path}")
+    return image
 
 
 def _project_xs_crop(crop: tuple[int, int, int, int] | None) -> list[int] | None:
@@ -219,29 +233,32 @@ def capture_player_blinks(
 ) -> BlinkObservation:
     """Capture player blink observations through Project_Xs tracking logic."""
 
-    cv2 = _load_cv2()
-    rngtool = _load_module("rngtool")
-    eye_image = cv2.imread(str(config.eye_image_path), cv2.IMREAD_GRAYSCALE)
-    if eye_image is None:
-        raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
+    eye_image = _read_grayscale_image(config.eye_image_path)
 
     try:
-        with _project_xs_import_path():
-            blinks, intervals, offset_time = rngtool.tracking_blink(
+        if should_stop is not None or frame_callback is not None or progress_callback is not None or not show_window:
+            blinks, intervals, offset_time = _tracking_blink_controlled(
                 eye_image,
-                *config.roi,
-                threshold=config.threshold,
-                size=config.blink_count,
-                monitor_window=config.monitor_window,
-                window_prefix=config.window_prefix,
-                crop=_project_xs_crop(config.crop),
-                camera=config.camera,
-                tk_window=None,
+                config,
                 should_stop=should_stop,
                 frame_callback=frame_callback,
                 progress_callback=progress_callback,
                 show_window=show_window,
             )
+        else:
+            rngtool = _load_module("rngtool")
+            with _project_xs_import_path():
+                blinks, intervals, offset_time = rngtool.tracking_blink(
+                    eye_image,
+                    *config.roi,
+                    threshold=config.threshold,
+                    size=config.blink_count,
+                    monitor_window=config.monitor_window,
+                    window_prefix=config.window_prefix,
+                    crop=_project_xs_crop(config.crop),
+                    camera=config.camera,
+                    tk_window=None,
+                )
     except Exception as exc:  # Project_Xs raises broad UI/capture exceptions.
         raise ProjectXsIntegrationError(f"Project_Xs blink tracking failed: {exc}") from exc
     if should_stop is not None and should_stop():
@@ -250,14 +267,98 @@ def capture_player_blinks(
     return BlinkObservation.from_sequences(blinks, intervals, offset_time)
 
 
+def _tracking_blink_controlled(
+    eye_image: Any,
+    config: BlinkCaptureConfig,
+    *,
+    should_stop: Callable[[], bool] | None,
+    frame_callback: Callable[[Any], None] | None,
+    progress_callback: Callable[[int, int], None] | None,
+    show_window: bool,
+) -> tuple[list[int], list[int], float]:
+    cv2 = _load_cv2()
+    if should_stop is not None and should_stop():
+        return [], [], 0.0
+    if config.monitor_window:
+        with _project_xs_import_path():
+            windowcapture = _load_module("windowcapture")
+            video = windowcapture.WindowCapture(config.window_prefix, _project_xs_crop(config.crop))
+    else:
+        backend = cv2.CAP_V4L if sys.platform.startswith("linux") else cv2.CAP_ANY
+        video = cv2.VideoCapture(config.camera, backend)
+        video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        video.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    state_idle = 0xFF
+    state_single = 0xF0
+    state_double = 0xF1
+    state = state_idle
+    blinks: list[int] = []
+    intervals: list[int] = []
+    prev_time = 0.0
+    offset_time = 0.0
+    prev_roi = None
+    roi_x, roi_y, roi_w, roi_h = config.roi
+    eye_width, eye_height = eye_image.shape[::-1]
+
+    try:
+        while len(blinks) < config.blink_count or state != state_idle:
+            if should_stop is not None and should_stop():
+                break
+            ok, frame = video.read()
+            if not ok or frame is None:
+                continue
+            time_counter = time.perf_counter()
+            roi = cv2.cvtColor(frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w], cv2.COLOR_RGB2GRAY)
+            if prev_roi is not None and (roi == prev_roi).all():
+                continue
+            prev_roi = roi
+            result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
+            _, match, _, max_loc = cv2.minMaxLoc(result)
+
+            cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (0, 0, 255), 2)
+            if 0.01 < match < config.threshold:
+                cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
+                if state == state_idle:
+                    blinks.append(0)
+                    intervals.append(round((time_counter - prev_time) / 1.017))
+                    if progress_callback is not None:
+                        progress_callback(len(intervals), config.blink_count)
+                    if len(intervals) == config.blink_count:
+                        offset_time = time_counter
+                    state = state_single
+                    prev_time = time_counter
+                elif state == state_single and time_counter - prev_time > 0.3:
+                    blinks[-1] = 1
+                    state = state_double
+            else:
+                match_location = (max_loc[0] + roi_x, max_loc[1] + roi_y)
+                match_bottom_right = (match_location[0] + eye_width, match_location[1] + eye_height)
+                cv2.rectangle(frame, match_location, match_bottom_right, 255, 2)
+
+            if frame_callback is not None:
+                frame_callback(frame)
+            if show_window:
+                cv2.imshow("view", frame)
+                if cv2.waitKey(1) == ord("q"):
+                    break
+            if state != state_idle and time_counter - prev_time > 0.7:
+                state = state_idle
+    finally:
+        release = getattr(video, "release", None)
+        if callable(release):
+            release()
+        if show_window:
+            cv2.destroyAllWindows()
+    return blinks, intervals, offset_time
+
+
 def capture_pokemon_blinks(config: BlinkCaptureConfig) -> PokemonBlinkObservation:
     """Capture Pokemon blink intervals through Project_Xs tracking logic."""
 
-    cv2 = _load_cv2()
     rngtool = _load_module("rngtool")
-    eye_image = cv2.imread(str(config.eye_image_path), cv2.IMREAD_GRAYSCALE)
-    if eye_image is None:
-        raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
+    eye_image = _read_grayscale_image(config.eye_image_path)
 
     try:
         with _project_xs_import_path():
@@ -323,11 +424,7 @@ def save_preview_frame(config: BlinkCaptureConfig, output_path: str | Path) -> P
 
 
 def _load_eye_template(config: BlinkCaptureConfig) -> Any:
-    cv2 = _load_cv2()
-    eye_image = cv2.imread(str(config.eye_image_path), cv2.IMREAD_GRAYSCALE)
-    if eye_image is None:
-        raise ProjectXsIntegrationError(f"Cannot read eye template image: {config.eye_image_path}")
-    return eye_image
+    return _read_grayscale_image(config.eye_image_path)
 
 
 def render_eye_preview(config: BlinkCaptureConfig, frame: Any) -> tuple[Any, EyePreviewResult]:

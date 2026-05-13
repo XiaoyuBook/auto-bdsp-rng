@@ -9,6 +9,7 @@ from pathlib import Path
 from auto_bdsp_rng.automation.easycon.backend import EasyConBackend
 from auto_bdsp_rng.automation.easycon.discovery import discover_ezcon, list_ports
 from auto_bdsp_rng.automation.easycon.models import EasyConInstallation, EasyConRunResult, EasyConRunTask, EasyConStatus
+from auto_bdsp_rng.automation.easycon.process import no_window_subprocess_kwargs
 
 
 CLI_TRANSITION_NOTICE = (
@@ -58,6 +59,7 @@ class CliEasyConBackend(EasyConBackend):
             encoding="utf-8",
             errors="replace",
             check=False,
+            **no_window_subprocess_kwargs(),
         )
         ended_at = datetime.now()
         failure_type = classify_cli_failure(completed.stdout, completed.stderr, completed.returncode)

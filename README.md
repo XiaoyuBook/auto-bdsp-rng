@@ -9,13 +9,13 @@
 普通用户请不要下载 GitHub 绿色 `Code` 按钮里的源码压缩包。请到 [GitHub Releases](https://github.com/XiaoyuBook/auto-bdsp-rng/releases) 下载：
 
 ```text
-auto-bdsp-rng-v0.0.2-windows-x64.zip
+auto-bdsp-rng-v0.0.3-windows-x64.zip
 ```
 
 下载后解压 zip，进入 `auto-bdsp-rng` 文件夹，双击：
 
 ```text
-auto-bdsp-rng.exe
+珍钻复刻定点自动乱数.exe
 ```
 
 目标电脑不需要安装 Python。请保留 exe 旁边的 `_internal`、`script`、`bridge`、`docs` 等目录，不要只复制单独的 exe。
