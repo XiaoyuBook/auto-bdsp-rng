@@ -218,7 +218,39 @@ def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
 
     assert calls == ["capture"]
     assert scripts == [("BDSP测种.txt", "A 100\n")]
-    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+
+
+def test_runner_count_mode_stops_after_requested_no_candidate_loops(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "谢米.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+    scripts: list[str] = []
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+        search_candidates=lambda _seed: [],
+        run_script_text=lambda _text, name: scripts.append(name),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            loop_mode="count",
+            loop_count=2,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=10)
+
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+    assert runner.progress.loop_index == 2
+    assert scripts == ["BDSP测种.txt", "BDSP测种.txt"]
 
 
 def test_runner_starts_by_running_seed_script_before_capture(tmp_path):

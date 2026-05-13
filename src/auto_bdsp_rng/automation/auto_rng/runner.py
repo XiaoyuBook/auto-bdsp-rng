@@ -376,10 +376,12 @@ class AutoRngRunner:
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._history("cycle_result", False, None, None, None)
             self._cycle_started = False
-            if self.config.loop_mode == "single":
-                self._set_progress(AutoRngPhase.COMPLETED, "无候选，单次模式已完成")
-            else:
+            if self.config.loop_mode == "infinite":
                 self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
+            elif self.config.loop_mode == "count" and self._completed_loops < self.config.loop_count:
+                self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
+            else:
+                self._set_progress(AutoRngPhase.COMPLETED, "无候选，自动流程已完成", loop_index=self._completed_loops)
             return
         self._locked_target = decision.target
         self._missed_target_advance = None
