@@ -385,14 +385,27 @@ def test_main_window_loads_project_xs_config_fields(app):
     assert window.threshold.value() == 0.7
 
 
-def test_main_window_can_switch_language(app):
+def test_main_window_header_shows_auto_rng_runtime_status(app):
     window = MainWindow()
 
-    window.language_combo.setCurrentIndex(window.language_combo.findData("en"))
+    assert not hasattr(window, "language_combo")
+    assert not hasattr(window, "language_label")
+    assert not hasattr(window, "seed_badge")
+    assert window.auto_loop_badge.text() == "循环 0"
+    assert window.auto_phase_badge.text() == "阶段 空闲"
+    assert window.auto_advance_badge.text() == "advance 0"
 
-    assert window.capture_group.title() == "Blink capture"
-    assert window.capture_button.text() == "Capture Seed"
-    assert window.tabs.tabText(2) == "EasyCon"
+    window.auto_rng_tab.autoProgressChanged.emit(
+        AutoRngProgress(
+            phase=AutoRngPhase.RUN_HIT_SCRIPT,
+            loop_index=3,
+            current_advances=4567,
+        )
+    )
+
+    assert window.auto_loop_badge.text() == "循环 3"
+    assert window.auto_phase_badge.text() == "阶段 运行撞闪脚本"
+    assert window.auto_advance_badge.text() == "advance 4567"
 
 
 def test_main_window_has_auto_rng_tab(app):

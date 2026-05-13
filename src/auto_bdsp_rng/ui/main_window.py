@@ -720,19 +720,19 @@ class MainWindow(QMainWindow):
         header_layout.setContentsMargins(16, 10, 16, 10)
         self.title_label = QLabel()
         self.title_label.setObjectName("WindowTitle")
-        self.seed_badge = QLabel()
-        self.seed_badge.setObjectName("Badge")
-        self.language_label = QLabel()
-        self.language_combo = QComboBox()
-        self.language_combo.addItem("中文", "zh")
-        self.language_combo.addItem("English", "en")
-        self.language_combo.currentIndexChanged.connect(self._change_language)
+        self.auto_loop_badge = QLabel("循环 0")
+        self.auto_loop_badge.setObjectName("Badge")
+        self.auto_phase_badge = QLabel("阶段 空闲")
+        self.auto_phase_badge.setObjectName("Badge")
+        self.auto_advance_badge = QLabel("advance 0")
+        self.auto_advance_badge.setObjectName("Badge")
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
-        header_layout.addWidget(self.seed_badge)
-        header_layout.addSpacing(16)
-        header_layout.addWidget(self.language_label)
-        header_layout.addWidget(self.language_combo)
+        header_layout.addWidget(self.auto_loop_badge)
+        header_layout.addSpacing(8)
+        header_layout.addWidget(self.auto_phase_badge)
+        header_layout.addSpacing(8)
+        header_layout.addWidget(self.auto_advance_badge)
         root_layout.addWidget(header)
 
         self.tabs = QTabWidget()
@@ -742,6 +742,7 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab = AutoRngPanel()
         self.history_tab = HistoryPanel()
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
+        self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self._capture_pokemon_info)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
@@ -1714,12 +1715,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("存档信息已应用" if self.lang == "zh" else "Profile applied")
 
     def _change_language(self) -> None:
-        self.lang = self.language_combo.currentData()
+        self.lang = "zh"
         self._apply_language()
 
     def _apply_language(self) -> None:
         self.title_label.setText(self._text("title"))
-        self.language_label.setText(self._text("language"))
         self.tabs.setTabText(0, self._text("project_xs"))
         self.tabs.setTabText(1, self._text("bdsp_search"))
         self.tabs.setTabText(2, self._text("easycon"))
@@ -1754,7 +1754,7 @@ class MainWindow(QMainWindow):
         self.show_stats_check.setText("显示能力值" if self.lang == "zh" else "Show Stats")
         self.iv_calculator_button.setText("个体值计算器" if self.lang == "zh" else "IV Calculator")
         self._refresh_result_columns()
-        self.seed_badge.setText(self._text("seed_linked"))
+        self._update_auto_rng_header(advances=self._tracked_advances)
         if not self._preview_timer.isActive():
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
@@ -1763,6 +1763,29 @@ class MainWindow(QMainWindow):
             key = label.property("i18n")
             if key:
                 label.setText(self._text(str(key)))
+
+    def _update_auto_rng_header(
+        self,
+        *,
+        loop_index: int | None = None,
+        phase_text: str | None = None,
+        advances: int | None = None,
+    ) -> None:
+        if loop_index is not None:
+            self.auto_loop_badge.setText(f"循环 {loop_index}")
+        if phase_text is not None:
+            self.auto_phase_badge.setText(f"阶段 {phase_text}")
+        if advances is not None:
+            self.auto_advance_badge.setText(f"advance {advances}")
+
+    def _apply_auto_rng_header_progress(self, progress: AutoRngProgress) -> None:
+        phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
+        advances = progress.current_advances if progress.current_advances is not None else self._tracked_advances
+        self._update_auto_rng_header(
+            loop_index=progress.loop_index,
+            phase_text=phase_text,
+            advances=advances,
+        )
 
     def _refresh_config_list(self) -> None:
         self.config_combo.blockSignals(True)
@@ -2262,7 +2285,7 @@ class MainWindow(QMainWindow):
         try:
             state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
         except ValueError as exc:
-            self.seed_badge.setText(str(exc))
+            self.statusBar().showMessage(str(exc))
             return
         seed64_pair = state.format_seed64_pair()
         for output, text in zip(self.seed64_outputs, seed64_pair):
@@ -2270,7 +2293,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, "bdsp_seed64_inputs"):
             for output, text in zip(self.bdsp_seed64_inputs, seed64_pair):
                 output.setText(text)
-        self.seed_badge.setText(self._text("seed_linked"))
         self._auto_refresh_results()
 
     def _current_seed_pair(self) -> SeedPair64:
@@ -2283,14 +2305,13 @@ class MainWindow(QMainWindow):
         try:
             seed_pair = SeedPair64.from_hex_words([box.text() for box in self.bdsp_seed64_inputs])
         except ValueError as exc:
-            self.seed_badge.setText(str(exc))
+            self.statusBar().showMessage(str(exc))
             return
         state = seed_pair.to_state32()
         for input_box, text in zip(self.seed32_inputs, state.format_words()):
             input_box.setText(text)
         for output, text in zip(self.seed64_outputs, seed_pair.format_seeds()):
             output.setText(text)
-        self.seed_badge.setText(self._text("seed_linked"))
         self._auto_refresh_results()
 
     def _auto_refresh_results(self) -> None:
@@ -2473,6 +2494,7 @@ class MainWindow(QMainWindow):
         self._advance_step = seed_result.npc + 1
         self._tracked_advances = seed_result.current_advances + elapsed_advances
         self.advances_value.setText(str(self._tracked_advances))
+        self._update_auto_rng_header(advances=self._tracked_advances)
         self.timer_value.setText("0")
         self._advance_timer.start()
 
@@ -2969,6 +2991,7 @@ class MainWindow(QMainWindow):
         self._advance_timer.stop()
         self._tracked_advances = 0
         self.advances_value.setText("0")
+        self._update_auto_rng_header(advances=0)
         self.timer_value.setText("0")
 
     def _capture_pokemon_info(self) -> None:
@@ -3065,6 +3088,7 @@ class MainWindow(QMainWindow):
     def _advance_tick(self) -> None:
         self._tracked_advances += self._advance_step
         self.advances_value.setText(str(self._tracked_advances))
+        self._update_auto_rng_header(advances=self._tracked_advances)
         # 同步更新自动定点面板的目前帧数
         self.auto_rng_tab.set_live_advances(self._tracked_advances)
 
@@ -3083,6 +3107,7 @@ class MainWindow(QMainWindow):
         self._sync_seed64_from_state32()
         self._tracked_advances += advances
         self.advances_value.setText(str(self._tracked_advances))
+        self._update_auto_rng_header(advances=self._tracked_advances)
 
     def capture_seed(self) -> None:
         if self._is_capturing():

@@ -97,6 +97,7 @@ class AutoRngWorker(QObject):
 class AutoRngPanel(QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
+    autoProgressChanged = Signal(object)
     ivCalculatorRequested = Signal()
     captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
     captureLog = Signal(str)  # 临时：后台线程日志输出
@@ -374,6 +375,7 @@ class AutoRngPanel(QWidget):
     def apply_progress(self, progress: AutoRngProgress) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         self.status_badge.setText(phase_text)
+        self.autoProgressChanged.emit(progress)
         if progress.log_message:
             self.add_log(progress.log_message)
 
