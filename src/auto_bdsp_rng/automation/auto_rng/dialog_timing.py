@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,14 +36,28 @@ def measure_keyword_interval(
     should_stop: Callable[[], bool] | None = None,
     timeout_seconds: float = 30.0,
     poll_interval_seconds: float = 0.1,
+    script_done: threading.Event | None = None,
+    grace_seconds: float = 30.0,
+    hard_timeout_seconds: float = 120.0,
 ) -> DialogTimingResult:
     first = normalize_ocr_text(first_keyword)
     second = normalize_ocr_text(second_keyword)
     started_at = monotonic()
     first_seen_at: float | None = None
+    script_ended_at: float | None = None
     while True:
         now = monotonic()
-        if now - started_at > timeout_seconds:
+        if script_done is not None:
+            # 脚本结束后再给 grace_seconds 检测对话框
+            if script_done.is_set():
+                if script_ended_at is None:
+                    script_ended_at = now
+                if now - script_ended_at > grace_seconds:
+                    break
+            elif now - started_at > hard_timeout_seconds:
+                # 脚本运行过久，兜底保护
+                break
+        elif now - started_at > timeout_seconds:
             break
         if should_stop is not None and should_stop():
             raise RuntimeError("Dialog timing calibration stopped")

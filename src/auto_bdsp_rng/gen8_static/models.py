@@ -205,6 +205,24 @@ class StateFilter:
             return False
         return all(min_iv <= iv <= max_iv for iv, min_iv, max_iv in zip(state.ivs, self.iv_min, self.iv_max))
 
+    def quick_reject(self, shiny: int, ability: int, gender: int, nature: int, height: int, weight: int) -> bool:
+        """快速预筛选：True=不匹配直接跳过，避免创建 State8 对象。"""
+        if self.skip:
+            return False
+        if self.ability != 255 and self.ability != ability:
+            return True
+        if self.gender != 255 and self.gender != gender:
+            return True
+        if self.shiny != 255 and not (self.shiny & shiny):
+            return True
+        if not self.natures[nature]:
+            return True
+        if height < self.height_min or height > self.height_max:
+            return True
+        if weight < self.weight_min or weight > self.weight_max:
+            return True
+        return False
+
 
 def hidden_power(ivs: Sequence[int]) -> int:
     if len(ivs) != 6:

@@ -446,24 +446,16 @@ def test_auto_rng_panel_includes_editable_shiny_threshold_in_config(app, tmp_pat
     assert config.shiny_threshold_seconds == 2.8
 
 
-def test_auto_rng_panel_has_editable_target_form_and_no_old_main_regions(app):
+def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     panel = AutoRngPanel()
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
 
     assert "定点目标 / 存档信息 / 个体筛选" not in group_titles
     assert "候选结果" not in group_titles
-    assert "目标精灵设置" in group_titles
     assert not hasattr(panel, "candidate_table")
     assert not hasattr(panel, "search_target_summary")
-
-    target_form = panel.target_form
-    assert target_form.category_combo.count() > 0
-    assert target_form.encounter_combo.count() > 0
-    assert target_form.iv_min[0].value() == 0
-    assert target_form.iv_max[0].value() == 31
-    assert target_form.height_min.value() == 0
-    assert target_form.height_max.value() == 255
-    assert target_form.shiny_filter.findText("Square") >= 0
+    assert hasattr(panel, "target_button")
+    assert panel.target_button.text() == "目标精灵设置..."
     assert not hasattr(panel, "parameter_preview")
     assert not hasattr(panel, "preview_button")
     assert panel.log_view.isReadOnly() is True
@@ -477,7 +469,6 @@ def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(a
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
     visible_labels = {label.text() for label in panel.findChildren(QLabel)}
 
-    assert "锁定目标" in group_titles
     assert "Seed" not in visible_labels
     assert "触发帧" not in visible_labels
     assert "剩余" not in visible_labels
@@ -491,17 +482,9 @@ def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(a
     assert not hasattr(panel, "summary_trigger")
     assert not hasattr(panel, "summary_remaining")
     assert not hasattr(panel, "summary_target")
-    assert isinstance(panel.locked_target_view.layout(), QGridLayout)
-    assert panel.locked_target_view.layout().itemAtPosition(0, 0).widget().text() == "状态"
-    assert panel.locked_target_view.layout().itemAtPosition(1, 0).widget().text() == "未锁定"
-    assert panel.locked_target_view.layout().itemAtPosition(0, 1).widget().text() == "PID"
-    assert panel.locked_target_view.layout().itemAtPosition(1, 1).widget().text() == "-"
     assert 70 <= panel.summary_group.maximumHeight() <= 110
     assert panel.summary_group.maximumWidth() == 16777215
-    assert panel.target_form_group.maximumHeight() <= 390
-    assert panel.target_form.settings_group.maximumWidth() <= 260
-    assert "目标候选 / 历史记录" in group_titles
-    assert panel.candidate_history_empty.text() == "暂无候选结果"
+    assert hasattr(panel, "target_button")
 
 
 def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
@@ -514,19 +497,14 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert panel.stop_button.height() == 34
     assert panel.config_panel.minimumWidth() == 300
     assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
-    assert panel.strategy_group.maximumHeight() <= 170
-    assert panel.script_group.maximumHeight() <= 230
+    assert panel.strategy_group.maximumHeight() == 16777215  # 未设固定高度
+    assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.max_advances.width() <= 150
     assert panel.seed_script_combo.width() <= 170
     assert panel.refresh_scripts_button.width() <= 250
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
-def test_auto_rng_target_form_hides_iv_calculator_and_stats_toggle(app):
-    panel = AutoRngPanel()
-
-    assert panel.target_form.iv_calculator_button.isHidden()
-    assert panel.target_form.show_stats_check.isHidden()
 
 
 def test_auto_rng_stop_button_requests_runner_stop_immediately(app):
@@ -540,63 +518,6 @@ def test_auto_rng_stop_button_requests_runner_stop_immediately(app):
 
     assert stops == ["stopped"]
     assert emissions == ["emitted"]
-
-
-def test_auto_rng_locked_target_view_shows_single_target_details(app):
-    panel = AutoRngPanel()
-    state = State8(
-        advances=1000,
-        ec=0x45EBFFE9,
-        sidtid=0,
-        pid=0xB3B242E2,
-        ivs=(4, 29, 5, 0, 18, 14),
-        ability=1,
-        gender=0,
-        level=5,
-        nature=0,
-        shiny=2,
-        height=33,
-        weight=155,
-    )
-
-    panel.apply_progress(
-        AutoRngProgress(
-            phase=AutoRngPhase.DECIDE_ADVANCE,
-            locked_target=AutoRngTarget(raw_target_advances=1000, state=state),
-            raw_target_advances=1000,
-            fixed_delay=100,
-            trigger_advances=900,
-            current_advances=0,
-            remaining_to_trigger=900,
-        )
-    )
-
-    values = panel.locked_target_view.values
-    assert values["Status"].text() == "已锁定"
-    assert values["PID"].text() == "B3B242E2"
-    assert values["Shiny"].text() == "方闪"
-    assert values["Nature"].text() == "勤奋"
-    assert values["Ability"].text() == "1"
-    assert values["IVs"].text() == "HP 4 / 攻击 29 / 防御 5 / 特攻 0 / 特防 18 / 速度 14"
-    assert values["Gender"].text() == "雄"
-    assert values["Height"].text() == "33"
-    assert values["Weight"].text() == "155"
-    assert "Characteristic" not in values
-    assert "Adv" not in values
-    assert "EC" not in values
-    assert "raw / trigger / delay" not in values
-    assert "current / remaining / final" not in values
-
-    locked_layout = panel.locked_target_view.layout()
-    assert locked_layout.itemAtPosition(0, 6).widget().text() == "IVs"
-    assert locked_layout.columnStretch(6) > locked_layout.columnStretch(1)
-    for column in range(locked_layout.columnCount()):
-        label_item = locked_layout.itemAtPosition(0, column)
-        value_item = locked_layout.itemAtPosition(1, column)
-        if label_item is not None:
-            assert label_item.widget().objectName() == "MutedLabel"
-        if value_item is not None:
-            assert value_item.widget().objectName() == "Badge"
 
 
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
@@ -627,19 +548,6 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
 
 
-def test_auto_rng_locked_target_view_clears_when_progress_has_no_target(app):
-    panel = AutoRngPanel()
-    panel.apply_progress(
-        AutoRngProgress(
-            phase=AutoRngPhase.DECIDE_ADVANCE,
-            locked_target=AutoRngTarget(raw_target_advances=1000),
-            raw_target_advances=1000,
-        )
-    )
-
-    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.SEARCH_TARGET, log_message="最终剩余帧过近，放弃本目标"))
-
-    assert panel.locked_target_view.values["Status"].text() == "未锁定"
 
 
 def test_auto_rng_worker_emits_progress_and_finished(app):
@@ -737,18 +645,18 @@ def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
     assert "搜索目标" in window.auto_rng_tab.log_view.toPlainText()
 
 
-def test_main_window_auto_rng_services_search_uses_auto_target_form(app, tmp_path, monkeypatch):
+def test_main_window_auto_rng_services_search_uses_multi_targets(app, tmp_path, monkeypatch):
     window = MainWindow()
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
     window.auto_rng_tab.max_advances.setValue(9)
-    target_form = window.auto_rng_tab.target_form
-    target_form.category_combo.setCurrentIndex(target_form.category_combo.findData("mythics"))
-    target_form.encounter_combo.setCurrentIndex(target_form.encounter_combo.findText("谢米 [幻兽]"))
-    target_form.iv_count_display.setValue(3)
-    target_form.height_min.setValue(0)
-    target_form.height_max.setValue(0)
-    target_form.shiny_filter.setCurrentIndex(target_form.shiny_filter.findText("Square"))
+    # 直接设置 _targets 列表模拟已添加目标
+    from auto_bdsp_rng.data import get_static_encounters
+    from auto_bdsp_rng.gen8_static import StateFilter
+    records = [r for r in get_static_encounters() if r.description == "Shaymin"]
+    if records:
+        sf = StateFilter(height_min=0, height_max=0)
+        window.auto_rng_tab._targets = [(records[0], sf, "square")]
     captured = []
 
     def fake_generate(criteria):
@@ -763,7 +671,6 @@ def test_main_window_auto_rng_services_search_uses_auto_target_form(app, tmp_pat
     assert len(captured) == 1
     criteria = captured[0]
     assert criteria.record.description == "Shaymin"
-    assert criteria.record.template.iv_count == 3
     assert criteria.max_advances == 9
     assert criteria.shiny_mode == "square"
     assert criteria.state_filter.height_min == 0
@@ -796,11 +703,6 @@ def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_p
     observation = SimpleNamespace(offset_time=100.0)
     displayed_frames: list[object] = []
     generated = []
-    target_form = window.auto_rng_tab.target_form
-    target_form.iv_min[0].setValue(31)
-    target_form.iv_max[0].setValue(31)
-    target_form.height_min.setValue(0)
-    target_form.height_max.setValue(0)
 
     def fake_capture(_config, **kwargs):
         kwargs["progress_callback"](3, 40)

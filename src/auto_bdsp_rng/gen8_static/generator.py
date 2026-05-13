@@ -16,11 +16,18 @@ from auto_bdsp_rng.gen8_static.models import (
     StateFilter,
     StaticTemplate8,
     get_shiny,
+    hidden_power,
     is_shiny,
     validate_seed64,
 )
 from auto_bdsp_rng.rng_core.generators import BDSPXorshift, RNGList, XoroshiroBDSP
 from auto_bdsp_rng.rng_core.seed import SeedPair64, U32_MAX
+
+try:
+    from auto_bdsp_rng.rng_core._native import generate_static as _native_generate
+    _HAS_NATIVE = True
+except ImportError:
+    _HAS_NATIVE = False
 
 
 def _gen_static_ec(rng: BDSPXorshift) -> int:
@@ -146,6 +153,35 @@ class StaticGenerator8:
         if self.offset < 0:
             raise ValueError("offset must be non-negative")
 
+    def _generate_native(self, seed0: int, seed1: int, roamer: bool) -> list[State8]:
+        """使用 C++ 原生扩展生成（高速路径），输出与 Python 完全一致。"""
+        sf = self.state_filter
+        template = self.template
+        profile = self.profile
+        results_raw = _native_generate(
+            seed0, seed1,
+            self.initial_advances, self.max_advances, self.offset,
+            int(self.lead), roamer,
+            int(template.shiny), template.fateful,
+            template.iv_count, template.ability,
+            template.info.gender_ratio if not roamer else 0,
+            template.info.ability_count,
+            profile.tid, profile.sid,
+            sf.skip, sf.ability, sf.gender, sf.shiny,
+            sf.height_min, sf.height_max, sf.weight_min, sf.weight_max,
+            tuple(sf.iv_min), tuple(sf.iv_max),
+            tuple(sf.natures), tuple(sf.hidden_powers),
+        )
+        return [
+            State8(
+                advances=r[0], ec=r[1], sidtid=r[2], pid=r[3],
+                ivs=tuple(r[4]),
+                ability=r[5], gender=r[6], level=r[7],
+                nature=r[8], shiny=r[9], height=r[10], weight=r[11],
+            )
+            for r in results_raw
+        ]
+
     def generate(self, seed0: int | SeedPair64, seed1: int | None = None) -> list[State8]:
         if isinstance(seed0, SeedPair64):
             if seed1 is not None:
@@ -155,6 +191,10 @@ class StaticGenerator8:
             raise ValueError("seed1 is required")
         seed0 = validate_seed64(seed0, "seed0")
         seed1 = validate_seed64(seed1, "seed1")
+
+        if _HAS_NATIVE:
+            return self._generate_native(seed0, seed1, self.template.roamer)
+
         if self.template.roamer:
             return self.generate_roamer(seed0, seed1)
         return self.generate_non_roamer(seed0, seed1)
@@ -163,67 +203,109 @@ class StaticGenerator8:
         rng = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         rng.advance(self.initial_advances + self.offset)
         rng_list: RNGList[int] = RNGList(rng, size=32, generate=_gen_static_ec)
+        sf = self.state_filter
 
         states: list[State8] = []
         for count in range(self.max_advances + 1):
+            rng_list.advance_state()
             ec = rng_list.next()
             sidtid = rng_list.next()
             pid = rng_list.next()
             shiny, pid = _apply_non_roamer_shiny(self.template, self.profile, sidtid, pid)
-            ivs = _fill_random_ivs(rng_list, _next_unique_fixed_iv_indices(rng_list, self.template.iv_count))
+
+            # IV
+            ivs: list[int] = [255] * 6
+            fixed = 0
+            while fixed < self.template.iv_count:
+                idx = _next_mod(rng_list, 6)
+                if ivs[idx] == 255:
+                    ivs[idx] = 31
+                    fixed += 1
+            for iv_idx in range(6):
+                if ivs[iv_idx] == 255:
+                    ivs[iv_idx] = _next_mod(rng_list, 32)
+
             ability = _generate_ability(rng_list, self.template)
             gender = _generate_gender(rng_list, self.template, self.lead)
             nature = _generate_nature(rng_list, self.lead)
             height, weight = _generate_height_weight(rng_list)
-            state = State8(
+
+            # 统一过滤（与 PokeFinder 一致）
+            if not sf.skip:
+                if sf.ability != 255 and sf.ability != ability:
+                    continue
+                if sf.gender != 255 and sf.gender != gender:
+                    continue
+                if sf.shiny != 255 and not (sf.shiny & shiny):
+                    continue
+                if not sf.natures[nature]:
+                    continue
+                if not sf.hidden_powers[hidden_power(ivs)]:
+                    continue
+                if height < sf.height_min or height > sf.height_max:
+                    continue
+                if weight < sf.weight_min or weight > sf.weight_max:
+                    continue
+                if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
+                    continue
+
+            states.append(State8(
                 advances=self.initial_advances + count,
-                ec=ec,
-                sidtid=sidtid,
-                pid=pid,
-                ivs=ivs,
-                ability=ability,
-                gender=gender,
-                level=self.template.level,
-                nature=nature,
-                shiny=shiny,
-                height=height,
-                weight=weight,
-            )
-            if self.state_filter.compare_state(state):
-                states.append(state)
-            rng_list.advance_state()
+                ec=ec, sidtid=sidtid, pid=pid, ivs=tuple(ivs),
+                ability=ability, gender=gender, level=self.template.level,
+                nature=nature, shiny=shiny, height=height, weight=weight,
+            ))
         return states
 
     def generate_roamer(self, seed0: int, seed1: int) -> list[State8]:
+        import time as _time
         gender = GENDER_FEMALE if self.template.species == 488 else GENDER_GENDERLESS
         roamer = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
         roamer.advance(self.initial_advances + self.offset)
+        sf = self.state_filter
+        need_shiny = sf.shiny != 255
 
         states: list[State8] = []
+        _yield_every = 50000
         for count in range(self.max_advances + 1):
+            if count % _yield_every == 0:
+                _time.sleep(0)
             ec = _gen_static_ec(roamer)
             rng = XoroshiroBDSP(ec)
             sidtid = rng.next_uint(U32_MAX)
             pid = rng.next_uint(U32_MAX)
             shiny, pid = _apply_roamer_shiny(self.profile, sidtid, pid)
-            ivs = _fill_random_ivs(rng, _next_unique_fixed_iv_indices(rng, 3))
+
+            if need_shiny and not (sf.shiny & shiny):
+                continue
+
+            ivs = [255] * 6
+            fixed = 0
+            while fixed < 3:
+                idx = _next_mod(rng, 6)
+                if ivs[idx] == 255:
+                    ivs[idx] = 31
+                    fixed += 1
+            for iv_idx in range(6):
+                if ivs[iv_idx] == 255:
+                    ivs[iv_idx] = _next_mod(rng, 32)
+
             ability = rng.next_uint(2)
             nature = _generate_nature(rng, self.lead)
             height, weight = _generate_height_weight(rng)
+
+            if sf.quick_reject(shiny, ability, gender, nature, height, weight):
+                continue
+            if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
+                continue
+            if not sf.hidden_powers[hidden_power(ivs)]:
+                continue
+
             state = State8(
                 advances=self.initial_advances + count,
-                ec=ec,
-                sidtid=sidtid,
-                pid=pid,
-                ivs=ivs,
-                ability=ability,
-                gender=gender,
-                level=self.template.level,
-                nature=nature,
-                shiny=shiny,
-                height=height,
-                weight=weight,
+                ec=ec, sidtid=sidtid, pid=pid, ivs=tuple(ivs),
+                ability=ability, gender=gender, level=self.template.level,
+                nature=nature, shiny=shiny, height=height, weight=weight,
             )
-            if self.state_filter.compare_state(state):
-                states.append(state)
+            states.append(state)
         return states

@@ -83,7 +83,10 @@ XOROSHIRO_JUMP_TABLE: tuple[tuple[int, int], ...] = (
 class BDSPXorshift:
     """BDSP four-word Xorshift used by Project_Xs and PokeFinder."""
 
-    state: SeedState32
+    __slots__ = ("s0", "s1", "s2", "s3")
+
+    def __init__(self, state: SeedState32) -> None:
+        self.s0, self.s1, self.s2, self.s3 = state.words
 
     @classmethod
     def from_seed_pair64(cls, seed_pair: SeedPair64) -> "BDSPXorshift":
@@ -96,14 +99,14 @@ class BDSPXorshift:
 
     @property
     def words(self) -> tuple[int, int, int, int]:
-        return self.state.words
+        return (self.s0, self.s1, self.s2, self.s3)
 
     def next(self) -> int:
-        s0, s1, s2, s3 = self.state.words
+        s0, s1, s2, s3 = self.s0, self.s1, self.s2, self.s3
         value = (s0 ^ ((s0 << 11) & U32_MAX)) & U32_MAX
         value = (value ^ (value >> 8)) & U32_MAX
         value = (value ^ s3 ^ (s3 >> 19)) & U32_MAX
-        self.state = SeedState32(s1, s2, s3, value)
+        self.s0, self.s1, self.s2, self.s3 = s1, s2, s3, value
         return value
 
     def advance(self, advances: int) -> None:
@@ -129,11 +132,11 @@ class BDSPXorshift:
                         if value & 1:
                             jumped = [
                                 current ^ state_word
-                                for current, state_word in zip(jumped, self.state.words)
+                                for current, state_word in zip(jumped, self.words)
                             ]
                         self.next()
                         value >>= 1
-                self.state = SeedState32.from_words(jumped)
+                self.s0, self.s1, self.s2, self.s3 = jumped[0], jumped[1], jumped[2], jumped[3]
             advances >>= 1
             table_index += 1
 

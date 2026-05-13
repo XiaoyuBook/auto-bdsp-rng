@@ -60,6 +60,7 @@ from auto_bdsp_rng.blink_detection import (
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
+from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
@@ -67,6 +68,7 @@ from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncou
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
+from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 
 
@@ -665,12 +667,17 @@ class MainWindow(QMainWindow):
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel()
         self.auto_rng_tab = AutoRngPanel()
+        self.history_tab = HistoryPanel()
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
+        self.auto_rng_tab.captureInfoRequested.connect(self._capture_pokemon_info)
+        self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
+        self.auto_rng_tab.requestStatsCapture.connect(self._on_request_stats_capture)
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
+        self.tabs.addTab(self.history_tab, "历史记录")
         root_layout.addWidget(self.tabs, 1)
 
         self.setCentralWidget(root)
@@ -1837,6 +1844,12 @@ class MainWindow(QMainWindow):
             time.sleep(0.2)
             waited += 0.2
             self._update_preview_frame()
+        # 首帧到达后立即停止预览，避免与后续 blink 捕捉抢摄像头资源
+        if self._latest_preview_frame is not None and self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self.preview_button.setText(self._text("preview_button"))
+            self.preview_label.clear()
+            self.preview_label.setText(self._text("no_preview"))
         return self._latest_preview_frame is not None
 
     def start_roi_selection(self) -> None:
@@ -2265,7 +2278,31 @@ class MainWindow(QMainWindow):
         if not self._ensure_bridge_connected():
             return
         services = self._build_auto_rng_services(config)
-        self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services))
+
+        def history_callback(event: str, args: tuple[object, ...]) -> None:
+            h = self.history_tab
+            if event == "cycle_start" and len(args) >= 1:
+                h.cycle_start(int(args[0]))
+            elif event == "seed_captured" and len(args) >= 4:
+                h.seed_captured(str(args[0]), int(args[1]), int(args[2]), int(args[3]))
+            elif event == "candidates_found" and len(args) >= 2:
+                flags = list(args[2]) if len(args) >= 3 else None
+                h.candidates_found(list(args[0]), int(args[1]), flags)  # type: ignore[arg-type]
+            elif event == "candidates_refiltered" and len(args) >= 2:
+                flags = list(args[2]) if len(args) >= 3 else None
+                h.candidates_refiltered(list(args[0]), int(args[1]), flags)  # type: ignore[arg-type]
+            elif event == "target_missed" and len(args) >= 2:
+                h.target_missed(int(args[0]) if args[0] is not None else 0, int(args[1]) if args[1] is not None else 0)
+            elif event == "cycle_result" and len(args) >= 3:
+                is_shiny = bool(args[0])
+                interval = float(args[1]) if args[1] is not None else None
+                used_delay = int(args[3]) if len(args) >= 4 and args[3] is not None else None
+                h.cycle_result(is_shiny, interval, used_delay)
+            elif event == "reverse_lookup_results" and len(args) >= 1:
+                chara = str(args[1]) if len(args) >= 2 and args[1] is not None else None
+                h.reverse_lookup_results(list(args[0]), chara)  # type: ignore[arg-type]
+
+        self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
 
     def _ensure_bridge_connected(self) -> bool:
         """确保伊机控连接就绪；CLI 模式只需串口可用，Bridge 模式需要连接。"""
@@ -2458,6 +2495,15 @@ class MainWindow(QMainWindow):
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
 
+            # 测种前先暂停预览，避免抢摄像头；测完后恢复
+            preview_was_running = self._preview_timer.isActive()
+            if preview_was_running:
+                self._preview_timer.stop()
+                self.preview_button.setText(self._text("preview_button"))
+                self.preview_label.clear()
+                self.preview_label.setText(self._text("no_preview"))
+                time.sleep(0.3)  # 等摄像头释放
+
             observation = capture_player_blinks(
                 tracking_config.capture,
                 should_stop=self._capture_cancel.is_set,
@@ -2478,6 +2524,10 @@ class MainWindow(QMainWindow):
                 measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(seed_result)
+            # 测种完成后恢复预览（如果之前是开着的）
+            if preview_was_running and not self._preview_timer.isActive():
+                self._preview_timer.start()
+                self.preview_button.setText(self._text("stop_preview"))
             return seed_result
 
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
@@ -2488,6 +2538,15 @@ class MainWindow(QMainWindow):
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
+
+            # 测种前暂停预览，避免抢摄像头
+            preview_was_running = self._preview_timer.isActive()
+            if preview_was_running:
+                self._preview_timer.stop()
+                self.preview_button.setText(self._text("preview_button"))
+                self.preview_label.clear()
+                self.preview_label.setText(self._text("no_preview"))
+                time.sleep(0.3)
 
             # 约束 reidentify 搜索范围：按预期位置缩小 search_min
             search_max = max(100_000, config.max_advances, search_criteria.max_advances)
@@ -2526,6 +2585,9 @@ class MainWindow(QMainWindow):
                 measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(reidentified)
+            if preview_was_running and not self._preview_timer.isActive():
+                self._preview_timer.start()
+                self.preview_button.setText(self._text("stop_preview"))
             return reidentified
 
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
@@ -2536,6 +2598,17 @@ class MainWindow(QMainWindow):
             else:
                 self.auto_rng_tab.add_log(f"找到 {len(candidates)} 个候选，最低帧 Adv={locked}")
             return candidates
+
+        def search_sync_service(seed_result: AutoRngSeedResult, lead: int, nature_locked: int | None) -> list[State8]:
+            """按指定 lead 和锁定性格搜索。lead=255 为无同步，0-24 为同步对应性格值。"""
+            from auto_bdsp_rng.gen8_static.models import Lead
+            crit = replace(search_criteria, seed=seed_pair_from_result(seed_result),
+                          lead=int(lead))
+            if nature_locked is not None and 0 <= nature_locked <= 24:
+                natures = tuple(i == nature_locked for i in range(25))
+                crit = replace(crit, state_filter=replace(crit.state_filter, natures=natures))
+            candidates = generate_static_candidates(crit)
+            return list(candidates)
 
         # CLI 后端（按需创建，复用同一个实例以便 stop_current_script 生效）
         _cli_backend: CliEasyConBackend | None = None
@@ -2595,12 +2668,15 @@ class MainWindow(QMainWindow):
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
             self._capture_cancel.clear()
             errors: list[BaseException] = []
+            script_done = threading.Event()
 
             def run_script() -> None:
                 try:
                     run_script_text_service(script_text, name)
                 except BaseException as exc:
                     errors.append(exc)
+                finally:
+                    script_done.set()
 
             # 脚本和 OCR 并行：脚本线程运行撞闪，主线程监测闪符
             script_thread = threading.Thread(target=run_script, daemon=True)
@@ -2610,8 +2686,9 @@ class MainWindow(QMainWindow):
                     lambda: capture_preview_frame(tracking_config.capture),
                     read_ocr_text,
                     should_stop=self._capture_cancel.is_set,
-                    timeout_seconds=max(45.0, threshold_seconds + 10.0),
                     poll_interval_seconds=0.1,
+                    script_done=script_done,
+                    grace_seconds=30.0,
                 )
             except Exception:
                 stop_current_script_service()
@@ -2625,12 +2702,147 @@ class MainWindow(QMainWindow):
                 raise errors[0]
             return ShinyCheckResult(is_shiny=is_shiny, interval_seconds=timing.interval_seconds)
 
+        def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> None:
+            import time
+            try:
+                from auto_bdsp_rng.rng_core._native import compute_iv_ranges as _compute_iv_ranges
+            except ImportError:
+                _compute_iv_ranges = None
+
+            log = self.auto_rng_tab.captureLog.emit
+            path = config.reverse_script_path
+            if path is None:
+                raise RuntimeError("反查脚本未配置")
+            text = path.read_text(encoding="utf-8")
+            log("[自动反查] 运行反查脚本…")
+            run_script_text_service(text, path.name)
+            time.sleep(1.0)
+
+            # OCR 笔记页 → 性格 + 个性（只做一次，识别可靠）
+            log("[自动反查] 截图笔记页…")
+            notes_frame = capture_preview_frame(tracking_config.capture)
+            notes_result = extract_pokemon_info(notes_image=notes_frame)
+            nature = notes_result.get("nature")
+            characteristic = notes_result.get("characteristic")
+            log(f"[自动反查] 性格={nature}, 个性={characteristic}")
+
+            # RIGHT → 能力页
+            script_text = "RIGHT 200\n"
+            if self.easycon_tab._is_bridge_mode():
+                self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, "reverse_right")
+            else:
+                port = self.easycon_tab.port_combo.currentText()
+                if port:
+                    from auto_bdsp_rng.automation.easycon import CliEasyConBackend
+                    CliEasyConBackend().run_script_text(script_text, "reverse_right", port=port)
+            time.sleep(2.0)
+
+            # 能力值 → 个体值 反算（用到的辅助函数只定义一次）
+            import math
+            from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import compute_characteristic
+            from auto_bdsp_rng.gen8_static.models import StateFilter
+            from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
+
+            base_stats = search_criteria.record.species_info.stats
+            level = search_criteria.record.template.level
+            ni = _NATURE_MAP.get(str(nature)) if nature else None
+            # 构建搜索条件模板（性格+个性锁定，帧数范围±500）
+            natures_locked = (True,) * 25
+            if ni is not None and 0 <= ni < 25:
+                natures_locked = tuple(i == ni for i in range(25))
+            criteria = replace(search_criteria, seed=seed_pair_from_result(seed_result),
+                              shiny_mode="any",
+                              initial_advances=max(0, target.raw_target_advances - 500),
+                              max_advances=target.raw_target_advances + 500)
+
+            # 能力页 OCR 重试逻辑（最多3次）
+            stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
+            candidates: list[object] = []
+            for attempt in range(1, 4):
+                log(f"[自动反查] 能力页 OCR 第{attempt}次…")
+                stats_frame = capture_preview_frame(tracking_config.capture)
+                stats_result = extract_pokemon_info(stats_image=stats_frame)
+                stats = stats_result.get("stats")
+                if not stats:
+                    log(f"[自动反查] 第{attempt}次能力值识别失败")
+                    if attempt < 3:
+                        time.sleep(0.5)
+                    continue
+
+                # 能力值 → 个体值反算（使用 C++ PokeFinder Nature::computeStat 公式）
+                stat_vals = [int(stats.get(n, 0)) for n in stat_names]
+                use_nature = ni if (ni is not None and 0 <= ni < 25) else 255
+                if _compute_iv_ranges is not None:
+                    ranges = _compute_iv_ranges(list(base_stats), stat_vals, use_nature, level)
+                else:
+                    # Python fallback（C++ 未编译时）
+                    ranges = []
+                    for i, name in enumerate(stat_names):
+                        possible = []
+                        for iv in range(32):
+                            if i == 0:
+                                c = (2 * base_stats[i] + iv) * level // 100 + level + 10
+                            else:
+                                c = (2 * base_stats[i] + iv) * level // 100 + 5
+                            if c == stat_vals[i]:
+                                possible.append(iv)
+                        ranges.append((min(possible), max(possible)) if possible else (0, 31))
+                iv_min = [r[0] for r in ranges]
+                iv_max = [r[1] for r in ranges]
+                for i, name in enumerate(stat_names):
+                    log(f"[自动反查] {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{base_stats[i]} Lv{level})")
+
+                reverse_filter = StateFilter(
+                    iv_min=tuple(iv_min), iv_max=tuple(iv_max),
+                    natures=natures_locked,
+                )
+                attempt_criteria = replace(criteria, state_filter=reverse_filter)
+                attempt_candidates = generate_static_candidates(attempt_criteria)
+                log(f"[自动反查] 第{attempt}次 PokeFinder 搜索: {len(attempt_candidates)} 个候选")
+
+                # 后置比对个性
+                if characteristic and attempt_candidates:
+                    matched: list[object] = []
+                    for state in attempt_candidates:
+                        state_ivs = [int(v) for v in (getattr(state, "ivs", None) or [])]
+                        if len(state_ivs) != 6:
+                            state_ivs = [0] * 6
+                        pid_val = int(getattr(state, "pid", 0))
+                        if compute_characteristic(pid_val, state_ivs) == characteristic:
+                            matched.append(state)
+                    log(f"[自动反查] 第{attempt}次 个性({characteristic})匹配: {len(matched)} 个")
+                    attempt_candidates = matched
+
+                if attempt_candidates:
+                    candidates = attempt_candidates
+                    break
+                log(f"[自动反查] 第{attempt}次未找到匹配个体，{'重试…' if attempt < 3 else '已达上限'}")
+
+            # 输出结果
+            if not candidates:
+                log("[自动反查] 3次尝试均未找到匹配个体")
+                self.history_tab.reverse_lookup_results([], characteristic)
+            else:
+                delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + config.fixed_delay
+                          if target.raw_target_advances else int(getattr(s, "advances", 0))
+                          for s in candidates]
+                self.history_tab.reverse_lookup_results(candidates, characteristic, delays)
+                for state in candidates:
+                    adv = int(getattr(state, "advances", 0))
+                    actual_delay = adv - target.raw_target_advances + config.fixed_delay if target.raw_target_advances else adv
+                    state_ivs = getattr(state, "ivs", None)
+                    iv_text = " / ".join(f"{name}={int(state_ivs[i])}" for i, name in enumerate(["HP","攻击","防御","特攻","特防","速度"])) if state_ivs is not None and len(state_ivs) == 6 else "?"
+                    pid_val = int(getattr(state, "pid", 0))
+                    log(f"[自动反查] advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
+
         return AutoRngServices(
             capture_seed=capture_seed_service,
             reidentify=reidentify_service,
             search_candidates=search_candidates_service,
+            search_sync=search_sync_service,
             run_script_text=run_script_text_service,
             run_hit_script_with_shiny_check=run_hit_script_with_shiny_check,
+            run_reverse_lookup=reverse_lookup_service,
             stop_current_script=stop_current_script_service,
         )
 
@@ -2662,6 +2874,97 @@ class MainWindow(QMainWindow):
         self._tracked_advances = 0
         self.advances_value.setText("0")
         self.timer_value.setText("0")
+
+    def _capture_pokemon_info(self) -> None:
+        """临时功能：手动触发精灵信息捕获。
+
+        主线程截图 → 后台 OCR + RIGHT → 主线程再截图 → 后台 OCR → 输出。
+        截图始终在主线程，避免摄像头多线程闪退。
+        """
+        import threading
+
+        self.auto_rng_tab.add_log("[捕获精灵信息] 开始…")
+
+        try:
+            capture_config = self._config_from_form().capture
+        except Exception as exc:
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] 获取截图配置失败: {exc}")
+            return
+
+        # 主线程截图笔记页
+        try:
+            notes_frame = capture_preview_frame(capture_config)
+        except Exception as exc:
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图笔记页失败: {exc}")
+            return
+
+        self._capture_config = capture_config  # 暂存供后续用
+        thread = threading.Thread(target=self._do_capture_pokemon_info, args=(notes_frame,), daemon=True)
+        thread.start()
+
+    def _do_capture_pokemon_info(self, notes_frame: object) -> None:
+        import time
+
+        log = self.auto_rng_tab.captureLog.emit
+
+        # 1) OCR 笔记页
+        notes_result = extract_pokemon_info(notes_image=notes_frame)
+        nature = notes_result.get("nature")
+        characteristic = notes_result.get("characteristic")
+
+        # 2) 发送 RIGHT 切换页面
+        try:
+            self._send_easycon_right()
+        except Exception as exc:
+            log(f"[捕获精灵信息] 发送 RIGHT 指令失败: {exc}")
+            return
+        time.sleep(2.0)
+
+        # 3) 请求主线程截图能力页
+        self.auto_rng_tab.requestStatsCapture.emit(nature, characteristic)
+
+    def _on_request_stats_capture(self, nature: str | None, characteristic: str | None) -> None:
+        """主线程回调：截图能力页 → OCR → 输出。"""
+        log = self.auto_rng_tab.add_log
+        try:
+            stats_frame = capture_preview_frame(self._capture_config)
+        except Exception as exc:
+            log(f"[捕获精灵信息] 截图能力页失败: {exc}")
+            return
+        stats_result = extract_pokemon_info(stats_image=stats_frame)
+        stats = stats_result.get("stats")
+
+        stat_order = ["性格", "个性", "HP", "攻击", "防御", "特攻", "特防", "速度"]
+        parts: list[str] = []
+        for key in stat_order:
+            if key == "性格":
+                parts.append(f"性格={nature}")
+            elif key == "个性":
+                parts.append(f"个性={characteristic}")
+            elif stats and key in stats:
+                parts.append(f"{key}={stats[key]}")
+            else:
+                parts.append(f"{key}=?")
+        log(f"[捕获精灵信息] {' / '.join(parts)}")
+
+    def _send_easycon_right(self) -> None:
+        """通过伊机控发送 RIGHT d-pad 按钮。"""
+        log = self.auto_rng_tab.add_log
+        script_text = "RIGHT 200\n"
+        if self.easycon_tab._is_bridge_mode():
+            log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT 200")
+            backend = self.easycon_tab._ensure_bridge_backend()
+            result = backend.run_script_text(script_text, "right_press")
+            log(f"[捕获精灵信息] Bridge 脚本完成: exit_code={result.exit_code}")
+        else:
+            log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT 200")
+            port = self.easycon_tab.port_combo.currentText()
+            if not port:
+                raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
+            from auto_bdsp_rng.automation.easycon import CliEasyConBackend
+            cli = CliEasyConBackend()
+            result = cli.run_script_text(script_text, "right_press", port=port)
+            log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:150] if result.stdout else '无'}")
 
     def _advance_tick(self) -> None:
         self._tracked_advances += self._advance_step
@@ -3002,33 +3305,42 @@ class MainWindow(QMainWindow):
 def _compute_iv_range(base_stats, stats, levels, nature, characteristic, hidden_power):
     """基于 PokeFinder IVChecker 算法计算个体值范围"""
     iv_order = [0, 1, 2, 5, 3, 4]
-    labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
+
+    try:
+        from auto_bdsp_rng.rng_core._native import compute_iv_ranges as _native_iv_ranges
+    except ImportError:
+        _native_iv_ranges = None
 
     def _calc_single(bs, st, lv, nat, charac):
-        min_ivs = [31] * 6
-        max_ivs = [0] * 6
-        for i in range(6):
-            for iv in range(32):
-                if nat != 255:
-                    increased, decreased = NATURE_MODIFIERS[nat]
-                    base = ((2 * bs[i] + iv) * lv) // 100 + 5
-                    if i == 0:
-                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
-                    if i == increased:
-                        base = (base * 110) // 100
-                    elif i == decreased:
-                        base = (base * 90) // 100
-                    if base == st[i]:
-                        min_ivs[i] = min(iv, min_ivs[i])
-                        max_ivs[i] = max(iv, max_ivs[i])
-                else:
-                    if i == 0:
-                        base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
-                    else:
+        if _native_iv_ranges is not None:
+            ranges = _native_iv_ranges(list(bs), list(st), nat, lv)
+            min_ivs = [max(0, r[0]) for r in ranges]
+            max_ivs = [min(31, r[1]) for r in ranges]
+        else:
+            min_ivs = [31] * 6
+            max_ivs = [0] * 6
+            for i in range(6):
+                for iv in range(32):
+                    if nat != 255:
+                        increased, decreased = NATURE_MODIFIERS[nat]
                         base = ((2 * bs[i] + iv) * lv) // 100 + 5
-                    if base == st[i] or (i != 0 and (int(base * 0.9) == st[i] or int(base * 1.1) == st[i])):
-                        min_ivs[i] = min(iv, min_ivs[i])
-                        max_ivs[i] = max(iv, max_ivs[i])
+                        if i == 0:
+                            base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                        if i == increased:
+                            base = (base * 110) // 100
+                        elif i == decreased:
+                            base = (base * 90) // 100
+                        if base == st[i]:
+                            min_ivs[i] = min(iv, min_ivs[i])
+                            max_ivs[i] = max(iv, max_ivs[i])
+                    else:
+                        if i == 0:
+                            base = ((2 * bs[i] + iv) * lv) // 100 + lv + 10
+                        else:
+                            base = ((2 * bs[i] + iv) * lv) // 100 + 5
+                        if base == st[i] or (i != 0 and (int(base * 0.9) == st[i] or int(base * 1.1) == st[i])):
+                            min_ivs[i] = min(iv, min_ivs[i])
+                            max_ivs[i] = max(iv, max_ivs[i])
 
         possible = [[] for _ in range(6)]
         char_high = 31

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -31,69 +32,30 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     validate_auto_scripts,
 )
-from auto_bdsp_rng.ui.static_target_form import NATURES_ZH, StaticTargetForm
+from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
+
+
+class _CopyableTextEdit(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
+        self.setUndoRedoEnabled(False)
+
+    def contextMenuEvent(self, event):
+        menu = self.createStandardContextMenu()
+        if menu is None or menu.isEmpty():
+            from PySide6.QtWidgets import QMenu
+            from PySide6.QtGui import QAction
+            menu = QMenu(self)
+            menu.addAction("复制", self.copy, QAction.Shortcut("Ctrl+C"))
+            menu.addAction("全选", self.selectAll, QAction.Shortcut("Ctrl+A"))
+        menu.exec(event.globalPos())
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = PROJECT_ROOT / "script"
-IV_LABELS_ZH = ("HP", "攻击", "防御", "特攻", "特防", "速度")
-
-
-class LockedTargetView(QGroupBox):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("锁定目标", parent)
-        self.values: dict[str, QLabel] = {}
-        self.setMaximumHeight(82)
-        layout = QGridLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setHorizontalSpacing(18)
-        layout.setVerticalSpacing(6)
-        fields = (
-            ("状态", "Status"),
-            ("PID", "PID"),
-            ("异色", "Shiny"),
-            ("性格", "Nature"),
-            ("特性", "Ability"),
-            ("性别", "Gender"),
-            ("IVs", "IVs"),
-            ("身高", "Height"),
-            ("体重", "Weight"),
-        )
-        for index, (label_text, key) in enumerate(fields):
-            label = QLabel(label_text)
-            label.setObjectName("MutedLabel")
-            value = QLabel("-")
-            value.setObjectName("Badge")
-            value.setWordWrap(False)
-            value.setMinimumWidth(220 if key == "IVs" else 48)
-            self.values[key] = value
-            layout.addWidget(label, 0, index)
-            layout.addWidget(value, 1, index)
-            layout.setColumnStretch(index, 5 if key == "IVs" else 1)
-        self.clear()
-
-    def clear(self, status: str = "未锁定") -> None:
-        for key, label in self.values.items():
-            label.setText(status if key == "Status" else "-")
-
-    def apply_progress(self, progress: AutoRngProgress) -> None:
-        target = progress.locked_target
-        if target is None:
-            self.clear()
-            return
-        state = target.state
-        self.values["Status"].setText("已锁定")
-        if state is None:
-            return
-        self.values["PID"].setText(_hex32(getattr(state, "pid", None)))
-        self.values["Shiny"].setText(_shiny_text(getattr(state, "shiny", None)))
-        self.values["Nature"].setText(_nature_text(getattr(state, "nature", None)))
-        self.values["Ability"].setText(_display_value(getattr(state, "ability", None)))
-        self.values["Gender"].setText(_gender_text(getattr(state, "gender", None)))
-        ivs = getattr(state, "ivs", None)
-        self.values["IVs"].setText(_ivs_text(ivs))
-        self.values["Height"].setText(_display_value(getattr(state, "height", None)))
-        self.values["Weight"].setText(_display_value(getattr(state, "weight", None)))
 
 
 class AutoRngWorker(QObject):
@@ -127,6 +89,9 @@ class AutoRngPanel(QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
     ivCalculatorRequested = Signal()
+    captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
+    captureLog = Signal(str)  # 临时：后台线程日志输出
+    requestStatsCapture = Signal(object, object)  # 临时：后台请求主线程截图能力页(nature, characteristic)
 
     def __init__(self, parent: QWidget | None = None, script_dir: Path = SCRIPT_DIR) -> None:
         super().__init__(parent)
@@ -192,6 +157,13 @@ class AutoRngPanel(QWidget):
         row.addWidget(self.status_badge)
         row.addWidget(self.start_button)
         row.addWidget(self.stop_button)
+        # 临时按钮：手动捕获精灵信息
+        self.capture_info_button = QPushButton("捕获精灵信息")
+        self.capture_info_button.setFixedHeight(34)
+        self.capture_info_button.setMinimumWidth(110)
+        self.capture_info_button.setToolTip("在笔记页点击，自动切换能力页并提取全部信息")
+        self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
+        row.addWidget(self.capture_info_button)
         return toolbar
 
     def _build_config_panel(self) -> QWidget:
@@ -202,15 +174,12 @@ class AutoRngPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         self.strategy_group = self._build_strategy_group()
-        self.script_group = self._build_script_group()
         layout.addWidget(self.strategy_group)
-        layout.addWidget(self.script_group)
         layout.addWidget(self._build_log_group(), 1)
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
         group = QGroupBox("自动策略")
-        group.setMaximumHeight(170)
         form = QFormLayout(group)
         form.setContentsMargins(12, 12, 12, 12)
         form.setVerticalSpacing(8)
@@ -229,11 +198,31 @@ class AutoRngPanel(QWidget):
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待窗口", self.max_wait_frames)
         form.addRow("闪光阈值(秒)", self.shiny_threshold_seconds)
+        # 同步开关（三态下拉框 + 性格输入）
+        sync_row = QHBoxLayout()
+        self.sync_combo = QComboBox()
+        self.sync_combo.addItems(["同步：关闭", "同步：首位普通精灵", "同步：首位同步精灵"])
+        self.sync_combo.setFixedHeight(34)
+        self.sync_combo.setMinimumWidth(160)
+        self.sync_combo.currentIndexChanged.connect(self._on_sync_changed)
+        self.sync_nature_input = QLineEdit()
+        self.sync_nature_input.setPlaceholderText("性格")
+        self.sync_nature_input.setFixedHeight(34)
+        self.sync_nature_input.setFixedWidth(72)
+        self.sync_nature_input.setEnabled(False)
+        sync_row.addWidget(self.sync_combo)
+        sync_row.addWidget(self.sync_nature_input)
+        form.addRow(sync_row)
+        # 自动反查下拉框
+        self.auto_reverse_combo = QComboBox()
+        self.auto_reverse_combo.addItems(["自动反查：关闭", "自动反查：开启"])
+        self.auto_reverse_combo.setFixedHeight(34)
+        self.auto_reverse_combo.setMinimumWidth(220)
+        form.addRow(self.auto_reverse_combo)
         return group
 
     def _build_script_group(self) -> QGroupBox:
         group = QGroupBox("脚本")
-        group.setMaximumHeight(220)
         layout = QGridLayout(group)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setHorizontalSpacing(8)
@@ -241,20 +230,23 @@ class AutoRngPanel(QWidget):
         self.seed_script_combo = QComboBox()
         self.advance_script_combo = QComboBox()
         self.hit_script_combo = QComboBox()
+        self.reverse_script_combo = QComboBox()
         self.refresh_scripts_button = QPushButton("刷新脚本列表")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo):
+        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.reverse_script_combo):
             combo.setFixedHeight(34)
-            combo.setFixedWidth(170)
+            combo.setFixedWidth(160)
         self.refresh_scripts_button.setFixedHeight(34)
         self.refresh_scripts_button.setMaximumWidth(250)
         layout.addWidget(QLabel("测种脚本"), 0, 0)
         layout.addWidget(self.seed_script_combo, 0, 1)
-        layout.addWidget(QLabel("过帧脚本"), 1, 0)
-        layout.addWidget(self.advance_script_combo, 1, 1)
-        layout.addWidget(QLabel("撞闪脚本"), 2, 0)
-        layout.addWidget(self.hit_script_combo, 2, 1)
-        layout.addWidget(self.refresh_scripts_button, 3, 0, 1, 2)
+        layout.addWidget(QLabel("过帧脚本"), 0, 2)
+        layout.addWidget(self.advance_script_combo, 0, 3)
+        layout.addWidget(QLabel("撞闪脚本"), 1, 0)
+        layout.addWidget(self.hit_script_combo, 1, 1)
+        layout.addWidget(QLabel("反查脚本"), 1, 2)
+        layout.addWidget(self.reverse_script_combo, 1, 3)
+        layout.addWidget(self.refresh_scripts_button, 2, 0, 1, 4)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
@@ -262,16 +254,16 @@ class AutoRngPanel(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
+        # 脚本区（从左侧移入，位于右侧顶部）
+        self.script_group = self._build_script_group()
+        layout.addWidget(self.script_group)
         top = QWidget()
         top_layout = QVBoxLayout(top)
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(8)
         top_layout.addWidget(self._build_summary_group())
-        self.locked_target_view = LockedTargetView()
-        top_layout.addWidget(self.locked_target_view)
         layout.addWidget(top)
         layout.addWidget(self._build_target_form_group())
-        layout.addWidget(self._build_candidate_history_group(), 1)
         return panel
 
     def _build_summary_group(self) -> QGroupBox:
@@ -312,21 +304,10 @@ class AutoRngPanel(QWidget):
         self.target_form_group = group
         return group
 
-    def _build_candidate_history_group(self) -> QGroupBox:
-        group = QGroupBox("目标候选 / 历史记录")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 12, 12, 12)
-        self.candidate_history_empty = QLabel("暂无候选结果")
-        self.candidate_history_empty.setObjectName("MutedLabel")
-        self.candidate_history_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.candidate_history_empty, 1)
-        return group
-
     def _build_log_group(self) -> QGroupBox:
         group = QGroupBox("日志")
         layout = QVBoxLayout(group)
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
+        self.log_view = _CopyableTextEdit()
         self.log_view.setFont(QFont("Consolas", 10))
         self.log_view.setStyleSheet("QPlainTextEdit { padding: 12px; }")
         layout.addWidget(self.log_view)
@@ -334,7 +315,7 @@ class AutoRngPanel(QWidget):
 
     def refresh_scripts(self) -> None:
         self._scripts = list_auto_scripts(self.script_dir)
-        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo):
+        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.reverse_script_combo):
             combo.blockSignals(True)
             combo.clear()
             combo.addItem("请选择", None)
@@ -360,7 +341,6 @@ class AutoRngPanel(QWidget):
         self.summary_delay.setText(_display_value(progress.fixed_delay))
         self.summary_current.setText(_display_value(progress.current_advances))
         self.summary_flash.setText(_display_value(progress.final_flash_frames))
-        self.locked_target_view.apply_progress(progress)
         if progress.log_message:
             self.add_log(progress.log_message)
 
@@ -418,6 +398,10 @@ class AutoRngPanel(QWidget):
             seed_script_path=self._selected_path(self.seed_script_combo),
             advance_script_path=self._selected_path(self.advance_script_combo),
             hit_script_path=self._selected_path(self.hit_script_combo),
+            reverse_script_path=self._selected_path(self.reverse_script_combo),
+            auto_reverse=self.auto_reverse_combo.currentIndex() == 1,
+            sync_mode=self.sync_combo.currentIndex(),
+            sync_nature=self.sync_nature_input.text().strip(),
             fixed_delay=self.fixed_delay.value(),
             max_wait_frames=self.max_wait_frames.value(),
             loop_mode=str(self.mode_combo.currentData()),
@@ -494,6 +478,12 @@ class AutoRngPanel(QWidget):
             s.setValue("advance_script", str(advance_path))
         if hit_path is not None:
             s.setValue("hit_script", str(hit_path))
+        reverse_path = self._selected_path(self.reverse_script_combo)
+        if reverse_path is not None:
+            s.setValue("reverse_script", str(reverse_path))
+        s.setValue("sync_state", self.sync_combo.currentIndex())
+        s.setValue("sync_nature", self.sync_nature_input.text())
+        s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
         # 目标精灵设置
         tf = self.target_form
         s.setValue("target_category", tf.category_combo.currentIndex())
@@ -528,6 +518,18 @@ class AutoRngPanel(QWidget):
             self._select_script_by_path(self.advance_script_combo, str(s.value("advance_script", "")))
         if s.contains("hit_script"):
             self._select_script_by_path(self.hit_script_combo, str(s.value("hit_script", "")))
+        if s.contains("reverse_script"):
+            self._select_script_by_path(self.reverse_script_combo, str(s.value("reverse_script", "")))
+        if s.contains("sync_state"):
+            idx = int(s.value("sync_state", 0))
+            if 0 <= idx < self.sync_combo.count():
+                self.sync_combo.setCurrentIndex(idx)
+        if s.contains("sync_nature"):
+            self.sync_nature_input.setText(str(s.value("sync_nature", "")))
+        if s.contains("auto_reverse"):
+            idx = int(s.value("auto_reverse", 0))
+            if 0 <= idx < self.auto_reverse_combo.count():
+                self.auto_reverse_combo.setCurrentIndex(idx)
         # 目标精灵设置
         tf = self.target_form
         if s.contains("target_category"):
@@ -564,6 +566,14 @@ class AutoRngPanel(QWidget):
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    def _on_sync_changed(self, index: int) -> None:
+        """同步状态改变时启用/禁用性格输入框。"""
+        if index == 0:  # 关闭
+            self.sync_nature_input.setEnabled(False)
+            self.sync_nature_input.clear()
+        else:
+            self.sync_nature_input.setEnabled(True)
+
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(minimum, maximum)
@@ -575,33 +585,3 @@ class AutoRngPanel(QWidget):
 
 def _display_value(value: object) -> str:
     return "-" if value is None else str(value)
-
-
-def _hex32(value: object) -> str:
-    return "-" if value is None else f"{int(value):08X}"
-
-
-def _shiny_text(value: object) -> str:
-    return {0: "否", 1: "星闪", 2: "方闪"}.get(value, _display_value(value))
-
-
-def _gender_text(value: object) -> str:
-    return {0: "雄", 1: "雌", 2: "-"}.get(value, _display_value(value))
-
-
-def _nature_text(value: object) -> str:
-    if value is None:
-        return "-"
-    index = int(value)
-    if 0 <= index < len(NATURES_ZH):
-        return NATURES_ZH[index]
-    return str(value)
-
-
-def _ivs_text(ivs: object) -> str:
-    if ivs is None:
-        return "-"
-    values = tuple(int(value) for value in ivs)
-    if len(values) != 6:
-        return "-"
-    return " / ".join(f"{label} {value}" for label, value in zip(IV_LABELS_ZH, values))

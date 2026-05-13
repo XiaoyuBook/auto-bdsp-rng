@@ -18,6 +18,7 @@ class AutoRngPhase(str, Enum):
     FINAL_WAIT = "等待触发"
     FINAL_ADJUST = "动态调整闪帧"
     RUN_HIT_SCRIPT = "运行撞闪脚本"
+    REVERSE_LOOKUP = "反查个体"
     LOOP_CHECK = "循环检查"
     COMPLETED = "已完成"
     FAILED = "失败"
@@ -55,6 +56,10 @@ class AutoRngConfig:
     seed_script_path: Path | None = None
     advance_script_path: Path | None = None
     hit_script_path: Path | None = None
+    reverse_script_path: Path | None = None
+    auto_reverse: bool = False
+    sync_mode: int = 0  # 0=关闭, 1=首位普通精灵, 2=首位同步精灵
+    sync_nature: str = ""  # 同步时锁定的性格名称
     fixed_delay: int = 100
     fixed_flash_frames: int = 60
     max_wait_frames: int = 300
