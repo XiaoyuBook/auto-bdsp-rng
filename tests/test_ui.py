@@ -611,6 +611,36 @@ def test_auto_rng_target_summary_scrolls_when_many_conditions(app):
     assert panel.target_summary_scroll.maximumHeight() <= 150
 
 
+def test_auto_rng_panel_restores_persisted_multi_targets(app, tmp_path):
+    from auto_bdsp_rng.data import get_static_encounters
+
+    first = AutoRngPanel(script_dir=tmp_path)
+    first._settings.clear()
+    record = next(r for r in get_static_encounters() if r.description == "Shaymin")
+    first.set_targets([
+        (record, StateFilter(height_min=0, height_max=0, weight_min=10, weight_max=20, shiny=2), "square"),
+        (record, StateFilter(height_min=255, height_max=255, ability=1, gender=0, shiny=2), "square"),
+    ])
+    first.close()
+    app.processEvents()
+
+    restored = AutoRngPanel(script_dir=tmp_path)
+
+    targets = restored.targets()
+    assert len(targets) == 2
+    assert [target[0].description for target in targets] == ["Shaymin", "Shaymin"]
+    assert targets[0][1].height_min == 0
+    assert targets[0][1].height_max == 0
+    assert targets[0][1].weight_min == 10
+    assert targets[0][1].weight_max == 20
+    assert targets[1][1].height_min == 255
+    assert targets[1][1].height_max == 255
+    assert targets[1][1].ability == 1
+    assert targets[1][1].gender == 0
+    assert [target[2] for target in targets] == ["square", "square"]
+    assert restored.target_summary_title.text() == "精灵筛选列表：谢米"
+    restored._settings.clear()
+
 
 def test_auto_rng_stop_button_requests_runner_stop_immediately(app):
     panel = AutoRngPanel()

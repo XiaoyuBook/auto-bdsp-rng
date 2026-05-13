@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
@@ -37,7 +38,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     validate_auto_scripts,
 )
-from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord
+from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
@@ -136,6 +137,10 @@ class AutoRngPanel(QWidget):
         self.content_grid.setRowStretch(0, 0)
         self.content_grid.setRowStretch(1, 1)
         layout.addWidget(content, 1)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._save_panel_state()
+        super().closeEvent(event)
 
     def _build_toolbar(self) -> QWidget:
         toolbar = QFrame()
@@ -545,6 +550,86 @@ class AutoRngPanel(QWidget):
         index = combo.findData(str(path))
         combo.setCurrentIndex(max(0, index))
 
+    def _serialize_targets(self) -> str:
+        rows = []
+        for record, state_filter, shiny_mode in self.targets():
+            rows.append({
+                "category": str(record.category.value),
+                "description": record.description,
+                "version": str(record.version.value),
+                "shiny_mode": shiny_mode,
+                "filter": {
+                    "gender": state_filter.gender,
+                    "ability": state_filter.ability,
+                    "shiny": state_filter.shiny,
+                    "height_min": state_filter.height_min,
+                    "height_max": state_filter.height_max,
+                    "weight_min": state_filter.weight_min,
+                    "weight_max": state_filter.weight_max,
+                    "skip": state_filter.skip,
+                    "iv_min": list(state_filter.iv_min),
+                    "iv_max": list(state_filter.iv_max),
+                    "natures": list(state_filter.natures),
+                    "hidden_powers": list(state_filter.hidden_powers),
+                },
+            })
+        return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+
+    def _restore_targets_json(self, text: str) -> bool:
+        try:
+            rows = json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(rows, list):
+            return False
+        restored: list[tuple[StaticEncounterRecord, StateFilter, str]] = []
+        all_records = get_static_encounters()
+        for row in rows:
+            if not isinstance(row, dict):
+                return False
+            category = row.get("category")
+            description = row.get("description")
+            version = row.get("version")
+            filter_data = row.get("filter")
+            if not isinstance(category, str) or not isinstance(description, str) or not isinstance(version, str):
+                return False
+            if not isinstance(filter_data, dict):
+                return False
+            record = next(
+                (
+                    candidate
+                    for candidate in all_records
+                    if candidate.category.value == category
+                    and candidate.description == description
+                    and candidate.version.value == version
+                ),
+                None,
+            )
+            if record is None:
+                return False
+            try:
+                state_filter = StateFilter(
+                    gender=int(filter_data.get("gender", 255)),
+                    ability=int(filter_data.get("ability", 255)),
+                    shiny=int(filter_data.get("shiny", 255)),
+                    height_min=int(filter_data.get("height_min", 0)),
+                    height_max=int(filter_data.get("height_max", 255)),
+                    weight_min=int(filter_data.get("weight_min", 0)),
+                    weight_max=int(filter_data.get("weight_max", 255)),
+                    skip=bool(filter_data.get("skip", False)),
+                    iv_min=tuple(int(value) for value in filter_data.get("iv_min", (0, 0, 0, 0, 0, 0))),
+                    iv_max=tuple(int(value) for value in filter_data.get("iv_max", (31, 31, 31, 31, 31, 31))),
+                    natures=tuple(bool(value) for value in filter_data.get("natures", (True,) * 25)),
+                    hidden_powers=tuple(bool(value) for value in filter_data.get("hidden_powers", (True,) * 16)),
+                )
+            except (TypeError, ValueError):
+                return False
+            restored.append((record, state_filter, str(row.get("shiny_mode", "any"))))
+        if not restored:
+            return False
+        self._targets = restored
+        return True
+
     def _save_panel_state(self) -> None:
         """持久化当前面板设置。"""
         s = self._settings
@@ -570,6 +655,7 @@ class AutoRngPanel(QWidget):
         s.setValue("sync_nature", self.sync_nature_input.text())
         s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
         s.setValue("reverse_lookup_window", self.reverse_lookup_window.value())
+        s.setValue("target_list_json", self._serialize_targets())
         # 目标精灵设置
         tf = self.target_form
         s.setValue("target_category", tf.category_combo.currentIndex())
@@ -618,6 +704,8 @@ class AutoRngPanel(QWidget):
                 self.auto_reverse_combo.setCurrentIndex(idx)
         if s.contains("reverse_lookup_window"):
             self.reverse_lookup_window.setValue(int(s.value("reverse_lookup_window", 500)))
+        if s.contains("target_list_json"):
+            self._restore_targets_json(str(s.value("target_list_json", "")))
         # 目标精灵设置
         tf = self.target_form
         if s.contains("target_category"):
@@ -646,6 +734,7 @@ class AutoRngPanel(QWidget):
                 tf.nature_combo.setCurrentIndex(idx)
         if s.contains("target_skip_filter"):
             tf.skip_filter.setChecked(s.value("target_skip_filter") == "true")
+        self._refresh_target_summary()
 
     def _select_script_by_path(self, combo: QComboBox, path_str: str) -> None:
         if not path_str:
