@@ -193,7 +193,9 @@ class StateFilter:
             return False
         if self.gender != 255 and self.gender != state.gender:
             return False
-        if self.shiny != 255 and not (self.shiny & state.shiny):
+        if self.shiny == 0 and state.shiny != 0:
+            return False
+        if self.shiny not in (0, 255) and not (self.shiny & state.shiny):
             return False
         if not self.natures[state.nature]:
             return False
@@ -213,7 +215,9 @@ class StateFilter:
             return True
         if self.gender != 255 and self.gender != gender:
             return True
-        if self.shiny != 255 and not (self.shiny & shiny):
+        if self.shiny == 0 and shiny != 0:
+            return True
+        if self.shiny not in (0, 255) and not (self.shiny & shiny):
             return True
         if not self.natures[nature]:
             return True

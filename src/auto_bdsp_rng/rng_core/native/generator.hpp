@@ -46,8 +46,22 @@ std::vector<StateResult> generate_non_roamer(
     u16 tid, u16 sid, u8 level,
     const FilterParams& filter);
 
+std::vector<StateResult> generate_non_roamer_multi(
+    u64 seed0, u64 seed1,
+    u32 initial_advances, u32 max_advances, u32 offset,
+    int lead, ShinyTemplate shiny_template, bool fateful,
+    u8 iv_count, u8 ability_template, u8 gender_ratio, u8 ability_count,
+    u16 tid, u16 sid, u8 level,
+    const std::vector<FilterParams>& filters);
+
 std::vector<StateResult> generate_roamer(
     u64 seed0, u64 seed1,
     u32 initial_advances, u32 max_advances, u32 offset,
     int lead, u16 tid, u16 sid, u16 species, u8 level,
     const FilterParams& filter);
+
+std::vector<StateResult> generate_roamer_multi(
+    u64 seed0, u64 seed1,
+    u32 initial_advances, u32 max_advances, u32 offset,
+    int lead, u16 tid, u16 sid, u16 species, u8 level,
+    const std::vector<FilterParams>& filters);

@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -33,7 +35,10 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     validate_auto_scripts,
 )
+from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord
+from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
+from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
 
 
 class _CopyableTextEdit(QPlainTextEdit):
@@ -100,6 +105,8 @@ class AutoRngPanel(QWidget):
         self._scripts: list[Path] = []
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoRngWorker | None = None
+        self._target_version = GameVersion.BD
+        self._targets: list[tuple[StaticEncounterRecord, StateFilter, str]] = []
         self._settings = QSettings("auto-bdsp-rng", "AutoRngPanel")
         self._build_ui()
         self.refresh_scripts()
@@ -176,7 +183,7 @@ class AutoRngPanel(QWidget):
         layout.setSpacing(12)
         self.strategy_group = self._build_strategy_group()
         layout.addWidget(self.strategy_group)
-        layout.addWidget(self._build_log_group(), 1)
+        layout.addStretch(1)
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
@@ -269,55 +276,51 @@ class AutoRngPanel(QWidget):
         # 脚本区（从左侧移入，位于右侧顶部）
         self.script_group = self._build_script_group()
         layout.addWidget(self.script_group)
-        top = QWidget()
-        top_layout = QVBoxLayout(top)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(8)
-        top_layout.addWidget(self._build_summary_group())
-        layout.addWidget(top)
-        layout.addWidget(self._build_target_form_group())
+        layout.addWidget(self._build_target_summary_group())
+        layout.addWidget(self._build_log_group(), 1)
         return panel
 
-    def _build_summary_group(self) -> QGroupBox:
-        group = QGroupBox("运行摘要")
-        group.setMaximumHeight(96)
-        grid = QGridLayout(group)
-        grid.setContentsMargins(12, 10, 12, 10)
-        grid.setHorizontalSpacing(18)
-        grid.setVerticalSpacing(6)
-        self.summary_group = group
-        fields = (
-            ("当前循环", "summary_loop"),
-            ("当前阶段", "summary_phase"),
-            ("原始目标帧", "summary_raw"),
-            ("delay", "summary_delay"),
-            ("目前帧数", "summary_current"),
-            ("最终闪帧", "summary_flash"),
-        )
-        for index, (label_text, attr) in enumerate(fields):
-            label = QLabel("-")
-            label.setObjectName("Badge")
-            setattr(self, attr, label)
-            row = index // 3
-            column = (index % 3) * 2
-            grid.addWidget(QLabel(label_text), row, column)
-            grid.addWidget(label, row, column + 1)
-            grid.setColumnStretch(column + 1, 1)
-        return group
-
-    def _build_target_form_group(self) -> QGroupBox:
-        group = QGroupBox("目标精灵设置")
-        group.setMaximumHeight(390)
+    def _build_target_summary_group(self) -> QGroupBox:
+        group = QGroupBox()
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+        header = QHBoxLayout()
+        self.target_summary_title = QLabel("精灵筛选列表：-")
+        self.target_button = QPushButton("目标精灵设置...")
+        self.target_button.setFixedHeight(34)
+        self.target_button.setMinimumWidth(150)
+        self.target_button.clicked.connect(self.open_target_dialog)
+        header.addWidget(self.target_summary_title)
+        header.addStretch(1)
+        header.addWidget(self.target_button)
+        layout.addLayout(header)
+
+        self.target_summary_scroll = QScrollArea()
+        self.target_summary_scroll.setWidgetResizable(True)
+        self.target_summary_scroll.setMaximumHeight(140)
+        self.target_summary_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.target_summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.target_summary_container = QWidget()
+        self.target_summary_layout = QVBoxLayout(self.target_summary_container)
+        self.target_summary_layout.setContentsMargins(0, 0, 0, 0)
+        self.target_summary_layout.setSpacing(6)
+        self.target_summary_scroll.setWidget(self.target_summary_container)
+        layout.addWidget(self.target_summary_scroll)
+        self.target_summary_group = group
+
         self.target_form = StaticTargetForm(self)
         self.target_form.show_stats_check.hide()
         self.target_form.iv_calculator_button.hide()
-        layout.addWidget(self.target_form)
-        self.target_form_group = group
+        self.target_form.hide()
+        self._refresh_target_summary()
         return group
 
     def _build_log_group(self) -> QGroupBox:
         group = QGroupBox("日志")
+        group.setMaximumWidth(16777215)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.log_group = group
         layout = QVBoxLayout(group)
         self.log_view = _CopyableTextEdit()
         self.log_view.setFont(QFont("Consolas", 10))
@@ -339,20 +342,13 @@ class AutoRngPanel(QWidget):
 
     def set_phase_text(self, text: str) -> None:
         self.status_badge.setText(text)
-        self.summary_phase.setText(text)
 
     def set_live_advances(self, advances: int) -> None:
-        self.summary_current.setText(str(advances))
+        _ = advances
 
     def apply_progress(self, progress: AutoRngProgress) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         self.status_badge.setText(phase_text)
-        self.summary_phase.setText(phase_text)
-        self.summary_loop.setText(_display_value(progress.loop_index))
-        self.summary_raw.setText(_display_value(progress.raw_target_advances))
-        self.summary_delay.setText(_display_value(progress.fixed_delay))
-        self.summary_current.setText(_display_value(progress.current_advances))
-        self.summary_flash.setText(_display_value(progress.final_flash_frames))
         if progress.log_message:
             self.add_log(progress.log_message)
 
@@ -364,6 +360,55 @@ class AutoRngPanel(QWidget):
         if locked_index is not None and 0 <= locked_index < len(rows):
             locked_text = f"，锁定 {rows[locked_index]}"
         self.add_log(f"候选结果 {len(rows)} 个{locked_text}")
+
+    def set_target_version(self, version: GameVersion) -> None:
+        self._target_version = version
+        self.target_form.set_version(version)
+        self._refresh_target_summary()
+
+    def set_targets(self, targets: list[tuple[StaticEncounterRecord, StateFilter, str]]) -> None:
+        self._targets = list(targets)
+        self._refresh_target_summary()
+
+    def targets(self) -> list[tuple[StaticEncounterRecord, StateFilter, str]]:
+        if self._targets:
+            return list(self._targets)
+        record = self.target_form.selected_record()
+        state_filter, shiny_mode = self.target_form.current_filter()
+        return [(record, state_filter, shiny_mode)]
+
+    def open_target_dialog(self) -> None:
+        dialog = TargetDialog(self, self._target_version)
+        dialog.set_targets(self.targets())
+        if dialog.exec() == dialog.DialogCode.Accepted:
+            self.set_targets(dialog.get_targets())
+
+    def target_summary_text(self) -> str:
+        return "; ".join(label.text() for label in getattr(self, "target_summary_labels", []))
+
+    def _refresh_target_summary(self) -> None:
+        if not hasattr(self, "target_summary_layout"):
+            return
+        while self.target_summary_layout.count():
+            item = self.target_summary_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.target_summary_labels: list[QLabel] = []
+        targets = self.targets() if hasattr(self, "target_form") else []
+        if not targets:
+            self.target_summary_title.setText("精灵筛选列表：-")
+            return
+        record = targets[0][0]
+        name = POKEMON_LABELS_ZH.get(record.description, record.description)
+        self.target_summary_title.setText(f"精灵筛选列表：{name}")
+        for index, (_record, state_filter, shiny_mode) in enumerate(targets, start=1):
+            label = QLabel(f"{index}. {_target_condition_text(state_filter, shiny_mode)}")
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+            self.target_summary_layout.addWidget(label)
+            self.target_summary_labels.append(label)
+        self.target_summary_layout.addStretch(1)
 
     def set_search_context_summary(
         self,
@@ -599,5 +644,37 @@ class AutoRngPanel(QWidget):
         return spin
 
 
-def _display_value(value: object) -> str:
-    return "-" if value is None else str(value)
+def _target_condition_text(state_filter: StateFilter, shiny_mode: str) -> str:
+    parts: list[str] = []
+    shiny_label = {
+        "shiny": "异色",
+        "star": "星闪",
+        "square": "方闪",
+        "none": "非异色",
+    }.get(shiny_mode)
+    if shiny_label is not None:
+        parts.append(f"异色：{shiny_label}")
+    if state_filter.ability != 255:
+        ability_label = {0: "0", 1: "1", 2: "隐藏"}.get(state_filter.ability, str(state_filter.ability))
+        parts.append(f"特性：{ability_label}")
+    if state_filter.gender != 255:
+        gender_label = {0: "雄性", 1: "雌性", 2: "无性别"}.get(state_filter.gender, str(state_filter.gender))
+        parts.append(f"性别：{gender_label}")
+    if state_filter.height_min != 0 or state_filter.height_max != 255:
+        value = str(state_filter.height_min) if state_filter.height_min == state_filter.height_max else f"{state_filter.height_min}-{state_filter.height_max}"
+        parts.append(f"身高：{value}")
+    if state_filter.weight_min != 0 or state_filter.weight_max != 255:
+        value = str(state_filter.weight_min) if state_filter.weight_min == state_filter.weight_max else f"{state_filter.weight_min}-{state_filter.weight_max}"
+        parts.append(f"体重：{value}")
+    if not all(state_filter.natures):
+        locked = [NATURES_ZH[index] for index, enabled in enumerate(state_filter.natures) if enabled]
+        if locked:
+            parts.append(f"性格：{','.join(locked)}")
+    iv_parts = [
+        f"{label}{lo}" if lo == hi else f"{label}{lo}-{hi}"
+        for label, lo, hi in zip(("HP", "攻击", "防御", "特攻", "特防", "速度"), state_filter.iv_min, state_filter.iv_max)
+        if lo != 0 or hi != 31
+    ]
+    if iv_parts:
+        parts.append("个体：" + "/".join(iv_parts))
+    return " | ".join(parts) if parts else "无额外筛选"

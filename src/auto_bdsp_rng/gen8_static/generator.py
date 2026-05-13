@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Sequence
 
 from auto_bdsp_rng.gen8_static.models import (
     GENDER_FEMALE,
@@ -25,9 +26,14 @@ from auto_bdsp_rng.rng_core.seed import SeedPair64, U32_MAX
 
 try:
     from auto_bdsp_rng.rng_core._native import generate_static as _native_generate
+    try:
+        from auto_bdsp_rng.rng_core._native import generate_static_multi as _native_generate_multi
+    except ImportError:
+        _native_generate_multi = None
     _HAS_NATIVE = True
 except ImportError:
     _HAS_NATIVE = False
+    _native_generate_multi = None
 
 
 def _gen_static_ec(rng: BDSPXorshift) -> int:
@@ -186,6 +192,42 @@ class StaticGenerator8:
             for r in results_raw
         ]
 
+    def _native_args_for_filter(self, seed0: int, seed1: int, roamer: bool, state_filter: StateFilter) -> tuple[object, ...]:
+        template = self.template
+        profile = self.profile
+        return (
+            seed0, seed1,
+            self.initial_advances, self.max_advances, self.offset,
+            int(self.lead), roamer,
+            int(template.shiny), template.fateful,
+            template.iv_count, template.ability,
+            template.info.gender_ratio if not roamer else 0,
+            template.info.ability_count,
+            profile.tid, profile.sid, template.level,
+            state_filter.skip, state_filter.ability, state_filter.gender, state_filter.shiny,
+            state_filter.height_min, state_filter.height_max, state_filter.weight_min, state_filter.weight_max,
+            tuple(state_filter.iv_min), tuple(state_filter.iv_max),
+            tuple(state_filter.natures), tuple(state_filter.hidden_powers),
+        )
+
+    def _generate_native_multi(self, seed0: int, seed1: int, roamer: bool, filters: Sequence[StateFilter]) -> list[State8]:
+        if _native_generate_multi is None:
+            raise ImportError("native multi static generator is unavailable")
+        if not filters:
+            return []
+        base_args = self._native_args_for_filter(seed0, seed1, roamer, filters[0])[:16]
+        filter_args = [self._native_args_for_filter(seed0, seed1, roamer, sf)[16:] for sf in filters]
+        results_raw = _native_generate_multi(*base_args, filter_args)
+        return [
+            State8(
+                advances=r[0], ec=r[1], sidtid=r[2], pid=r[3],
+                ivs=tuple(r[4]),
+                ability=r[5], gender=r[6], level=self.template.level,
+                nature=r[8], shiny=r[9], height=r[10], weight=r[11],
+            )
+            for r in results_raw
+        ]
+
     def generate(self, seed0: int | SeedPair64, seed1: int | None = None) -> list[State8]:
         if isinstance(seed0, SeedPair64):
             if seed1 is not None:
@@ -202,6 +244,26 @@ class StaticGenerator8:
         if self.template.roamer:
             return self.generate_roamer(seed0, seed1)
         return self.generate_non_roamer(seed0, seed1)
+
+    def generate_matching_any(self, filters: Sequence[StateFilter], seed0: int | SeedPair64, seed1: int | None = None) -> list[State8]:
+        if isinstance(seed0, SeedPair64):
+            if seed1 is not None:
+                raise ValueError("seed1 must be omitted when seed0 is a SeedPair64")
+            seed0, seed1 = seed0.seeds
+        if seed1 is None:
+            raise ValueError("seed1 is required")
+        seed0 = validate_seed64(seed0, "seed0")
+        seed1 = validate_seed64(seed1, "seed1")
+        filters = tuple(filters)
+        if not filters:
+            return []
+
+        if _HAS_NATIVE and _native_generate_multi is not None:
+            return self._generate_native_multi(seed0, seed1, self.template.roamer, filters)
+
+        base = replace(self, state_filter=StateFilter(skip=True))
+        states = base.generate(seed0, seed1)
+        return [state for state in states if any(sf.compare_state(state) for sf in filters)]
 
     def generate_non_roamer(self, seed0: int, seed1: int) -> list[State8]:
         rng = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))

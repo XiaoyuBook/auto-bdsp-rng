@@ -11,12 +11,12 @@ pytest.importorskip("PySide6")
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton
+from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
 from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
-from auto_bdsp_rng.gen8_static import State8
+from auto_bdsp_rng.gen8_static import State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
@@ -479,6 +479,8 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     panel = AutoRngPanel()
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
 
+    assert "目标精灵设置" not in group_titles
+    assert "运行摘要" not in group_titles
     assert "定点目标 / 存档信息 / 个体筛选" not in group_titles
     assert "候选结果" not in group_titles
     assert not hasattr(panel, "candidate_table")
@@ -493,11 +495,12 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     assert "最小 final flash frames" not in labels
 
 
-def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(app):
+def test_auto_rng_panel_uses_full_width_log_without_summary_group(app):
     panel = AutoRngPanel()
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
     visible_labels = {label.text() for label in panel.findChildren(QLabel)}
 
+    assert "运行摘要" not in group_titles
     assert "Seed" not in visible_labels
     assert "触发帧" not in visible_labels
     assert "剩余" not in visible_labels
@@ -506,14 +509,13 @@ def test_auto_rng_summary_uses_chinese_labels_and_hides_seed_and_locked_target(a
     assert "current advances" not in visible_labels
     assert "remaining_to_trigger" not in visible_labels
     assert "final flash_frames" not in visible_labels
-    assert {"当前循环", "当前阶段", "原始目标帧", "delay", "当前帧", "最终闪帧"} <= visible_labels
+    assert not ({"当前循环", "当前阶段", "原始目标帧", "当前帧", "最终闪帧"} & visible_labels)
     assert not hasattr(panel, "summary_seed")
+    assert not hasattr(panel, "summary_group")
     assert not hasattr(panel, "summary_trigger")
     assert not hasattr(panel, "summary_remaining")
     assert not hasattr(panel, "summary_target")
-    assert 70 <= panel.summary_group.maximumHeight() <= 110
-    assert panel.summary_group.maximumWidth() == 16777215
-    assert hasattr(panel, "target_button")
+    assert panel.log_group.maximumWidth() == 16777215
 
 
 def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
@@ -533,6 +535,39 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert panel.refresh_scripts_button.width() <= 250
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
+
+def test_auto_rng_target_summary_uses_chinese_compact_rows_and_scroll(app):
+    panel = AutoRngPanel()
+    from auto_bdsp_rng.data import get_static_encounters
+
+    record = next(r for r in get_static_encounters() if r.description == "Shaymin")
+    panel.set_targets([
+        (record, StateFilter(height_min=0, height_max=0, shiny=2), "square"),
+        (record, StateFilter(height_min=255, height_max=255, shiny=2), "square"),
+    ])
+
+    assert panel.target_summary_title.text() == "精灵筛选列表：谢米"
+    assert panel.target_summary_labels[0].text() == "1. 异色：方闪 | 身高：0"
+    assert panel.target_summary_labels[1].text() == "2. 异色：方闪 | 身高：255"
+    assert "任意" not in panel.target_summary_labels[0].text()
+    assert "Height" not in panel.target_summary_labels[0].text()
+    assert "Weight" not in panel.target_summary_labels[0].text()
+    assert panel.target_summary_scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert panel.target_summary_scroll.maximumHeight() <= 150
+
+
+def test_auto_rng_target_summary_scrolls_when_many_conditions(app):
+    panel = AutoRngPanel()
+    from auto_bdsp_rng.data import get_static_encounters
+
+    record = next(r for r in get_static_encounters() if r.description == "Shaymin")
+    panel.set_targets([
+        (record, StateFilter(height_min=i, height_max=i, shiny=2), "square")
+        for i in range(12)
+    ])
+
+    assert len(panel.target_summary_labels) == 12
+    assert panel.target_summary_scroll.maximumHeight() <= 150
 
 
 
@@ -568,12 +603,7 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
         )
     )
 
-    assert panel.status_badge.text() == "RunHitScript"
-    assert panel.summary_loop.text() == "2"
-    assert panel.summary_raw.text() == "1300"
-    assert panel.summary_delay.text() == "1200"
-    assert panel.summary_current.text() == "0"
-    assert panel.summary_flash.text() == "100"
+    assert panel.status_badge.text() == "运行撞闪脚本"
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
 
 
@@ -688,22 +718,22 @@ def test_main_window_auto_rng_services_search_uses_multi_targets(app, tmp_path, 
         window.auto_rng_tab._targets = [(records[0], sf, "square")]
     captured = []
 
-    def fake_generate(criteria):
-        captured.append(criteria)
+    def fake_generate(criteria, targets):
+        captured.append((criteria, targets))
         return []
 
-    monkeypatch.setattr(main_window_module, "generate_static_candidates", fake_generate)
+    monkeypatch.setattr(main_window_module, "generate_static_candidates_multi", fake_generate)
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, max_advances=9))
 
     services.search_candidates(AutoRngSeedResult(seed=window._current_seed_pair()))
 
     assert len(captured) == 1
-    criteria = captured[0]
+    criteria, targets = captured[0]
     assert criteria.record.description == "Shaymin"
     assert criteria.max_advances == 9
-    assert criteria.shiny_mode == "square"
-    assert criteria.state_filter.height_min == 0
-    assert criteria.state_filter.height_max == 0
+    assert targets[0].shiny_mode == "square"
+    assert targets[0].state_filter.height_min == 0
+    assert targets[0].state_filter.height_max == 0
 
 
 def test_main_window_auto_rng_capture_service_uses_project_xs(app, tmp_path, monkeypatch):

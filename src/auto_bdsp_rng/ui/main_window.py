@@ -62,7 +62,12 @@ from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_inte
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
-from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
+from auto_bdsp_rng.automation.auto_rng.search import (
+    StaticSearchCriteria,
+    StaticSearchTarget,
+    generate_static_candidates,
+    generate_static_candidates_multi,
+)
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
@@ -2398,10 +2403,8 @@ class MainWindow(QMainWindow):
         self._advance_timer.start()
 
     def _sync_bdsp_data_from_auto_rng(self, seed: SeedPair64) -> None:
-        form = self.auto_rng_tab.target_form
-        form.set_version(self._profile_version)
-        record = form.selected_record()
-        state_filter, shiny_mode = form.current_filter()
+        self.auto_rng_tab.set_target_version(self._profile_version)
+        record, state_filter, shiny_mode = self.auto_rng_tab.targets()[0]
         self._apply_auto_target_to_bdsp_controls(record, state_filter, shiny_mode)
         self._active_record = record
         try:
@@ -2461,9 +2464,10 @@ class MainWindow(QMainWindow):
 
     def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
         tracking_config = self._config_from_form()
-        self.auto_rng_tab.target_form.set_version(self._profile_version)
-        record = self.auto_rng_tab.target_form.selected_record()
-        state_filter, shiny_mode = self.auto_rng_tab.target_form.current_filter()
+        self.auto_rng_tab.set_target_version(self._profile_version)
+        target_entries = self.auto_rng_tab.targets()
+        record, state_filter, shiny_mode = target_entries[0]
+        search_targets = [StaticSearchTarget(sf, mode) for _record, sf, mode in target_entries]
         try:
             initial_seed = self._current_seed_pair()
         except ValueError:
@@ -2479,7 +2483,7 @@ class MainWindow(QMainWindow):
             lead=Lead.NONE,
             shiny_mode=shiny_mode,
         )
-        self._update_auto_rng_search_summary(search_criteria)
+        self._update_auto_rng_search_summary(search_criteria, search_targets)
 
         def seed_pair_from_result(seed_result: AutoRngSeedResult) -> SeedPair64:
             seed = seed_result.seed
@@ -2608,7 +2612,10 @@ class MainWindow(QMainWindow):
             return reidentified
 
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
-            candidates = generate_static_candidates(replace(search_criteria, seed=seed_pair_from_result(seed_result)))
+            candidates = generate_static_candidates_multi(
+                replace(search_criteria, seed=seed_pair_from_result(seed_result)),
+                search_targets,
+            )
             locked = candidates[0].advances if candidates else None
             if locked is None:
                 self.auto_rng_tab.add_log("找到 0 个候选")
@@ -2624,7 +2631,11 @@ class MainWindow(QMainWindow):
             if nature_locked is not None and 0 <= nature_locked <= 24:
                 natures = tuple(i == nature_locked for i in range(25))
                 crit = replace(crit, state_filter=replace(crit.state_filter, natures=natures))
-            candidates = generate_static_candidates(crit)
+            sync_targets = [
+                StaticSearchTarget(replace(target.state_filter, natures=crit.state_filter.natures), target.shiny_mode)
+                for target in search_targets
+            ]
+            candidates = generate_static_candidates_multi(crit, sync_targets)
             return list(candidates)
 
         # CLI 后端（按需创建，复用同一个实例以便 stop_current_script 生效）
@@ -2868,8 +2879,8 @@ class MainWindow(QMainWindow):
             stop_current_script=stop_current_script_service,
         )
 
-    def _update_auto_rng_search_summary(self, criteria: StaticSearchCriteria) -> None:
-        target_text = self.auto_rng_tab.target_form.summary_text()
+    def _update_auto_rng_search_summary(self, criteria: StaticSearchCriteria, targets: list[StaticSearchTarget]) -> None:
+        target_text = self.auto_rng_tab.target_summary_title.text()
         profile_text = (
             f"{criteria.profile.name} / TID {criteria.profile.tid} / SID {criteria.profile.sid} / "
             f"{GAME_LABELS_EN.get(self._profile_version, self._profile_version.value)}"
@@ -2878,10 +2889,10 @@ class MainWindow(QMainWindow):
             f"{label} {low}-{high}"
             for label, low, high in zip(IV_LABELS, criteria.state_filter.iv_min, criteria.state_filter.iv_max)
         )
-        filter_text = (
-            f"shiny={criteria.shiny_mode}; ability={criteria.state_filter.ability}; "
-            f"gender={criteria.state_filter.gender}; Height {criteria.state_filter.height_min}-{criteria.state_filter.height_max}; "
-            f"Weight {criteria.state_filter.weight_min}-{criteria.state_filter.weight_max}; {iv_text}"
+        filter_text = self.auto_rng_tab.target_summary_text() or (
+            f"异色={criteria.shiny_mode}; 特性={criteria.state_filter.ability}; "
+            f"性别={criteria.state_filter.gender}; 身高 {criteria.state_filter.height_min}-{criteria.state_filter.height_max}; "
+            f"体重 {criteria.state_filter.weight_min}-{criteria.state_filter.weight_max}; {iv_text}"
         )
         self.auto_rng_tab.set_search_context_summary(
             target=target_text,

@@ -34,6 +34,21 @@ static FilterParams build_filter(
     return f;
 }
 
+static std::vector<FilterParams> build_filters(py::list filters_py)
+{
+    std::vector<FilterParams> filters;
+    filters.reserve(py::len(filters_py));
+    for (const auto& item : filters_py) {
+        py::tuple f = item.cast<py::tuple>();
+        filters.push_back(build_filter(
+            f[0].cast<bool>(), f[1].cast<int>(), f[2].cast<int>(), f[3].cast<int>(),
+            f[4].cast<int>(), f[5].cast<int>(), f[6].cast<int>(), f[7].cast<int>(),
+            f[8].cast<py::tuple>(), f[9].cast<py::tuple>(),
+            f[10].cast<py::tuple>(), f[11].cast<py::tuple>()));
+    }
+    return filters;
+}
+
 // StateResult → Python tuple
 static py::tuple state_to_tuple(const StateResult& r) {
     py::tuple ivs(6);
@@ -78,6 +93,40 @@ static py::list generate_static_py(
             static_cast<u8>(gender_ratio), static_cast<u8>(ability_count),
             static_cast<u16>(tid), static_cast<u16>(sid),
             static_cast<u8>(level), filter);
+    }
+
+    py::list out;
+    for (const auto& r : results) {
+        out.append(state_to_tuple(r));
+    }
+    return out;
+}
+
+static py::list generate_static_multi_py(
+    u64 seed0, u64 seed1,
+    u32 initial_advances, u32 max_advances, u32 offset,
+    int lead, bool roamer,
+    int shiny_template, bool fateful,
+    int iv_count, int ability_template,
+    int gender_ratio, int ability_count,
+    int tid, int sid, int level,
+    py::list filters_py)
+{
+    std::vector<FilterParams> filters = build_filters(filters_py);
+    std::vector<StateResult> results;
+    if (roamer) {
+        results = generate_roamer_multi(
+            seed0, seed1, initial_advances, max_advances, offset,
+            lead, static_cast<u16>(tid), static_cast<u16>(sid), 0,
+            static_cast<u8>(level), filters);
+    } else {
+        results = generate_non_roamer_multi(
+            seed0, seed1, initial_advances, max_advances, offset,
+            lead, static_cast<ShinyTemplate>(shiny_template), fateful,
+            static_cast<u8>(iv_count), static_cast<u8>(ability_template),
+            static_cast<u8>(gender_ratio), static_cast<u8>(ability_count),
+            static_cast<u16>(tid), static_cast<u16>(sid),
+            static_cast<u8>(level), filters);
     }
 
     py::list out;
@@ -186,4 +235,14 @@ PYBIND11_MODULE(_native, m) {
     m.def("compute_iv_ranges", &compute_iv_ranges_py,
           py::arg("bases"), py::arg("stats"), py::arg("nature"), py::arg("level"),
           "Compute IV ranges from stats using PokeFinder's Nature::computeStat formula.");
+    m.def("generate_static_multi", &generate_static_multi_py,
+          py::arg("seed0"), py::arg("seed1"),
+          py::arg("initial_advances"), py::arg("max_advances"), py::arg("offset"),
+          py::arg("lead"), py::arg("roamer"),
+          py::arg("shiny_template"), py::arg("fateful"),
+          py::arg("iv_count"), py::arg("ability_template"),
+          py::arg("gender_ratio"), py::arg("ability_count"),
+          py::arg("tid"), py::arg("sid"), py::arg("level"),
+          py::arg("filters"),
+          "Generate BDSP static encounter states matching any filter (C++ native).");
 }

@@ -55,7 +55,8 @@ bool pass_filter(const StateResult& r, const FilterParams& f) {
     if (f.skip) return true;
     if (f.ability != 255 && f.ability != r.ability) return false;
     if (f.gender != 255 && f.gender != r.gender) return false;
-    if (f.shiny_mask != 255 && !(f.shiny_mask & r.shiny)) return false;
+    if (f.shiny_mask == 0 && r.shiny != 0) return false;
+    if (f.shiny_mask != 0 && f.shiny_mask != 255 && !(f.shiny_mask & r.shiny)) return false;
     if (!f.natures[r.nature]) return false;
     if (!f.hidden_powers[hidden_power(r.ivs)]) return false;
     if (r.height < f.height_min || r.height > f.height_max) return false;
@@ -72,10 +73,18 @@ bool quick_reject_shiny_a_g_n_h_w(u8 shiny, u8 ability, u8 gender, u8 nature,
     if (f.skip) return false;
     if (f.ability != 255 && f.ability != ability) return true;
     if (f.gender != 255 && f.gender != gender) return true;
-    if (f.shiny_mask != 255 && !(f.shiny_mask & shiny)) return true;
+    if (f.shiny_mask == 0 && shiny != 0) return true;
+    if (f.shiny_mask != 0 && f.shiny_mask != 255 && !(f.shiny_mask & shiny)) return true;
     if (!f.natures[nature]) return true;
     if (height < f.height_min || height > f.height_max) return true;
     if (weight < f.weight_min || weight > f.weight_max) return true;
+    return false;
+}
+
+bool pass_any_filter(const StateResult& r, const std::vector<FilterParams>& filters) {
+    for (const auto& filter : filters) {
+        if (pass_filter(r, filter)) return true;
+    }
     return false;
 }
 
@@ -177,6 +186,30 @@ std::vector<StateResult> generate_non_roamer(
     return results;
 }
 
+std::vector<StateResult> generate_non_roamer_multi(
+    u64 seed0, u64 seed1,
+    u32 initial_advances, u32 max_advances, u32 offset,
+    int lead, ShinyTemplate shiny_template, bool fateful,
+    u8 iv_count, u8 ability_template, u8 gender_ratio, u8 ability_count,
+    u16 tid, u16 sid, u8 level,
+    const std::vector<FilterParams>& filters)
+{
+    if (filters.empty()) return {};
+    FilterParams all_states;
+    all_states.skip = true;
+    auto states = generate_non_roamer(
+        seed0, seed1, initial_advances, max_advances, offset,
+        lead, shiny_template, fateful, iv_count, ability_template,
+        gender_ratio, ability_count, tid, sid, level, all_states);
+    std::vector<StateResult> results;
+    for (const auto& state : states) {
+        if (pass_any_filter(state, filters)) {
+            results.push_back(state);
+        }
+    }
+    return results;
+}
+
 std::vector<StateResult> generate_roamer(
     u64 seed0, u64 seed1,
     u32 initial_advances, u32 max_advances, u32 offset,
@@ -249,6 +282,27 @@ std::vector<StateResult> generate_roamer(
         r.nature = nature; r.shiny = shiny;
         r.height = height; r.weight = weight;
         results.push_back(r);
+    }
+    return results;
+}
+
+std::vector<StateResult> generate_roamer_multi(
+    u64 seed0, u64 seed1,
+    u32 initial_advances, u32 max_advances, u32 offset,
+    int lead, u16 tid, u16 sid, u16 species, u8 level,
+    const std::vector<FilterParams>& filters)
+{
+    if (filters.empty()) return {};
+    FilterParams all_states;
+    all_states.skip = true;
+    auto states = generate_roamer(
+        seed0, seed1, initial_advances, max_advances, offset,
+        lead, tid, sid, species, level, all_states);
+    std::vector<StateResult> results;
+    for (const auto& state : states) {
+        if (pass_any_filter(state, filters)) {
+            results.push_back(state);
+        }
     }
     return results;
 }
