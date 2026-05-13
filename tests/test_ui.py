@@ -431,6 +431,14 @@ def test_auto_rng_panel_blocks_start_when_required_script_parameter_is_missing(a
     assert "缺少必需参数 _目标帧数" in panel.log_view.toPlainText()
 
 
+def test_auto_rng_start_button_uses_primary_toolbutton_style(app):
+    window = MainWindow()
+
+    assert window.auto_rng_tab.start_button.isEnabled()
+    assert window.auto_rng_tab.start_button.objectName() == "PrimaryButton"
+    assert "QToolButton#PrimaryButton" in window.styleSheet()
+
+
 def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_path):
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")

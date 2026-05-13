@@ -1605,6 +1605,31 @@ class MainWindow(QMainWindow):
             QPushButton#PrimaryButton:hover {
                 background: #1e7d5a;
             }
+            QToolButton#PrimaryButton {
+                background: #23936b;
+                color: #ffffff;
+                border: 1px solid #23936b;
+                border-radius: 3px;
+                padding: 4px 18px 4px 12px;
+                font-weight: 700;
+            }
+            QToolButton#PrimaryButton:hover {
+                background: #1e7d5a;
+                border-color: #1e7d5a;
+            }
+            QToolButton#PrimaryButton:pressed {
+                background: #186b4c;
+                border-color: #186b4c;
+            }
+            QToolButton#PrimaryButton:disabled {
+                background: #c8c6c0;
+                color: #777;
+                border-color: #c8c6c0;
+            }
+            QToolButton#PrimaryButton::menu-button {
+                border-left: 1px solid rgba(255,255,255,90);
+                width: 18px;
+            }
             QTableWidget {
                 background: #ffffff;
                 alternate-background-color: #f5f4f0;
