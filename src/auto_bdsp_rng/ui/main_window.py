@@ -2807,8 +2807,8 @@ class MainWindow(QMainWindow):
                         state_ivs = [int(v) for v in (getattr(state, "ivs", None) or [])]
                         if len(state_ivs) != 6:
                             state_ivs = [0] * 6
-                        pid_val = int(getattr(state, "pid", 0))
-                        if compute_characteristic(pid_val, state_ivs) == characteristic:
+                        ec_val = int(getattr(state, "ec", 0))
+                        if compute_characteristic(ec_val, state_ivs) == characteristic:
                             matched.append(state)
                     log(f"[自动反查] 第{attempt}次 个性({characteristic})匹配: {len(matched)} 个")
                     attempt_candidates = matched

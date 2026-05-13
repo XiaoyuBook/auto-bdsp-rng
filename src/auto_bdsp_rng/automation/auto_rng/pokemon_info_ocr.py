@@ -482,41 +482,35 @@ def _load_image(image_input: str | Path | np.ndarray) -> np.ndarray:
 
 # ── CLI 测试入口 ───────────────────────────────────────────────────
 
-# ── 个性计算（PID + IVs → 中文个性） ──────────────────────────────
+# ── 个性计算（EC + IVs → 中文个性） ──────────────────────────────
 
-# 30 种个性，按 PID%6 分6组，每组按 IV[PID%6]%5 分5个子消息
-_CHARACTERISTIC_TABLE: list[str] = [
-    # HP (PID%6=0)
-    "喜欢睡午觉", "经常打瞌睡", "经常懒床", "经常犯困", "喜欢懒床",
-    # 攻击 (PID%6=1)
-    "喜欢打架", "血气方刚", "喜欢乱闹", "有点暴躁", "喜欢硬干",
-    # 防御 (PID%6=2)
-    "很有耐心", "非常坚韧", "很有干劲", "非常努力", "很有毅力",
-    # 速度 (PID%6=3)
-    "喜欢快跑", "经常乱窜", "毛手毛脚", "有点慢性子", "优哉游哉",
-    # 特攻 (PID%6=4)
-    "好奇心强", "喜欢深究", "经常想事", "非常细心", "貌似冷静",
-    # 特防 (PID%6=5)
-    "非常听话", "有点顽固", "非常可靠", "喜欢耍赖", "非常实在",
-]
+# 与定点数据区/PokeFinder 口径一致：按 EC 决定最高 IV 同分时的起始检查位。
+_CHARACTERISTICS_ZH: tuple[tuple[str, ...], ...] = (
+    ("非常喜欢吃东西", "经常睡午觉", "常常打瞌睡", "经常乱扔东西", "喜欢悠然自在"),
+    ("以力气大为傲", "喜欢胡闹", "有点容易生气", "喜欢打架", "血气方刚"),
+    ("身体强壮", "抗打能力强", "顽强不屈", "能吃苦耐劳", "善于忍耐"),
+    ("好奇心强", "喜欢恶作剧", "做事万无一失", "经常思考", "一丝不苟"),
+    ("性格强势", "有一点点爱慕虚荣", "争强好胜", "不服输", "有一点点固执"),
+    ("喜欢比谁跑得快", "对声音敏感", "冒冒失失", "有点容易得意忘形", "逃得快"),
+)
 
 
-def compute_characteristic(pid: int, ivs: list[int]) -> str:
-    """根据 PID 和 IVs 计算宝可梦的中文个性（特性描述）。
-
-    PokeFinder/gen4+ 个性顺序: HP(0), Atk(1), Def(2), Spe(3), SpA(4), SpD(5)
-    对应 ivs 索引:            [0],     [1],     [2],     [5],    [3],    [4]
-    """
-    pid = pid & 0xFFFFFFFF
-    group = pid % 6
-    # PokeFinder ivOrder 映射
-    iv_order = [0, 1, 2, 5, 3, 4]
-    stat_idx = iv_order[group] if group < len(iv_order) else 0
-    value = ivs[stat_idx] % 5 if stat_idx < len(ivs) else 0
-    index = group * 5 + value
-    if 0 <= index < len(_CHARACTERISTIC_TABLE):
-        return _CHARACTERISTIC_TABLE[index]
-    return ""
+def compute_characteristic(ec: int, ivs: list[int]) -> str:
+    """根据 EC 和 IVs 计算 BDSP 中文个性。"""
+    if len(ivs) < 6:
+        return ""
+    order = (0, 1, 2, 5, 3, 4)
+    char_order = (0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4)
+    ec_index = (ec & 0xFFFFFFFF) % 6
+    char_index = ec_index
+    max_iv = 0
+    for offset in range(6):
+        index = char_order[ec_index + offset]
+        if ivs[order[index]] > max_iv:
+            char_index = index
+            max_iv = ivs[order[index]]
+    stat_index = order[char_index]
+    return _CHARACTERISTICS_ZH[stat_index][max_iv % 5]
 
 
 if __name__ == "__main__":

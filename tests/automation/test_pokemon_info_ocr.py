@@ -10,6 +10,7 @@ from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     _extract_nature_and_characteristic,
     _extract_stats,
     _is_pixel_red,
+    compute_characteristic,
     _norm,
 )
 
@@ -228,3 +229,10 @@ def test_is_pixel_red_false():
     assert _is_pixel_red(200, 200, 200) is False  # white/gray
     assert _is_pixel_red(100, 150, 100) is False  # green > red
     assert _is_pixel_red(80, 60, 200) is False    # blue > red
+
+
+def test_compute_characteristic_uses_ec_tie_break_and_bdsp_translation():
+    assert compute_characteristic(
+        0x38458EDC,
+        [31, 31, 31, 9, 23, 31],
+    ) == "经常睡午觉"
