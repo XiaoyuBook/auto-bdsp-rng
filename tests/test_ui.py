@@ -438,8 +438,25 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     assert config.hit_script_path == tmp_path / "谢米.txt"
     assert config.fixed_delay == 1200
     assert config.max_wait_frames == 300
+    assert config.start_phase == AutoRngPhase.RUN_SEED_SCRIPT
     assert config.reseed_threshold_frames == 990_000
     assert config.min_final_flash_frames == 5
+
+
+def test_auto_rng_panel_can_start_from_capture_seed_via_menu(app, tmp_path):
+    (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path)
+    emitted: list[AutoRngConfig] = []
+    panel.startRequested.connect(lambda config: emitted.append(config))
+    panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
+
+    panel.start_from_capture_action.trigger()
+
+    assert len(emitted) == 1
+    assert emitted[0].start_phase == AutoRngPhase.CAPTURE_SEED
+    assert emitted[0].seed_script_path == tmp_path / "BDSP测种.txt"
 
 
 def test_main_window_exposes_shiny_threshold_calibration_button_on_seed_capture_tab(app):

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -16,17 +16,19 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngProgress
+from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     DEFAULT_ADVANCE_SCRIPT_NAME,
     DEFAULT_SEED_SCRIPT_NAME,
@@ -148,8 +150,16 @@ class AutoRngPanel(QWidget):
         self.mode_combo.addItem("循环 N 次", "count")
         self.mode_combo.addItem("无限循环", "infinite")
         self.loop_count = self._spin(1, 9999, 1)
-        self.start_button = QPushButton("开始")
+        self.start_button = QToolButton()
+        self.start_button.setText("开始")
         self.start_button.setObjectName("PrimaryButton")
+        self.start_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.start_menu = QMenu(self.start_button)
+        self.start_from_seed_action = QAction("从测种开始", self.start_button)
+        self.start_from_capture_action = QAction("从捕获 Seed 开始", self.start_button)
+        self.start_menu.addAction(self.start_from_seed_action)
+        self.start_menu.addAction(self.start_from_capture_action)
+        self.start_button.setMenu(self.start_menu)
         self.stop_button = QPushButton("停止")
         self.status_badge = QLabel("空闲")
         self.status_badge.setObjectName("Badge")
@@ -162,6 +172,8 @@ class AutoRngPanel(QWidget):
         self.start_button.setMinimumWidth(68)
         self.stop_button.setMinimumWidth(68)
         self.start_button.clicked.connect(self._start_clicked)
+        self.start_from_seed_action.triggered.connect(self._start_clicked)
+        self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)
         self.stop_button.clicked.connect(self._stop_clicked)
         self.debug_output_check = QCheckBox("调试")
         self.debug_output_check.setToolTip("输出 CLI 耗时、时间戳等调试信息")
@@ -438,8 +450,14 @@ class AutoRngPanel(QWidget):
         )
 
     def _start_clicked(self) -> None:
+        self._start_with_phase(AutoRngPhase.RUN_SEED_SCRIPT)
+
+    def _start_from_capture_clicked(self) -> None:
+        self._start_with_phase(AutoRngPhase.CAPTURE_SEED)
+
+    def _start_with_phase(self, start_phase: AutoRngPhase) -> None:
         self._save_panel_state()
-        config = self.build_config()
+        config = self.build_config(start_phase=start_phase)
         try:
             validate_auto_scripts(
                 config.seed_script_path,
@@ -457,7 +475,7 @@ class AutoRngPanel(QWidget):
             self._runner_worker.stop()
         self.stopRequested.emit()
 
-    def build_config(self) -> AutoRngConfig:
+    def build_config(self, *, start_phase: AutoRngPhase = AutoRngPhase.RUN_SEED_SCRIPT) -> AutoRngConfig:
         return AutoRngConfig(
             script_dir=self.script_dir,
             seed_script_path=self._selected_path(self.seed_script_combo),
@@ -472,6 +490,7 @@ class AutoRngPanel(QWidget):
             max_wait_frames=self.max_wait_frames.value(),
             loop_mode=str(self.mode_combo.currentData()),
             loop_count=self.loop_count.value(),
+            start_phase=start_phase,
             max_advances=self.max_advances.value(),
             shiny_threshold_seconds=self.shiny_threshold_seconds.value() or None,
             debug_output=self.debug_output_check.isChecked(),

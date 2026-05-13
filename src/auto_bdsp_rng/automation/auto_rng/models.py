@@ -68,6 +68,7 @@ class AutoRngConfig:
     min_final_flash_frames: int = 5
     loop_mode: str = "single"
     loop_count: int = 1
+    start_phase: AutoRngPhase = AutoRngPhase.RUN_SEED_SCRIPT
     max_advances: int = 100_000
     shiny_threshold_seconds: float | None = None
     debug_output: bool = False

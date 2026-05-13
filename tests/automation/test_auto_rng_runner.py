@@ -281,6 +281,56 @@ def test_runner_starts_by_running_seed_script_before_capture(tmp_path):
     assert events == ["script:BDSP测种.txt", "capture"]
 
 
+def test_runner_can_start_first_cycle_from_capture_seed_then_resume_seed_script(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "谢米.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+    events: list[str] = []
+    capture_count = 0
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal capture_count
+        capture_count += 1
+        events.append("capture")
+        return AutoRngSeedResult(seed=f"seed-{capture_count}", current_advances=0, npc=0)
+
+    services = AutoRngServices(
+        capture_seed=capture_seed,
+        search_candidates=lambda _seed: [FakeState(1300)],
+        reidentify=lambda _seed: AutoRngSeedResult(seed="seed-reid", current_advances=0, npc=0),
+        run_script_text=lambda _text, name: events.append(f"script:{name}"),
+        monotonic=lambda: 10.0,
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            loop_mode="count",
+            loop_count=2,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=9)
+
+    assert events == [
+        "capture",
+        "script:谢米.txt",
+        "script:BDSP测种.txt",
+        "capture",
+    ]
+    assert runner.progress.phase != AutoRngPhase.RUN_SEED_SCRIPT
+    assert runner.progress.loop_index == 2
+
+
 def test_runner_runs_advance_script_then_reidentifies_when_request_is_within_threshold(tmp_path):
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"

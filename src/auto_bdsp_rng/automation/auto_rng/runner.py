@@ -273,7 +273,19 @@ class AutoRngRunner:
 
     def run(self, *, max_steps: int = 100) -> AutoRngProgress:
         if self.progress.phase == AutoRngPhase.IDLE:
-            self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "开始自动流程，运行测种脚本")
+            if self.config.start_phase == AutoRngPhase.CAPTURE_SEED:
+                self._completed_loops += 1
+                self._cycle_started = True
+                self._sync_initial = self.config.sync_mode >= 2
+                self._is_sync_active = self._sync_initial
+                self._history("cycle_start", self._completed_loops)
+                self._set_progress(
+                    AutoRngPhase.CAPTURE_SEED,
+                    "开始自动流程，从捕获 seed 开始",
+                    loop_index=self._completed_loops,
+                )
+            else:
+                self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "开始自动流程，运行测种脚本")
         steps = 0
         while not self._stop_requested and steps < max_steps:
             steps += 1
