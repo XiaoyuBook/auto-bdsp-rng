@@ -771,7 +771,10 @@ class EasyConPanel(QWidget):
             f" QPushButton:hover {{ background: #e8e6e1; }}"
         )
         combo_style = (
-            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
+            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            f" padding: 3px 6px; font-size: 11px; min-height: 24px; max-height: 24px; }}"
+            f" QComboBox::drop-down {{ border: 1px solid {self.CLR_BORDER}; width: 18px; }}"
+            f" QComboBox QAbstractItemView {{ font-size: 11px; }}"
         )
 
         self.connect_button = QPushButton("自动连接(推荐)")

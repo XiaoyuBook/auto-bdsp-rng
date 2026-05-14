@@ -805,9 +805,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
-        self.open_source_build_label = QLabel("永久免费 · 开源项目 · 谨防倒卖")
-        self.open_source_build_label.setObjectName("StatusSlogan")
-        self.statusBar().addPermanentWidget(self.open_source_build_label)
         self.help_menu_controller = HelpMenuController(self)
         self.help_menu_controller.install(self.help_button)
 
@@ -1547,12 +1544,6 @@ class MainWindow(QMainWindow):
                 border-radius: 999px;
             }
 
-            /* ── StatusBar Slogan ── */
-            QLabel#StatusSlogan {
-                color: #0E8F70;
-                font-weight: 600;
-                padding: 0 8px;
-            }
 
             /* ── Tab ── */
             QTabWidget::pane {

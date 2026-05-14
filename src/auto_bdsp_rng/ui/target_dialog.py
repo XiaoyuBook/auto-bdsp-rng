@@ -146,6 +146,17 @@ class TargetDialog(QDialog):
             self._entries.append(entry)
             self._entry_layout.addWidget(entry)
         if self._entries:
+            # 同步 target_form 的 combo 到第一个目标的精灵
+            first_record = self._entries[0]._record
+            self.target_form.category_combo.setCurrentIndex(
+                max(0, self.target_form.category_combo.findData(first_record.category.value))
+            )
+            self.target_form.refresh_encounters()
+            for idx in range(self.target_form.encounter_combo.count()):
+                data = self.target_form.encounter_combo.itemData(idx)
+                if data is not None and getattr(data, "description", None) == first_record.description:
+                    self.target_form.encounter_combo.setCurrentIndex(idx)
+                    break
             self.target_form.category_combo.setEnabled(False)
             self.target_form.encounter_combo.setEnabled(False)
 
