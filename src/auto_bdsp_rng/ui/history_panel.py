@@ -25,6 +25,7 @@ class _CopyableTextEdit(QPlainTextEdit):
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.setUndoRedoEnabled(False)
+        self.setObjectName("LogView")
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu()
