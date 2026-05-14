@@ -5,7 +5,7 @@ from typing import Callable
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices
-from PySide6.QtWidgets import QApplication, QMainWindow, QMenu
+from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QPushButton, QToolButton
 
 from auto_bdsp_rng.ui.about_dialog import AboutDialog
 from auto_bdsp_rng.ui.markdown_viewer import MarkdownViewerDialog, read_markdown_text
@@ -34,18 +34,40 @@ class HelpMenuController:
         self.copy_text = copy_text or self._copy_text
         self.project_root = project_root or Path(__file__).resolve().parents[3]
 
-    def install(self) -> QMenu:
-        self.help_menu = self.window.menuBar().addMenu("帮助")
+    def install(self, button: QToolButton | QPushButton | None = None) -> QMenu:
+        self.help_menu = self._build_menu(parent=button or self.window)
+        if button is None:
+            self.window.menuBar().addMenu(self.help_menu)
+        else:
+            button.setMenu(self.help_menu)
+            if isinstance(button, QToolButton):
+                button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        return self.help_menu
+
+    def _build_menu(self, parent) -> QMenu:
+        menu = QMenu("帮助", parent)
 
         self.tutorial_action = QAction("使用教程", self.window)
         self.tutorial_action.triggered.connect(lambda: self.open_url(TUTORIAL_URL))
-        self.help_menu.addAction(self.tutorial_action)
+        menu.addAction(self.tutorial_action)
 
         self.about_action = QAction("关于项目", self.window)
         self.about_action.triggered.connect(self.show_about)
-        self.help_menu.addAction(self.about_action)
+        menu.addAction(self.about_action)
 
-        self.contact_menu = self.help_menu.addMenu("作者联系")
+        self.source_action = QAction("GitHub源码", self.window)
+        self.source_action.triggered.connect(lambda: self.open_url(PROJECT_REPOSITORY_URL))
+        menu.addAction(self.source_action)
+
+        self.changelog_action = QAction("更新日志", self.window)
+        self.changelog_action.triggered.connect(self.show_changelog)
+        menu.addAction(self.changelog_action)
+
+        self.sponsors_action = QAction("赞助名单", self.window)
+        self.sponsors_action.triggered.connect(self.show_sponsors)
+        menu.addAction(self.sponsors_action)
+
+        self.contact_menu = QMenu("作者联系", self.window)
         self.email_action = QAction(f"邮箱：{AUTHOR_EMAIL}", self.window)
         self.email_action.triggered.connect(self.copy_author_email)
         self.contact_menu.addAction(self.email_action)
@@ -61,11 +83,7 @@ class HelpMenuController:
         self.support_action = QAction("支持项目", self.window)
         self.support_action.triggered.connect(self.show_sponsor)
         self.contact_menu.addAction(self.support_action)
-
-        self.changelog_action = QAction("更新日志", self.window)
-        self.changelog_action.triggered.connect(self.show_changelog)
-        self.help_menu.addAction(self.changelog_action)
-        return self.help_menu
+        return menu
 
     def copy_author_email(self) -> None:
         self.copy_text(AUTHOR_EMAIL)
@@ -77,7 +95,8 @@ class HelpMenuController:
         dialog = AboutDialog(
             self.window,
             open_source=lambda: self.open_url(PROJECT_REPOSITORY_URL),
-            open_sponsors=lambda: self.open_url(SPONSORS_URL),
+            open_sponsors=self.show_sponsors,
+            copy_text=self.copy_text,
         )
         dialog.exec()
 
@@ -88,6 +107,11 @@ class HelpMenuController:
     def show_changelog(self) -> None:
         text = read_markdown_text(self.project_root / "CHANGELOG.md")
         dialog = MarkdownViewerDialog("更新日志", text, self.window)
+        dialog.exec()
+
+    def show_sponsors(self) -> None:
+        text = read_markdown_text(self.project_root / "SPONSORS.md")
+        dialog = MarkdownViewerDialog("赞助名单", text, self.window)
         dialog.exec()
 
     @staticmethod

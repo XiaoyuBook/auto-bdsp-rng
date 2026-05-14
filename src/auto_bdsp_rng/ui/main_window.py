@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -762,6 +763,10 @@ class MainWindow(QMainWindow):
         self.auto_phase_badge.setObjectName("Badge")
         self.auto_advance_badge = QLabel("advance 0")
         self.auto_advance_badge.setObjectName("Badge")
+        self.help_button = QToolButton()
+        self.help_button.setObjectName("HelpMenuButton")
+        self.help_button.setText("帮助 ▾")
+        self.help_button.setCursor(Qt.CursorShape.PointingHandCursor)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.auto_loop_badge)
@@ -769,6 +774,8 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.auto_phase_badge)
         header_layout.addSpacing(8)
         header_layout.addWidget(self.auto_advance_badge)
+        header_layout.addSpacing(10)
+        header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
         self.tabs = QTabWidget()
@@ -793,8 +800,11 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
+        self.open_source_build_label = QLabel("永久免费 · 开源项目 · 谨防倒卖")
+        self.open_source_build_label.setObjectName("StatusSlogan")
+        self.statusBar().addPermanentWidget(self.open_source_build_label)
         self.help_menu_controller = HelpMenuController(self)
-        self.help_menu_controller.install()
+        self.help_menu_controller.install(self.help_button)
 
     def _maybe_show_startup_notice(self) -> None:
         if not should_show_startup_notice():
@@ -1551,6 +1561,11 @@ class MainWindow(QMainWindow):
                 color: #23936b;
                 font-weight: 600;
             }
+            QLabel#StatusSlogan {
+                color: #23936b;
+                font-weight: 600;
+                padding: 0 8px;
+            }
             QTabWidget::pane {
                 border: 1px solid #c8c6c0;
                 border-radius: 4px;
@@ -1681,6 +1696,24 @@ class MainWindow(QMainWindow):
             QToolButton#PrimaryButton::menu-button {
                 border-left: 1px solid rgba(255,255,255,90);
                 width: 18px;
+            }
+            QToolButton#HelpMenuButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                color: #555;
+                min-height: 24px;
+                padding: 2px 8px;
+                font-weight: 700;
+            }
+            QToolButton#HelpMenuButton:hover {
+                background: #e8e6e1;
+                border-color: #d6d3cb;
+                color: #1a1a1a;
+            }
+            QToolButton#HelpMenuButton::menu-indicator {
+                image: none;
+                width: 0;
             }
             QTableWidget {
                 background: #ffffff;

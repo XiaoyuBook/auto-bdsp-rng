@@ -1,4 +1,4 @@
-# auto_bdsp_rng
+# 珍钻复刻自动定点乱数
 
 <p align="center">
   <img src="docs/assets/app-icon.png" alt="auto_bdsp_rng 图标" width="220">
@@ -46,30 +46,8 @@ auto-bdsp-rng-v0.0.4-windows-x64.zip
 - 自动转换为 PokeFinder / Gen 8 定点使用的 `Seed[0-1]`。
 - 支持 reidentify、手动推进、TID/SID 流程、眨眼监控和 timeline 规划。
 
-Seed 转换关系：
-
-```text
-seed0 = S0S1
-seed1 = S2S3
-```
-
-示例：
-
-```text
-Seed[0-3]
-S0 = 12345678
-S1 = 9ABCDEF0
-S2 = 11111111
-S3 = 22222222
-
-Seed[0-1]
-seed0 = 123456789ABCDEF0
-seed1 = 1111111122222222
-```
-
 ### BDSP 定点搜索
 
-- C++（pybind11）移植 BDSP Gen 8 Static RNG 核心，Python 自动回退。
 - 支持初始帧、最大帧数、Offset、队首特性、版本、TID/SID/TSV、闪符等输入。
 - 支持定点目标、游走目标、固定 IV、性格、特性、性别、身高、体重、异色筛选。
 - 结果表格支持复制、导出 CSV / TXT、列展示和中文化显示。
