@@ -24,6 +24,9 @@ from auto_bdsp_rng.automation.auto_rng.runner import (
 @dataclass(frozen=True)
 class FakeState:
     advances: int
+    ec: int = 0
+    pid: int = 0
+    nature: int = 0
 
 
 def test_target_1000_delay_100_current_0_runs_advance_script():
@@ -219,6 +222,94 @@ def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
     assert calls == ["capture"]
     assert scripts == [("BDSP测种.txt", "A 100\n")]
     assert runner.progress.phase == AutoRngPhase.COMPLETED
+
+
+def test_runner_preserves_sync_candidate_source_and_nature(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+    calls: list[tuple[int, int | None]] = []
+    history: list[tuple[str, tuple[object, ...]]] = []
+
+    def search_sync(_seed: AutoRngSeedResult, lead: int, nature_locked: int | None) -> list[object]:
+        calls.append((lead, nature_locked))
+        if lead == 255:
+            return []
+        return [FakeState(1000, ec=0x8BAE6A32, pid=0xAC3EC480, nature=0)]
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            fixed_delay=100,
+            sync_mode=1,
+            sync_nature="勤奋",
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_sync=search_sync,
+            reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=700, npc=0),
+            run_script_text=lambda _text, _name: None,
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+
+    runner.run(max_steps=2)
+
+    assert calls == [(255, None), (0, 0)]
+    candidates_event = next(args for event, args in history if event == "candidates_found")
+    candidates, locked_index, sync_flags, _delay = candidates_event
+    assert locked_index == 0
+    assert sync_flags == ["sync"]
+    assert candidates[0].nature == 0
+    assert runner.progress.locked_target is not None
+    assert runner.progress.locked_target.sync_source == "sync"
+    assert runner.progress.locked_target.sync_nature == 0
+
+
+def test_runner_does_not_label_secondary_no_sync_candidate_as_sync(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+    history: list[tuple[str, tuple[object, ...]]] = []
+
+    def search_sync(_seed: AutoRngSeedResult, lead: int, nature_locked: int | None) -> list[object]:
+        if lead == 0:
+            return []
+        return [FakeState(1000, ec=0x8BAE6A32, pid=0xAC3EC480, nature=18)]
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            fixed_delay=100,
+            sync_mode=2,
+            sync_nature="勤奋",
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_sync=search_sync,
+            reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=700, npc=0),
+            run_script_text=lambda _text, _name: None,
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+
+    runner.run(max_steps=2)
+
+    candidates_event = next(args for event, args in history if event == "candidates_found")
+    candidates, _locked_index, sync_flags, _delay = candidates_event
+    assert sync_flags == ["no_sync"]
+    assert candidates[0].nature == 18
+    assert runner.progress.locked_target is not None
+    assert runner.progress.locked_target.sync_source == "no_sync"
+    assert runner.progress.locked_target.sync_nature is None
 
 
 def test_runner_count_mode_stops_after_requested_no_candidate_loops(tmp_path):

@@ -2923,10 +2923,14 @@ class MainWindow(QMainWindow):
                 target.raw_target_advances,
                 config.reverse_lookup_window,
             )
+            reverse_lead = search_criteria.lead
+            if getattr(target, "sync_source", None) == "sync" and getattr(target, "sync_nature", None) is not None:
+                reverse_lead = int(getattr(target, "sync_nature"))
             criteria = replace(search_criteria, seed=seed_pair_from_result(seed_result),
                               shiny_mode="any",
                               initial_advances=reverse_start,
-                              max_advances=reverse_count)
+                              max_advances=reverse_count,
+                              lead=reverse_lead)
             log(f"[自动反查] 搜索范围: Adv {reverse_start}-{reverse_end} (±{min(10_000, max(0, int(config.reverse_lookup_window)))})")
 
             # 能力页 OCR 重试逻辑（最多3次）

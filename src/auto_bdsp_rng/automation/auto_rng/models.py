@@ -44,6 +44,8 @@ class AutoRngTarget:
     raw_target_advances: int
     state: Any | None = None
     label: str = ""
+    sync_source: str | None = None
+    sync_nature: int | None = None
 
     @classmethod
     def from_state(cls, state: Any, label: str = "") -> "AutoRngTarget":

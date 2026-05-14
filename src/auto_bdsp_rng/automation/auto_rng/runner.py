@@ -362,17 +362,24 @@ class AutoRngRunner:
         else:
             results_primary = list(self.services.search_candidates(seed))
 
-        # 合并去重（按 advances 排序，PID+EC 相同取低帧）
+        def source_for_lead(lead: int) -> str:
+            return "sync" if int(Lead.SYNCHRONIZE_START) <= int(lead) <= int(Lead.SYNCHRONIZE_END) else "no_sync"
+
+        primary_source = source_for_lead(lead_primary)
+        secondary_source = source_for_lead(lead_secondary) if sync_enabled and self.services.search_sync is not None else "no_sync"
+
+        # 合并去重（按 advances 排序，同一同步来源内 PID+EC 相同取低帧）
         seen_keys: set[str] = set()
         merged: list[object] = []
         sync_flags: list[str] = []  # 记录每个候选的同步来源
-        for state in sorted(results_primary + results_secondary, key=lambda s: getattr(s, "advances", 0)):
-            key = f"{getattr(state, 'pid', 0):08X}:{getattr(state, 'ec', 0):08X}"
+        sourced_results = [(state, primary_source) for state in results_primary]
+        sourced_results.extend((state, secondary_source) for state in results_secondary)
+        for state, source in sorted(sourced_results, key=lambda item: getattr(item[0], "advances", 0)):
+            key = f"{source}:{getattr(state, 'pid', 0):08X}:{getattr(state, 'ec', 0):08X}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 merged.append(state)
-                in_p = any(getattr(s, "advances", 0) == getattr(state, "advances", 0) for s in results_primary)
-                sync_flags.append("no_sync" if in_p else "sync")
+                sync_flags.append(source)
 
         # 过滤已过帧——同时过滤 sync_flags
         min_reachable = seed.current_advances + self.config.fixed_delay + self._fixed_flash_frames()
@@ -399,15 +406,20 @@ class AutoRngRunner:
         self._missed_target_advance = None
         # 判断目标是否需要切换同步状态
         locked_adv = decision.target.raw_target_advances if decision.target else 0
-        if sync_enabled and self.services.search_sync is not None:
-            in_primary = any(getattr(c, "advances", 0) == locked_adv for c in results_primary)
-            if in_primary:
-                self._need_sync_switch = False
-            else:
-                self._need_sync_switch = True
-        else:
-            self._need_sync_switch = False
         locked_idx = next((i for i, c in enumerate(reachable) if getattr(c, "advances", 0) == locked_adv), 0)
+        if sync_enabled and self.services.search_sync is not None:
+            selected_source = reachable_flags[locked_idx] if locked_idx < len(reachable_flags) else primary_source
+            current_source = "sync" if self._is_sync_active and nature_idx is not None else "no_sync"
+            self._need_sync_switch = selected_source != current_source
+        else:
+            selected_source = "no_sync"
+            self._need_sync_switch = False
+        if self._locked_target is not None:
+            self._locked_target = replace(
+                self._locked_target,
+                sync_source=selected_source,
+                sync_nature=nature_idx if selected_source == "sync" else None,
+            )
         if was_missed:
             self._history("candidates_refiltered", reachable, locked_idx, reachable_flags, self.config.fixed_delay)
         else:
