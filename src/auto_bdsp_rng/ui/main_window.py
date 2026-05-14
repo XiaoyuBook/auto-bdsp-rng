@@ -1201,11 +1201,12 @@ class MainWindow(QMainWindow):
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
+        group.setObjectName("ProfileGroup")
         group.setMinimumHeight(96)
         group.setMaximumHeight(106)
 
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(12, 16, 12, 12)
+        outer.setContentsMargins(12, 8, 12, 12)
         outer.setSpacing(10)
         outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -1582,6 +1583,24 @@ class MainWindow(QMainWindow):
                 top: 2px;
                 padding: 0 6px;
                 color: #111827;
+            }
+            QGroupBox#ProfileGroup {
+                margin-top: 12px;
+                padding: 12px 16px 12px 16px;
+            }
+            QGroupBox#ProfileGroup::title {
+                top: 0;
+            }
+            QGroupBox#ProfileGroup QLineEdit,
+            QGroupBox#ProfileGroup QPushButton {
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0 12px;
+            }
+            QGroupBox#ProfileGroup QCheckBox {
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0;
             }
 
             /* ── 输入框 / 下拉框 / 列表 ── */
