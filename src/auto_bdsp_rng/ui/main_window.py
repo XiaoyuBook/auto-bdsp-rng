@@ -1113,7 +1113,8 @@ class MainWindow(QMainWindow):
         # 左：基础参数（合并原 乱数信息 + 设置）
         layout.addWidget(self._build_basic_params_group())
         # 右：筛选项
-        layout.addWidget(self._build_filter_group(), 1)
+        self.filter_group = self._build_filter_group()
+        layout.addWidget(self.filter_group, 1)
         return panel
 
     def _build_basic_params_group(self) -> QGroupBox:
