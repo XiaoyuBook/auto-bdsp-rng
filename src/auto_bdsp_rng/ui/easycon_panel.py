@@ -589,6 +589,7 @@ class EasyConPanel(QWidget):
 
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setObjectName("EasyConLog")
         self.log_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.log_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.log_view.customContextMenuRequested.connect(self._log_context_menu)
@@ -632,6 +633,7 @@ class EasyConPanel(QWidget):
         action_layout.addWidget(self.elapsed_label, 5)
 
         self.run_button = QPushButton("运行脚本")
+        self.run_button.setObjectName("PrimaryButton")
         self.run_button.setMinimumHeight(70)
         self.run_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.run_button.setStyleSheet(
