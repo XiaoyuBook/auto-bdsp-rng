@@ -9,7 +9,7 @@
 普通用户请不要下载 GitHub 绿色 `Code` 按钮里的源码压缩包。请到 [GitHub Releases](https://github.com/XiaoyuBook/auto-bdsp-rng/releases) 下载：
 
 ```text
-auto-bdsp-rng-v0.0.3-windows-x64.zip
+auto-bdsp-rng-v0.0.4-windows-x64.zip
 ```
 
 下载后解压 zip，进入 `auto-bdsp-rng` 文件夹，双击：
@@ -129,6 +129,8 @@ python -m pip install -e .[dev]
 ```powershell
 python -m pip install -e .[ocr]
 ```
+
+Windows Release green packages starting with `v0.0.4` include PaddleOCR/PaddlePaddle in the zip, so normal users do not need to install OCR dependencies separately.
 
 ## 运行
 

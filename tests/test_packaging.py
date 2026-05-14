@@ -26,9 +26,38 @@ def test_build_script_copies_project_xs_user_resources_next_to_exe():
 
     assert 'DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs"' in script
     assert 'DIST_DIR / "third_party" / "Project_Xs_CHN" / "images"' in script
+    assert 'DIST_DIR / "third_party" / "Project_Xs_CHN" / "src"' in script
+    assert '"windowcapture.py"' in script
     assert "PROJECT_XS_OVERRIDES" in script
     assert "overlay_optional_tree" in script
     assert "verify_project_xs_assets" in script
+
+
+def test_windows_build_includes_ocr_dependencies():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "build_exe.py").read_text(encoding="utf-8")
+    spec = (root / "packaging" / "auto-bdsp-rng.spec").read_text(encoding="utf-8")
+
+    assert '".[dev,ocr]"' in script
+    assert "verify_ocr_dependencies" in script
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"paddlex[ocr]>=3.5,<3.6"' in pyproject
+    assert '"paddle"' in spec
+    assert '"paddleocr"' in spec
+    assert '"paddlex"' in spec
+    assert "copy_metadata" in spec
+    assert '"scikit-learn"' in spec
+    assert '"python-bidi"' in spec
+    assert '"tokenizers"' in spec
+    assert '"paddleocr",' not in spec.partition("excludes=[")[2].partition("]")[0]
+
+
+def test_packaged_gui_entry_has_ocr_smoke_probe():
+    root = Path(__file__).resolve().parents[1]
+    entry = (root / "packaging" / "entry_gui.py").read_text(encoding="utf-8")
+
+    assert "AUTO_BDSP_RNG_OCR_SMOKE" in entry
+    assert "read_paddle_ocr_text" in entry
 
 
 def test_pyinstaller_spec_names_chinese_executable():

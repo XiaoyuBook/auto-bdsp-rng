@@ -1,6 +1,6 @@
 # Windows Release Build
 
-This document is for maintainers who need to build the Windows x64 green package for `auto-bdsp-rng v0.0.3`.
+This document is for maintainers who need to build the Windows x64 green package for `auto-bdsp-rng v0.0.4`.
 
 ## Requirements
 
@@ -43,7 +43,7 @@ The script will:
 8. run PyInstaller with `packaging/auto-bdsp-rng.spec`,
 9. try to publish EasyConBridge for `win-x64`,
 10. write `dist/auto-bdsp-rng/README.txt`,
-11. create `release/auto-bdsp-rng-v0.0.3-windows-x64.zip`.
+11. create `release/auto-bdsp-rng-v0.0.4-windows-x64.zip`.
 
 ## Clean Build Outputs
 
@@ -63,7 +63,7 @@ This removes only `build/`, `dist/`, and `release/`.
 
 - onedir app: `dist/auto-bdsp-rng/`
 - executable: `dist/auto-bdsp-rng/珍钻复刻定点自动乱数.exe`
-- release zip: `release/auto-bdsp-rng-v0.0.3-windows-x64.zip`
+- release zip: `release/auto-bdsp-rng-v0.0.4-windows-x64.zip`
 
 The package is intentionally onedir, not onefile. Users must keep `_internal`, `script`, `bridge`, `docs`, and other sibling directories beside the exe.
 
@@ -79,7 +79,7 @@ It uses `third_party/EasyCon` by default. If EasyCon is elsewhere, set `EASYCON_
 
 ## OCR
 
-The default package is the base build. It excludes `paddlepaddle` and `paddleocr` from PyInstaller so the GUI and core workflows are not blocked by OCR. OCR-dependent features should show a friendly UI or log message when OCR packages are unavailable.
+The Windows release package includes `paddlepaddle` and `paddleocr` so OCR shiny checks, stats-page OCR, and notes-page OCR are available from the green zip. This makes the zip larger and can make the first OCR use slower while Paddle initializes its models.
 
 ## Troubleshooting
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto-bdsp-rng"
-version = "0.0.3"
+version = "0.0.4"
 description = "BDSP blink seed detection and Gen 8 static RNG helper."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -27,6 +27,7 @@ dev = [
 ocr = [
     "paddlepaddle>=3.2,<3.3",
     "paddleocr>=3,<4",
+    "paddlex[ocr]>=3.5,<3.6",
 ]
 
 [project.scripts]

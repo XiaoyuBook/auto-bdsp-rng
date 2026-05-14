@@ -2,7 +2,13 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 
 ROOT = Path(SPECPATH).parent
@@ -49,11 +55,68 @@ hiddenimports = [
     "win32ui",
 ]
 
-for package in ("PySide6", "cv2", "numpy", "PIL", "pyautogui"):
+for package in (
+    "PySide6",
+    "cv2",
+    "numpy",
+    "PIL",
+    "pyautogui",
+    "paddle",
+    "paddleocr",
+    "paddlex",
+    "bs4",
+    "einops",
+    "ftfy",
+    "imagesize",
+    "jinja2",
+    "latex2mathml",
+    "lxml",
+    "openpyxl",
+    "premailer",
+    "pyclipper",
+    "pypdfium2",
+    "bidi",
+    "regex",
+    "safetensors",
+    "sklearn",
+    "scipy",
+    "sentencepiece",
+    "shapely",
+    "tiktoken",
+    "tokenizers",
+):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
+
+for distribution in (
+    "paddlepaddle",
+    "paddleocr",
+    "paddlex",
+    "beautifulsoup4",
+    "einops",
+    "ftfy",
+    "imagesize",
+    "Jinja2",
+    "latex2mathml",
+    "lxml",
+    "opencv-contrib-python",
+    "openpyxl",
+    "premailer",
+    "pyclipper",
+    "pypdfium2",
+    "python-bidi",
+    "regex",
+    "safetensors",
+    "scikit-learn",
+    "scipy",
+    "sentencepiece",
+    "shapely",
+    "tiktoken",
+    "tokenizers",
+):
+    datas += copy_metadata(distribution)
 
 hiddenimports += collect_submodules("auto_bdsp_rng")
 datas += collect_data_files("auto_bdsp_rng", include_py_files=False)
@@ -75,9 +138,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "paddle",
-        "paddleocr",
-        "paddlepaddle",
         "pytest",
         "tkinter",
     ],

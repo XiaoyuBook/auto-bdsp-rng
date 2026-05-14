@@ -671,6 +671,12 @@ class MainWindow(QMainWindow):
         self._capture_frame: object | None = None
         self._shiny_calibration_thread: QThread | None = None
         self._shiny_calibration_worker: ShinyThresholdCalibrationWorker | None = None
+        self._static_generation_thread: threading.Thread | None = None
+        self._static_generation_result: tuple[StaticEncounterRecord, list[State8]] | None = None
+        self._static_generation_error: Exception | None = None
+        self._static_generation_timer = QTimer(self)
+        self._static_generation_timer.setInterval(50)
+        self._static_generation_timer.timeout.connect(self._poll_static_generation_thread)
         self._capture_mode = "seed"
         self._capture_progress = (0, DEFAULT_BLINK_COUNT)
         self._advance_timer = QTimer(self)
@@ -3354,24 +3360,75 @@ class MainWindow(QMainWindow):
             if record is None:
                 raise ValueError("Select a static encounter")
             state_filter, shiny_mode = self._current_filter()
-            self._active_record = record
-            states = generate_static_candidates(
-                StaticSearchCriteria(
-                    seed=self._current_seed_pair(),
-                    profile=self._current_profile(),
-                    record=record,
-                    state_filter=state_filter,
-                    initial_advances=int(self.initial_advances.text() or 0),
-                    max_advances=int(self.max_advances.text() or 0),
-                    offset=int(self.offset.text() or 0),
-                    lead=self.lead_combo.currentData(),
-                    shiny_mode=shiny_mode,
-                )
+            criteria = StaticSearchCriteria(
+                seed=self._current_seed_pair(),
+                profile=self._current_profile(),
+                record=record,
+                state_filter=state_filter,
+                initial_advances=int(self.initial_advances.text() or 0),
+                max_advances=int(self.max_advances.text() or 0),
+                offset=int(self.offset.text() or 0),
+                lead=self.lead_combo.currentData(),
+                shiny_mode=shiny_mode,
             )
         except Exception as exc:
             self._show_error("Generation failed", exc)
             return
+        if criteria.max_advances >= 1_000_000:
+            self._start_static_generation(record, criteria)
+            return
+        try:
+            states = generate_static_candidates(criteria)
+        except Exception as exc:
+            self._show_error("Generation failed", exc)
+            return
+        self._finish_static_generation(record, states)
+
+    def _start_static_generation(self, record: StaticEncounterRecord, criteria: StaticSearchCriteria) -> None:
+        if self._static_generation_thread is not None and self._static_generation_thread.is_alive():
+            self.statusBar().showMessage("Static generation is already running")
+            return
+        self._static_generation_result = None
+        self._static_generation_error = None
+
+        def run() -> None:
+            try:
+                states = generate_static_candidates(criteria)
+            except Exception as exc:
+                self._static_generation_error = exc
+            else:
+                self._static_generation_result = (record, states)
+
+        thread = threading.Thread(target=run, name="static-generation", daemon=True)
+        self._static_generation_thread = thread
+        self.generate_button.setEnabled(False)
+        self.statusBar().showMessage("Generating static results...")
+        self._static_generation_timer.start()
+        thread.start()
+
+    def _poll_static_generation_thread(self) -> None:
+        thread = self._static_generation_thread
+        if thread is None or thread.is_alive():
+            return
+        self._static_generation_timer.stop()
+        self._static_generation_thread = None
+        self.generate_button.setEnabled(True)
+        if self._static_generation_error is not None:
+            error = self._static_generation_error
+            self._static_generation_error = None
+            self._show_error("Generation failed", error)
+            return
+        result = self._static_generation_result
+        self._static_generation_result = None
+        if result is None:
+            self._show_error("Generation failed", RuntimeError("Static generation finished without results"))
+            return
+        record, states = result
+        self._finish_static_generation(record, states)
+
+    def _finish_static_generation(self, record: StaticEncounterRecord, states: list[State8]) -> None:
         self._states = states
+        self._active_record = record
         self._populate_table(states)
         self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
 

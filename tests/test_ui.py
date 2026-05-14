@@ -60,6 +60,31 @@ def test_main_window_generates_static_results(app):
     assert window.table.item(0, 1).text()
 
 
+def test_static_generation_runs_in_background(app, monkeypatch):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("10000000")
+
+    def slow_generate(_criteria):
+        time.sleep(0.2)
+        return []
+
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", slow_generate)
+
+    started = time.perf_counter()
+    window.generate_results()
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.1
+    assert not window.generate_button.isEnabled()
+    deadline = time.perf_counter() + 2
+    while not window.generate_button.isEnabled() and time.perf_counter() < deadline:
+        app.processEvents()
+        QTest.qWait(10)
+    assert window.generate_button.isEnabled()
+
+
 def test_bdsp_max_advances_matches_pokefinder_limit(app):
     window = MainWindow()
 

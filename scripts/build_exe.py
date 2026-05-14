@@ -19,6 +19,7 @@ PROJECT_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="ut
 VERSION = f"v{PROJECT_VERSION}"
 ZIP_NAME = f"{APP_NAME}-{VERSION}-windows-x64.zip"
 VENV = ROOT / ".venv"
+BUILD_DIR = ROOT / "build"
 DIST_DIR = ROOT / "dist" / APP_NAME
 RELEASE_DIR = ROOT / "release"
 ZIP_PATH = RELEASE_DIR / ZIP_NAME
@@ -47,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     run([str(python), "-m", "auto_bdsp_rng", "--version"])
     build_icon(python)
     build_pyinstaller(python)
+    verify_packaged_ocr()
     copy_release_files()
     verify_project_xs_assets()
     build_easycon_bridge()
@@ -89,8 +91,14 @@ def ensure_venv(host_python: Path) -> Path:
 
 def install_dependencies(python: Path) -> None:
     run([str(python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-    run([str(python), "-m", "pip", "install", "-e", ".[dev]"], cwd=ROOT)
+    run([str(python), "-m", "pip", "install", "-e", ".[dev,ocr]"], cwd=ROOT)
     run([str(python), "-m", "pip", "install", "pyinstaller>=6,<7", "pillow>=10,<12"])
+    verify_ocr_dependencies(python)
+
+
+def verify_ocr_dependencies(python: Path) -> None:
+    code = "import paddle, paddleocr; print('OCR dependencies available')"
+    run([str(python), "-c", code])
 
 
 def remove_stale_native_extensions() -> None:
@@ -126,6 +134,21 @@ def build_pyinstaller(python: Path) -> None:
     exe = DIST_DIR / f"{EXE_NAME}.exe"
     if not exe.exists():
         raise SystemExit(f"PyInstaller did not create {exe}")
+
+
+def verify_packaged_ocr() -> None:
+    exe = DIST_DIR / f"{EXE_NAME}.exe"
+    output = BUILD_DIR / "ocr-smoke.txt"
+    if output.exists():
+        output.unlink()
+    env = os.environ.copy()
+    env["AUTO_BDSP_RNG_OCR_SMOKE"] = str(output)
+    subprocess.run([str(exe)], cwd=DIST_DIR, env=env, check=False)
+    if not output.exists():
+        raise SystemExit("Packaged OCR smoke test did not write a result file.")
+    text = output.read_text(encoding="utf-8", errors="replace")
+    if "OCR smoke ok" not in text:
+        raise SystemExit(f"Packaged OCR smoke test failed:\n{text}")
 
 
 def build_easycon_bridge() -> None:
@@ -171,6 +194,7 @@ def copy_release_files() -> None:
     copy_optional_tree(ROOT / "docs" / "assets", DIST_DIR / "docs" / "assets")
     copy_optional_tree(PROJECT_XS_ROOT / "configs", DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs")
     copy_optional_tree(PROJECT_XS_ROOT / "images", DIST_DIR / "third_party" / "Project_Xs_CHN" / "images")
+    copy_optional_tree(PROJECT_XS_ROOT / "src", DIST_DIR / "third_party" / "Project_Xs_CHN" / "src")
     overlay_optional_tree(PROJECT_XS_OVERRIDES, DIST_DIR / "third_party" / "Project_Xs_CHN")
     write_user_readme(DIST_DIR / "README.txt")
     license_source = ROOT / "LICENSE"
@@ -199,7 +223,7 @@ def write_user_readme(path: Path) -> None:
                 "杀毒软件误报时，请先确认 zip 来自 XiaoyuBook/auto-bdsp-rng 的 GitHub Release，再将解压目录加入信任列表或提交误报反馈。",
                 "",
                 "运行条件：目标电脑不需要安装 Python。实际乱数流程仍需要 BDSP 游戏窗口或采集画面、对应脚本、串口/单片机/驱动，以及 EasyConBridge 或 ezcon 后端。",
-                "基础版不包含 paddlepaddle/paddleocr；OCR 相关功能不可用时会在界面或日志中提示，请不要把 OCR 不可用当作程序启动失败。",
+                "本包已内置 paddlepaddle/paddleocr，用于 OCR 闪光判定、能力页和笔记页识别。首次使用 OCR 可能需要初始化模型，耗时较长。",
                 "",
                 "如果软件打不开，请到 GitHub Issues 反馈，并附上 Windows 版本、解压路径、是否有杀毒拦截、以及截图或日志。",
                 "",
@@ -225,8 +249,13 @@ def create_release_zip() -> None:
 def verify_project_xs_assets() -> None:
     config_root = DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs"
     asset_root = DIST_DIR / "third_party" / "Project_Xs_CHN"
+    src_root = DIST_DIR / "third_party" / "Project_Xs_CHN" / "src"
     if not config_root.exists():
         raise SystemExit(f"Project_Xs configs were not copied: {config_root}")
+    for module_name in ("rngtool.py", "windowcapture.py"):
+        module_path = src_root / module_name
+        if not module_path.exists():
+            raise SystemExit(f"Project_Xs runtime module was not copied: {module_path}")
     missing: list[Path] = []
     for config_path in config_root.glob("*.json"):
         try:

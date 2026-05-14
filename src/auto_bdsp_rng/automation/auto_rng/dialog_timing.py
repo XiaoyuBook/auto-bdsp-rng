@@ -81,7 +81,8 @@ def read_ocr_text(frame: object) -> str:
         except RuntimeError as tesseract_error:
             raise RuntimeError(
                 "OCR engine is unavailable. Install PaddleOCR with "
-                "`python -m pip install .[ocr]`, or install pytesseract plus Tesseract chi_sim."
+                "`python -m pip install .[ocr]`, or install pytesseract plus Tesseract chi_sim. "
+                f"PaddleOCR error: {paddle_error}; Tesseract error: {tesseract_error}"
             ) from tesseract_error
 
 
