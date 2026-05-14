@@ -176,6 +176,7 @@ class AutoRngPanel(QWidget):
         self.status_badge.setObjectName("Badge")
         self.debug_output_check = QCheckBox("调试")
         self.debug_output_check.setToolTip("输出 CLI 耗时、时间戳等调试信息")
+        self.debug_output_check.setFixedHeight(34)
 
         # 统一控件尺寸：全部 34px
         self.status_badge.setFixedHeight(34)
@@ -197,6 +198,7 @@ class AutoRngPanel(QWidget):
         # ── 左分区：运行模式 + 次数 + 调试 ──
         left_layout = QHBoxLayout()
         left_layout.setSpacing(12)
+        left_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         left_layout.addWidget(QLabel("运行模式"))
         left_layout.addWidget(self.mode_combo)
         left_layout.addWidget(QLabel("次数"))
@@ -233,7 +235,6 @@ class AutoRngPanel(QWidget):
         layout.setSpacing(12)
         self.strategy_group = self._build_strategy_group()
         layout.addWidget(self.strategy_group)
-        layout.addStretch(1)
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
@@ -328,13 +329,16 @@ class AutoRngPanel(QWidget):
         self.script_group = self._build_script_group()
         layout.addWidget(self.script_group)
         layout.addWidget(self._build_target_summary_group())
+        layout.addStretch(1)
         return panel
 
     def _build_target_summary_group(self) -> QGroupBox:
         group = QGroupBox()
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        group.setMaximumHeight(204)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
         header = QHBoxLayout()
         self.target_summary_title = QLabel("精灵筛选列表：-")
         self.target_button = QPushButton("目标精灵设置...")
@@ -348,13 +352,14 @@ class AutoRngPanel(QWidget):
 
         self.target_summary_scroll = QScrollArea()
         self.target_summary_scroll.setWidgetResizable(True)
-        self.target_summary_scroll.setMaximumHeight(140)
+        self.target_summary_scroll.setMinimumHeight(66)
+        self.target_summary_scroll.setMaximumHeight(84)
         self.target_summary_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.target_summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.target_summary_container = QWidget()
         self.target_summary_layout = QVBoxLayout(self.target_summary_container)
         self.target_summary_layout.setContentsMargins(0, 0, 0, 0)
-        self.target_summary_layout.setSpacing(6)
+        self.target_summary_layout.setSpacing(3)
         self.target_summary_scroll.setWidget(self.target_summary_container)
         layout.addWidget(self.target_summary_scroll)
         self.target_summary_group = group
@@ -466,7 +471,6 @@ class AutoRngPanel(QWidget):
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
             self.target_summary_layout.addWidget(label)
             self.target_summary_labels.append(label)
-        self.target_summary_layout.addStretch(1)
 
     def set_search_context_summary(
         self,

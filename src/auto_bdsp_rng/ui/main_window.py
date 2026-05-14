@@ -864,7 +864,7 @@ class MainWindow(QMainWindow):
 
         # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
-        self.profile_group.setMaximumHeight(100)
+        self.profile_group.setMaximumHeight(106)
         layout.addWidget(self.profile_group)
 
         # 第 2 行：参数区（三列：乱数信息 + 设置 + 筛选项）
@@ -1201,11 +1201,11 @@ class MainWindow(QMainWindow):
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
-        group.setMinimumHeight(90)
-        group.setMaximumHeight(100)
+        group.setMinimumHeight(96)
+        group.setMaximumHeight(106)
 
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setContentsMargins(12, 16, 12, 12)
         outer.setSpacing(10)
         outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -1289,6 +1289,7 @@ class MainWindow(QMainWindow):
             iv_grid.addWidget(max_spin,  i, 2)
 
         left_col.addLayout(iv_grid)
+        left_col.addSpacing(10)
         self.show_stats_check = QCheckBox("显示能力值")
         self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
         left_col.addWidget(self.show_stats_check)
@@ -1436,9 +1437,11 @@ class MainWindow(QMainWindow):
 
         # 工具栏: 40px
         toolbar_widget = QWidget()
-        toolbar_widget.setFixedHeight(40)
+        toolbar_widget.setObjectName("ResultsToolbar")
+        toolbar_widget.setFixedHeight(38)
         toolbar = QHBoxLayout(toolbar_widget)
-        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setContentsMargins(0, 0, 0, 2)
+        toolbar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.result_count = QLabel("0 条结果")
         self.result_count.setObjectName("ResultCount")
@@ -1657,6 +1660,17 @@ class MainWindow(QMainWindow):
                 border: 1px solid #E5E7EB;
                 border-radius: 8px;
             }
+            QFrame#AutoRngToolbar QComboBox,
+            QFrame#AutoRngToolbar QSpinBox {
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0 12px;
+            }
+            QFrame#AutoRngToolbar QCheckBox {
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0;
+            }
 
             /* ── 预览 ── */
             QLabel#Preview {
@@ -1726,6 +1740,11 @@ class MainWindow(QMainWindow):
             }
 
             /* ── Danger 按钮 ── */
+            QWidget#ResultsToolbar QPushButton {
+                min-height: 32px;
+                max-height: 32px;
+                padding: 0 14px;
+            }
             QPushButton#DangerButton {
                 background: #FFFFFF;
                 color: #DC2626;
