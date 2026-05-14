@@ -70,14 +70,17 @@ from auto_bdsp_rng.automation.auto_rng.search import (
     generate_static_candidates,
     generate_static_candidates_multi,
 )
+from auto_bdsp_rng.app_settings import set_startup_notice_acknowledged, should_show_startup_notice
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_icon_path, resource_path
+from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
-from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
+from auto_bdsp_rng.ui.help_menu import HelpMenuController
+from auto_bdsp_rng.ui.history_panel import HistoryPanel
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
@@ -693,6 +696,7 @@ class MainWindow(QMainWindow):
         self._sync_seed64_from_state32()
         self._apply_language()
         self.statusBar().showMessage(self._text("ready"))
+        QTimer.singleShot(0, self._maybe_show_startup_notice)
 
     def _connect_auto_rng_sync_signals(self) -> None:
         self.autoCaptureFrameChanged.connect(self._handle_auto_capture_frame)
@@ -789,6 +793,22 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
+        self.help_menu_controller = HelpMenuController(self)
+        self.help_menu_controller.install()
+
+    def _maybe_show_startup_notice(self) -> None:
+        if not should_show_startup_notice():
+            return
+        dialog = StartupNoticeDialog(self)
+        dialog.setModal(True)
+
+        def persist_choice() -> None:
+            if dialog.dont_show_again.isChecked():
+                set_startup_notice_acknowledged(True)
+
+        dialog.accepted.connect(persist_choice)
+        dialog.show()
+        self._startup_notice_dialog = dialog
 
     def _build_project_xs_tab(self) -> QWidget:
         splitter = QSplitter(Qt.Orientation.Horizontal)

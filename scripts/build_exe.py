@@ -30,6 +30,7 @@ BRIDGE_PROJECT = ROOT / "bridge" / "EasyConBridge" / "EasyConBridge.csproj"
 BRIDGE_DIST = DIST_DIR / "bridge" / "EasyConBridge"
 PROJECT_XS_ROOT = ROOT / "third_party" / "Project_Xs_CHN"
 PROJECT_XS_OVERRIDES = ROOT / "packaging" / "project_xs_overrides"
+PRIVATE_SPONSOR_ASSETS = ROOT / "private_assets" / "sponsor"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
     run([str(python), "-m", "auto_bdsp_rng", "--version"])
     stage("Generate icon")
     build_icon(python)
+    stage("Check private sponsor assets")
+    report_private_sponsor_assets()
     stage("Run PyInstaller")
     build_pyinstaller(python)
     stage("Verify packaged OCR")
@@ -109,6 +112,17 @@ def install_dependencies(python: Path) -> None:
 def verify_ocr_dependencies(python: Path) -> None:
     code = "import paddle, paddleocr; print('OCR dependencies available')"
     run([str(python), "-c", code])
+
+
+def report_private_sponsor_assets() -> None:
+    expected = [PRIVATE_SPONSOR_ASSETS / "alipay.jpg", PRIVATE_SPONSOR_ASSETS / "wechat.jpg"]
+    existing = [path for path in expected if path.exists()]
+    if len(existing) == len(expected):
+        print(f"Private sponsor QR assets will be bundled inside _internal: {PRIVATE_SPONSOR_ASSETS}")
+        return
+    print("Private sponsor QR assets are incomplete; support dialog will show the no-QR fallback.")
+    for path in expected:
+        print(f"  {'found' if path.exists() else 'missing'}: {path}")
 
 
 def remove_stale_native_extensions() -> None:

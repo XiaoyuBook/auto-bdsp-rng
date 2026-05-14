@@ -135,6 +135,7 @@ hiddenimports += collect_submodules("auto_bdsp_rng")
 datas += collect_data_files("auto_bdsp_rng", include_py_files=False)
 datas += tree_datas("script", "script")
 datas += tree_datas("docs/assets", "docs/assets")
+datas += tree_datas("private_assets/sponsor", "private_assets/sponsor")
 datas += tree_datas("third_party/Project_Xs_CHN", "third_party/Project_Xs_CHN")
 datas += tree_datas("third_party/PokeFinder/Core/Resources", "third_party/PokeFinder/Core/Resources")
 

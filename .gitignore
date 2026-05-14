@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 release/
+private_assets/
 script/.generated/
 bridge/**/bin/
 bridge/**/obj/
