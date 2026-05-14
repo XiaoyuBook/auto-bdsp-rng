@@ -57,6 +57,7 @@ class AutoRngConfig:
     advance_script_path: Path | None = None
     hit_script_path: Path | None = None
     reverse_script_path: Path | None = None
+    record_script_path: Path | None = None
     auto_reverse: bool = False
     reverse_lookup_window: int = 500
     sync_mode: int = 0  # 0=关闭, 1=首位普通精灵, 2=首位同步精灵

@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from auto_bdsp_rng.automation.easycon.models import EasyConConfig, EasyConInstallation
+from auto_bdsp_rng.automation.easycon.process import no_window_subprocess_kwargs
 
 
 CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "auto_bdsp_rng" / "easycon"
@@ -83,6 +84,7 @@ def list_ports(installation: EasyConInstallation) -> list[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        **no_window_subprocess_kwargs(),
     )
     if result.returncode != 0:
         return []
@@ -109,4 +111,5 @@ def _read_version(path: Path) -> subprocess.CompletedProcess[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        **no_window_subprocess_kwargs(),
     )

@@ -2458,10 +2458,12 @@ class MainWindow(QMainWindow):
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
         elif event == "candidates_found" and len(values) >= 2:
             flags = list(values[2]) if len(values) >= 3 else None
-            h.candidates_found(list(values[0]), int(values[1]), flags)  # type: ignore[arg-type]
+            delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
+            h.candidates_found(list(values[0]), int(values[1]), flags, delay)  # type: ignore[arg-type]
         elif event == "candidates_refiltered" and len(values) >= 2:
             flags = list(values[2]) if len(values) >= 3 else None
-            h.candidates_refiltered(list(values[0]), int(values[1]), flags)  # type: ignore[arg-type]
+            delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
+            h.candidates_refiltered(list(values[0]), int(values[1]), flags, delay)  # type: ignore[arg-type]
         elif event == "target_missed" and len(values) >= 2:
             h.target_missed(int(values[0]) if values[0] is not None else 0, int(values[1]) if values[1] is not None else 0)
         elif event == "cycle_result" and len(values) >= 3:

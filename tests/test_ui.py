@@ -756,6 +756,46 @@ def test_history_panel_reverse_lookup_candidates_are_single_line(app):
     assert not any(line.strip().startswith("EC:") for line in lines)
 
 
+def test_history_panel_candidates_use_configured_delay(app):
+    panel = HistoryPanel()
+    state = SimpleNamespace(
+        advances=1234,
+        ec=0xAABBCCDD,
+        pid=0x11223344,
+        ivs=(31, 30, 29, 28, 27, 26),
+        ability=1,
+        gender=0,
+        nature=0,
+        shiny=2,
+        height=255,
+        weight=12,
+    )
+
+    panel.candidates_found([state], locked_index=0, candidate_delay=321)
+
+    text = panel.text_view.toPlainText()
+    assert "adv=1234" in text
+    assert "delay=321" in text
+    assert "delay=1234" not in text
+
+
+def test_auto_rng_log_adds_timestamp(app, monkeypatch):
+    panel = AutoRngPanel()
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 5, 14, 12, 34, 56)
+
+    monkeypatch.setattr("auto_bdsp_rng.ui.auto_rng_panel.datetime", FixedDatetime)
+
+    panel.add_log("第一行\n[01:02:03] 已有时间")
+
+    lines = panel.log_view.toPlainText().splitlines()
+    assert lines[0] == "[12:34:56] 第一行"
+    assert lines[1] == "[01:02:03] 已有时间"
+
+
 
 
 def test_auto_rng_worker_emits_progress_and_finished(app):

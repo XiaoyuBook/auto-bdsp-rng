@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     DEFAULT_ADVANCE_SCRIPT_NAME,
+    DEFAULT_RECORD_SCRIPT_NAME,
     DEFAULT_SEED_SCRIPT_NAME,
     AutoScriptError,
     choose_default_script,
@@ -65,6 +68,7 @@ class _CopyableTextEdit(QPlainTextEdit):
 
 
 SCRIPT_DIR = resource_path("script")
+_TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
 
 
 class AutoRngWorker(QObject):
@@ -380,7 +384,13 @@ class AutoRngPanel(QWidget):
             self.add_log(progress.log_message)
 
     def add_log(self, message: str) -> None:
-        self.log_view.appendPlainText(message)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        lines = str(message).splitlines() or [""]
+        stamped = [
+            line if _TIMESTAMP_RE.match(line) else f"[{timestamp}] {line}"
+            for line in lines
+        ]
+        self.log_view.appendPlainText("\n".join(stamped))
 
     def set_candidates(self, rows: list[list[str]], locked_index: int | None = None) -> None:
         locked_text = ""
@@ -489,6 +499,7 @@ class AutoRngPanel(QWidget):
             advance_script_path=self._selected_path(self.advance_script_combo),
             hit_script_path=self._selected_path(self.hit_script_combo),
             reverse_script_path=self._selected_path(self.reverse_script_combo),
+            record_script_path=choose_default_script(self._scripts, DEFAULT_RECORD_SCRIPT_NAME),
             auto_reverse=self.auto_reverse_combo.currentIndex() == 1,
             reverse_lookup_window=self.reverse_lookup_window.value(),
             sync_mode=self.sync_combo.currentIndex(),

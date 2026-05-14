@@ -409,9 +409,9 @@ class AutoRngRunner:
             self._need_sync_switch = False
         locked_idx = next((i for i, c in enumerate(reachable) if getattr(c, "advances", 0) == locked_adv), 0)
         if was_missed:
-            self._history("candidates_refiltered", reachable, locked_idx, reachable_flags)
+            self._history("candidates_refiltered", reachable, locked_idx, reachable_flags, self.config.fixed_delay)
         else:
-            self._history("candidates_found", reachable, locked_idx, reachable_flags)
+            self._history("candidates_found", reachable, locked_idx, reachable_flags, self.config.fixed_delay)
         flash = self._fixed_flash_frames()
         trigger = decision.raw_target_advances - self.config.fixed_delay - flash
         self._set_progress(
@@ -679,9 +679,13 @@ class AutoRngRunner:
             self._locked_target = None
             self._history("cycle_result", True, result.interval_seconds, trigger, used_delay)
             self._cycle_started = False
-            # 判定出闪后自动录像 5 秒
+            # 判定出闪后执行可替换的录屏脚本。
             try:
-                self.services.run_script_text("Capture 5000\n", "auto_capture")
+                record_path = self.config.record_script_path
+                if record_path is not None and record_path.exists():
+                    self.services.run_script_text(record_path.read_text(encoding="utf-8"), record_path.name)
+                else:
+                    self.services.run_script_text("Capture 5000\n", "auto_capture")
             except Exception:
                 pass
             self._set_progress(

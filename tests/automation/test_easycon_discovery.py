@@ -13,6 +13,7 @@ def test_discover_ezcon_uses_saved_path(monkeypatch, tmp_path):
 
     def fake_run(args, **kwargs):
         assert args == [str(ezcon), "--version"]
+        assert kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
         return subprocess.CompletedProcess(args, 0, stdout="1.6.1+test\n", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -48,11 +49,12 @@ def test_list_ports_calls_ezcon_port_list(monkeypatch, tmp_path):
     ezcon = tmp_path / "ezcon.exe"
     ezcon.write_text("", encoding="utf-8")
 
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, stdout="COM7\n", stderr=""),
-    )
+    def fake_run(args, **kwargs):
+        assert args == [str(ezcon), "port", "-l"]
+        assert kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+        return subprocess.CompletedProcess(args, 0, stdout="COM7\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert list_ports(EasyConInstallation(path=ezcon)) == ["COM7"]
 

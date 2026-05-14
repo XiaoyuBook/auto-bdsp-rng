@@ -196,7 +196,13 @@ class HistoryPanel(QWidget):
             self._w(f"[{_now()}] 重新测种，当前 Seed: {seed_text}  初始帧: {initial_advances}  (原始 Seed: {self._original_seed_text})")
             self._w(SEPARATOR_THIN)
 
-    def candidates_found(self, candidates: list[object], locked_index: int, sync_flags: list[str] | None = None) -> None:
+    def candidates_found(
+        self,
+        candidates: list[object],
+        locked_index: int,
+        sync_flags: list[str] | None = None,
+        candidate_delay: int | None = None,
+    ) -> None:
         self._pid_ec_seen.clear()
         self._w(f"[{_now()}] 搜索到 {len(candidates)} 个候选")
         for i, state in enumerate(candidates):
@@ -212,7 +218,8 @@ class HistoryPanel(QWidget):
             else:
                 self._pid_ec_seen[key] = i + 1
             tag_str = f"({', '.join(tags)})" if tags else ""
-            self._w(f"  候选{i+1}{tag_str}: adv={adv} delay={adv} EC={_state_ec(state)} PID={_state_pid(state)} "
+            delay = candidate_delay if candidate_delay is not None else adv
+            self._w(f"  候选{i+1}{tag_str}: adv={adv} delay={delay} EC={_state_ec(state)} PID={_state_pid(state)} "
                     f"{_state_iv_text(getattr(state, 'ivs', None))} "
                     f"性格={_nature_text(state)} 异色={_shiny_text(state)} "
                     f"身高={_get_int(state, 'height')} 体重={_get_int(state, 'weight')}")
@@ -223,7 +230,13 @@ class HistoryPanel(QWidget):
         self._w(f"[{_now()}] 重新搜索，排除已过帧...")
         self._w(SEPARATOR_THIN)
 
-    def candidates_refiltered(self, candidates: list[object], locked_index: int, sync_flags: list[str] | None = None) -> None:
+    def candidates_refiltered(
+        self,
+        candidates: list[object],
+        locked_index: int,
+        sync_flags: list[str] | None = None,
+        candidate_delay: int | None = None,
+    ) -> None:
         """错过目标后，重新筛选的候选列表。"""
         self._pid_ec_seen.clear()
         self._w(f"[{_now()}] 剩余 {len(candidates)} 个候选")
@@ -240,7 +253,8 @@ class HistoryPanel(QWidget):
             else:
                 self._pid_ec_seen[key] = i + 1
             tag_str = f"({', '.join(tags)})" if tags else ""
-            self._w(f"  候选{i+1}{tag_str}: adv={adv} delay={adv} EC={_state_ec(state)} PID={_state_pid(state)} "
+            delay = candidate_delay if candidate_delay is not None else adv
+            self._w(f"  候选{i+1}{tag_str}: adv={adv} delay={delay} EC={_state_ec(state)} PID={_state_pid(state)} "
                     f"{_state_iv_text(getattr(state, 'ivs', None))} "
                     f"性格={_nature_text(state)} 异色={_shiny_text(state)} "
                     f"身高={_get_int(state, 'height')} 体重={_get_int(state, 'weight')}")
