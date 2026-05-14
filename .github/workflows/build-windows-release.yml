@@ -23,6 +23,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Cache virtual environment
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: windows-venv-py312-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            windows-venv-py312-
 
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@v4
@@ -31,6 +41,10 @@ jobs:
 
       - name: Build package
         shell: cmd
+        env:
+          AUTO_BDSP_RNG_OCR_SMOKE_MODE: import
+          AUTO_BDSP_RNG_OCR_SMOKE_TIMEOUT: 300
+          AUTO_BDSP_RNG_ZIP_COMPRESSLEVEL: 1
         run: build_exe.bat
 
       - name: Upload artifact

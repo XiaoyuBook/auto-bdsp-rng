@@ -41,6 +41,19 @@ def tree_datas(source: str, target: str):
     return items
 
 
+def keep_runtime_entry(entry):
+    source = Path(str(entry[0]))
+    parts = {part.lower() for part in source.parts}
+    return not ({"tests", "__pycache__", ".pytest_cache"} & parts)
+
+
+def keep_runtime_import(name: str) -> bool:
+    parts = {part.lower() for part in name.split(".")}
+    if "tests" in parts or "testing" in parts or "conftest" in parts:
+        return False
+    return True
+
+
 datas = []
 binaries = []
 hiddenimports = [
@@ -86,9 +99,9 @@ for package in (
     "tokenizers",
 ):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
-    datas += package_datas
-    binaries += package_binaries
-    hiddenimports += package_hiddenimports
+    datas += [entry for entry in package_datas if keep_runtime_entry(entry)]
+    binaries += [entry for entry in package_binaries if keep_runtime_entry(entry)]
+    hiddenimports += [name for name in package_hiddenimports if keep_runtime_import(name)]
 
 for distribution in (
     "paddlepaddle",
@@ -138,7 +151,17 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        "numpy.tests",
+        "pandas.tests",
+        "PIL.Tests",
+        "paddleocr.tests",
+        "paddlex.tests",
         "pytest",
+        "scipy.tests",
+        "scipy.special.tests",
+        "scipy.stats.tests",
+        "shapely.tests",
+        "sklearn.tests",
         "tkinter",
     ],
     noarchive=False,

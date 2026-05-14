@@ -9,12 +9,18 @@ from auto_bdsp_rng.__main__ import main
 
 def _run_ocr_smoke(output_path: str) -> int:
     try:
-        import numpy as np
+        mode = os.environ.get("AUTO_BDSP_RNG_OCR_SMOKE_MODE", "full").strip().lower()
+        if mode == "import":
+            import paddle  # noqa: F401
+            import paddleocr  # noqa: F401
+            import paddlex  # noqa: F401
+        else:
+            import numpy as np
 
-        from auto_bdsp_rng.automation.auto_rng.dialog_timing import read_paddle_ocr_text
+            from auto_bdsp_rng.automation.auto_rng.dialog_timing import read_paddle_ocr_text
 
-        frame = np.zeros((32, 96, 3), dtype=np.uint8)
-        read_paddle_ocr_text(frame)
+            frame = np.zeros((32, 96, 3), dtype=np.uint8)
+            read_paddle_ocr_text(frame)
     except Exception:
         Path(output_path).write_text(traceback.format_exc(), encoding="utf-8")
         return 1

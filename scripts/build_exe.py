@@ -41,17 +41,27 @@ def main(argv: list[str] | None = None) -> int:
     require_windows()
     host_python = Path(sys.executable)
     check_python_version(host_python)
+    stage("Initialize submodules")
     run(["git", "submodule", "update", "--init", "--recursive"])
     python = ensure_venv(host_python)
     remove_stale_native_extensions()
+    stage("Install dependencies")
     install_dependencies(python)
+    stage("Run package version check")
     run([str(python), "-m", "auto_bdsp_rng", "--version"])
+    stage("Generate icon")
     build_icon(python)
+    stage("Run PyInstaller")
     build_pyinstaller(python)
+    stage("Verify packaged OCR")
     verify_packaged_ocr()
+    stage("Copy release files")
     copy_release_files()
+    stage("Verify Project_Xs assets")
     verify_project_xs_assets()
+    stage("Build EasyConBridge")
     build_easycon_bridge()
+    stage("Create release zip")
     create_release_zip()
     print()
     print(f"Build complete: {DIST_DIR}")
@@ -143,7 +153,17 @@ def verify_packaged_ocr() -> None:
         output.unlink()
     env = os.environ.copy()
     env["AUTO_BDSP_RNG_OCR_SMOKE"] = str(output)
-    subprocess.run([str(exe)], cwd=DIST_DIR, env=env, check=False)
+    if os.environ.get("GITHUB_ACTIONS"):
+        env.setdefault("AUTO_BDSP_RNG_OCR_SMOKE_MODE", "import")
+    timeout_seconds = int(os.environ.get("AUTO_BDSP_RNG_OCR_SMOKE_TIMEOUT", "300"))
+    print(f"Packaged OCR smoke mode: {env.get('AUTO_BDSP_RNG_OCR_SMOKE_MODE', 'full')}", flush=True)
+    try:
+        completed = subprocess.run([str(exe)], cwd=DIST_DIR, env=env, check=False, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        text = output.read_text(encoding="utf-8", errors="replace") if output.exists() else ""
+        raise SystemExit(f"Packaged OCR smoke test timed out after {timeout_seconds}s.\n{text}") from exc
+    if completed.returncode != 0:
+        print(f"Packaged OCR smoke process exited with code {completed.returncode}", flush=True)
     if not output.exists():
         raise SystemExit("Packaged OCR smoke test did not write a result file.")
     text = output.read_text(encoding="utf-8", errors="replace")
@@ -238,10 +258,15 @@ def create_release_zip() -> None:
     RELEASE_DIR.mkdir(parents=True, exist_ok=True)
     if ZIP_PATH.exists():
         ZIP_PATH.unlink()
-    with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for path in DIST_DIR.rglob("*"):
+    compresslevel = int(os.environ.get("AUTO_BDSP_RNG_ZIP_COMPRESSLEVEL", "6"))
+    files = [path for path in DIST_DIR.rglob("*") if path.is_file()]
+    print(f"Creating {ZIP_PATH} from {len(files)} files with compresslevel={compresslevel}", flush=True)
+    with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=compresslevel) as archive:
+        for index, path in enumerate(files, start=1):
             if path.is_file():
                 archive.write(path, Path(APP_NAME) / path.relative_to(DIST_DIR))
+            if index % 1000 == 0:
+                print(f"  zipped {index}/{len(files)} files", flush=True)
     if not ZIP_PATH.exists():
         raise SystemExit(f"Release zip was not created: {ZIP_PATH}")
 
@@ -308,8 +333,13 @@ def overlay_optional_tree(source: Path, target: Path) -> None:
 
 
 def run(command: list[str], cwd: Path = ROOT) -> None:
-    print("+ " + " ".join(str(part) for part in command))
+    print("+ " + " ".join(str(part) for part in command), flush=True)
     subprocess.run(command, cwd=cwd, check=True)
+
+
+def stage(name: str) -> None:
+    print()
+    print(f"=== {name} ===", flush=True)
 
 
 if __name__ == "__main__":
