@@ -362,7 +362,7 @@ class StaticTargetForm(QWidget):
         spin.setValue(value)
         spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        spin.setFixedHeight(32)
+        spin.setFixedHeight(36)
         return spin
 
 
