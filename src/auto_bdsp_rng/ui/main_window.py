@@ -824,15 +824,23 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
+        # 左侧：可滚动区域，内含三个卡片分组
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(380)
+        scroll.setMaximumWidth(420)
+        left_content = QWidget()
+        left_layout = QVBoxLayout(left_content)
         left_layout.setContentsMargins(0, 0, 8, 0)
-        left_layout.setSpacing(10)
+        left_layout.setSpacing(12)
         self.capture_group = self._build_blink_group()
+        self.params_group = self._build_blink_params_group()
         self.seed_group = self._build_seed_group()
         left_layout.addWidget(self.capture_group)
+        left_layout.addWidget(self.params_group)
         left_layout.addWidget(self.seed_group)
         left_layout.addStretch(1)
+        scroll.setWidget(left_content)
 
         # 右侧：状态条（紧凑） + 预览（下部）
         self.status_group = self._build_project_status_group()
@@ -843,9 +851,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
 
-        splitter.addWidget(left)
+        splitter.addWidget(scroll)
         splitter.addWidget(right)
-        splitter.setSizes([430, 1050])
+        splitter.setSizes([400, 1050])
         return splitter
 
     def _build_bdsp_tab(self) -> QWidget:
@@ -856,10 +864,9 @@ class MainWindow(QMainWindow):
 
         # ── 顶部：存档信息 ──
         self.profile_group = self._build_profile_group()
-        self.profile_group.setMaximumHeight(120)
         layout.addWidget(self.profile_group)
 
-        # ── 中部：乱数信息 / 设置 / 筛选项 ──
+        # ── 中部：乱数信息 / 设置 / 筛选项（可滚动） ──
         mid_row = QHBoxLayout()
         mid_row.setSpacing(10)
         self.rng_info_group = self._build_rng_info_group()
@@ -873,8 +880,11 @@ class MainWindow(QMainWindow):
         mid_row.addWidget(self.filter_group, 2)
         mid_widget = QWidget()
         mid_widget.setLayout(mid_row)
-        mid_widget.setMaximumHeight(360)
-        layout.addWidget(mid_widget)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(mid_widget)
+        layout.addWidget(scroll)
 
         # ── 下部：结果表格（主区域） ──
         self.results_panel = self._build_results()
@@ -890,24 +900,13 @@ class MainWindow(QMainWindow):
         outer.setSpacing(0)
         outer.addStretch()
 
-        # 控件统一样式
-        stat_label_css = "font-size: 12px; color: #666; border: 0; background: transparent;"
-        stat_value_css = "font-size: 12px; font-weight: 600; color: #1a1a1a; border: 0; background: transparent;"
-        spin_css = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 140px; }"
-        btn_css = (
-            "QPushButton { min-height: 30px; max-height: 30px;"
-            " min-width: 86px; max-width: 100px; padding: 0 14px; }"
-        )
-
         row = QHBoxLayout()
         row.setSpacing(28)
         row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # Progress
         self.progress_label = QLabel("Progress:")
-        self.progress_label.setStyleSheet(stat_label_css)
         self.progress_value = QLabel("0/0")
-        self.progress_value.setStyleSheet(stat_value_css)
         pg = QHBoxLayout()
         pg.setSpacing(4)
         pg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
@@ -917,9 +916,7 @@ class MainWindow(QMainWindow):
 
         # Advances
         self.advances_label = QLabel("Advances:")
-        self.advances_label.setStyleSheet(stat_label_css)
         self.advances_value = QLabel("0")
-        self.advances_value.setStyleSheet(stat_value_css)
         ag = QHBoxLayout()
         ag.setSpacing(4)
         ag.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
@@ -929,9 +926,7 @@ class MainWindow(QMainWindow):
 
         # Timer
         self.timer_label = QLabel("Timer:")
-        self.timer_label.setStyleSheet(stat_label_css)
         self.timer_value = QLabel("0")
-        self.timer_value.setStyleSheet(stat_value_css)
         tg = QHBoxLayout()
         tg.setSpacing(4)
         tg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
@@ -939,21 +934,10 @@ class MainWindow(QMainWindow):
         tg.addWidget(self.timer_value)
         row.addLayout(tg)
 
-        # 分隔
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #c8c6c0;")
-        sep.setFixedHeight(22)
-        row.addWidget(sep)
-        row.setSpacing(12)
-
         # X to advance
         self.x_to_advance_label = QLabel("X to advance:")
-        self.x_to_advance_label.setStyleSheet(stat_label_css)
         self.x_to_advance = self._spin(0, 10_000_000, 165)
-        self.x_to_advance.setStyleSheet(spin_css)
         self.advance_button = QPushButton("Advance")
-        self.advance_button.setStyleSheet(btn_css)
         self.advance_button.clicked.connect(self.advance_current_seed)
         row.addWidget(self.x_to_advance_label)
         row.addWidget(self.x_to_advance)
@@ -986,8 +970,9 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _build_blink_group(self) -> QGroupBox:
-        group = QGroupBox()
+        group = QGroupBox("捕捉配置")
         layout = QGridLayout(group)
+        layout.setVerticalSpacing(8)
         self.config_label = QLabel()
         self.config_combo = QComboBox()
         self.config_combo.setEditable(True)
@@ -1002,19 +987,42 @@ class MainWindow(QMainWindow):
         self.reidentify_button.clicked.connect(self.reidentify_seed)
         self.preview_button = QPushButton()
         self.preview_button.clicked.connect(self.toggle_preview)
-        self.save_config_button = QPushButton()
-        self.save_config_button.clicked.connect(self.save_current_config)
-        self.raw_screenshot_button = QPushButton()
-        self.raw_screenshot_button.clicked.connect(self.start_eye_capture_selection)
-        self.select_roi_button = QPushButton()
-        self.select_roi_button.clicked.connect(self.start_roi_selection)
         self.calibrate_shiny_threshold_button = QPushButton()
         self.calibrate_shiny_threshold_button.clicked.connect(self.calibrate_shiny_threshold)
         self.calibrate_shiny_threshold_button.hide()
 
         self.monitor_window = QCheckBox()
         self.reidentify_1_pk_npc = QCheckBox()
+
+        # 配置选择行：配置 [下拉] [浏览]
+        layout.addWidget(self.config_label, 0, 0)
+        layout.addWidget(self.config_combo, 0, 1)
+        layout.addWidget(self.browse_button, 0, 2)
+
+        # Monitor Window
+        layout.addWidget(self.monitor_window, 1, 0, 1, 3)
+
+        # 三按钮等宽：[预览] [捕捉 Seed] [重新识别]
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.addWidget(self.preview_button, 1)
+        btn_row.addWidget(self.capture_button, 1)
+        btn_row.addWidget(self.reidentify_button, 1)
+        layout.addLayout(btn_row, 2, 0, 1, 3)
+
+        # Reidentify 1 PK NPC + calibrate（隐藏）
+        layout.addWidget(self.reidentify_1_pk_npc, 3, 0, 1, 3)
+        layout.addWidget(self.calibrate_shiny_threshold_button, 4, 0, 1, 3)
+        return group
+
+    def _build_blink_params_group(self) -> QGroupBox:
+        group = QGroupBox("识别参数")
+        layout = QGridLayout(group)
+        layout.setVerticalSpacing(8)
+        layout.setHorizontalSpacing(12)
+
         self.window_prefix = QLineEdit()
+        self.window_prefix.setPlaceholderText(self._text("window_prefix"))
         self.camera = self._spin(0, 99, 0)
         self.x = self._spin(0, 10000, 0)
         self.y = self._spin(0, 10000, 0)
@@ -1030,39 +1038,56 @@ class MainWindow(QMainWindow):
         self.display_percent = self._spin(1, 300, 80)
         self.blink_count = DEFAULT_BLINK_COUNT
 
-        layout.addWidget(self.config_label, 0, 0)
-        layout.addWidget(self.config_combo, 0, 1, 1, 2)
-        layout.addWidget(self.browse_button, 0, 3)
-        layout.addWidget(self.monitor_window, 1, 1)
-        layout.addWidget(self.preview_button, 1, 0)
-        layout.addWidget(self.capture_button, 1, 2)
-        layout.addWidget(self.reidentify_button, 1, 3)
-        layout.addWidget(self.calibrate_shiny_threshold_button, 2, 0)
-        layout.addWidget(self.reidentify_1_pk_npc, 2, 1, 1, 3)
-        layout.addWidget(QLabel(), 3, 0)
-        layout.addWidget(self.window_prefix, 3, 1, 1, 3)
-        self._add_form_row(layout, 4, "camera", self.camera)
-        layout.addWidget(self.select_roi_button, 5, 1, 1, 3)
-        self._add_form_row(layout, 6, "threshold", self.threshold)
-        self._add_form_row(layout, 7, "time_delay", self.white_delay)
-        self._add_form_row(layout, 8, "advance_delay", self.advance_delay)
-        self._add_form_row(layout, 9, "advance_delay_2", self.advance_delay_2)
-        self._add_form_row(layout, 10, "npcs", self.npc_count)
-        self._add_form_row(layout, 11, "timeline_npcs", self.timeline_npc)
-        self._add_form_row(layout, 12, "pokemon_npcs", self.pokemon_npc)
-        self._add_form_row(layout, 13, "display_percent", self.display_percent)
-        layout.addWidget(self.save_config_button, 14, 2)
-        layout.addWidget(self.raw_screenshot_button, 14, 3)
+        self.select_roi_button = QPushButton()
+        self.select_roi_button.clicked.connect(self.start_roi_selection)
+        self.save_config_button = QPushButton()
+        self.save_config_button.clicked.connect(self.save_current_config)
+        self.raw_screenshot_button = QPushButton()
+        self.raw_screenshot_button.clicked.connect(self.start_eye_capture_selection)
+
+        # window_prefix 单独占一行
+        layout.addWidget(self.window_prefix, 0, 0, 1, 3)
+
+        params = [
+            ("camera", self.camera),
+            ("threshold", self.threshold),
+            ("time_delay", self.white_delay),
+            ("advance_delay", self.advance_delay),
+            ("advance_delay_2", self.advance_delay_2),
+            ("npcs", self.npc_count),
+            ("timeline_npcs", self.timeline_npc),
+            ("pokemon_npcs", self.pokemon_npc),
+            ("display_percent", self.display_percent),
+        ]
+        for i, (key, widget) in enumerate(params):
+            label = QLabel()
+            label.setProperty("i18n", key)
+            label.setFixedWidth(110)
+            widget.setFixedHeight(36)
+            layout.addWidget(label, i + 1, 0)
+            layout.addWidget(widget, i + 1, 1, 1, 2)
+
+        # select_roi_button 全宽
+        layout.addWidget(self.select_roi_button, len(params) + 1, 0, 1, 3)
+
+        # 底部按钮行：[保存配置] [截取眼睛] 右对齐
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(8)
+        bottom_row.addStretch()
+        bottom_row.addWidget(self.save_config_button)
+        bottom_row.addWidget(self.raw_screenshot_button)
+        layout.addLayout(bottom_row, len(params) + 2, 0, 1, 3)
         return group
 
     def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:
         label = QLabel()
         label.setProperty("i18n", key)
+        label.setFixedWidth(110)
         layout.addWidget(label, row, 0)
         layout.addWidget(widget, row, 1, 1, 3)
 
     def _build_seed_group(self) -> QGroupBox:
-        group = QGroupBox()
+        group = QGroupBox("Seed")
         layout = QGridLayout(group)
         self.seed32_inputs = [QLineEdit() for _ in range(4)]
         for box in self.seed32_inputs:
@@ -1086,6 +1111,7 @@ class MainWindow(QMainWindow):
     def _build_rng_info_group(self) -> QGroupBox:
         group = QGroupBox("乱数信息")
         layout = QGridLayout(group)
+        layout.setVerticalSpacing(8)
         self.lead_label = QLabel("队首")
         self.lead_combo = QComboBox()
         self.lead_combo.addItem("无", int(Lead.NONE))
@@ -1100,27 +1126,29 @@ class MainWindow(QMainWindow):
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.offset = self._spin(0, 1_000_000, 0)
         self.generate_button = QPushButton("生成")
+        self.generate_button.setObjectName("PrimaryButton")
         self.generate_button.clicked.connect(self.generate_results)
 
-        layout.addWidget(self.lead_label, 0, 0)
-        layout.addWidget(self.lead_combo, 0, 1)
-        layout.addWidget(QLabel("Seed 0"), 1, 0)
-        layout.addWidget(self.bdsp_seed64_inputs[0], 1, 1)
-        layout.addWidget(QLabel("Seed 1"), 2, 0)
-        layout.addWidget(self.bdsp_seed64_inputs[1], 2, 1)
-        layout.addWidget(QLabel("初始帧"), 3, 0)
-        layout.addWidget(self.initial_advances, 3, 1)
-        layout.addWidget(QLabel("最大帧数"), 4, 0)
-        layout.addWidget(self.max_advances, 4, 1)
-        layout.addWidget(QLabel("Offset"), 5, 0)
-        layout.addWidget(self.offset, 5, 1)
+        label_w = 80
+        for label, widget, row in [
+            (self.lead_label, self.lead_combo, 0),
+            (QLabel("Seed 0"), self.bdsp_seed64_inputs[0], 1),
+            (QLabel("Seed 1"), self.bdsp_seed64_inputs[1], 2),
+            (QLabel("初始帧"), self.initial_advances, 3),
+            (QLabel("最大帧数"), self.max_advances, 4),
+            (QLabel("Offset"), self.offset, 5),
+        ]:
+            label.setFixedWidth(label_w)
+            layout.addWidget(label, row, 0)
+            layout.addWidget(widget, row, 1)
         layout.addWidget(self.generate_button, 6, 0, 1, 2)
         group.setMinimumWidth(250)
         return group
 
     def _build_static_group(self) -> QGroupBox:
-        group = QGroupBox()
+        group = QGroupBox("设置")
         layout = QGridLayout(group)
+        layout.setVerticalSpacing(8)
         self.category_combo = QComboBox()
         self.category_combo.addItem("御三家", StaticEncounterCategory.STARTERS.value)
         self.category_combo.addItem("全部", None)
@@ -1142,6 +1170,7 @@ class MainWindow(QMainWindow):
         self.iv_count_display = self._spin(0, 6, 0)
         self.iv_count_display.setReadOnly(True)
 
+        label_w = 80
         rows = (
             ("分类", self.category_combo),
             ("宝可梦", self.encounter_combo),
@@ -1150,109 +1179,70 @@ class MainWindow(QMainWindow):
             ("异色", self.template_shiny_display),
             ("IV Count", self.iv_count_display),
         )
-        for row, (label, widget) in enumerate(rows):
-            layout.addWidget(QLabel(label), row, 0)
+        for row, (label_text, widget) in enumerate(rows):
+            lbl = QLabel(label_text)
+            lbl.setFixedWidth(label_w)
+            layout.addWidget(lbl, row, 0)
             layout.addWidget(widget, row, 1)
         group.setMinimumWidth(290)
         return group
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
-        group.setMinimumHeight(150)
-        group.setMaximumHeight(155)
+        group.setMinimumHeight(80)
 
         outer = QHBoxLayout(group)
         outer.setContentsMargins(16, 12, 16, 12)
         outer.setSpacing(24)
         outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
-        css_cb = "QCheckBox { font-size: 12px; spacing: 6px; border: 0; background: transparent; }"
-
-        input_css = (
-            "QLineEdit {"
-            " min-height: 30px; max-height: 30px; min-width: 220px; max-width: 220px;"
-            " background: #ffffff; color: #1a1a1a;"
-            " border: 1px solid #c8c8c8; border-radius: 2px;"
-            " padding-left: 8px;"
-            "}"
-        )
-
-        # ── 左列：存档选择 ──
+        # ── 左：存档名称 + 管理按钮（垂直） ──
         left = QVBoxLayout()
-        left.setSpacing(6)
-
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
+        left.setSpacing(8)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
         lbl = QLabel("存档信息")
-        lbl.setStyleSheet(css_label)
-        lbl.setFixedWidth(58)
         self.profile_name = QLineEdit("-")
         self.profile_name.setPlaceholderText("存档信息")
-        self.profile_name.setFixedWidth(180)
-        self.profile_name.setStyleSheet(input_css)
-        row1.addWidget(lbl)
-        row1.addWidget(self.profile_name)
-        row1.addStretch()
-        left.addLayout(row1)
+        self.profile_name.setFixedHeight(36)
+        name_row.addWidget(lbl)
+        name_row.addWidget(self.profile_name)
+        name_row.addStretch()
+        left.addLayout(name_row)
 
         self.profile_manager_button = QPushButton("存档信息管理")
-        self.profile_manager_button.setFixedWidth(180)
-        self.profile_manager_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
+        self.profile_manager_button.setFixedHeight(36)
         self.profile_manager_button.clicked.connect(self.open_profile_manager)
         left.addWidget(self.profile_manager_button)
         left.addStretch()
         outer.addLayout(left)
 
-        # ── 竖线 ──
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.VLine)
-        sep1.setStyleSheet("color: #c8c6c0;")
-        sep1.setFixedHeight(120)
-        outer.addWidget(sep1)
-
-        # ── 中列：TID / SID / TSV — 三行纯文本框 ──
+        # ── 中：TID / SID / TSV ──
         self.tid = QLineEdit("12345")
-        self.tid.setStyleSheet(input_css)
         self.sid = QLineEdit("54321")
-        self.sid.setStyleSheet(input_css)
         self.tsv = QLineEdit("58376")
         self.tsv.setReadOnly(True)
-        self.tsv.setStyleSheet(input_css)
         self.tid.editingFinished.connect(self._update_tsv)
         self.sid.editingFinished.connect(self._update_tsv)
 
         mid = QGridLayout()
         mid.setVerticalSpacing(8)
-        mid.setHorizontalSpacing(4)
+        mid.setHorizontalSpacing(8)
         for row, (label_text, widget) in enumerate([("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)]):
             lbl = QLabel(label_text)
-            lbl.setStyleSheet(css_label)
-            lbl.setFixedSize(42, 30)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            widget.setFixedSize(220, 30)
+            widget.setFixedHeight(36)
             mid.addWidget(lbl, row, 0)
             mid.addWidget(widget, row, 1)
         outer.addLayout(mid)
 
-        # ── 竖线 ──
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.VLine)
-        sep2.setStyleSheet("color: #c8c6c0;")
-        sep2.setFixedHeight(120)
-        outer.addWidget(sep2)
-
-        # ── 右列：游戏与护符 ──
+        # ── 右：游戏版本 + 三个 checkbox ──
         right = QVBoxLayout()
         right.setSpacing(8)
 
         game_row = QHBoxLayout()
         game_row.setSpacing(8)
         game_lbl = QLabel("游戏")
-        game_lbl.setStyleSheet(css_label)
-        game_lbl.setFixedWidth(36)
         self.profile_game_value = QLabel(self._game_label(self._profile_version))
-        self.profile_game_value.setStyleSheet("font-size: 12px; font-weight: 600; border: 0; background: transparent;")
         game_row.addWidget(game_lbl)
         game_row.addWidget(self.profile_game_value)
         game_row.addStretch()
@@ -1270,9 +1260,6 @@ class MainWindow(QMainWindow):
         right.addLayout(charms_row1)
         right.addWidget(self.oval_charm)
 
-        for cb in (self.national_dex, self.shiny_charm, self.oval_charm):
-            cb.setStyleSheet(css_cb)
-
         right.addStretch()
         outer.addLayout(right)
         outer.addStretch()
@@ -1280,18 +1267,11 @@ class MainWindow(QMainWindow):
 
     def _build_filter_group(self) -> QGroupBox:
         group = QGroupBox("筛选项")
-        group.setMaximumHeight(340)
-
         outer = QHBoxLayout(group)
         outer.setContentsMargins(12, 10, 12, 10)
-        outer.setSpacing(28)
+        outer.setSpacing(24)
 
-        css_label = "font-size: 12px; color: #555; border: 0; background: transparent;"
-        css_ctrl = "QLineEdit { min-height: 30px; max-height: 30px; min-width: 64px; }"
-        css_combo = "QComboBox { min-height: 30px; max-height: 30px; min-width: 180px; }"
-        css_cb = "font-size: 12px; spacing: 6px; border: 0; background: transparent;"
-
-        # ── 左列：IV 范围 + 底部按钮 ──
+        # ── 左列：能力值范围 ──
         left_col = QVBoxLayout()
         left_col.setSpacing(8)
 
@@ -1303,15 +1283,11 @@ class MainWindow(QMainWindow):
         iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
         for row, label in enumerate(iv_labels):
             lbl = QLabel(label)
-            lbl.setStyleSheet(css_label)
             lbl.setFixedWidth(50)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             min_spin = self._spin(0, 31, 0)
-            min_spin.setFixedWidth(68)
-            min_spin.setStyleSheet(css_ctrl)
+            min_spin.setFixedWidth(72)
             max_spin = self._spin(0, 31, 31)
-            max_spin.setFixedWidth(68)
-            max_spin.setStyleSheet(css_ctrl)
+            max_spin.setFixedWidth(72)
             self.iv_min.append(min_spin)
             self.iv_max.append(max_spin)
             iv_grid.addWidget(lbl, row, 0)
@@ -1322,26 +1298,16 @@ class MainWindow(QMainWindow):
         # checkbox + 按钮
         self.show_stats_check = QCheckBox("显示能力值")
         self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
-        self.show_stats_check.setStyleSheet(css_cb)
         left_col.addWidget(self.show_stats_check)
 
         self.iv_calculator_button = QPushButton("个体值计算器")
         self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
-        self.iv_calculator_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; }")
-        self.iv_calculator_button.setFixedWidth(230)
         left_col.addWidget(self.iv_calculator_button)
 
         left_col.addStretch()
         outer.addLayout(left_col)
 
-        # ── 竖线分隔 ──
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #c8c6c0;")
-        sep.setMinimumHeight(260)
-        outer.addWidget(sep)
-
-        # ── 右列：筛选条件 + 底部复选框 ──
+        # ── 右列：其他筛选 ──
         right_col = QVBoxLayout()
         right_col.setSpacing(8)
 
@@ -1355,9 +1321,7 @@ class MainWindow(QMainWindow):
         self.ability_filter.addItem("0", 0)
         self.ability_filter.addItem("1", 1)
         self.ability_filter.addItem("隐藏", 2)
-        self.ability_filter.setStyleSheet(css_combo)
         lbl = QLabel("特性")
-        lbl.setStyleSheet(css_label)
         lbl.setFixedWidth(70)
         right.addWidget(lbl, 0, 0)
         right.addWidget(self.ability_filter, 0, 1)
@@ -1368,22 +1332,17 @@ class MainWindow(QMainWindow):
         self.gender_filter.addItem("雄性", 0)
         self.gender_filter.addItem("雌性", 1)
         self.gender_filter.addItem("无性别", 2)
-        self.gender_filter.setStyleSheet(css_combo)
         lbl = QLabel("性别")
-        lbl.setStyleSheet(css_label)
         lbl.setFixedWidth(70)
         right.addWidget(lbl, 1, 0)
         right.addWidget(self.gender_filter, 1, 1)
 
         # Height
         self.height_min = self._spin(0, 255, 0)
-        self.height_min.setFixedWidth(80)
-        self.height_min.setStyleSheet(css_ctrl)
+        self.height_min.setFixedWidth(72)
         self.height_max = self._spin(0, 255, 255)
-        self.height_max.setFixedWidth(80)
-        self.height_max.setStyleSheet(css_ctrl)
+        self.height_max.setFixedWidth(72)
         lbl = QLabel("Height")
-        lbl.setStyleSheet(css_label)
         lbl.setFixedWidth(70)
         right.addWidget(lbl, 2, 0)
         ht = QHBoxLayout()
@@ -1398,9 +1357,7 @@ class MainWindow(QMainWindow):
         self.nature_combo.addItem("任意", -1)
         for index, nature in enumerate(NATURES_ZH):
             self.nature_combo.addItem(nature, index)
-        self.nature_combo.setStyleSheet(css_combo)
         lbl = QLabel("性格")
-        lbl.setStyleSheet(css_label)
         lbl.setFixedWidth(70)
         right.addWidget(lbl, 3, 0)
         right.addWidget(self.nature_combo, 3, 1)
@@ -1412,22 +1369,17 @@ class MainWindow(QMainWindow):
         self.shiny_filter.addItem("Star", "star")
         self.shiny_filter.addItem("Square", "square")
         self.shiny_filter.addItem("非异色", "none")
-        self.shiny_filter.setStyleSheet(css_combo)
         lbl = QLabel("异色")
-        lbl.setStyleSheet(css_label)
         lbl.setFixedWidth(70)
         right.addWidget(lbl, 4, 0)
         right.addWidget(self.shiny_filter, 4, 1)
 
         # Weight
         self.weight_min = self._spin(0, 255, 0)
-        self.weight_min.setFixedWidth(80)
-        self.weight_min.setStyleSheet(css_ctrl)
+        self.weight_min.setFixedWidth(72)
         self.weight_max = self._spin(0, 255, 255)
-        self.weight_max.setFixedWidth(80)
-        self.weight_max.setStyleSheet(css_ctrl)
+        self.weight_max.setFixedWidth(72)
         lbl = QLabel("Weight")
-        lbl.setStyleSheet(css_label)
         lbl.setFixedWidth(70)
         right.addWidget(lbl, 5, 0)
         wt = QHBoxLayout()
@@ -1441,7 +1393,6 @@ class MainWindow(QMainWindow):
 
         # 取消筛选
         self.skip_filter = QCheckBox("取消筛选")
-        self.skip_filter.setStyleSheet(css_cb)
         right_col.addWidget(self.skip_filter)
 
         right_col.addStretch()
@@ -1497,24 +1448,20 @@ class MainWindow(QMainWindow):
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 0)
-        btn_css = "QPushButton { min-height: 30px; max-height: 30px; padding: 0 14px; }"
         self.generate_button = QPushButton("生成")
-        self.generate_button.setStyleSheet(btn_css)
         self.generate_button.setObjectName("PrimaryButton")
         self.generate_button.clicked.connect(self.generate_results)
         self.copy_button = QPushButton("复制")
-        self.copy_button.setStyleSheet(btn_css)
         self.copy_button.clicked.connect(self.copy_results)
         self.export_button = QPushButton("导出 CSV")
-        self.export_button.setStyleSheet(btn_css)
         self.export_button.clicked.connect(self.export_results)
         self.result_count = QLabel("0 条结果")
         self.result_count.setObjectName("ResultCount")
+        toolbar.addWidget(self.result_count)
+        toolbar.addStretch(1)
         toolbar.addWidget(self.generate_button)
         toolbar.addWidget(self.copy_button)
         toolbar.addWidget(self.export_button)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self.result_count)
         layout.addLayout(toolbar)
 
         self.table = PokeFinderTableWidget()
@@ -1996,6 +1943,7 @@ class MainWindow(QMainWindow):
         self.status_group.setTitle(self._text("status"))
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
+        self.params_group.setTitle("识别参数" if self.lang == "zh" else "Recognition Params")
         self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
         self.static_group.setTitle("设置" if self.lang == "zh" else "Settings")
         self.profile_group.setTitle("存档信息" if self.lang == "zh" else "Profile")
