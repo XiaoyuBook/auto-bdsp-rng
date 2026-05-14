@@ -149,7 +149,7 @@ class AutoRngPanel(QWidget):
 
     def _build_toolbar(self) -> QWidget:
         toolbar = QFrame()
-        toolbar.setObjectName("EasyConToolbar")
+        toolbar.setObjectName("AutoRngToolbar")
         toolbar.setMaximumHeight(60)
         toolbar.setMinimumHeight(56)
         row = QHBoxLayout(toolbar)
@@ -171,6 +171,7 @@ class AutoRngPanel(QWidget):
         self.start_menu.addAction(self.start_from_capture_action)
         self.start_button.setMenu(self.start_menu)
         self.stop_button = QPushButton("停止")
+        self.stop_button.setObjectName("DangerButton")
         self.status_badge = QLabel("空闲")
         self.status_badge.setObjectName("Badge")
         for widget in (self.mode_combo, self.loop_count):
@@ -198,6 +199,7 @@ class AutoRngPanel(QWidget):
         row.addWidget(self.stop_button)
         # 临时按钮：手动捕获精灵信息
         self.capture_info_button = QPushButton("捕获精灵信息")
+        self.capture_info_button.setObjectName("SecondaryButton")
         self.capture_info_button.setFixedHeight(34)
         self.capture_info_button.setMinimumWidth(110)
         self.capture_info_button.setToolTip("在笔记页点击，自动切换能力页并提取全部信息")
@@ -353,6 +355,7 @@ class AutoRngPanel(QWidget):
         self.log_group = group
         layout = QVBoxLayout(group)
         self.log_view = _CopyableTextEdit()
+        self.log_view.setObjectName("LogView")
         self.log_view.setFont(QFont("Consolas", 10))
         self.log_view.setStyleSheet("QPlainTextEdit { padding: 12px; }")
         layout.addWidget(self.log_view)
