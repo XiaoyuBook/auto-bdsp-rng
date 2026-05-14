@@ -966,6 +966,9 @@ class MainWindow(QMainWindow):
     def _build_blink_group(self) -> QGroupBox:
         group = QGroupBox("捕捉配置")
         layout = QGridLayout(group)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(6)
         self.config_label = QLabel()
         self.config_combo = QComboBox()
         self.config_combo.setEditable(True)
@@ -1008,22 +1011,67 @@ class MainWindow(QMainWindow):
         self.display_percent = self._spin(1, 300, 80)
         self.blink_count = DEFAULT_BLINK_COUNT
 
+        compact_fields = [
+            self.config_combo,
+            self.window_prefix,
+            self.camera,
+            self.x,
+            self.y,
+            self.w,
+            self.h,
+            self.threshold,
+            self.white_delay,
+            self.advance_delay,
+            self.advance_delay_2,
+            self.npc_count,
+            self.timeline_npc,
+            self.pokemon_npc,
+            self.display_percent,
+        ]
+        compact_field_style = (
+            "QLineEdit, QComboBox, QDoubleSpinBox {"
+            " min-height: 30px; max-height: 30px; padding: 0 8px; border-radius: 6px;"
+            "}"
+        )
+        for widget in compact_fields:
+            widget.setFixedHeight(32)
+            widget.setStyleSheet(compact_field_style)
+        compact_button_style = "QPushButton { min-height: 32px; max-height: 32px; padding: 0 10px; border-radius: 6px; }"
+        for button in (
+            self.browse_button,
+            self.preview_button,
+            self.capture_button,
+            self.reidentify_button,
+            self.select_roi_button,
+            self.save_config_button,
+            self.raw_screenshot_button,
+        ):
+            button.setFixedHeight(34)
+            button.setStyleSheet(compact_button_style)
+        self.monitor_window.setFixedHeight(28)
+        self.reidentify_1_pk_npc.setFixedHeight(28)
+
         # 配置选择行：配置 [下拉] [浏览]
         layout.addWidget(self.config_label, 0, 0)
         layout.addWidget(self.config_combo, 0, 1, 1, 2)
         layout.addWidget(self.browse_button, 0, 3)
 
-        # Monitor Window
-        layout.addWidget(self.monitor_window, 1, 1)
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(8)
+        button_row.addWidget(self.preview_button)
+        button_row.addWidget(self.capture_button)
+        button_row.addWidget(self.reidentify_button)
+        layout.addLayout(button_row, 1, 0, 1, 4)
 
-        # 三按钮等宽：[预览] [捕捉 Seed] [重新识别]
-        layout.addWidget(self.preview_button, 1, 0)
-        layout.addWidget(self.capture_button, 1, 2)
-        layout.addWidget(self.reidentify_button, 1, 3)
-
-        # Reidentify 1 PK NPC + calibrate（隐藏）
+        checks_row = QHBoxLayout()
+        checks_row.setContentsMargins(0, 0, 0, 0)
+        checks_row.setSpacing(12)
+        checks_row.addWidget(self.monitor_window)
+        checks_row.addWidget(self.reidentify_1_pk_npc)
+        checks_row.addStretch(1)
+        layout.addLayout(checks_row, 2, 1, 1, 3)
         layout.addWidget(self.calibrate_shiny_threshold_button, 2, 0)
-        layout.addWidget(self.reidentify_1_pk_npc, 2, 1, 1, 3)
         layout.addWidget(QLabel(), 3, 0)
         layout.addWidget(self.window_prefix, 3, 1, 1, 3)
         self._add_form_row(layout, 4, "camera", self.camera)
@@ -1049,23 +1097,25 @@ class MainWindow(QMainWindow):
     def _build_seed_group(self) -> QGroupBox:
         group = QGroupBox("Seed")
         layout = QGridLayout(group)
-        self.seed32_inputs = [QLineEdit() for _ in range(4)]
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self.seed32_inputs = [QLineEdit(group) for _ in range(4)]
         for box in self.seed32_inputs:
             box.setReadOnly(True)
             box.setMaxLength(8)
             box.setPlaceholderText("—")
+            box.setVisible(False)
         self.seed64_outputs = [QLineEdit() for _ in range(2)]
         for output in self.seed64_outputs:
             output.setReadOnly(True)
             output.setObjectName("Readonly")
+            output.setFixedHeight(32)
 
-        for index, input_box in enumerate(self.seed32_inputs):
-            layout.addWidget(QLabel(f"S{index}"), index // 2, (index % 2) * 2)
-            layout.addWidget(input_box, index // 2, (index % 2) * 2 + 1)
-        layout.addWidget(QLabel("Seed0"), 2, 0)
-        layout.addWidget(self.seed64_outputs[0], 2, 1, 1, 3)
-        layout.addWidget(QLabel("Seed1"), 3, 0)
-        layout.addWidget(self.seed64_outputs[1], 3, 1, 1, 3)
+        layout.addWidget(QLabel("Seed0"), 0, 0)
+        layout.addWidget(self.seed64_outputs[0], 0, 1, 1, 3)
+        layout.addWidget(QLabel("Seed1"), 1, 0)
+        layout.addWidget(self.seed64_outputs[1], 1, 1, 1, 3)
         return group
 
     def _build_rng_info_group(self) -> QGroupBox:

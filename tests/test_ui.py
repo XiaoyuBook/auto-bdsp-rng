@@ -120,6 +120,10 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
     assert seed.x() == capture.x()
     assert seed.y() > capture.bottom()
     assert window.window_prefix.parent() is window.capture_group
+    assert all(not box.isVisible() for box in window.seed32_inputs)
+    assert [label.text() for label in window.seed_group.findChildren(QLabel)] == ["Seed0", "Seed1"]
+    assert window.threshold.height() <= 32
+    assert window.capture_button.height() <= 34
 
 
 def test_blink_parameter_spinboxes_ignore_mouse_wheel(app):
