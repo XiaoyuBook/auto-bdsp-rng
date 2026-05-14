@@ -554,6 +554,11 @@ class RoiPreviewLabel(QLabel):
             painter.drawRect(QRect(self._drag_start, self._drag_current).normalized().intersected(self._pixmap_rect))
 
 
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
+
+
 class PokeFinderTableWidget(QTableWidget):
     """QTableWidget with PokeFinder-style prefix search on the active column."""
 
@@ -824,23 +829,16 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        # 左侧：可滚动区域，内含三个卡片分组
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(380)
-        scroll.setMaximumWidth(420)
-        left_content = QWidget()
-        left_layout = QVBoxLayout(left_content)
+        # Left side follows the compact single-column layout from 0940b1b.
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 8, 0)
-        left_layout.setSpacing(12)
+        left_layout.setSpacing(10)
         self.capture_group = self._build_blink_group()
-        self.blink_params_group = self._build_blink_params_group()
         self.seed_group = self._build_seed_group()
         left_layout.addWidget(self.capture_group)
-        left_layout.addWidget(self.blink_params_group)
         left_layout.addWidget(self.seed_group)
         left_layout.addStretch(1)
-        scroll.setWidget(left_content)
 
         # 右侧：状态条（紧凑） + 预览（下部）
         self.status_group = self._build_project_status_group()
@@ -851,9 +849,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
 
-        splitter.addWidget(scroll)
+        splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setSizes([400, 1050])
+        splitter.setSizes([430, 1050])
         return splitter
 
     def _build_bdsp_tab(self) -> QWidget:
@@ -968,7 +966,6 @@ class MainWindow(QMainWindow):
     def _build_blink_group(self) -> QGroupBox:
         group = QGroupBox("捕捉配置")
         layout = QGridLayout(group)
-        layout.setVerticalSpacing(8)
         self.config_label = QLabel()
         self.config_combo = QComboBox()
         self.config_combo.setEditable(True)
@@ -983,42 +980,19 @@ class MainWindow(QMainWindow):
         self.reidentify_button.clicked.connect(self.reidentify_seed)
         self.preview_button = QPushButton()
         self.preview_button.clicked.connect(self.toggle_preview)
+        self.save_config_button = QPushButton()
+        self.save_config_button.clicked.connect(self.save_current_config)
+        self.raw_screenshot_button = QPushButton()
+        self.raw_screenshot_button.clicked.connect(self.start_eye_capture_selection)
+        self.select_roi_button = QPushButton()
+        self.select_roi_button.clicked.connect(self.start_roi_selection)
         self.calibrate_shiny_threshold_button = QPushButton()
         self.calibrate_shiny_threshold_button.clicked.connect(self.calibrate_shiny_threshold)
         self.calibrate_shiny_threshold_button.hide()
 
         self.monitor_window = QCheckBox()
         self.reidentify_1_pk_npc = QCheckBox()
-
-        # 配置选择行：配置 [下拉] [浏览]
-        layout.addWidget(self.config_label, 0, 0)
-        layout.addWidget(self.config_combo, 0, 1)
-        layout.addWidget(self.browse_button, 0, 2)
-
-        # Monitor Window
-        layout.addWidget(self.monitor_window, 1, 0, 1, 3)
-
-        # 三按钮等宽：[预览] [捕捉 Seed] [重新识别]
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-        btn_row.addWidget(self.preview_button, 1)
-        btn_row.addWidget(self.capture_button, 1)
-        btn_row.addWidget(self.reidentify_button, 1)
-        layout.addLayout(btn_row, 2, 0, 1, 3)
-
-        # Reidentify 1 PK NPC + calibrate（隐藏）
-        layout.addWidget(self.reidentify_1_pk_npc, 3, 0, 1, 3)
-        layout.addWidget(self.calibrate_shiny_threshold_button, 4, 0, 1, 3)
-        return group
-
-    def _build_blink_params_group(self) -> QGroupBox:
-        group = QGroupBox("识别参数")
-        layout = QGridLayout(group)
-        layout.setVerticalSpacing(8)
-        layout.setHorizontalSpacing(12)
-
         self.window_prefix = QLineEdit()
-        self.window_prefix.setPlaceholderText(self._text("window_prefix"))
         self.camera = self._spin(0, 99, 0)
         self.x = self._spin(0, 10000, 0)
         self.y = self._spin(0, 10000, 0)
@@ -1034,51 +1008,41 @@ class MainWindow(QMainWindow):
         self.display_percent = self._spin(1, 300, 80)
         self.blink_count = DEFAULT_BLINK_COUNT
 
-        self.select_roi_button = QPushButton()
-        self.select_roi_button.clicked.connect(self.start_roi_selection)
-        self.save_config_button = QPushButton()
-        self.save_config_button.clicked.connect(self.save_current_config)
-        self.raw_screenshot_button = QPushButton()
-        self.raw_screenshot_button.clicked.connect(self.start_eye_capture_selection)
+        # 配置选择行：配置 [下拉] [浏览]
+        layout.addWidget(self.config_label, 0, 0)
+        layout.addWidget(self.config_combo, 0, 1, 1, 2)
+        layout.addWidget(self.browse_button, 0, 3)
 
-        # window_prefix 单独占一行
-        layout.addWidget(self.window_prefix, 0, 0, 1, 3)
+        # Monitor Window
+        layout.addWidget(self.monitor_window, 1, 1)
 
-        params = [
-            ("camera", self.camera),
-            ("threshold", self.threshold),
-            ("time_delay", self.white_delay),
-            ("advance_delay", self.advance_delay),
-            ("advance_delay_2", self.advance_delay_2),
-            ("npcs", self.npc_count),
-            ("timeline_npcs", self.timeline_npc),
-            ("pokemon_npcs", self.pokemon_npc),
-            ("display_percent", self.display_percent),
-        ]
-        for i, (key, widget) in enumerate(params):
-            label = QLabel()
-            label.setProperty("i18n", key)
-            label.setFixedWidth(110)
-            widget.setFixedHeight(36)
-            layout.addWidget(label, i + 1, 0)
-            layout.addWidget(widget, i + 1, 1, 1, 2)
+        # 三按钮等宽：[预览] [捕捉 Seed] [重新识别]
+        layout.addWidget(self.preview_button, 1, 0)
+        layout.addWidget(self.capture_button, 1, 2)
+        layout.addWidget(self.reidentify_button, 1, 3)
 
-        # select_roi_button 全宽
-        layout.addWidget(self.select_roi_button, len(params) + 1, 0, 1, 3)
-
-        # 底部按钮行：[保存配置] [截取眼睛] 右对齐
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(8)
-        bottom_row.addStretch()
-        bottom_row.addWidget(self.save_config_button)
-        bottom_row.addWidget(self.raw_screenshot_button)
-        layout.addLayout(bottom_row, len(params) + 2, 0, 1, 3)
+        # Reidentify 1 PK NPC + calibrate（隐藏）
+        layout.addWidget(self.calibrate_shiny_threshold_button, 2, 0)
+        layout.addWidget(self.reidentify_1_pk_npc, 2, 1, 1, 3)
+        layout.addWidget(QLabel(), 3, 0)
+        layout.addWidget(self.window_prefix, 3, 1, 1, 3)
+        self._add_form_row(layout, 4, "camera", self.camera)
+        layout.addWidget(self.select_roi_button, 5, 1, 1, 3)
+        self._add_form_row(layout, 6, "threshold", self.threshold)
+        self._add_form_row(layout, 7, "time_delay", self.white_delay)
+        self._add_form_row(layout, 8, "advance_delay", self.advance_delay)
+        self._add_form_row(layout, 9, "advance_delay_2", self.advance_delay_2)
+        self._add_form_row(layout, 10, "npcs", self.npc_count)
+        self._add_form_row(layout, 11, "timeline_npcs", self.timeline_npc)
+        self._add_form_row(layout, 12, "pokemon_npcs", self.pokemon_npc)
+        self._add_form_row(layout, 13, "display_percent", self.display_percent)
+        layout.addWidget(self.save_config_button, 14, 2)
+        layout.addWidget(self.raw_screenshot_button, 14, 3)
         return group
 
     def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:
         label = QLabel()
         label.setProperty("i18n", key)
-        label.setFixedWidth(110)
         layout.addWidget(label, row, 0)
         layout.addWidget(widget, row, 1, 1, 3)
 
@@ -1905,7 +1869,7 @@ class MainWindow(QMainWindow):
         return w
 
     def _double_spin(self, minimum: float, maximum: float, value: float, decimals: int) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+        spin = NoWheelDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setDecimals(decimals)
         spin.setSingleStep(0.1)
@@ -1999,7 +1963,6 @@ class MainWindow(QMainWindow):
         self.status_group.setTitle(self._text("status"))
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
-        self.blink_params_group.setTitle("识别参数" if self.lang == "zh" else "Recognition Params")
         self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
         self.static_group.setTitle("设置" if self.lang == "zh" else "Settings")
         self.profile_group.setTitle("存档信息" if self.lang == "zh" else "Profile")

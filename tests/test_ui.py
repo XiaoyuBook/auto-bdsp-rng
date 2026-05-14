@@ -9,7 +9,8 @@ import pytest
 pytest.importorskip("PySide6")
 
 from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QPoint, QPointF, QThread, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
 
@@ -104,6 +105,44 @@ def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
     assert window.shiny_charm.text() == "闪耀护符"
     assert window.oval_charm.text() == "圆形护符"
     assert speed_min.geometry().bottom() < show_stats.geometry().top()
+
+
+def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    window.resize(1280, 760)
+    window.show()
+    app.processEvents()
+
+    capture = window.capture_group.geometry()
+    seed = window.seed_group.geometry()
+
+    assert seed.x() == capture.x()
+    assert seed.y() > capture.bottom()
+    assert window.window_prefix.parent() is window.capture_group
+
+
+def test_blink_parameter_spinboxes_ignore_mouse_wheel(app):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    window.show()
+    app.processEvents()
+    window.threshold.setValue(0.5)
+    window.threshold.setFocus()
+
+    wheel = QWheelEvent(
+        QPointF(10, 10),
+        QPointF(10, 10),
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.ScrollUpdate,
+        False,
+    )
+    QApplication.sendEvent(window.threshold, wheel)
+
+    assert window.threshold.value() == 0.5
 
 
 def test_bdsp_table_uses_pokefinder_cell_interactions(app):
