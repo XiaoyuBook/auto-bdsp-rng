@@ -860,31 +860,17 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         # 顶部：存档信息（紧凑）
         self.profile_group = self._build_profile_group()
-        self.profile_group.setMaximumHeight(110)
+        self.profile_group.setMaximumHeight(70)
         layout.addWidget(self.profile_group)
 
-        # 中部：三列参数面板（紧凑，可滚动，max 260px）
-        mid_scroll = QScrollArea()
-        mid_scroll.setWidgetResizable(True)
-        mid_scroll.setMaximumHeight(260)
-        mid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        mid_widget = QWidget()
-        mid_row = QHBoxLayout(mid_widget)
-        mid_row.setSpacing(10)
-        self.rng_info_group = self._build_rng_info_group()
-        self.rng_info_group.setMinimumWidth(220)
-        self.static_group = self._build_static_group()
-        self.static_group.setMinimumWidth(240)
-        self.filter_group = self._build_filter_group()
-        mid_row.addWidget(self.rng_info_group, 1)
-        mid_row.addWidget(self.static_group, 1)
-        mid_row.addWidget(self.filter_group, 2)
-        mid_scroll.setWidget(mid_widget)
-        layout.addWidget(mid_scroll)
+        # 中部：两列参数面板（基础参数 + 筛选项）
+        self.params_group = self._build_params_group()
+        self.params_group.setMaximumHeight(220)
+        layout.addWidget(self.params_group)
 
         # 下部：结果表格（主区域，至少 350px）
         self.results_panel = self._build_results()
@@ -1110,50 +1096,59 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_rng_info_group(self) -> QGroupBox:
-        group = QGroupBox("乱数信息")
-        layout = QGridLayout(group)
-        layout.setVerticalSpacing(6)
-        layout.setContentsMargins(10, 10, 10, 10)
+        # 控件已迁移到 _build_basic_params_group，此处保留为空壳
+        return QGroupBox()
+
+    def _build_static_group(self) -> QGroupBox:
+        # 控件已迁移到 _build_basic_params_group，此处保留为空壳
+        return QGroupBox()
+
+    def _build_params_group(self) -> QWidget:
+        """合并 基础参数 + 筛选项 为左右两列，没有滚动条"""
+        panel = QWidget()
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # 左：基础参数（合并原 乱数信息 + 设置）
+        layout.addWidget(self._build_basic_params_group())
+        # 右：筛选项
+        layout.addWidget(self._build_filter_group(), 1)
+        return panel
+
+    def _build_basic_params_group(self) -> QGroupBox:
+        """合并原 _build_rng_info_group + _build_static_group 的所有控件"""
+        group = QGroupBox("基础参数")
+        self.rng_info_group = group
+        group.setMinimumWidth(400)
+        grid = QGridLayout(group)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setVerticalSpacing(4)
+        grid.setHorizontalSpacing(12)
+
+        LABEL_W = 58
+        INPUT_W = 130
+
+        # -- 第一列控件 --
+        # 队首
         self.lead_label = QLabel("队首")
         self.lead_combo = QComboBox()
         self.lead_combo.addItem("无", int(Lead.NONE))
         self.lead_combo.addItem("同步：勤奋", int(Lead.SYNCHRONIZE_START))
         self.lead_combo.addItem("迷人之躯 ♀", int(Lead.CUTE_CHARM_F))
         self.lead_combo.addItem("迷人之躯 ♂", int(Lead.CUTE_CHARM_M))
+
+        # Seed 0 / Seed 1
         self.bdsp_seed64_inputs = [QLineEdit() for _ in range(2)]
         for input_box in self.bdsp_seed64_inputs:
             input_box.setMaxLength(16)
             input_box.editingFinished.connect(self._sync_state32_from_bdsp_seed64)
+
         self.initial_advances = self._spin(0, 10_000_000, 0)
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.offset = self._spin(0, 1_000_000, 0)
-        self.generate_button = QPushButton("生成")
-        self.generate_button.setObjectName("PrimaryButton")
-        self.generate_button.clicked.connect(self.generate_results)
 
-        label_w = 60
-        for label, widget, row in [
-            (self.lead_label, self.lead_combo, 0),
-            (QLabel("Seed 0"), self.bdsp_seed64_inputs[0], 1),
-            (QLabel("Seed 1"), self.bdsp_seed64_inputs[1], 2),
-            (QLabel("初始帧"), self.initial_advances, 3),
-            (QLabel("最大帧数"), self.max_advances, 4),
-            (QLabel("Offset"), self.offset, 5),
-        ]:
-            label.setFixedWidth(label_w)
-            widget.setFixedHeight(30)
-            layout.addWidget(label, row, 0)
-            layout.addWidget(widget, row, 1)
-        self.generate_button.setFixedHeight(30)
-        layout.addWidget(self.generate_button, 6, 0, 1, 2)
-        group.setMinimumWidth(220)
-        return group
-
-    def _build_static_group(self) -> QGroupBox:
-        group = QGroupBox("设置")
-        layout = QGridLayout(group)
-        layout.setVerticalSpacing(6)
-        layout.setContentsMargins(10, 10, 10, 10)
+        # -- 第二列控件 --
         self.category_combo = QComboBox()
         self.category_combo.addItem("御三家", StaticEncounterCategory.STARTERS.value)
         self.category_combo.addItem("全部", None)
@@ -1162,43 +1157,90 @@ class MainWindow(QMainWindow):
                 continue
             self.category_combo.addItem(CATEGORY_LABELS_ZH.get(category.value, category.value), category.value)
         self.category_combo.currentIndexChanged.connect(self._refresh_encounters)
+
         self.encounter_combo = QComboBox()
         self.encounter_combo.currentIndexChanged.connect(self._update_encounter_details)
+
         self.level_display = self._spin(1, 100, 1)
         self.level_display.setReadOnly(True)
+
         self.template_ability_display = QComboBox()
         self.template_ability_display.addItems(["0", "1", "隐藏", "0/1", "任意"])
         self.template_ability_display.setEnabled(False)
+
         self.template_shiny_display = QComboBox()
         self.template_shiny_display.addItems(["随机", "锁闪"])
         self.template_shiny_display.setEnabled(False)
+
         self.iv_count_display = self._spin(0, 6, 0)
         self.iv_count_display.setReadOnly(True)
 
-        label_w = 60
-        rows = (
-            ("分类", self.category_combo),
+        # ===== 布局 =====
+        # Row 0, col 0: 队首
+        self.lead_label.setFixedWidth(LABEL_W)
+        grid.addWidget(self.lead_label, 0, 0)
+        self.lead_combo.setFixedHeight(28)
+        self.lead_combo.setFixedWidth(INPUT_W)
+        grid.addWidget(self.lead_combo, 0, 1)
+
+        # Row 0, col 2: 分类 label
+        cat_lbl = QLabel("分类")
+        cat_lbl.setFixedWidth(LABEL_W)
+        grid.addWidget(cat_lbl, 0, 2)
+        self.category_combo.setFixedHeight(28)
+        self.category_combo.setFixedWidth(INPUT_W)
+        grid.addWidget(self.category_combo, 0, 3)
+
+        # Rows 1-5: 两列表单
+        left_pairs = [
+            ("Seed 0", self.bdsp_seed64_inputs[0]),
+            ("Seed 1", self.bdsp_seed64_inputs[1]),
+            ("初始帧", self.initial_advances),
+            ("最大帧数", self.max_advances),
+            ("Offset", self.offset),
+        ]
+        right_pairs = [
             ("宝可梦", self.encounter_combo),
             ("等级", self.level_display),
             ("特性", self.template_ability_display),
             ("异色", self.template_shiny_display),
             ("IV Count", self.iv_count_display),
-        )
-        for row, (label_text, widget) in enumerate(rows):
+        ]
+
+        for i, (label_text, widget) in enumerate(left_pairs):
+            row = i + 1
             lbl = QLabel(label_text)
-            lbl.setFixedWidth(label_w)
-            widget.setFixedHeight(30)
-            layout.addWidget(lbl, row, 0)
-            layout.addWidget(widget, row, 1)
-        group.setMinimumWidth(240)
+            lbl.setFixedWidth(LABEL_W)
+            grid.addWidget(lbl, row, 0)
+            widget.setFixedHeight(28)
+            widget.setFixedWidth(INPUT_W)
+            grid.addWidget(widget, row, 1)
+
+        for i, (label_text, widget) in enumerate(right_pairs):
+            row = i + 1
+            lbl = QLabel(label_text)
+            lbl.setFixedWidth(LABEL_W)
+            grid.addWidget(lbl, row, 2)
+            widget.setFixedHeight(28)
+            widget.setFixedWidth(INPUT_W)
+            grid.addWidget(widget, row, 3)
+
+        # Row 6: 生成按钮（全宽）
+        self.generate_button = QPushButton("生成")
+        self.generate_button.setObjectName("PrimaryButton")
+        self.generate_button.setFixedHeight(28)
+        self.generate_button.clicked.connect(self.generate_results)
+        grid.addWidget(self.generate_button, 6, 0, 1, 4)
+
         return group
 
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
-        group.setMinimumHeight(80)
+        group.setMinimumHeight(50)
+        group.setMaximumHeight(70)
 
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setContentsMargins(8, 4, 8, 4)
         outer.setSpacing(0)
         outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -1206,12 +1248,12 @@ class MainWindow(QMainWindow):
         lbl = QLabel("名称")
         self.profile_name = QLineEdit("-")
         self.profile_name.setPlaceholderText("存档名称")
-        self.profile_name.setFixedHeight(30)
+        self.profile_name.setFixedHeight(28)
         self.profile_name.setFixedWidth(120)
         outer.addWidget(lbl)
         outer.addWidget(self.profile_name)
         self.profile_manager_button = QPushButton("管理")
-        self.profile_manager_button.setFixedHeight(30)
+        self.profile_manager_button.setFixedHeight(28)
         self.profile_manager_button.clicked.connect(self.open_profile_manager)
         outer.addWidget(self.profile_manager_button)
 
@@ -1226,8 +1268,8 @@ class MainWindow(QMainWindow):
         self.sid.editingFinished.connect(self._update_tsv)
 
         for w in (self.tid, self.sid, self.tsv):
-            w.setFixedHeight(30)
-            w.setFixedWidth(80)
+            w.setFixedHeight(28)
+            w.setFixedWidth(72)
 
         outer.addWidget(QLabel("TID"))
         outer.addWidget(self.tid)
@@ -1257,17 +1299,17 @@ class MainWindow(QMainWindow):
     def _build_filter_group(self) -> QGroupBox:
         group = QGroupBox("筛选项")
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(10, 10, 10, 10)
-        outer.setSpacing(20)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(10)
 
         # ── 左列：能力值范围 ──
         left_col = QVBoxLayout()
-        left_col.setSpacing(6)
+        left_col.setSpacing(4)
 
         # IV grid: 2 行 x 6 列（每行 3 组 label+min+max）
         iv_grid = QGridLayout()
         iv_grid.setVerticalSpacing(4)
-        iv_grid.setHorizontalSpacing(6)
+        iv_grid.setHorizontalSpacing(4)
         self.iv_min: list[QLineEdit] = []
         self.iv_max: list[QLineEdit] = []
         iv_labels = ("HP", "攻击", "防御", "特攻", "特防", "速度")
@@ -1275,13 +1317,13 @@ class MainWindow(QMainWindow):
             row = i // 3
             col = (i % 3) * 3
             lbl = QLabel(label)
-            lbl.setFixedWidth(36)
+            lbl.setFixedWidth(32)
             min_spin = self._spin(0, 31, 0)
-            min_spin.setFixedWidth(56)
-            min_spin.setFixedHeight(30)
+            min_spin.setFixedWidth(50)
+            min_spin.setFixedHeight(28)
             max_spin = self._spin(0, 31, 31)
-            max_spin.setFixedWidth(56)
-            max_spin.setFixedHeight(30)
+            max_spin.setFixedWidth(50)
+            max_spin.setFixedHeight(28)
             self.iv_min.append(min_spin)
             self.iv_max.append(max_spin)
             iv_grid.addWidget(lbl, row, col)
@@ -1295,6 +1337,7 @@ class MainWindow(QMainWindow):
         left_col.addWidget(self.show_stats_check)
 
         self.iv_calculator_button = QPushButton("个体值计算器")
+        self.iv_calculator_button.setFixedHeight(28)
         self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
         left_col.addWidget(self.iv_calculator_button)
 
@@ -1303,7 +1346,7 @@ class MainWindow(QMainWindow):
 
         # ── 右列：其他筛选 ──
         right_col = QVBoxLayout()
-        right_col.setSpacing(6)
+        right_col.setSpacing(4)
 
         right_grid = QGridLayout()
         right_grid.setVerticalSpacing(4)
@@ -1317,8 +1360,8 @@ class MainWindow(QMainWindow):
         self.ability_filter.addItem("隐藏", 2)
         lbl = QLabel("特性")
         right_grid.addWidget(lbl, 0, 0)
-        self.ability_filter.setFixedWidth(120)
-        self.ability_filter.setFixedHeight(30)
+        self.ability_filter.setFixedWidth(100)
+        self.ability_filter.setFixedHeight(28)
         right_grid.addWidget(self.ability_filter, 0, 1)
 
         # 性别
@@ -1329,8 +1372,8 @@ class MainWindow(QMainWindow):
         self.gender_filter.addItem("无性别", 2)
         lbl = QLabel("性别")
         right_grid.addWidget(lbl, 0, 2)
-        self.gender_filter.setFixedWidth(120)
-        self.gender_filter.setFixedHeight(30)
+        self.gender_filter.setFixedWidth(100)
+        self.gender_filter.setFixedHeight(28)
         right_grid.addWidget(self.gender_filter, 0, 3)
 
         # 性格
@@ -1340,8 +1383,8 @@ class MainWindow(QMainWindow):
             self.nature_combo.addItem(nature, index)
         lbl = QLabel("性格")
         right_grid.addWidget(lbl, 0, 4)
-        self.nature_combo.setFixedWidth(120)
-        self.nature_combo.setFixedHeight(30)
+        self.nature_combo.setFixedWidth(100)
+        self.nature_combo.setFixedHeight(28)
         right_grid.addWidget(self.nature_combo, 0, 5)
 
         # 异色
@@ -1353,17 +1396,17 @@ class MainWindow(QMainWindow):
         self.shiny_filter.addItem("非异色", "none")
         lbl = QLabel("异色")
         right_grid.addWidget(lbl, 0, 6)
-        self.shiny_filter.setFixedWidth(120)
-        self.shiny_filter.setFixedHeight(30)
+        self.shiny_filter.setFixedWidth(100)
+        self.shiny_filter.setFixedHeight(28)
         right_grid.addWidget(self.shiny_filter, 0, 7)
 
         # Height
         self.height_min = self._spin(0, 255, 0)
-        self.height_min.setFixedWidth(56)
-        self.height_min.setFixedHeight(30)
+        self.height_min.setFixedWidth(50)
+        self.height_min.setFixedHeight(28)
         self.height_max = self._spin(0, 255, 255)
-        self.height_max.setFixedWidth(56)
-        self.height_max.setFixedHeight(30)
+        self.height_max.setFixedWidth(50)
+        self.height_max.setFixedHeight(28)
         lbl = QLabel("Height")
         right_grid.addWidget(lbl, 1, 0)
         right_grid.addWidget(self.height_min, 1, 1)
@@ -1371,11 +1414,11 @@ class MainWindow(QMainWindow):
 
         # Weight
         self.weight_min = self._spin(0, 255, 0)
-        self.weight_min.setFixedWidth(56)
-        self.weight_min.setFixedHeight(30)
+        self.weight_min.setFixedWidth(50)
+        self.weight_min.setFixedHeight(28)
         self.weight_max = self._spin(0, 255, 255)
-        self.weight_max.setFixedWidth(56)
-        self.weight_max.setFixedHeight(30)
+        self.weight_max.setFixedWidth(50)
+        self.weight_max.setFixedHeight(28)
         lbl = QLabel("Weight")
         right_grid.addWidget(lbl, 1, 3)
         right_grid.addWidget(self.weight_min, 1, 4)
@@ -1435,21 +1478,21 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         toolbar_widget = QWidget()
-        toolbar_widget.setFixedHeight(40)
+        toolbar_widget.setFixedHeight(36)
         toolbar = QHBoxLayout(toolbar_widget)
         toolbar.setContentsMargins(0, 0, 0, 0)
         self.generate_button = QPushButton("生成")
         self.generate_button.setObjectName("PrimaryButton")
-        self.generate_button.setFixedHeight(30)
+        self.generate_button.setFixedHeight(28)
         self.generate_button.clicked.connect(self.generate_results)
         self.copy_button = QPushButton("复制")
-        self.copy_button.setFixedHeight(30)
+        self.copy_button.setFixedHeight(28)
         self.copy_button.clicked.connect(self.copy_results)
         self.export_button = QPushButton("导出 CSV")
-        self.export_button.setFixedHeight(30)
+        self.export_button.setFixedHeight(28)
         self.export_button.clicked.connect(self.export_results)
         self.result_count = QLabel("0 条结果")
         self.result_count.setObjectName("ResultCount")
@@ -1940,7 +1983,7 @@ class MainWindow(QMainWindow):
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
         self.params_group.setTitle("识别参数" if self.lang == "zh" else "Recognition Params")
-        self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
+        self.rng_info_group.setTitle("基础参数" if self.lang == "zh" else "Basic Params")
         self.static_group.setTitle("设置" if self.lang == "zh" else "Settings")
         self.profile_group.setTitle("存档信息" if self.lang == "zh" else "Profile")
         self.filter_group.setTitle("筛选项" if self.lang == "zh" else "Filters")
