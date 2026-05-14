@@ -36,7 +36,7 @@ class SponsorDialog(QDialog):
     def __init__(self, parent=None, assets: SponsorAssets | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("支持项目")
-        self.resize(720, 560)
+        self.resize(820, 720)
         self.assets = assets or find_sponsor_assets()
         self._build_ui()
 
@@ -82,12 +82,12 @@ class SponsorDialog(QDialog):
 
         image = QLabel()
         image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        image.setMinimumSize(280, 360)
+        image.setMinimumSize(340, 440)
         image.setStyleSheet("background: #fff; border: 1px solid #c8c6c0;")
         if path is not None and path.exists():
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():
-                image.setPixmap(pixmap.scaled(260, 340, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                image.setPixmap(pixmap.scaled(320, 420, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             else:
                 image.setText("二维码图片无法读取")
         else:

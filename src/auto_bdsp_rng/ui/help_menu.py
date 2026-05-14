@@ -63,10 +63,6 @@ class HelpMenuController:
         self.changelog_action.triggered.connect(self.show_changelog)
         menu.addAction(self.changelog_action)
 
-        self.sponsors_action = QAction("赞助名单", self.window)
-        self.sponsors_action.triggered.connect(self.show_sponsors)
-        menu.addAction(self.sponsors_action)
-
         self.contact_menu = QMenu("作者联系", self.window)
         self.email_action = QAction(f"邮箱：{AUTHOR_EMAIL}", self.window)
         self.email_action.triggered.connect(self.copy_author_email)
