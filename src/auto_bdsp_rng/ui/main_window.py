@@ -1898,6 +1898,7 @@ class MainWindow(QMainWindow):
         w = QLineEdit(str(value))
         w.setValidator(QIntValidator(minimum, maximum))
         w.setAlignment(Qt.AlignmentFlag.AlignRight)
+        w.setFixedHeight(36)
         return w
 
     def _double_spin(self, minimum: float, maximum: float, value: float, decimals: int) -> QDoubleSpinBox:
@@ -1906,6 +1907,7 @@ class MainWindow(QMainWindow):
         spin.setDecimals(decimals)
         spin.setSingleStep(0.1)
         spin.setValue(value)
+        spin.setFixedHeight(36)
         return spin
 
     def _text(self, key: str) -> str:
