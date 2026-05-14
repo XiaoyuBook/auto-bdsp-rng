@@ -150,11 +150,10 @@ class AutoRngPanel(QWidget):
     def _build_toolbar(self) -> QWidget:
         toolbar = QFrame()
         toolbar.setObjectName("AutoRngToolbar")
-        toolbar.setMaximumHeight(60)
-        toolbar.setMinimumHeight(56)
+        toolbar.setFixedHeight(60)
         row = QHBoxLayout(toolbar)
         row.setContentsMargins(12, 8, 12, 8)
-        row.setSpacing(8)
+        row.setSpacing(0)
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("单次", "single")
         self.mode_combo.addItem("循环 N 次", "count")
@@ -172,39 +171,55 @@ class AutoRngPanel(QWidget):
         self.start_button.setMenu(self.start_menu)
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("DangerButton")
-        self.status_badge = QLabel("空闲")
+        self.status_badge = QLabel("状态：空闲")
         self.status_badge.setObjectName("Badge")
-        for widget in (self.mode_combo, self.loop_count):
-            widget.setFixedHeight(34)
-        self.mode_combo.setFixedWidth(110)
+        self.debug_output_check = QCheckBox("调试")
+        self.debug_output_check.setToolTip("输出 CLI 耗时、时间戳等调试信息")
+
+        # 统一控件尺寸
+        self.mode_combo.setFixedHeight(36)
+        self.mode_combo.setFixedWidth(120)
+        self.loop_count.setFixedHeight(36)
         self.loop_count.setFixedWidth(80)
-        self.start_button.setFixedHeight(34)
-        self.stop_button.setFixedHeight(34)
-        self.start_button.setMinimumWidth(68)
-        self.stop_button.setMinimumWidth(68)
+        self.start_button.setFixedHeight(36)
+        self.start_button.setMinimumWidth(88)
+        self.stop_button.setFixedHeight(36)
+        self.stop_button.setMinimumWidth(80)
+
+        # 信号/槽（保持不变）
         self.start_button.clicked.connect(self._start_clicked)
         self.start_from_seed_action.triggered.connect(self._start_clicked)
         self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)
         self.stop_button.clicked.connect(self._stop_clicked)
-        self.debug_output_check = QCheckBox("调试")
-        self.debug_output_check.setToolTip("输出 CLI 耗时、时间戳等调试信息")
-        row.addWidget(QLabel("运行模式"))
-        row.addWidget(self.mode_combo)
-        row.addWidget(QLabel("次数"))
-        row.addWidget(self.loop_count)
-        row.addWidget(self.debug_output_check)
-        row.addStretch(1)
-        row.addWidget(self.status_badge)
-        row.addWidget(self.start_button)
-        row.addWidget(self.stop_button)
-        # 临时按钮：手动捕获精灵信息
+
+        # ── 左分区：运行模式 + 次数 + 调试 ──
+        left_layout = QHBoxLayout()
+        left_layout.setSpacing(12)
+        left_layout.addWidget(QLabel("运行模式"))
+        left_layout.addWidget(self.mode_combo)
+        left_layout.addWidget(QLabel("次数"))
+        left_layout.addWidget(self.loop_count)
+        left_layout.addWidget(self.debug_output_check)
+
+        # ── 右分区：状态 + 按钮 ──
         self.capture_info_button = QPushButton("捕获精灵信息")
         self.capture_info_button.setObjectName("SecondaryButton")
-        self.capture_info_button.setFixedHeight(34)
-        self.capture_info_button.setMinimumWidth(110)
+        self.capture_info_button.setFixedHeight(36)
+        self.capture_info_button.setMinimumWidth(120)
         self.capture_info_button.setToolTip("在笔记页点击，自动切换能力页并提取全部信息")
         self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
-        row.addWidget(self.capture_info_button)
+
+        right_layout = QHBoxLayout()
+        right_layout.setSpacing(10)
+        right_layout.addWidget(self.status_badge)
+        right_layout.addSpacing(16)
+        right_layout.addWidget(self.start_button)
+        right_layout.addWidget(self.stop_button)
+        right_layout.addWidget(self.capture_info_button)
+
+        row.addLayout(left_layout)
+        row.addStretch(1)
+        row.addLayout(right_layout)
         return toolbar
 
     def _build_config_panel(self) -> QWidget:
