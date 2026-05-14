@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeyEvent, QTextCursor
 
 import auto_bdsp_rng.ui.easycon_panel as panel_module
 from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConInstallation, EasyConStatus
-from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
+from auto_bdsp_rng.ui.easycon_panel import EasyConPanel, KeyMappingDialog
 
 
 @pytest.fixture
@@ -119,6 +119,12 @@ class FakeBridgeBackend:
 def test_easycon_panel_lists_builtin_scripts(easycon_panel):
     assert easycon_panel.script_list.count() == 1
     assert easycon_panel.script_list.item(0).text() == "玫瑰公园.txt"
+
+
+def test_key_mapping_dialog_layout_fits_fixed_window(app):
+    dialog = KeyMappingDialog({})
+
+    assert dialog.minimumSizeHint().height() <= dialog.height()
 
 
 def test_easycon_panel_loads_script_and_blocks_required_parameter(easycon_panel):

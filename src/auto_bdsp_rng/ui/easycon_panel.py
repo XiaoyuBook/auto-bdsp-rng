@@ -242,6 +242,7 @@ class KeyMappingDialog(QDialog):
     """按键映射对话框 — 手柄背景图 + 可点击按键位置绑定"""
 
     _IMG_W, _IMG_H = 786, 786
+    _PANEL_W, _PANEL_H = 500, 500
 
     # 基于 786×786 手柄图片的像素分析精确定位
     # 坐标通过 PIL 逐像素扫描手柄图确定 (x, y, w, h, name, label)
@@ -293,11 +294,12 @@ class KeyMappingDialog(QDialog):
         # 手柄图片背景面板
         bg_path = str(Path(__file__).resolve().parent / "controller_bg.png")
         panel = QLabel()
-        panel.setFixedSize(self._IMG_W, self._IMG_H)
+        panel.setFixedSize(self._PANEL_W, self._PANEL_H)
         panel.setPixmap(QPixmap(bg_path).scaled(
-            self._IMG_W, self._IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            self._PANEL_W, self._PANEL_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         ))
         panel.setScaledContents(False)
+        panel.setProperty("role", "controller_mapping_panel")
 
         btn_style = (
             "QPushButton {"
@@ -309,10 +311,17 @@ class KeyMappingDialog(QDialog):
             " QPushButton:hover { background: rgba(120,120,120,180); }"
         )
 
+        scale_x = self._PANEL_W / self._IMG_W
+        scale_y = self._PANEL_H / self._IMG_H
         for x, y, w, h, name, label in self._BTN_POSITIONS:
             btn = QPushButton(label, panel)
             btn.setCheckable(True)
-            btn.setGeometry(x, y, w, h)
+            btn.setGeometry(
+                round(x * scale_x),
+                round(y * scale_y),
+                max(24, round(w * scale_x)),
+                max(20, round(h * scale_y)),
+            )
             btn.setStyleSheet(btn_style)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setProperty("label", label)
