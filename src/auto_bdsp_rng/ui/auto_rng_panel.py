@@ -150,10 +150,11 @@ class AutoRngPanel(QWidget):
     def _build_toolbar(self) -> QWidget:
         toolbar = QFrame()
         toolbar.setObjectName("AutoRngToolbar")
-        toolbar.setFixedHeight(60)
+        toolbar.setFixedHeight(56)
         row = QHBoxLayout(toolbar)
-        row.setContentsMargins(12, 8, 12, 8)
+        row.setContentsMargins(14, 0, 14, 0)
         row.setSpacing(0)
+        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("单次", "single")
         self.mode_combo.addItem("循环 N 次", "count")
@@ -176,14 +177,15 @@ class AutoRngPanel(QWidget):
         self.debug_output_check = QCheckBox("调试")
         self.debug_output_check.setToolTip("输出 CLI 耗时、时间戳等调试信息")
 
-        # 统一控件尺寸
-        self.mode_combo.setFixedHeight(36)
+        # 统一控件尺寸：全部 34px
+        self.status_badge.setFixedHeight(34)
+        self.mode_combo.setFixedHeight(34)
         self.mode_combo.setFixedWidth(120)
-        self.loop_count.setFixedHeight(36)
+        self.loop_count.setFixedHeight(34)
         self.loop_count.setFixedWidth(80)
-        self.start_button.setFixedHeight(36)
+        self.start_button.setFixedHeight(34)
         self.start_button.setMinimumWidth(88)
-        self.stop_button.setFixedHeight(36)
+        self.stop_button.setFixedHeight(34)
         self.stop_button.setMinimumWidth(80)
 
         # 信号/槽（保持不变）
@@ -204,7 +206,7 @@ class AutoRngPanel(QWidget):
         # ── 右分区：状态 + 按钮 ──
         self.capture_info_button = QPushButton("捕获精灵信息")
         self.capture_info_button.setObjectName("SecondaryButton")
-        self.capture_info_button.setFixedHeight(36)
+        self.capture_info_button.setFixedHeight(34)
         self.capture_info_button.setMinimumWidth(120)
         self.capture_info_button.setToolTip("在笔记页点击，自动切换能力页并提取全部信息")
         self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
@@ -230,12 +232,13 @@ class AutoRngPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         self.strategy_group = self._build_strategy_group()
-        layout.addWidget(self.strategy_group, 1)
+        layout.addWidget(self.strategy_group)
+        layout.addStretch(1)
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
         group = QGroupBox("自动策略")
-        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form = QFormLayout(group)
         form.setContentsMargins(12, 12, 12, 12)
         form.setVerticalSpacing(8)
@@ -366,7 +369,7 @@ class AutoRngPanel(QWidget):
     def _build_log_group(self) -> QGroupBox:
         group = QGroupBox("日志")
         group.setMaximumWidth(16777215)
-        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.log_group = group
         layout = QVBoxLayout(group)
         self.log_view = _CopyableTextEdit()
