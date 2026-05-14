@@ -1690,6 +1690,21 @@ class MainWindow(QMainWindow):
                 max-height: 34px;
                 padding: 0;
             }
+            QFrame#AutoRngToolbar QPushButton,
+            QFrame#AutoRngToolbar QToolButton {
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0 12px;
+            }
+            QGroupBox#TargetSummaryGroup {
+                margin-top: 0;
+                padding: 8px 16px 8px 16px;
+            }
+            QGroupBox#TargetSummaryGroup QPushButton {
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0 14px;
+            }
 
             /* ── 预览 ── */
             QLabel#Preview {

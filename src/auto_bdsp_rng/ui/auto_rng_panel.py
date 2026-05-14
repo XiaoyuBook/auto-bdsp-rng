@@ -215,6 +215,7 @@ class AutoRngPanel(QWidget):
 
         right_layout = QHBoxLayout()
         right_layout.setSpacing(10)
+        right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         right_layout.addWidget(self.status_badge)
         right_layout.addSpacing(16)
         right_layout.addWidget(self.start_button)
@@ -334,12 +335,14 @@ class AutoRngPanel(QWidget):
 
     def _build_target_summary_group(self) -> QGroupBox:
         group = QGroupBox()
+        group.setObjectName("TargetSummaryGroup")
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        group.setMaximumHeight(204)
+        group.setMaximumHeight(150)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 6, 12, 8)
+        layout.setSpacing(5)
         header = QHBoxLayout()
+        header.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.target_summary_title = QLabel("精灵筛选列表：-")
         self.target_button = QPushButton("目标精灵设置...")
         self.target_button.setFixedHeight(34)
@@ -352,8 +355,8 @@ class AutoRngPanel(QWidget):
 
         self.target_summary_scroll = QScrollArea()
         self.target_summary_scroll.setWidgetResizable(True)
-        self.target_summary_scroll.setMinimumHeight(66)
-        self.target_summary_scroll.setMaximumHeight(84)
+        self.target_summary_scroll.setMinimumHeight(56)
+        self.target_summary_scroll.setMaximumHeight(62)
         self.target_summary_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.target_summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.target_summary_container = QWidget()
