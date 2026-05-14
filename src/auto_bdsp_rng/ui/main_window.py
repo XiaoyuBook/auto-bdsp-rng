@@ -1297,74 +1297,94 @@ class MainWindow(QMainWindow):
 
         # ===== 右: 其他筛选 =====
         right_col = QVBoxLayout()
-        right_col.setSpacing(6)
+        right_col.setSpacing(5)
 
-        right_grid = QGridLayout()
-        right_grid.setVerticalSpacing(5)
-        right_grid.setHorizontalSpacing(8)
+        right_form = QGridLayout()
+        right_form.setVerticalSpacing(5)
+        right_form.setHorizontalSpacing(8)
 
-        def _make_combo(items):
-            cb = QComboBox()
-            for text, value in items:
-                cb.addItem(text, value)
-            cb.setFixedHeight(30)
-            cb.setFixedWidth(150)
-            return cb
+        LABEL_W = 60
+        COMBO_W = 190
+        SPIN_W = 68
 
-        self.ability_filter = _make_combo([("任意",255),("0",0),("1",1),("隐藏",2)])
-        self.gender_filter  = _make_combo([("任意",255),("雄性",0),("雌性",1),("无性别",2)])
+        self.ability_filter = QComboBox()
+        for text, value in [("任意",255),("0",0),("1",1),("隐藏",2)]:
+            self.ability_filter.addItem(text, value)
+        self.ability_filter.setFixedHeight(32)
+        self.ability_filter.setFixedWidth(COMBO_W)
+
+        self.gender_filter = QComboBox()
+        for text, value in [("任意",255),("雄性",0),("雌性",1),("无性别",2)]:
+            self.gender_filter.addItem(text, value)
+        self.gender_filter.setFixedHeight(32)
+        self.gender_filter.setFixedWidth(COMBO_W)
+
         self.nature_combo = QComboBox()
         self.nature_combo.addItem("任意", -1)
         for index, nature in enumerate(NATURES_ZH):
             self.nature_combo.addItem(nature, index)
-        self.nature_combo.setFixedHeight(30)
-        self.nature_combo.setFixedWidth(150)
+        self.nature_combo.setFixedHeight(32)
+        self.nature_combo.setFixedWidth(COMBO_W)
+
         self.shiny_filter = QComboBox()
         for text, value in [("任意","any"),("异色","shiny"),("Star","star"),("Square","square"),("非异色","none")]:
             self.shiny_filter.addItem(text, value)
-        self.shiny_filter.setFixedHeight(30)
-        self.shiny_filter.setFixedWidth(150)
+        self.shiny_filter.setFixedHeight(32)
+        self.shiny_filter.setFixedWidth(COMBO_W)
 
-        # Row 0: 特性 + 性别
-        right_grid.addWidget(QLabel("特性"), 0, 0)
-        right_grid.addWidget(self.ability_filter, 0, 1)
-        right_grid.addWidget(QLabel("性别"), 0, 2)
-        right_grid.addWidget(self.gender_filter, 0, 3)
-        # Row 1: 性格 + 异色
-        right_grid.addWidget(QLabel("性格"), 1, 0)
-        right_grid.addWidget(self.nature_combo, 1, 1)
-        right_grid.addWidget(QLabel("异色"), 1, 2)
-        right_grid.addWidget(self.shiny_filter, 1, 3)
-        # Row 2: Height + Weight
         self.height_min = self._spin(0, 255, 0)
-        self.height_min.setFixedWidth(56); self.height_min.setFixedHeight(30)
+        self.height_min.setFixedWidth(SPIN_W); self.height_min.setFixedHeight(32)
         self.height_max = self._spin(0, 255, 255)
-        self.height_max.setFixedWidth(56); self.height_max.setFixedHeight(30)
+        self.height_max.setFixedWidth(SPIN_W); self.height_max.setFixedHeight(32)
         self.weight_min = self._spin(0, 255, 0)
-        self.weight_min.setFixedWidth(56); self.weight_min.setFixedHeight(30)
+        self.weight_min.setFixedWidth(SPIN_W); self.weight_min.setFixedHeight(32)
         self.weight_max = self._spin(0, 255, 255)
-        self.weight_max.setFixedWidth(56); self.weight_max.setFixedHeight(30)
+        self.weight_max.setFixedWidth(SPIN_W); self.weight_max.setFixedHeight(32)
 
-        right_grid.addWidget(QLabel("Height"), 2, 0)
-        right_grid.addWidget(self.height_min, 2, 1)
-        right_grid.addWidget(self.height_max, 2, 2)
-        right_grid.addWidget(QLabel("Weight"), 2, 3)
-        right_grid.addWidget(self.weight_min, 2, 4)
-        right_grid.addWidget(self.weight_max, 2, 5)
+        # 一行一个字段
+        for row, (label_text, widget) in enumerate([
+            ("特性",   self.ability_filter),
+            ("性别",   self.gender_filter),
+            ("性格",   self.nature_combo),
+            ("异色",   self.shiny_filter),
+        ]):
+            lbl = QLabel(label_text)
+            lbl.setFixedWidth(LABEL_W)
+            right_form.addWidget(lbl, row, 0)
+            right_form.addWidget(widget, row, 1)
 
-        right_col.addLayout(right_grid)
-        # "取消筛选" checkbox
-        self.skip_filter = QCheckBox("取消筛选")
-        right_col.addWidget(self.skip_filter)
-        right_col.addStretch()
-        outer.addLayout(right_col, 1)
+        # Height 行
+        right_form.addWidget(QLabel("Height"), 4, 0)
+        ht_row = QHBoxLayout()
+        ht_row.setSpacing(8)
+        ht_row.addWidget(self.height_min)
+        ht_row.addWidget(self.height_max)
+        ht_row.addStretch()
+        right_form.addLayout(ht_row, 4, 1)
+
+        # Weight 行
+        right_form.addWidget(QLabel("Weight"), 5, 0)
+        wt_row = QHBoxLayout()
+        wt_row.setSpacing(8)
+        wt_row.addWidget(self.weight_min)
+        wt_row.addWidget(self.weight_max)
+        wt_row.addStretch()
+        right_form.addLayout(wt_row, 5, 1)
+
+        right_col.addLayout(right_form)
 
         # 个体值计算器按钮
         self.iv_calculator_button = QPushButton("个体值计算器")
         self.iv_calculator_button.setFixedHeight(32)
-        self.iv_calculator_button.setFixedWidth(160)
+        self.iv_calculator_button.setFixedWidth(190)
         self.iv_calculator_button.clicked.connect(self.open_iv_calculator)
         right_col.addWidget(self.iv_calculator_button)
+        right_col.addStretch()
+        outer.addLayout(right_col, 1)
+
+        # skip_filter 被业务代码引用，保留为隐藏
+        self.skip_filter = QCheckBox()
+        self.skip_filter.setVisible(False)
 
         # 保留旧隐藏控件
         self.nature_list = QListWidget()
