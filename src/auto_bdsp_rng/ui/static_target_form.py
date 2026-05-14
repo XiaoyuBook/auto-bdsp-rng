@@ -164,7 +164,7 @@ class StaticTargetForm(QWidget):
             ("IV Count", self.iv_count_display),
         )
         for row, (label, widget) in enumerate(rows):
-            widget.setFixedHeight(32)
+            widget.setFixedHeight(36)
             widget.setFixedWidth(160)
             settings_layout.addWidget(QLabel(label), row, 0)
             settings_layout.addWidget(widget, row, 1)
@@ -255,7 +255,7 @@ class StaticTargetForm(QWidget):
 
         right_col.addLayout(grid)
         for combo in (self.ability_filter, self.gender_filter, self.nature_combo, self.shiny_filter):
-            combo.setFixedHeight(32)
+            combo.setFixedHeight(36)
             combo.setFixedWidth(240)
         self.skip_filter = QCheckBox("取消筛选")
         right_col.addWidget(self.skip_filter)
