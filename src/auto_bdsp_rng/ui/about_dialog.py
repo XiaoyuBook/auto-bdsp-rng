@@ -205,18 +205,15 @@ class AboutDialog(QDialog):
             col.setSpacing(8)
             col.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            # 图标按钮：统一缩放至48x48保证大小一致
+            # 图标按钮：全部56x56
             icon_btn = QPushButton()
             icon_btn.setFixedSize(56, 56)
             icon_btn.setObjectName("FriendIconBtn")
             icon_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             icon_btn.clicked.connect(lambda checked, u=url: QDesktopServices.openUrl(QUrl(u)))
             if icon_path.exists():
-                pixmap = QPixmap(str(icon_path))
-                if not pixmap.isNull():
-                    scaled = pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                    icon_btn.setIcon(QIcon(scaled))
-                    icon_btn.setIconSize(QSize(48, 48))
+                icon_btn.setIcon(QIcon(str(icon_path)))
+                icon_btn.setIconSize(QSize(56, 56))
             col.addWidget(icon_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
             # 名称
