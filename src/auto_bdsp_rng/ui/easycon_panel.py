@@ -1436,7 +1436,9 @@ class EasyConPanel(QWidget):
         for prefix in skip_prefixes:
             if clean.startswith(prefix):
                 return None
-        # 保留：连接成功/失败、PRINT 输出、exit code、时间信息
+        # 跳过 exit code 0（正常完成不需要显示）
+        if clean == "exit code: 0" or clean.startswith("exit code: 0"):
+            return None
         return clean
 
     def _read_stdout(self) -> None:
