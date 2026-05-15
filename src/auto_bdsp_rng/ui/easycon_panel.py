@@ -389,6 +389,9 @@ class EasyConPanel(QWidget):
         self.virtual_controller_enabled = False
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
         self.key_mapping: dict[str, int] = dict(DEFAULT_KEY_MAPPING)
+        self._recording = False
+        self._recorded_lines: list[str] = []
+        self._last_record_ts: float = 0.0
         self.process: QProcess | None = None
         self.current_run_started_at: datetime | None = None
         self.current_run_script_path: Path | None = None
@@ -864,13 +867,16 @@ class EasyConPanel(QWidget):
         help_btn.setStyleSheet(btn_style)
         layout.addWidget(help_btn, 1, 1, 1, 1)
 
-        record_btn = QPushButton("录制脚本")
-        record_btn.setStyleSheet(btn_style)
-        layout.addWidget(record_btn, 2, 0, 1, 1)
+        self.record_btn = QPushButton("录制脚本")
+        self.record_btn.setStyleSheet(btn_style)
+        self.record_btn.clicked.connect(self._start_recording)
+        layout.addWidget(self.record_btn, 2, 0, 1, 1)
 
-        pause_btn = QPushButton("暂停录制")
-        pause_btn.setStyleSheet(btn_style)
-        layout.addWidget(pause_btn, 2, 1, 1, 1)
+        self.pause_btn = QPushButton("暂停录制")
+        self.pause_btn.setStyleSheet(btn_style)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.clicked.connect(self._toggle_pause_recording)
+        layout.addWidget(self.pause_btn, 2, 1, 1, 1)
 
         # 手柄测试按钮（保留原有功能）
         self.controller_duration = QSpinBox()
@@ -1809,6 +1815,9 @@ class EasyConPanel(QWidget):
         if not down and key not in self.virtual_controller_keys:
             return True
         kind, value, direction = action
+        # 录制：生成 EasyCon 脚本命令
+        if self._recording and down:
+            self._append_recorded_action(action)
         try:
             if kind == "button":
                 if down:
@@ -1817,6 +1826,14 @@ class EasyConPanel(QWidget):
                 else:
                     self._ensure_bridge_backend().key_up(value)
                     self.virtual_controller_keys.pop(key, None)
+                    # 录制按键释放
+                    if self._recording:
+                        now = datetime.now().timestamp()
+                        wait_ms = int((now - self._last_record_ts) * 1000) if self._last_record_ts else 0
+                        if wait_ms > 0:
+                            self._recorded_lines.append(f"WAIT {wait_ms}")
+                        self._recorded_lines.append(f"{value} UP")
+                        self._last_record_ts = now
             elif direction is not None:
                 self._ensure_bridge_backend().stick_direction(value, direction, down)
                 if down:
@@ -1828,6 +1845,76 @@ class EasyConPanel(QWidget):
             self._append_log("error", f"键盘虚拟手柄发送失败: {exc}")
             self.keyboard_controller_check.setChecked(False)
         return True
+
+    def _append_recorded_action(self, action: tuple[str, str, str | None]) -> None:
+        kind, value, direction = action
+        now = datetime.now().timestamp()
+        wait_ms = int((now - self._last_record_ts) * 1000) if self._last_record_ts else 0
+        if wait_ms > 0:
+            self._recorded_lines.append(f"WAIT {wait_ms}")
+        self._last_record_ts = now
+        if kind == "button":
+            self._recorded_lines.append(f"{value} DOWN")
+        elif direction is not None:
+            label = f"{value.upper()}Stick({direction})" if value in ("left", "right") else direction
+            self._recorded_lines.append(label)
+
+    def _start_recording(self) -> None:
+        if self._recording:
+            self._stop_recording()
+            return
+        if not self.virtual_controller_enabled:
+            self._append_log("warn", "请先启用键盘虚拟手柄再开始录制")
+            return
+        self._recording = True
+        self._recorded_lines = []
+        self._last_record_ts = datetime.now().timestamp()
+        self.record_btn.setText("停止录制")
+        self.record_btn.setStyleSheet(self.record_btn.styleSheet() + "QPushButton { color: #DC2626; }")
+        self.pause_btn.setEnabled(True)
+        self._append_log("info", "开始录制脚本，在键盘虚拟手柄上操作即可...")
+
+    def _stop_recording(self) -> None:
+        self._recording = False
+        self.record_btn.setText("录制脚本")
+        self.pause_btn.setEnabled(False)
+        if self._recorded_lines:
+            script = "\n".join(self._recorded_lines) + "\n"
+            editor = self.editor
+            cursor = editor.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            editor.setTextCursor(cursor)
+            editor.insertPlainText(script)
+            self._append_log("info", f"录制完成，已插入 {len(self._recorded_lines)} 行脚本")
+            self._recorded_lines = []
+        else:
+            self._append_log("info", "录制已停止（无操作记录）")
+
+    def _toggle_pause_recording(self) -> None:
+        if not self._recording:
+            return
+        self._recording = False
+        self.pause_btn.setText("继续录制")
+        self.pause_btn.setStyleSheet(self.pause_btn.styleSheet() + "QPushButton { color: #10A37F; }")
+        self._append_log("info", "录制已暂停")
+        # 重新点击时恢复
+        try:
+            self.pause_btn.clicked.disconnect()
+        except Exception:
+            pass
+        self.pause_btn.clicked.connect(self._resume_recording)
+
+    def _resume_recording(self) -> None:
+        self._recording = True
+        self._last_record_ts = datetime.now().timestamp()
+        self.pause_btn.setText("暂停录制")
+        self.pause_btn.setEnabled(True)
+        self._append_log("info", "录制已恢复")
+        try:
+            self.pause_btn.clicked.disconnect()
+        except Exception:
+            pass
+        self.pause_btn.clicked.connect(self._toggle_pause_recording)
 
     def _release_virtual_controller_keys(self) -> None:
         for key, action in list(self.virtual_controller_keys.items()):
