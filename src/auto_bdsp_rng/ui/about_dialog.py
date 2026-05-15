@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -190,31 +190,39 @@ class AboutDialog(QDialog):
         group = self._card("友情链接")
         layout = QHBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(16)
+        layout.setSpacing(20)
+
+        assets_dir = Path(__file__).resolve().parents[3] / "docs" / "assets"
 
         projects = (
-            ("🎮", "伊机控", "Switch 自动化控制\n脚本执行与串口连接", EASYCON_URL),
-            ("👁", "Project_Xs", "眨眼测种\n摄像头捕捉恢复 Seed", PROJECT_XS_URL),
-            ("🔍", "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选", POKEFINDER_URL),
+            (assets_dir / "friend_easycon.ico",    "伊机控",     "Switch 自动化控制\n脚本执行与串口连接", EASYCON_URL),
+            (assets_dir / "friend_project_xs.png",  "Project_Xs", "眨眼测种\n摄像头捕捉恢复 Seed",       PROJECT_XS_URL),
+            (assets_dir / "friend_pokefinder.ico",  "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选",     POKEFINDER_URL),
         )
 
-        for icon_text, name, desc, url in projects:
+        for icon_path, name, desc, url in projects:
             col = QVBoxLayout()
-            col.setSpacing(6)
+            col.setSpacing(8)
             col.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            icon_btn = QPushButton(icon_text)
-            icon_btn.setFixedSize(52, 52)
+            # 图标按钮
+            icon_btn = QPushButton()
+            icon_btn.setFixedSize(56, 56)
             icon_btn.setObjectName("FriendIconBtn")
             icon_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             icon_btn.clicked.connect(lambda checked, u=url: QDesktopServices.openUrl(QUrl(u)))
+            if icon_path.exists():
+                icon_btn.setIcon(QIcon(str(icon_path)))
+                icon_btn.setIconSize(icon_btn.size() - QSize(8, 8))
             col.addWidget(icon_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
+            # 名称
             name_lbl = QLabel(name)
             name_lbl.setObjectName("FriendLinkName")
             name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             col.addWidget(name_lbl)
 
+            # 描述
             desc_lbl = QLabel(desc)
             desc_lbl.setObjectName("FriendDesc")
             desc_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
