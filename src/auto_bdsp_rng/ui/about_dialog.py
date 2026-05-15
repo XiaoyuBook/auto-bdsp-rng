@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication, QPixmap
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QFrame,
@@ -27,6 +28,9 @@ from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
 PROJECT_REPOSITORY_URL = "https://github.com/XiaoyuBook/auto-bdsp-rng"
 EASYCON_URL = "https://github.com/EasyConNS/EasyCon"
 PROJECT_XS_URL = "https://github.com/HaKu76/Project_Xs_CHN"
+AUTHOR_BILIBILI_URL = "https://space.bilibili.com/269020915"
+AUTHOR_GITHUB_URL = "https://github.com/XiaoyuBook"
+AUTHOR_EMAIL = "kesong2003@qq.com"
 
 
 class AboutDialog(QDialog):
@@ -67,13 +71,13 @@ class AboutDialog(QDialog):
         left.setSpacing(12)
         left.addWidget(self._project_info_card())
         left.addWidget(self._usage_card())
-        left.addWidget(self._github_card())
         left.addWidget(self._friend_links_card())
 
         right = QVBoxLayout()
         right.setSpacing(12)
         right.addWidget(self._open_source_card())
-        right.addWidget(self._sponsor_card(), 1)
+        right.addWidget(self._contact_card())
+        right.addWidget(self._sponsor_card())
 
         content.addLayout(left, 5)
         content.addLayout(right, 6)
@@ -188,37 +192,6 @@ class AboutDialog(QDialog):
         layout.addStretch(1)
         return group
 
-    def _github_card(self) -> QGroupBox:
-        group = self._card("GitHub")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        icon = QLabel("GH")
-        icon.setObjectName("GithubIcon")
-        icon.setFixedSize(34, 34)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        row.addWidget(icon)
-
-        repo = QLabel("XiaoyuBook/auto-bdsp-rng")
-        repo.setObjectName("RepoLabel")
-        repo.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        row.addWidget(repo, 1)
-        layout.addLayout(row)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        open_button = QPushButton("打开项目主页")
-        open_button.clicked.connect(self._handle_open_source)
-        buttons.addWidget(open_button)
-        copy_button = QPushButton("复制仓库地址")
-        copy_button.clicked.connect(self._handle_copy_repository)
-        buttons.addWidget(copy_button)
-        layout.addLayout(buttons)
-        return group
-
     def _friend_links_card(self) -> QGroupBox:
         group = self._card("友情链接")
         layout = QVBoxLayout(group)
@@ -237,56 +210,85 @@ class AboutDialog(QDialog):
 
         return group
 
+    def _contact_card(self) -> QGroupBox:
+        group = self._card("作者联系")
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        # 邮箱按钮
+        email_btn = QPushButton("📧 邮箱")
+        email_btn.setObjectName("ContactButton")
+        email_btn.setToolTip(AUTHOR_EMAIL)
+        email_btn.clicked.connect(self._handle_copy_email)
+        layout.addWidget(email_btn, 1)
+
+        # B站按钮
+        bili_btn = QPushButton("📺 B站主页")
+        bili_btn.setObjectName("ContactButton")
+        bili_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(AUTHOR_BILIBILI_URL)))
+        layout.addWidget(bili_btn, 1)
+
+        # GitHub按钮
+        gh_btn = QPushButton("🐙 GitHub")
+        gh_btn.setObjectName("ContactButton")
+        gh_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(AUTHOR_GITHUB_URL)))
+        layout.addWidget(gh_btn, 1)
+
+        return group
+
+    def _handle_copy_email(self) -> None:
+        QApplication.clipboard().setText(AUTHOR_EMAIL)
+
+    def _show_qr_popup(self, path: Path | None, title: str) -> None:
+        if path is None or not path.exists():
+            return
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setMinimumSize(400, 440)
+        dlg.setStyleSheet("QDialog { background: #fff; }")
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 16)
+        img = QLabel()
+        img.setPixmap(pixmap.scaled(360, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(img, 1)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        dlg.exec()
+
     def _sponsor_card(self) -> QGroupBox:
         group = self._card("支持项目")
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        intro = QLabel("如果项目对你有帮助，\n欢迎赞助支持持续维护。")
+        intro = QLabel("如果项目对你有帮助，欢迎赞助支持持续维护。")
         intro.setWordWrap(True)
         intro.setObjectName("MutedLabel")
         layout.addWidget(intro)
 
-        qr_row = QHBoxLayout()
-        qr_row.setSpacing(12)
-        qr_row.addWidget(self._qr_block("微信", self._sponsor_assets.wechat))
-        qr_row.addWidget(self._qr_block("支付宝", self._sponsor_assets.alipay))
-        layout.addLayout(qr_row, 1)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+
+        wechat_btn = QPushButton("微信赞赏")
+        wechat_btn.clicked.connect(lambda: self._show_qr_popup(self._sponsor_assets.wechat, "微信赞赏"))
+        btn_row.addWidget(wechat_btn, 1)
+
+        alipay_btn = QPushButton("支付宝赞赏")
+        alipay_btn.clicked.connect(lambda: self._show_qr_popup(self._sponsor_assets.alipay, "支付宝赞赏"))
+        btn_row.addWidget(alipay_btn, 1)
+
+        layout.addLayout(btn_row)
 
         sponsors = QPushButton("赞助名单")
         sponsors.clicked.connect(self._handle_open_sponsors)
         layout.addWidget(sponsors)
         return group
-
-    def _qr_block(self, title: str, path: Path | None) -> QWidget:
-        block = QWidget()
-        block.setObjectName("QrBlock")
-        layout = QVBoxLayout(block)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        label = QLabel(title)
-        label.setObjectName("QrTitle")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(label)
-
-        image = QLabel()
-        image.setObjectName("QrImage")
-        image.setFixedSize(132, 132)
-        image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        image.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        if path is not None and path.exists():
-            pixmap = QPixmap(str(path))
-            if not pixmap.isNull():
-                image.setPixmap(pixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-            else:
-                image.setText("无法读取")
-        else:
-            image.setText("未包含")
-        layout.addWidget(image, alignment=Qt.AlignmentFlag.AlignCenter)
-        return block
 
     def _rule_column(self, title: str, items: tuple[str, ...], allowed: bool) -> QWidget:
         widget = QWidget()
@@ -437,24 +439,6 @@ class AboutDialog(QDialog):
             color: {warning};
             font-weight: 700;
         }}
-        QLabel#GithubIcon {{
-            color: {soft};
-            background: {soft_bg};
-            border: 1px solid {border};
-            border-radius: 17px;
-            font-weight: 900;
-            font-size: 12px;
-        }}
-        QLabel#QrTitle {{
-            color: {muted};
-            font-weight: 700;
-        }}
-        QLabel#QrImage {{
-            background: {panel};
-            border: 1px solid {border};
-            border-radius: 5px;
-            color: {muted};
-        }}
         QLabel#BuildLabel {{
             color: {muted};
             font-size: 11px;
@@ -489,6 +473,21 @@ class AboutDialog(QDialog):
         QPushButton#PrimaryButton:hover {{
             background: #1e7d5a;
             border-color: #1e7d5a;
+        }}
+        QPushButton#ContactButton {{
+            background: {soft_bg};
+            border: 1px solid {border};
+            border-radius: 6px;
+            min-height: 36px;
+            padding: 6px 10px;
+            color: {soft};
+            font-weight: 700;
+            font-size: 13px;
+        }}
+        QPushButton#ContactButton:hover {{
+            background: {soft};
+            color: #ffffff;
+            border-color: {soft};
         }}
         """
 
