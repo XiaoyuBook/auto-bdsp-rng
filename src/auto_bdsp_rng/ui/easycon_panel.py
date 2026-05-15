@@ -1680,9 +1680,14 @@ class EasyConPanel(QWidget):
             self._append_log("info", f"串口: {port}")
 
     def toggle_bridge_connection(self) -> None:
+        # 如果状态标记为已连接但实际后端未连接（如 CLI 模式切回 Bridge），修复状态
         if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
-            self.disconnect_bridge()
-            return
+            if self.bridge_backend is not None and self.bridge_backend.connected():
+                self.disconnect_bridge()
+                return
+            # 实际未连接，重置状态
+            self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
+            self._update_bridge_controls()
         self.connect_bridge()
 
     def connect_bridge(self) -> None:
