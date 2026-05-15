@@ -3168,6 +3168,7 @@ class MainWindow(QMainWindow):
             stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
             candidates: list[object] = []
             last_ocr_stats: dict[str, object] | None = None
+            prev_ocr_key: str | None = None  # 用于判断 OCR 结果是否重复
             for attempt in range(1, 4):
                 log(f"[自动反查] 能力页 OCR 第{attempt}次…")
                 stats_frame = capture_preview_frame(tracking_config.capture)
@@ -3205,8 +3206,15 @@ class MainWindow(QMainWindow):
                     "stats": dict(zip(stat_names, stat_vals)),
                     "iv_min": list(iv_min), "iv_max": list(iv_max),
                 }
-                for i, name in enumerate(stat_names):
-                    log(f"[自动反查] {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{base_stats[i]} Lv{level})")
+                # 判断此次 OCR 结果是否与上次完全相同
+                curr_key = f"{stat_vals}|{iv_min}|{iv_max}"
+                is_new_ocr = curr_key != prev_ocr_key
+                if is_new_ocr:
+                    prev_ocr_key = curr_key
+                    for i, name in enumerate(stat_names):
+                        log(f"[自动反查] {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{base_stats[i]} Lv{level})")
+                else:
+                    log(f"[自动反查] 第{attempt}次 OCR 结果与上次相同，跳过重复输出")
 
                 reverse_filter = StateFilter(
                     iv_min=tuple(iv_min), iv_max=tuple(iv_max),
@@ -3214,7 +3222,8 @@ class MainWindow(QMainWindow):
                 )
                 attempt_criteria = replace(criteria, state_filter=reverse_filter)
                 attempt_candidates = generate_static_candidates(attempt_criteria)
-                log(f"[自动反查] 第{attempt}次 PokeFinder 搜索: {len(attempt_candidates)} 个候选")
+                if is_new_ocr:
+                    log(f"[自动反查] 第{attempt}次 PokeFinder 搜索: {len(attempt_candidates)} 个候选")
 
                 # 后置比对个性
                 if characteristic and attempt_candidates:
