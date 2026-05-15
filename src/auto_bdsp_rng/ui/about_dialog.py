@@ -27,7 +27,7 @@ from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
 
 PROJECT_REPOSITORY_URL = "https://github.com/XiaoyuBook/auto-bdsp-rng"
 EASYCON_URL = "https://github.com/EasyConNS/EasyCon"
-PROJECT_XS_URL = "https://github.com/HaKu76/Project_Xs_CHN"
+PROJECT_XS_URL = "https://github.com/Lincoln-LM/Project_Xs"
 POKEFINDER_URL = "https://github.com/Admiral-Fish/PokeFinder"
 AUTHOR_BILIBILI_URL = "https://space.bilibili.com/269020915"
 AUTHOR_GITHUB_URL = "https://github.com/XiaoyuBook"
