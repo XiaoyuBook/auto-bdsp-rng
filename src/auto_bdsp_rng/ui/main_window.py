@@ -3088,6 +3088,11 @@ class MainWindow(QMainWindow):
                     script_done=script_done,
                     grace_seconds=30.0,
                 )
+            except TimeoutError:
+                stop_current_script_service()
+                script_thread.join(timeout=5.0)
+                self.auto_rng_tab.captureLog.emit("OCR 闪符检测超时，本轮判定为未出闪")
+                return ShinyCheckResult(is_shiny=False)
             except Exception:
                 stop_current_script_service()
                 script_thread.join(timeout=5.0)
