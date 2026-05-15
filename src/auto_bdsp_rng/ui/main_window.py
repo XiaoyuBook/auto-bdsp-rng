@@ -2693,10 +2693,8 @@ class MainWindow(QMainWindow):
         elif event == "reverse_lookup_results" and len(values) >= 1:
             chara = str(values[1]) if len(values) >= 2 and values[1] is not None else None
             delays = list(values[2]) if len(values) >= 3 and values[2] is not None else None
-            if delays is None:
-                h.reverse_lookup_results(list(values[0]), chara)  # type: ignore[arg-type]
-            else:
-                h.reverse_lookup_results(list(values[0]), chara, delays)  # type: ignore[arg-type]
+            ocr = dict(values[3]) if len(values) >= 4 and values[3] is not None else None
+            h.reverse_lookup_results(list(values[0]), chara, delays, ocr)  # type: ignore[arg-type]
 
     def _ensure_bridge_connected(self) -> bool:
         """确保伊机控连接就绪；CLI 模式只需串口可用，Bridge 模式需要连接。"""
@@ -3169,6 +3167,7 @@ class MainWindow(QMainWindow):
             # 能力页 OCR 重试逻辑（最多3次）
             stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
             candidates: list[object] = []
+            last_ocr_stats: dict[str, object] | None = None
             for attempt in range(1, 4):
                 log(f"[自动反查] 能力页 OCR 第{attempt}次…")
                 stats_frame = capture_preview_frame(tracking_config.capture)
@@ -3202,6 +3201,10 @@ class MainWindow(QMainWindow):
                         time.sleep(0.5)
                     continue
                 iv_min, iv_max = normalized_ranges
+                last_ocr_stats = {
+                    "stats": dict(zip(stat_names, stat_vals)),
+                    "iv_min": list(iv_min), "iv_max": list(iv_max),
+                }
                 for i, name in enumerate(stat_names):
                     log(f"[自动反查] {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{base_stats[i]} Lv{level})")
 
@@ -3234,7 +3237,7 @@ class MainWindow(QMainWindow):
             # 输出结果
             if not candidates:
                 log("[自动反查] 3次尝试均未找到匹配个体")
-                self.autoHistoryEvent.emit("reverse_lookup_results", ([], characteristic))
+                self.autoHistoryEvent.emit("reverse_lookup_results", ([], characteristic, None, last_ocr_stats))
             else:
                 delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + config.fixed_delay
                           if target.raw_target_advances else int(getattr(s, "advances", 0))

@@ -270,10 +270,23 @@ class HistoryPanel(QWidget):
             self._w(f"[{_now()}] 本轮结果: 未出闪  间隔: {interval_text}{delay_text}")
         self._w(SEPARATOR_THIN)
 
-    def reverse_lookup_results(self, candidates: list[object], characteristic: str | None = None, delays: list[int] | None = None) -> None:
+    def reverse_lookup_results(self, candidates: list[object], characteristic: str | None = None, delays: list[int] | None = None, ocr_stats: dict | None = None) -> None:
         count = len(candidates)
         if count == 0:
             self._w(f"[{_now()}] 反查结果: 未找到匹配个体")
+            if ocr_stats:
+                stats = ocr_stats.get("stats", {})
+                iv_min = ocr_stats.get("iv_min", [])
+                iv_max = ocr_stats.get("iv_max", [])
+                if stats:
+                    stat_text = " / ".join(f"{n}={stats.get(n, '?')}" for n in ("HP", "攻击", "防御", "特攻", "特防", "速度"))
+                    self._w(f"  OCR 能力值: {stat_text}")
+                if iv_min and iv_max and len(iv_min) == 6 and len(iv_max) == 6:
+                    iv_text = " / ".join(
+                        f"{n}={iv_min[i]}" if iv_min[i] == iv_max[i] else f"{n}={iv_min[i]}-{iv_max[i]}"
+                        for i, n in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度"))
+                    )
+                    self._w(f"  OCR 反算个体值范围: {iv_text}")
         else:
             self._w(f"[{_now()}] 反查结果 ({count} 个匹配):")
             for i, state in enumerate(candidates):
