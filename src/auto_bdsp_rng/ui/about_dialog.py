@@ -45,8 +45,8 @@ class AboutDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("关于项目")
-        self.setMinimumWidth(760)
-        self.resize(780, 660)
+        self.setMinimumWidth(780)
+        self.resize(800, 660)
         self._open_source = open_source
         self._open_sponsors = open_sponsors
         self._copy_text = copy_text
@@ -69,18 +69,20 @@ class AboutDialog(QDialog):
 
         left = QVBoxLayout()
         left.setSpacing(12)
+        left.setAlignment(Qt.AlignmentFlag.AlignTop)
         left.addWidget(self._project_info_card())
         left.addWidget(self._usage_card())
         left.addWidget(self._contact_card())
 
         right = QVBoxLayout()
         right.setSpacing(12)
+        right.setAlignment(Qt.AlignmentFlag.AlignTop)
         right.addWidget(self._open_source_card())
         right.addWidget(self._friend_links_card())
         right.addWidget(self._sponsor_card())
 
-        content.addLayout(left, 5)
-        content.addLayout(right, 6)
+        content.addLayout(left, 1)
+        content.addLayout(right, 1)
         layout.addLayout(content)
 
         footer = QHBoxLayout()
