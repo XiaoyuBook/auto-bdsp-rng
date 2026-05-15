@@ -25,6 +25,8 @@ from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
 
 
 PROJECT_REPOSITORY_URL = "https://github.com/XiaoyuBook/auto-bdsp-rng"
+EASYCON_URL = "https://github.com/EasyConNS/EasyCon"
+PROJECT_XS_URL = "https://github.com/HaKu76/Project_Xs_CHN"
 
 
 class AboutDialog(QDialog):
@@ -65,6 +67,7 @@ class AboutDialog(QDialog):
         left.addWidget(self._project_info_card())
         left.addWidget(self._usage_card())
         left.addWidget(self._github_card())
+        left.addWidget(self._friend_links_card())
 
         right = QVBoxLayout()
         right.setSpacing(12)
@@ -176,9 +179,10 @@ class AboutDialog(QDialog):
         warning.setWordWrap(True)
         layout.addWidget(warning)
 
-        hint = QLabel("请通过 GitHub 官方渠道获取最新版。")
+        hint = QLabel(f"请通过 <a href='{PROJECT_REPOSITORY_URL}' style='color:{soft};'>GitHub 官方渠道</a> 获取最新版。")
         hint.setObjectName("MutedLabel")
         hint.setWordWrap(True)
+        hint.setOpenExternalLinks(True)
         layout.addWidget(hint)
         layout.addStretch(1)
         return group
@@ -212,6 +216,24 @@ class AboutDialog(QDialog):
         copy_button.clicked.connect(self._handle_copy_repository)
         buttons.addWidget(copy_button)
         layout.addLayout(buttons)
+        return group
+
+    def _friend_links_card(self) -> QGroupBox:
+        group = self._card("友情链接")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+
+        links = (
+            ("伊机控 (EasyCon)", EASYCON_URL),
+            ("Project_Xs", PROJECT_XS_URL),
+        )
+        for name, url in links:
+            link = QLabel(f"<a href='{url}' style='text-decoration:none;'>{name}</a>")
+            link.setOpenExternalLinks(True)
+            link.setObjectName("FriendLink")
+            layout.addWidget(link)
+
         return group
 
     def _sponsor_card(self) -> QGroupBox:
@@ -435,6 +457,14 @@ class AboutDialog(QDialog):
         QLabel#BuildLabel {{
             color: {muted};
             font-size: 11px;
+        }}
+        QLabel#FriendLink {{
+            color: {soft};
+            font-weight: 600;
+            font-size: 13px;
+        }}
+        QLabel#FriendLink:hover {{
+            color: {text};
         }}
         QPushButton {{
             background: {panel};
