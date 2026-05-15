@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 # ── 配色 ──────────────────────────────────────────────────
 CLR_SEP     = "#9CA3AF"   # 分隔线
 CLR_TS      = "#6B7280"   # 时间戳
-CLR_BODY    = "#E5E7EB"   # 正文
+CLR_BODY    = "#1F2937"   # 正文
 CLR_LOCK    = "#16A34A"   # 锁定 / 成功
 CLR_SYNC    = "#22D3EE"   # 同步标签
 CLR_SHINY   = "#F59E0B"   # 出闪
