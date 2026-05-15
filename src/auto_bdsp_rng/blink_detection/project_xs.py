@@ -303,12 +303,20 @@ def _tracking_blink_controlled(
     eye_width, eye_height = eye_image.shape[::-1]
 
     try:
+        consecutive_failures = 0
         while len(blinks) < config.blink_count or state != state_idle:
             if should_stop is not None and should_stop():
                 break
             ok, frame = video.read()
             if not ok or frame is None:
+                consecutive_failures += 1
+                if consecutive_failures > 30:  # 约3秒无画面则判定窗口未打开
+                    raise ProjectXsIntegrationError(
+                        "未检测到捕捉画面，请确认捕捉窗口已打开且未被最小化"
+                    )
+                time.sleep(0.1)
                 continue
+            consecutive_failures = 0
             time_counter = time.perf_counter()
             roi = cv2.cvtColor(frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w], cv2.COLOR_RGB2GRAY)
             if prev_roi is not None and (roi == prev_roi).all():

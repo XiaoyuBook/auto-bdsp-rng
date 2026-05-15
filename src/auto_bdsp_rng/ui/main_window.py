@@ -2894,13 +2894,22 @@ class MainWindow(QMainWindow):
             if preview_was_running:
                 time.sleep(0.3)  # 等摄像头释放
 
-            observation = capture_player_blinks(
-                tracking_config.capture,
-                should_stop=self._capture_cancel.is_set,
-                frame_callback=store_frame,
-                progress_callback=store_progress,
-                show_window=False,
-            )
+            try:
+                observation = capture_player_blinks(
+                    tracking_config.capture,
+                    should_stop=self._capture_cancel.is_set,
+                    frame_callback=store_frame,
+                    progress_callback=store_progress,
+                    show_window=False,
+                )
+            except ProjectXsIntegrationError:
+                self._call_on_ui_thread(
+                    lambda: QMessageBox.warning(
+                        self, "捕捉失败",
+                        "未检测到捕捉画面，请确认 Project_Xs 捕捉窗口已打开且未被最小化，然后重新开始。"
+                    )
+                )
+                raise
             result = recover_seed_from_observation(observation, npc=tracking_config.npc)
             elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
             elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
