@@ -189,17 +189,49 @@ class AboutDialog(QDialog):
         group = self._card("友情链接")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(8)
+        layout.setSpacing(12)
 
-        links = (
-            ("伊机控 (EasyCon)", EASYCON_URL),
-            ("Project_Xs", PROJECT_XS_URL),
+        # EasyCon 图标路径
+        easycon_icon = Path(__file__).resolve().parents[3] / "third_party" / "EasyCon" / "src" / "EasyCon2.Avalonia" / "Assets" / "favicon.ico"
+
+        projects = (
+            (easycon_icon, "伊机控 (EasyCon)", "Switch 自动化控制，提供脚本执行与串口连接", EASYCON_URL),
+            (None, "Project_Xs", "眨眼测种，通过摄像头捕捉眨眼恢复游戏 Seed", PROJECT_XS_URL),
         )
-        for name, url in links:
-            link = QLabel(f"<a href='{url}' style='text-decoration:none;'>{name}</a>")
-            link.setOpenExternalLinks(True)
-            link.setObjectName("FriendLink")
-            layout.addWidget(link)
+
+        for icon_path, name, desc, url in projects:
+            row = QHBoxLayout()
+            row.setSpacing(10)
+
+            # 图标
+            icon_lbl = QLabel()
+            icon_lbl.setFixedSize(36, 36)
+            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon_lbl.setObjectName("FriendIcon")
+            if icon_path is not None and icon_path.exists():
+                pixmap = QPixmap(str(icon_path))
+                if not pixmap.isNull():
+                    icon_lbl.setPixmap(pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                else:
+                    icon_lbl.setText("🔌")
+            else:
+                icon_lbl.setText("👁")
+            row.addWidget(icon_lbl)
+
+            # 名称 + 描述
+            text_col = QVBoxLayout()
+            text_col.setSpacing(2)
+            name_lbl = QLabel(f"<a href='{url}' style='text-decoration:none;'>{name}</a>")
+            name_lbl.setOpenExternalLinks(True)
+            name_lbl.setObjectName("FriendLink")
+            text_col.addWidget(name_lbl)
+            desc_lbl = QLabel(desc)
+            desc_lbl.setObjectName("FriendDesc")
+            desc_lbl.setWordWrap(True)
+            text_col.addWidget(desc_lbl)
+
+            row.addLayout(text_col, 1)
+            layout.addLayout(row)
 
         return group
 
@@ -442,6 +474,13 @@ class AboutDialog(QDialog):
             color: {muted};
             font-size: 11px;
         }}
+        QLabel#FriendIcon {{
+            background: {soft_bg};
+            border: 1px solid {border};
+            border-radius: 6px;
+            color: {soft};
+            font-size: 16px;
+        }}
         QLabel#FriendLink {{
             color: {soft};
             font-weight: 600;
@@ -449,6 +488,10 @@ class AboutDialog(QDialog):
         }}
         QLabel#FriendLink:hover {{
             color: {text};
+        }}
+        QLabel#FriendDesc {{
+            color: {muted};
+            font-size: 11px;
         }}
         QPushButton {{
             background: {panel};
