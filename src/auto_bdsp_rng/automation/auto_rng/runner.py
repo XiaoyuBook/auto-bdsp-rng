@@ -347,7 +347,8 @@ class AutoRngRunner:
             nature_idx = _nature_index(self.config.sync_nature)
         was_missed = self._missed_target_advance is not None
 
-        # 双重搜索：按当前同步状态先搜，再搜另一状态
+        # 双重搜索：仅在有体型筛选时同时查询同步/非同步两张表
+        # 无体型筛选时根据同步模式只查一张表
         from auto_bdsp_rng.gen8_static.models import Lead
         results_primary: list[object] = []
         results_secondary: list[object] = []
@@ -355,10 +356,13 @@ class AutoRngRunner:
         lead_primary = nature_idx if self._is_sync_active and nature_idx is not None else int(Lead.NONE)
         if sync_enabled and self.services.search_sync is not None:
             results_primary = self.services.search_sync(seed, lead_primary, nature_idx if self._is_sync_active else None)
-            # 另一状态
-            lead_secondary = nature_idx if not self._is_sync_active and nature_idx is not None else int(Lead.NONE)
-            nature_secondary = nature_idx if not self._is_sync_active else None
-            results_secondary = self.services.search_sync(seed, lead_secondary, nature_secondary)
+            lead_secondary = int(Lead.NONE)
+            nature_secondary = None
+            if self.config.has_body_filters:
+                # 有体型筛选时查询另一同步状态的表
+                lead_secondary = nature_idx if not self._is_sync_active and nature_idx is not None else int(Lead.NONE)
+                nature_secondary = nature_idx if not self._is_sync_active else None
+                results_secondary = self.services.search_sync(seed, lead_secondary, nature_secondary)
         else:
             results_primary = list(self.services.search_candidates(seed))
 

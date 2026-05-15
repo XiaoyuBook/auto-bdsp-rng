@@ -540,6 +540,11 @@ class AutoRngPanel(QWidget):
             max_advances=self.max_advances.value(),
             shiny_threshold_seconds=self.shiny_threshold_seconds.value() or None,
             debug_output=self.debug_output_check.isChecked(),
+            has_body_filters=any(
+                sf.height_min != 0 or sf.height_max != 255
+                or sf.weight_min != 0 or sf.weight_max != 255
+                for _record, sf, _mode in self.targets()
+            ),
         )
 
     def run_with_runner(self, runner: object) -> None:

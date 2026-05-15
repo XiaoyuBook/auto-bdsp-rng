@@ -64,6 +64,7 @@ class AutoRngConfig:
     reverse_lookup_window: int = 500
     sync_mode: int = 0  # 0=关闭, 1=首位普通精灵, 2=首位同步精灵
     sync_nature: str = ""  # 同步时锁定的性格名称
+    has_body_filters: bool = False  # 是否有体型筛选（身高/体重）
     fixed_delay: int = 100
     fixed_flash_frames: int = 60
     max_wait_frames: int = 300
