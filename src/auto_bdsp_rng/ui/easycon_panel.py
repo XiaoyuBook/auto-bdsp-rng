@@ -1871,7 +1871,7 @@ class EasyConPanel(QWidget):
                         wait_ms = int((now - self._last_record_ts) * 1000) if self._last_record_ts else 0
                         if wait_ms > 0:
                             self._recorded_lines.append(f"WAIT {wait_ms}")
-                        self._recorded_lines.append(f"{value} UP")
+                        self._recorded_lines.append(f"{value.upper()} UP")
                         self._last_record_ts = now
             elif direction is not None:
                 self._ensure_bridge_backend().stick_direction(value, direction, down)
@@ -1893,7 +1893,7 @@ class EasyConPanel(QWidget):
             self._recorded_lines.append(f"WAIT {wait_ms}")
         self._last_record_ts = now
         if kind == "button":
-            self._recorded_lines.append(f"{value} DOWN")
+            self._recorded_lines.append(f"{value.upper()} DOWN")
         elif kind == "stick":
             # EasyCon 脚本语法: LS UP / RS DOWN / UP (hat)
             if value == "left":
