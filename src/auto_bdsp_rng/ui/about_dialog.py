@@ -28,6 +28,7 @@ from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
 PROJECT_REPOSITORY_URL = "https://github.com/XiaoyuBook/auto-bdsp-rng"
 EASYCON_URL = "https://github.com/EasyConNS/EasyCon"
 PROJECT_XS_URL = "https://github.com/HaKu76/Project_Xs_CHN"
+POKEFINDER_URL = "https://github.com/Admiral-Fish/PokeFinder"
 AUTHOR_BILIBILI_URL = "https://space.bilibili.com/269020915"
 AUTHOR_GITHUB_URL = "https://github.com/XiaoyuBook"
 AUTHOR_EMAIL = "kesong2003@qq.com"
@@ -187,51 +188,40 @@ class AboutDialog(QDialog):
 
     def _friend_links_card(self) -> QGroupBox:
         group = self._card("友情链接")
-        layout = QVBoxLayout(group)
+        layout = QHBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
-
-        # EasyCon 图标路径
-        easycon_icon = Path(__file__).resolve().parents[3] / "third_party" / "EasyCon" / "src" / "EasyCon2.Avalonia" / "Assets" / "favicon.ico"
+        layout.setSpacing(16)
 
         projects = (
-            (easycon_icon, "伊机控 (EasyCon)", "Switch 自动化控制，提供脚本执行与串口连接", EASYCON_URL),
-            (None, "Project_Xs", "眨眼测种，通过摄像头捕捉眨眼恢复游戏 Seed", PROJECT_XS_URL),
+            ("🎮", "伊机控", "Switch 自动化控制\n脚本执行与串口连接", EASYCON_URL),
+            ("👁", "Project_Xs", "眨眼测种\n摄像头捕捉恢复 Seed", PROJECT_XS_URL),
+            ("🔍", "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选", POKEFINDER_URL),
         )
 
-        for icon_path, name, desc, url in projects:
-            row = QHBoxLayout()
-            row.setSpacing(10)
+        for icon_text, name, desc, url in projects:
+            col = QVBoxLayout()
+            col.setSpacing(6)
+            col.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            # 图标
-            icon_lbl = QLabel()
-            icon_lbl.setFixedSize(36, 36)
-            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            icon_lbl.setObjectName("FriendIcon")
-            if icon_path is not None and icon_path.exists():
-                pixmap = QPixmap(str(icon_path))
-                if not pixmap.isNull():
-                    icon_lbl.setPixmap(pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                else:
-                    icon_lbl.setText("🔌")
-            else:
-                icon_lbl.setText("👁")
-            row.addWidget(icon_lbl)
+            icon_btn = QPushButton(icon_text)
+            icon_btn.setFixedSize(52, 52)
+            icon_btn.setObjectName("FriendIconBtn")
+            icon_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            icon_btn.clicked.connect(lambda checked, u=url: QDesktopServices.openUrl(QUrl(u)))
+            col.addWidget(icon_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
-            # 名称 + 描述
-            text_col = QVBoxLayout()
-            text_col.setSpacing(2)
-            name_lbl = QLabel(f"<a href='{url}' style='text-decoration:none;'>{name}</a>")
-            name_lbl.setOpenExternalLinks(True)
-            name_lbl.setObjectName("FriendLink")
-            text_col.addWidget(name_lbl)
+            name_lbl = QLabel(name)
+            name_lbl.setObjectName("FriendLinkName")
+            name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            col.addWidget(name_lbl)
+
             desc_lbl = QLabel(desc)
             desc_lbl.setObjectName("FriendDesc")
+            desc_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             desc_lbl.setWordWrap(True)
-            text_col.addWidget(desc_lbl)
+            col.addWidget(desc_lbl)
 
-            row.addLayout(text_col, 1)
-            layout.addLayout(row)
+            layout.addLayout(col, 1)
 
         return group
 
@@ -474,24 +464,25 @@ class AboutDialog(QDialog):
             color: {muted};
             font-size: 11px;
         }}
-        QLabel#FriendIcon {{
+        QPushButton#FriendIconBtn {{
             background: {soft_bg};
             border: 1px solid {border};
-            border-radius: 6px;
-            color: {soft};
-            font-size: 16px;
+            border-radius: 10px;
+            font-size: 22px;
         }}
-        QLabel#FriendLink {{
-            color: {soft};
-            font-weight: 600;
-            font-size: 13px;
+        QPushButton#FriendIconBtn:hover {{
+            background: {soft};
+            border-color: {soft};
         }}
-        QLabel#FriendLink:hover {{
+        QLabel#FriendLinkName {{
             color: {text};
+            font-weight: 700;
+            font-size: 12px;
         }}
         QLabel#FriendDesc {{
             color: {muted};
-            font-size: 11px;
+            font-size: 10px;
+            line-height: 1.4;
         }}
         QPushButton {{
             background: {panel};
