@@ -64,26 +64,17 @@ class AboutDialog(QDialog):
 
         layout.addWidget(self._build_header())
 
-        content = QHBoxLayout()
-        content.setSpacing(14)
-
-        left = QVBoxLayout()
-        left.setSpacing(12)
-        left.setAlignment(Qt.AlignmentFlag.AlignTop)
-        left.addWidget(self._project_info_card())
-        left.addWidget(self._usage_card())
-        left.addWidget(self._contact_card())
-
-        right = QVBoxLayout()
-        right.setSpacing(12)
-        right.setAlignment(Qt.AlignmentFlag.AlignTop)
-        right.addWidget(self._open_source_card())
-        right.addWidget(self._friend_links_card())
-        right.addWidget(self._sponsor_card())
-
-        content.addLayout(left, 1)
-        content.addLayout(right, 1)
-        layout.addLayout(content)
+        grid = QGridLayout()
+        grid.setSpacing(14)
+        grid.addWidget(self._project_info_card(), 0, 0)
+        grid.addWidget(self._open_source_card(),   0, 1)
+        grid.addWidget(self._usage_card(),         1, 0)
+        grid.addWidget(self._friend_links_card(),  1, 1)
+        grid.addWidget(self._contact_card(),       2, 0)
+        grid.addWidget(self._sponsor_card(),       2, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
@@ -320,7 +311,7 @@ class AboutDialog(QDialog):
     def _card(title: str) -> QGroupBox:
         group = QGroupBox(title)
         group.setObjectName("AboutCard")
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
         return group
 
     def _handle_open_source(self) -> None:
