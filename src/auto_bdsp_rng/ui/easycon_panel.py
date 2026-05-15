@@ -1579,14 +1579,15 @@ class EasyConPanel(QWidget):
 
     def _append_log(self, level: str, message: str) -> None:
         color = {
-            "info": "#91E0C3",
+            "info": "#E7ECE9",
             "warn": "#E6D79B",
             "error": "#FF8A8A",
             "stdout": "#E7ECE9",
             "stderr": "#FFB1A8",
         }.get(level, "#E7ECE9")
+        ts = datetime.now().strftime("%H:%M:%S")
         for line in message.splitlines() or [""]:
-            self.log_view.append(f'<span style="color:{color}">[{level}] {line}</span>')
+            self.log_view.append(f'<span style="color:{color}">[{ts}] {line}</span>')
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
 
     def _log_context_menu(self, pos):
@@ -1863,8 +1864,11 @@ class EasyConPanel(QWidget):
         if self._recording:
             self._stop_recording()
             return
+        if not self._is_bridge_mode():
+            self._append_log("warn", "录制脚本仅支持常驻连接（Bridge）模式，请切换连接模式")
+            return
         if not self.virtual_controller_enabled:
-            self._append_log("warn", "请先启用键盘虚拟手柄再开始录制")
+            self._append_log("warn", "请先启用键盘虚拟手柄（勾选连接）再开始录制")
             return
         self._recording = True
         self._recorded_lines = []
