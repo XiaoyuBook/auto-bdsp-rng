@@ -1856,9 +1856,14 @@ class EasyConPanel(QWidget):
         self._last_record_ts = now
         if kind == "button":
             self._recorded_lines.append(f"{value} DOWN")
-        elif direction is not None:
-            label = f"{value.upper()}Stick({direction})" if value in ("left", "right") else direction
-            self._recorded_lines.append(label)
+        elif kind == "stick":
+            # EasyCon 脚本语法: LS UP / RS DOWN / UP (hat)
+            if value == "left":
+                self._recorded_lines.append(f"LS {direction}")
+            elif value == "right":
+                self._recorded_lines.append(f"RS {direction}")
+            elif value == "hat":
+                self._recorded_lines.append(direction)
 
     def _start_recording(self) -> None:
         if self._recording:
