@@ -239,7 +239,7 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        intro = QLabel("如有 Bug 反馈、功能建议或优化需求，欢迎通过以下方式联系作者：")
+        intro = QLabel("如有 Bug 反馈（请描述触发场景与现象）、功能建议或优化需求，欢迎通过以下方式联系作者：")
         intro.setWordWrap(True)
         intro.setObjectName("MutedLabel")
         layout.addWidget(intro)
