@@ -79,7 +79,7 @@ class AboutDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
-        build = QLabel("Official Open Source Build")
+        build = QLabel("Official Open Source Build · 官方开源构建版")
         build.setObjectName("BuildLabel")
         footer.addWidget(build)
         footer.addStretch(1)
@@ -112,20 +112,24 @@ class AboutDialog(QDialog):
         row.addWidget(logo)
 
         title_column = QVBoxLayout()
-        title_column.setSpacing(4)
+        title_column.setSpacing(2)
 
         title_line = QHBoxLayout()
         title_line.setSpacing(10)
         title = QLabel("珍钻复刻定点自动乱数")
         title.setObjectName("AboutTitle")
-        version = QLabel(f"v{__version__}")
+        version = QLabel(f"Version {__version__}")
         version.setObjectName("VersionLabel")
         title_line.addWidget(title)
         title_line.addWidget(version)
         title_line.addStretch(1)
         title_column.addLayout(title_line)
 
-        slogan = QLabel("永久免费 · 开源项目 · 谨防倒卖")
+        subtitle = QLabel("珍钻复刻定点自动化辅助工具")
+        subtitle.setObjectName("AboutSubtitle")
+        title_column.addWidget(subtitle)
+
+        slogan = QLabel("永久免费 · 开源透明 · 请勿付费购买")
         slogan.setObjectName("SloganLabel")
         title_column.addWidget(slogan)
 
@@ -159,8 +163,8 @@ class AboutDialog(QDialog):
         layout = QHBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(18)
-        layout.addWidget(self._rule_column("允许", ("学习", "修改", "非商业传播"), True))
-        layout.addWidget(self._rule_column("禁止", ("二次售卖", "付费分发", "商业倒卖"), False))
+        layout.addWidget(self._rule_column("允许", ("学习研究", "修改代码", "非商业分享"), True))
+        layout.addWidget(self._rule_column("禁止", ("付费售卖", "打包分发牟利", "冒充官方发布"), False))
         return group
 
     def _open_source_card(self) -> QGroupBox:
@@ -173,12 +177,12 @@ class AboutDialog(QDialog):
         lead.setObjectName("StatementLead")
         layout.addWidget(lead)
 
-        warning = QLabel("如果你是付费购买，\n说明你可能被骗。")
+        warning = QLabel("任何付费售卖均非官方行为，请勿购买。")
         warning.setObjectName("WarningText")
         warning.setWordWrap(True)
         layout.addWidget(warning)
 
-        hint = QLabel(f"请通过 <a href='{PROJECT_REPOSITORY_URL}' style='color:{self._link_color};'>GitHub 官方渠道</a> 获取最新版。")
+        hint = QLabel(f"请认准 <a href='{PROJECT_REPOSITORY_URL}' style='color:{self._link_color};'>GitHub 官方仓库</a> 获取最新版。")
         hint.setObjectName("MutedLabel")
         hint.setWordWrap(True)
         hint.setOpenExternalLinks(True)
@@ -195,9 +199,9 @@ class AboutDialog(QDialog):
         assets_dir = Path(__file__).resolve().parents[3] / "docs" / "assets"
 
         projects = (
-            (assets_dir / "friend_easycon.ico",    "伊机控",     "Switch 自动化控制\n脚本执行与串口连接", EASYCON_URL),
-            (assets_dir / "friend_project_xs.png",  "Project_Xs", "眨眼测种",                             PROJECT_XS_URL),
-            (assets_dir / "friend_pokefinder.ico",  "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选",     POKEFINDER_URL),
+            (assets_dir / "friend_easycon.ico",    "伊机控",     "Switch 自动化控制\n脚本执行 / 串口连接", EASYCON_URL),
+            (assets_dir / "friend_project_xs.png",  "Project_Xs", "眨眼测种",                               PROJECT_XS_URL),
+            (assets_dir / "friend_pokefinder.ico",  "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选",       POKEFINDER_URL),
         )
 
         for icon_path, name, desc, url in projects:
@@ -239,7 +243,7 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        intro = QLabel("如有 Bug 反馈（请描述触发场景与现象）、功能建议或优化需求，欢迎通过以下方式联系作者：")
+        intro = QLabel("如需反馈 Bug、提出功能建议或优化需求，请尽量附上触发场景、复现步骤和截图，并通过以下方式联系作者：")
         intro.setWordWrap(True)
         intro.setObjectName("MutedLabel")
         layout.addWidget(intro)
@@ -247,13 +251,13 @@ class AboutDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
 
-        email_btn = QPushButton("📧 邮箱")
+        email_btn = QPushButton("📧 发送邮件")
         email_btn.setObjectName("ContactButton")
         email_btn.setToolTip(AUTHOR_EMAIL)
         email_btn.clicked.connect(self._handle_copy_email)
         btn_row.addWidget(email_btn, 1)
 
-        bili_btn = QPushButton("📺 B站主页")
+        bili_btn = QPushButton("📺 B站")
         bili_btn.setObjectName("ContactButton")
         bili_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(AUTHOR_BILIBILI_URL)))
         btn_row.addWidget(bili_btn, 1)
@@ -296,7 +300,7 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        intro = QLabel("如果项目对你有帮助，欢迎赞助支持持续维护。")
+        intro = QLabel("如果本项目对你有帮助，欢迎自愿赞助，支持后续维护。")
         intro.setWordWrap(True)
         intro.setObjectName("MutedLabel")
         layout.addWidget(intro)
@@ -414,9 +418,13 @@ class AboutDialog(QDialog):
         }}
         QLabel#VersionLabel {{
             color: {muted};
+            font-size: 11px;
+            font-weight: 600;
+            padding-top: 6px;
+        }}
+        QLabel#AboutSubtitle {{
+            color: {muted};
             font-size: 13px;
-            font-weight: 700;
-            padding-top: 5px;
         }}
         QLabel#SloganLabel {{
             color: {soft};
@@ -544,7 +552,7 @@ class StartupNoticeDialog(QDialog):
         layout = QVBoxLayout(self)
         message = QLabel(
             "本软件永久免费且开源，更多请点击帮助。\n\n"
-            "如果你是付费获得，说明你可能被骗。"
+            "任何付费售卖均非官方行为，请勿购买。"
         )
         message.setWordWrap(True)
         message.setStyleSheet("font-size: 13px; color: #222;")
