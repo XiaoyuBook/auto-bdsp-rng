@@ -57,4 +57,31 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          name: 珍钻复刻定点自动乱数 ${{ github.ref_name }}
+          body: |
+            ## 珍钻复刻定点自动乱数 ${{ github.ref_name }}
+
+            这是正式发布版。普通用户请下载下面的 Windows x64 绿色版压缩包：
+
+            `auto-bdsp-rng-${{ github.ref_name }}-windows-x64.zip`
+
+            请不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`，那些是源码包，不能直接双击运行。
+
+            ### 使用方式
+
+            1. 下载 `auto-bdsp-rng-${{ github.ref_name }}-windows-x64.zip`
+            2. 解压 zip
+            3. 进入 `auto-bdsp-rng` 文件夹
+            4. 双击 `珍钻复刻定点自动乱数.exe`
+
+            ### 说明
+
+            - Windows x64 onedir 绿色版，不需要安装 Python。
+            - 请保留 exe 旁边的 `_internal`、`script`、`bridge` 等目录，不要只复制 exe。
+            - 首次启动或首次 OCR 初始化可能较慢。
+            - 自动乱数流程仍需要游戏窗口、采集环境、串口/驱动、EasyCon 或兼容后端等实际运行环境。
+            - 本软件永久免费且开源，请勿购买倒卖版本。
+          draft: false
+          prerelease: false
+          make_latest: true
           files: release/auto-bdsp-rng-v*-windows-x64.zip
