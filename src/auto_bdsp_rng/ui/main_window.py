@@ -3205,6 +3205,8 @@ class MainWindow(QMainWindow):
                 last_ocr_stats = {
                     "stats": dict(zip(stat_names, stat_vals)),
                     "iv_min": list(iv_min), "iv_max": list(iv_max),
+                    "nature": nature,
+                    "characteristic": characteristic,
                 }
                 # 判断此次 OCR 结果是否与上次完全相同
                 curr_key = f"{stat_vals}|{iv_min}|{iv_max}"
