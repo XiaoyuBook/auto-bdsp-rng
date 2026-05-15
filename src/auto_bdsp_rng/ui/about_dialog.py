@@ -196,7 +196,7 @@ class AboutDialog(QDialog):
 
         projects = (
             (assets_dir / "friend_easycon.ico",    "伊机控",     "Switch 自动化控制\n脚本执行与串口连接", EASYCON_URL),
-            (assets_dir / "friend_project_xs.png",  "Project_Xs", "眨眼测种\n摄像头捕捉恢复 Seed",       PROJECT_XS_URL),
+            (assets_dir / "friend_project_xs.png",  "Project_Xs", "眨眼测种",                             PROJECT_XS_URL),
             (assets_dir / "friend_pokefinder.ico",  "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选",     POKEFINDER_URL),
         )
 
@@ -205,15 +205,18 @@ class AboutDialog(QDialog):
             col.setSpacing(8)
             col.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            # 图标按钮
+            # 图标按钮：统一缩放至48x48保证大小一致
             icon_btn = QPushButton()
             icon_btn.setFixedSize(56, 56)
             icon_btn.setObjectName("FriendIconBtn")
             icon_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             icon_btn.clicked.connect(lambda checked, u=url: QDesktopServices.openUrl(QUrl(u)))
             if icon_path.exists():
-                icon_btn.setIcon(QIcon(str(icon_path)))
-                icon_btn.setIconSize(icon_btn.size() - QSize(8, 8))
+                pixmap = QPixmap(str(icon_path))
+                if not pixmap.isNull():
+                    scaled = pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    icon_btn.setIcon(QIcon(scaled))
+                    icon_btn.setIconSize(QSize(48, 48))
             col.addWidget(icon_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
             # 名称
