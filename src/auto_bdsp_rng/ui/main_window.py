@@ -3085,7 +3085,7 @@ class MainWindow(QMainWindow):
                     poll_interval_seconds=0.1,
                     script_done=script_done,
                     grace_seconds=30.0,
-                    hard_timeout_seconds=90.0,
+                    hard_timeout_seconds=300.0,
                 )
             except TimeoutError:
                 stop_current_script_service()
