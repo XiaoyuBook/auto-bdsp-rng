@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeyEvent, QTextCursor
 
 import auto_bdsp_rng.ui.easycon_panel as panel_module
 from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConInstallation, EasyConStatus
-from auto_bdsp_rng.ui.easycon_panel import EasyConPanel, KeyMappingDialog
+from auto_bdsp_rng.ui.easycon_panel import DEFAULT_KEY_MAPPING, EasyConPanel, KeyMappingDialog
 
 
 @pytest.fixture
@@ -54,6 +54,33 @@ def process_events_until(predicate, timeout_ms=1000):
         time.sleep(0.01)
     app.processEvents()
     assert predicate()
+
+
+def test_key_mapping_dialog_uses_original_easycon_layout(app):
+    dialog = KeyMappingDialog(DEFAULT_KEY_MAPPING)
+
+    assert dialog.size().width() == 999
+    assert dialog.size().height() == 830
+    assert dialog._buttons["ZL"].geometry().getRect() == (280, 134, 62, 41)
+    assert dialog._buttons["A"].geometry().getRect() == (758, 292, 62, 41)
+    assert dialog._buttons["RSUp"].geometry().getRect() == (571, 357, 62, 41)
+    assert dialog._buttons["ZL"].text() == "F"
+    assert dialog._buttons["L"].text() == "G"
+    assert dialog._buttons["A"].text() == "L"
+    assert dialog._buttons["RSUp"].text() == "Up"
+
+
+def test_key_mapping_dialog_updates_visible_key_text(app):
+    dialog = KeyMappingDialog(DEFAULT_KEY_MAPPING)
+
+    dialog._select_button("A")
+    QApplication.sendEvent(
+        dialog,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_M, Qt.KeyboardModifier.NoModifier),
+    )
+
+    assert dialog.get_mapping()["A"] == Qt.Key.Key_M
+    assert dialog._buttons["A"].text() == "M"
 
 
 class FakeBridgeBackend:
