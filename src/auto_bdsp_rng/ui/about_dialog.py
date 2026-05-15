@@ -71,12 +71,12 @@ class AboutDialog(QDialog):
         left.setSpacing(12)
         left.addWidget(self._project_info_card())
         left.addWidget(self._usage_card())
-        left.addWidget(self._friend_links_card())
+        left.addWidget(self._contact_card())
 
         right = QVBoxLayout()
         right.setSpacing(12)
         right.addWidget(self._open_source_card())
-        right.addWidget(self._contact_card())
+        right.addWidget(self._friend_links_card())
         right.addWidget(self._sponsor_card())
 
         content.addLayout(left, 5)
@@ -212,29 +212,35 @@ class AboutDialog(QDialog):
 
     def _contact_card(self) -> QGroupBox:
         group = self._card("作者联系")
-        layout = QHBoxLayout(group)
+        layout = QVBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        # 邮箱按钮
+        intro = QLabel("如有 Bug 反馈、功能建议或优化需求，欢迎通过以下方式联系作者：")
+        intro.setWordWrap(True)
+        intro.setObjectName("MutedLabel")
+        layout.addWidget(intro)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+
         email_btn = QPushButton("📧 邮箱")
         email_btn.setObjectName("ContactButton")
         email_btn.setToolTip(AUTHOR_EMAIL)
         email_btn.clicked.connect(self._handle_copy_email)
-        layout.addWidget(email_btn, 1)
+        btn_row.addWidget(email_btn, 1)
 
-        # B站按钮
         bili_btn = QPushButton("📺 B站主页")
         bili_btn.setObjectName("ContactButton")
         bili_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(AUTHOR_BILIBILI_URL)))
-        layout.addWidget(bili_btn, 1)
+        btn_row.addWidget(bili_btn, 1)
 
-        # GitHub按钮
         gh_btn = QPushButton("🐙 GitHub")
         gh_btn.setObjectName("ContactButton")
         gh_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(AUTHOR_GITHUB_URL)))
-        layout.addWidget(gh_btn, 1)
+        btn_row.addWidget(gh_btn, 1)
 
+        layout.addLayout(btn_row)
         return group
 
     def _handle_copy_email(self) -> None:
