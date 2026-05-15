@@ -1410,13 +1410,45 @@ class EasyConPanel(QWidget):
         self._append_log("error", f"自动流程脚本失败: {error}")
         self._finish_run("失败", exit_code=1)
 
+    @staticmethod
+    def _filter_cli_line(line: str) -> str | None:
+        """过滤 EasyCon CLI 输出：去掉 ANSI 码和冗余启动信息，保留关键行"""
+        import re
+        # 去掉 ANSI 转义码
+        clean = re.sub(r'\x1b\[[0-9;]*m', '', line).strip()
+        if not clean:
+            return None
+        # 跳过的冗余启动信息
+        skip_prefixes = (
+            "---- EasyCon CLI Runner",
+            "---- 仅供内部测试",
+            "------------------------------------------",
+            "配置文件不存在",
+            "准备执行脚本... 环境信息",
+            "准备加载搜图标签...",
+            "标签（脚本）路径",
+            "已加载标签",
+            "正在解析脚本...",
+            "准备连接单片机...",
+            "==>开始执行脚本",
+            "已完成，连接保持",
+        )
+        for prefix in skip_prefixes:
+            if clean.startswith(prefix):
+                return None
+        # 保留：连接成功/失败、PRINT 输出、exit code、时间信息
+        return clean
+
     def _read_stdout(self) -> None:
         if self.process is None:
             return
         text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
         if text:
             self.current_run_stdout.append(text)
-            self._append_log("stdout", text.rstrip())
+            for raw_line in text.splitlines():
+                filtered = self._filter_cli_line(raw_line)
+                if filtered:
+                    self._append_log("stdout", filtered)
 
     def _read_stderr(self) -> None:
         if self.process is None:
@@ -1424,7 +1456,11 @@ class EasyConPanel(QWidget):
         text = bytes(self.process.readAllStandardError()).decode("utf-8", errors="replace")
         if text:
             self.current_run_stderr.append(text)
-            self._append_log("stderr", text.rstrip())
+            import re
+            for raw_line in text.splitlines():
+                clean = re.sub(r'\x1b\[[0-9;]*m', '', raw_line).strip()
+                if clean:
+                    self._append_log("stderr", clean)
 
     def _process_finished(self, exit_code: int, _status) -> None:  # type: ignore[no-untyped-def]
         if self.stop_requested:
