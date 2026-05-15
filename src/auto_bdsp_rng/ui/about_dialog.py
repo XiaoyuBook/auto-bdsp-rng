@@ -199,7 +199,7 @@ class AboutDialog(QDialog):
         assets_dir = Path(__file__).resolve().parents[3] / "docs" / "assets"
 
         projects = (
-            (assets_dir / "friend_easycon.ico",    "伊机控",     "Switch 自动化控制\n脚本执行 / 串口连接", EASYCON_URL),
+            (assets_dir / "friend_easycon.ico",    "伊机控",     "Switch 自动化控制\n脚本执行与串口连接", EASYCON_URL),
             (assets_dir / "friend_project_xs.png",  "Project_Xs", "眨眼测种",                               PROJECT_XS_URL),
             (assets_dir / "friend_pokefinder.ico",  "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选",       POKEFINDER_URL),
         )
