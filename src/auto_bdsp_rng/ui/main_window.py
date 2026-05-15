@@ -85,7 +85,7 @@ from auto_bdsp_rng.ui.history_panel import HistoryPanel
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
-APP_TITLE = "珍钻复刻定点自动乱数"
+APP_TITLE = "珍钻复刻自动乱数"
 APP_DISPLAY_TITLE = f"{APP_TITLE} v{__version__}"
 APP_USER_MODEL_ID = "XiaoyuBook.auto-bdsp-rng"
 DEFAULT_BLINK_COUNT = 40
@@ -419,7 +419,7 @@ TEXT = {
         "results": "results",
     },
     "zh": {
-        "title": "BDSP 定点乱数工作台",
+        "title": "珍钻复刻自动乱数工作台",
         "language": "语言",
         "capture": "眨眼捕捉",
         "seed": "Seed",

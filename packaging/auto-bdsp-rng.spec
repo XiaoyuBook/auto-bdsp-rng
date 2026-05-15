@@ -138,6 +138,10 @@ datas += tree_datas("docs/assets", "docs/assets")
 datas += tree_datas("private_assets/sponsor", "private_assets/sponsor")
 datas += tree_datas("third_party/Project_Xs_CHN", "third_party/Project_Xs_CHN")
 datas += tree_datas("third_party/PokeFinder/Core/Resources", "third_party/PokeFinder/Core/Resources")
+for root_file in ("CHANGELOG.md", "SPONSORS.md"):
+    path = ROOT / root_file
+    if path.exists():
+        datas.append((str(path), "."))
 
 binaries += collect_dynamic_libs("auto_bdsp_rng")
 
@@ -175,7 +179,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="珍钻复刻定点自动乱数",
+    name="珍钻复刻自动乱数",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -57,9 +57,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: 珍钻复刻定点自动乱数 ${{ github.ref_name }}
+          name: 珍钻复刻自动乱数 ${{ github.ref_name }}
           body: |
-            ## 珍钻复刻定点自动乱数 ${{ github.ref_name }}
+            ## 珍钻复刻自动乱数 ${{ github.ref_name }}
 
             这是正式发布版。普通用户请下载下面的 Windows x64 绿色版压缩包：
 
@@ -72,7 +72,7 @@ jobs:
             1. 下载 `auto-bdsp-rng-${{ github.ref_name }}-windows-x64.zip`
             2. 解压 zip
             3. 进入 `auto-bdsp-rng` 文件夹
-            4. 双击 `珍钻复刻定点自动乱数.exe`
+            4. 双击 `珍钻复刻自动乱数.exe`
 
             ### 说明
 

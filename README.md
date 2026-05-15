@@ -1,4 +1,4 @@
-# 珍钻复刻自动定点乱数
+# 珍钻复刻自动乱数
 
 <p align="center">
   <img src="docs/assets/app-icon.png" alt="auto_bdsp_rng 图标" width="220">
@@ -9,13 +9,13 @@
 普通用户请不要下载 GitHub 绿色 `Code` 按钮里的源码压缩包。请到 [GitHub Releases](https://github.com/XiaoyuBook/auto-bdsp-rng/releases) 下载：
 
 ```text
-auto-bdsp-rng-v0.0.4-windows-x64.zip
+auto-bdsp-rng-v1.0.0-windows-x64.zip
 ```
 
 下载后解压 zip，进入 `auto-bdsp-rng` 文件夹，双击：
 
 ```text
-珍钻复刻定点自动乱数.exe
+珍钻复刻自动乱数.exe
 ```
 
 目标电脑不需要安装 Python。请保留 exe 旁边的 `_internal`、`script`、`bridge`、`docs` 等目录，不要只复制单独的 exe。
@@ -108,7 +108,7 @@ python -m pip install -e .[dev]
 python -m pip install -e .[ocr]
 ```
 
-Windows Release green packages starting with `v0.0.4` include PaddleOCR/PaddlePaddle in the zip, so normal users do not need to install OCR dependencies separately.
+Windows Release green packages starting with `v1.0.0` include PaddleOCR/PaddlePaddle in the zip, so normal users do not need to install OCR dependencies separately.
 
 ## 运行
 

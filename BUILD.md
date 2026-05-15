@@ -1,6 +1,6 @@
 # Windows Release Build
 
-This document is for maintainers who need to build the Windows x64 green package for `auto-bdsp-rng v0.0.4`.
+This document is for maintainers who need to build the Windows x64 green package for `auto-bdsp-rng v1.0.0`.
 
 ## Requirements
 
@@ -43,7 +43,7 @@ The script will:
 8. run PyInstaller with `packaging/auto-bdsp-rng.spec`,
 9. try to publish EasyConBridge for `win-x64`,
 10. write `dist/auto-bdsp-rng/README.txt`,
-11. create `release/auto-bdsp-rng-v0.0.4-windows-x64.zip`.
+11. create `release/auto-bdsp-rng-v1.0.0-windows-x64.zip`.
 
 ## Clean Build Outputs
 
@@ -62,8 +62,8 @@ This removes only `build/`, `dist/`, and `release/`.
 ## Output
 
 - onedir app: `dist/auto-bdsp-rng/`
-- executable: `dist/auto-bdsp-rng/珍钻复刻定点自动乱数.exe`
-- release zip: `release/auto-bdsp-rng-v0.0.4-windows-x64.zip`
+- executable: `dist/auto-bdsp-rng/珍钻复刻自动乱数.exe`
+- release zip: `release/auto-bdsp-rng-v1.0.0-windows-x64.zip`
 
 The package is intentionally onedir, not onefile. Users must keep `_internal`, `script`, `bridge`, `docs`, and other sibling directories beside the exe.
 

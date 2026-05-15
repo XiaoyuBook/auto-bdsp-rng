@@ -116,7 +116,7 @@ class AboutDialog(QDialog):
 
         title_line = QHBoxLayout()
         title_line.setSpacing(10)
-        title = QLabel("珍钻复刻定点自动乱数")
+        title = QLabel("珍钻复刻自动乱数")
         title.setObjectName("AboutTitle")
         version = QLabel(f"Version {__version__}")
         version.setObjectName("VersionLabel")

@@ -64,7 +64,7 @@ def test_pyinstaller_spec_names_chinese_executable():
     root = Path(__file__).resolve().parents[1]
     spec = (root / "packaging" / "auto-bdsp-rng.spec").read_text(encoding="utf-8")
 
-    assert 'name="珍钻复刻定点自动乱数"' in spec
+    assert 'name="珍钻复刻自动乱数"' in spec
 
 
 def test_qt_application_and_window_use_project_identity(monkeypatch):

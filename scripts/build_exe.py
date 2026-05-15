@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 APP_NAME = "auto-bdsp-rng"
-EXE_NAME = "珍钻复刻定点自动乱数"
+EXE_NAME = "珍钻复刻自动乱数"
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 VERSION = f"v{PROJECT_VERSION}"
@@ -231,6 +231,10 @@ def copy_release_files() -> None:
     copy_optional_tree(PROJECT_XS_ROOT / "src", DIST_DIR / "third_party" / "Project_Xs_CHN" / "src")
     overlay_optional_tree(PROJECT_XS_OVERRIDES, DIST_DIR / "third_party" / "Project_Xs_CHN")
     write_user_readme(DIST_DIR / "README.txt")
+    for root_file in ("CHANGELOG.md", "SPONSORS.md"):
+        source = ROOT / root_file
+        if source.exists():
+            shutil.copy2(source, DIST_DIR / root_file)
     license_source = ROOT / "LICENSE"
     license_txt_source = ROOT / "LICENSE.txt"
     if license_source.exists():

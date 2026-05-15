@@ -7,6 +7,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QPushButton, QToolButton
 
+from auto_bdsp_rng.resources import app_base_dir
 from auto_bdsp_rng.ui.about_dialog import AboutDialog
 from auto_bdsp_rng.ui.markdown_viewer import MarkdownViewerDialog, read_markdown_text
 from auto_bdsp_rng.ui.sponsor_dialog import SponsorDialog
@@ -32,7 +33,7 @@ class HelpMenuController:
         self.window = window
         self.open_url = open_url or self._open_url
         self.copy_text = copy_text or self._copy_text
-        self.project_root = project_root or Path(__file__).resolve().parents[3]
+        self.project_root = project_root or app_base_dir()
 
     def install(self, button: QToolButton | QPushButton | None = None) -> QMenu:
         self.help_menu = self._build_menu(parent=button or self.window)
