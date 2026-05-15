@@ -48,6 +48,7 @@ class AboutDialog(QDialog):
         self._copy_text = copy_text
         self._sponsor_assets = sponsor_assets or find_sponsor_assets()
         self._dark = self.palette().window().color().lightness() < 128
+        self._link_color = "#9fc8ad" if self._dark else "#23936b"
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -179,7 +180,7 @@ class AboutDialog(QDialog):
         warning.setWordWrap(True)
         layout.addWidget(warning)
 
-        hint = QLabel(f"请通过 <a href='{PROJECT_REPOSITORY_URL}' style='color:{soft};'>GitHub 官方渠道</a> 获取最新版。")
+        hint = QLabel(f"请通过 <a href='{PROJECT_REPOSITORY_URL}' style='color:{self._link_color};'>GitHub 官方渠道</a> 获取最新版。")
         hint.setObjectName("MutedLabel")
         hint.setWordWrap(True)
         hint.setOpenExternalLinks(True)
