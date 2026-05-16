@@ -2,9 +2,9 @@ _目标帧数 = 100
 _翻全国图鉴 = 7500
 _翻神奥图鉴 = 2500
 _翻页 = 180
-# 0关，1开，用于切换精灵到对首（同步放第二位）
+# 0关，1开，用于切换精灵到队首（同步放第二位）
 $精灵切换开关 = 0 
-$地下过帧 = 1 # 0是不地下过帧，1是地下过帧
+$地下过帧 = 0 # 0是不地下过帧，1是地下过帧
 $目标帧数 = _目标帧数 - 300 #预留5分钟
 IF $精灵切换开关 == 1 
 $目标帧数 -= 300
@@ -25,6 +25,7 @@ PRINT 全国图鉴 & $翻全国图鉴次数 & 次
 PRINT 神奥图鉴 & $翻神奥图鉴次数 & 次
 PRINT 翻页 & $翻页次数 & 次
 
+
 WAIT 1000
 IF $地下过帧 == 1
 B
@@ -33,6 +34,18 @@ LS DOWN
 WAIT 2000
 LS RESET
 WAIT 3500#出去洞窟需根据设备情况修改时间
+ELSE
+WAIT 1000
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 50
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 1000
+A
+WAIT 1000
 ENDIF
 IF $精灵切换开关 == 1
 CALL 切换宝可梦
@@ -66,10 +79,10 @@ IF $翻神奥图鉴次数 != 0
         RIGHT $翻神奥图鉴时间
         WAIT 200
     NEXT
+    RIGHT
+    WAIT 1000
     L
     WAIT 1000
-    RIGHT
-    WAIT 100
 ENDIF
 IF $翻页次数 != 0
     $右翻页次数 = $翻页次数 + 1
@@ -106,6 +119,23 @@ WAIT 6000# 可根据设备情况修改时间
 LS RESET
 WAIT 1000
 Y
+ELSE
+PLUS DOWN #打开道具栏
+WAIT 100
+PLUS UP
+WAIT 1000
+RIGHT  # 根据个人情况修改，使用钓鱼竿
+WAIT 1000
+A
+WAIT 1000
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 50
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 1000
 ENDIF
 WAIT 1000
 

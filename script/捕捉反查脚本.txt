@@ -1,7 +1,7 @@
-WAIT 15000
+WAIT 13000
 X  # 打开精灵球界面
 WAIT 400
-FOR 1 # 选择大师球，根据需求修改次数
+FOR 2 # 选择大师球，根据需求修改次数
 RIGHT
 WAIT 200
 NEXT
