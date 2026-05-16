@@ -252,6 +252,7 @@ class AutoRngRunner:
         self._is_sync_active: bool = False  # 当前队首是否为同步精灵
         self._sync_initial: bool = False  # 本轮初始同步状态（每轮重置）
         self._need_sync_switch: bool = False  # 本次过帧是否需要切换同步状态
+        self._need_init_reset: bool = False  # 无目标重试时临时启用初始化
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -400,8 +401,10 @@ class AutoRngRunner:
             self._history("cycle_result", False, None, None, None)
             self._cycle_started = False
             if self.config.loop_mode == "infinite":
+                self._need_init_reset = True
                 self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
             elif self.config.loop_mode == "count" and self._completed_loops < self.config.loop_count:
+                self._need_init_reset = True
                 self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
             else:
                 self._set_progress(AutoRngPhase.COMPLETED, "无候选，自动流程已完成", loop_index=self._completed_loops)
@@ -452,6 +455,12 @@ class AutoRngRunner:
         self._is_sync_active = self._sync_initial
         self._history("cycle_start", self._completed_loops)
         text = path.read_text(encoding="utf-8")
+        # 无目标重试时临时启用初始化（避免放大模式卡住流程）
+        if getattr(self, "_need_init_reset", False):
+            text = text.replace("$初始化 = 0", "$初始化 = 1")
+            self._need_init_reset = False
+            if self.history_callback is not None:
+                self.history_callback("log_message", ("初始化已临时启用",))
         self.services.run_script_text(text, path.name)
         self._set_progress(AutoRngPhase.CAPTURE_SEED, f"测种脚本完成——{path.name}",
                           loop_index=self._completed_loops,
