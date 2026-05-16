@@ -1,12 +1,12 @@
 {
     "MonitorWindow": true,
     "WindowPrefix": "PotPlayer",
-    "image": "./images/custom/config_bebe_eye.png",
+    "image": "./images/custom/config_camera_eye.png",
     "view": [
-        518,
-        378,
-        41,
-        50
+        510,
+        261,
+        57,
+        71
     ],
     "thresh": 0.7,
     "white_delay": 0.0,
