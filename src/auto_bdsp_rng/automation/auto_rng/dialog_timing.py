@@ -29,7 +29,7 @@ def measure_keyword_interval(
     capture_frame: Callable[[], object],
     read_text: Callable[[object], str],
     *,
-    first_keyword: str = "出现了",
+    first_keyword: str = "出现了！",
     second_keyword: str = "去吧",
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
