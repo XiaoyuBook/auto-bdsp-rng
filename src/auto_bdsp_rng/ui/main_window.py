@@ -3144,8 +3144,27 @@ class MainWindow(QMainWindow):
             from auto_bdsp_rng.gen8_static.models import StateFilter
             from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
 
-            base_stats = search_criteria.record.species_info.stats
-            level = search_criteria.record.template.level
+            # 多地精灵组合：反查时遍历同组所有成员
+            REVERSE_GROUPS: dict[str, list[str]] = {
+                "Raikou":   ["Raikou", "Entei", "Suicune"],
+                "Entei":    ["Raikou", "Entei", "Suicune"],
+                "Suicune":  ["Raikou", "Entei", "Suicune"],
+                "Regirock": ["Regirock", "Regice", "Registeel"],
+                "Regice":   ["Regirock", "Regice", "Registeel"],
+                "Registeel":["Regirock", "Regice", "Registeel"],
+                "Latias":   ["Latias", "Latios"],
+                "Latios":   ["Latias", "Latios"],
+            }
+            target_desc = search_criteria.record.description
+            group_species = REVERSE_GROUPS.get(target_desc, [target_desc])
+            if len(group_species) > 1:
+                log(f"[自动反查] 多地精灵组: {', '.join(group_species)}")
+
+            all_records = get_static_encounters()
+            species_records = {
+                desc: next((r for r in all_records if r.description == desc), search_criteria.record)
+                for desc in group_species
+            }
             ni = _NATURE_MAP.get(str(nature)) if nature else None
             # 构建搜索条件模板（性格+个性锁定，帧数范围可配置）
             natures_locked = (True,) * 25
@@ -3169,7 +3188,7 @@ class MainWindow(QMainWindow):
             stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
             candidates: list[object] = []
             last_ocr_stats: dict[str, object] | None = None
-            prev_ocr_key: str | None = None  # 用于判断 OCR 结果是否重复
+            prev_ocr_key: str | None = None
             for attempt in range(1, 4):
                 log(f"[自动反查] 能力页 OCR 第{attempt}次…")
                 stats_frame = capture_preview_frame(tracking_config.capture)
@@ -3181,68 +3200,74 @@ class MainWindow(QMainWindow):
                         time.sleep(0.5)
                     continue
 
-                # 能力值 → 个体值反算（使用 C++ PokeFinder Nature::computeStat 公式）
                 stat_vals = [int(stats.get(n, 0)) for n in stat_names]
                 use_nature = ni if (ni is not None and 0 <= ni < 25) else 255
-                if _compute_iv_ranges is not None:
-                    ranges = _compute_iv_ranges(list(base_stats), stat_vals, use_nature, level)
-                else:
-                    # Python fallback（C++ 未编译时）
-                    ranges = []
-                    for i, name in enumerate(stat_names):
-                        possible = []
-                        for iv in range(32):
-                            c = _compute_stat(base_stats[i], iv, level, use_nature, i)
-                            if c == stat_vals[i]:
-                                possible.append(iv)
-                        ranges.append((min(possible), max(possible)) if possible else (31, 0))
-                normalized_ranges = _normalize_iv_ranges(ranges)
-                if normalized_ranges is None:
-                    log(f"[自动反查] 第{attempt}次能力值与性格/等级不匹配，可能 OCR 误读，重试…")
-                    if attempt < 3:
-                        time.sleep(0.5)
-                    continue
-                iv_min, iv_max = normalized_ranges
-                last_ocr_stats = {
-                    "stats": dict(zip(stat_names, stat_vals)),
-                    "iv_min": list(iv_min), "iv_max": list(iv_max),
-                    "nature": nature,
-                    "characteristic": characteristic,
-                }
-                # 判断此次 OCR 结果是否与上次完全相同
-                curr_key = f"{stat_vals}|{iv_min}|{iv_max}"
-                is_new_ocr = curr_key != prev_ocr_key
-                if is_new_ocr:
-                    prev_ocr_key = curr_key
-                    for i, name in enumerate(stat_names):
-                        log(f"[自动反查] {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{base_stats[i]} Lv{level})")
-                else:
-                    log(f"[自动反查] 第{attempt}次 OCR 结果与上次相同，跳过重复输出")
+                is_new_ocr = True  # 每个 OCR 尝试默认视作新结果
 
-                reverse_filter = StateFilter(
-                    iv_min=tuple(iv_min), iv_max=tuple(iv_max),
-                    natures=natures_locked,
-                )
-                attempt_criteria = replace(criteria, state_filter=reverse_filter)
-                attempt_candidates = generate_static_candidates(attempt_criteria)
-                if is_new_ocr:
-                    log(f"[自动反查] 第{attempt}次 PokeFinder 搜索: {len(attempt_candidates)} 个候选")
+                # 对组内所有精灵遍历搜索
+                for species_desc in group_species:
+                    species_record = species_records[species_desc]
+                    species_base = species_record.species_info.stats
+                    species_level = species_record.template.level
 
-                # 后置比对个性
-                if characteristic and attempt_candidates:
-                    matched: list[object] = []
-                    for state in attempt_candidates:
-                        state_ivs = [int(v) for v in (getattr(state, "ivs", None) or [])]
-                        if len(state_ivs) != 6:
-                            state_ivs = [0] * 6
-                        ec_val = int(getattr(state, "ec", 0))
-                        if compute_characteristic(ec_val, state_ivs) == characteristic:
-                            matched.append(state)
-                    log(f"[自动反查] 第{attempt}次 个性({characteristic})匹配: {len(matched)} 个")
-                    attempt_candidates = matched
+                    if _compute_iv_ranges is not None:
+                        ranges = _compute_iv_ranges(list(species_base), stat_vals, use_nature, species_level)
+                    else:
+                        ranges = []
+                        for i, name in enumerate(stat_names):
+                            possible = []
+                            for iv in range(32):
+                                c = _compute_stat(species_base[i], iv, species_level, use_nature, i)
+                                if c == stat_vals[i]:
+                                    possible.append(iv)
+                            ranges.append((min(possible), max(possible)) if possible else (31, 0))
+                    normalized_ranges = _normalize_iv_ranges(ranges)
+                    if normalized_ranges is None:
+                        continue
+                    iv_min, iv_max = normalized_ranges
+                    last_ocr_stats = {
+                        "stats": dict(zip(stat_names, stat_vals)),
+                        "iv_min": list(iv_min), "iv_max": list(iv_max),
+                        "nature": nature,
+                        "characteristic": characteristic,
+                    }
+                    curr_key = f"{stat_vals}|{iv_min}|{iv_max}"
+                    is_new_ocr = curr_key != prev_ocr_key
+                    if is_new_ocr:
+                        prev_ocr_key = curr_key
+                        for i, name in enumerate(stat_names):
+                            log(f"[自动反查] {species_desc} {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{species_base[i]} Lv{species_level})")
+                    else:
+                        log(f"[自动反查] 第{attempt}次 OCR 结果与上次相同，跳过重复输出")
 
-                if attempt_candidates:
-                    candidates = attempt_candidates
+                    species_criteria = replace(criteria, record=species_record)
+                    reverse_filter = StateFilter(
+                        iv_min=tuple(iv_min), iv_max=tuple(iv_max),
+                        natures=natures_locked,
+                    )
+                    attempt_criteria = replace(species_criteria, state_filter=reverse_filter)
+                    species_candidates = list(generate_static_candidates(attempt_criteria))
+                    # 标记反查精灵名
+                    for c in species_candidates:
+                        object.__setattr__(c, "_reverse_species", species_desc)
+                    if is_new_ocr:
+                        log(f"[自动反查] {species_desc} PokeFinder 搜索: {len(species_candidates)} 个候选")
+
+                    if characteristic and species_candidates:
+                        matched: list[object] = []
+                        for state in species_candidates:
+                            state_ivs = [int(v) for v in (getattr(state, "ivs", None) or [])]
+                            if len(state_ivs) != 6:
+                                state_ivs = [0] * 6
+                            ec_val = int(getattr(state, "ec", 0))
+                            if compute_characteristic(ec_val, state_ivs) == characteristic:
+                                matched.append(state)
+                        log(f"[自动反查] {species_desc} 个性({characteristic})匹配: {len(matched)} 个")
+                        species_candidates = matched
+
+                    candidates.extend(species_candidates)
+
+                if candidates:
                     break
                 log(f"[自动反查] 第{attempt}次未找到匹配个体，{'重试…' if attempt < 3 else '已达上限'}")
 
@@ -3261,7 +3286,8 @@ class MainWindow(QMainWindow):
                     state_ivs = getattr(state, "ivs", None)
                     iv_text = " / ".join(f"{name}={int(state_ivs[i])}" for i, name in enumerate(["HP","攻击","防御","特攻","特防","速度"])) if state_ivs is not None and len(state_ivs) == 6 else "?"
                     pid_val = int(getattr(state, "pid", 0))
-                    log(f"[自动反查] advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
+                    species_tag = f"[{getattr(state, '_reverse_species', '')}] " if getattr(state, '_reverse_species', '') else ""
+                    log(f"[自动反查] {species_tag}advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
 
         return AutoRngServices(
             capture_seed=capture_seed_service,
