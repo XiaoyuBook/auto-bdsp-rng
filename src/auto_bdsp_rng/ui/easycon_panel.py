@@ -1476,6 +1476,7 @@ class EasyConPanel(QWidget):
 
     def _process_error(self, error) -> None:  # type: ignore[no-untyped-def]
         self._append_log("error", f"进程启动失败: {error}")
+        self._show_failure_toast(str(error))
         self._finish_run("失败", exit_code=None)
 
     def _finish_run(
@@ -1703,6 +1704,7 @@ class EasyConPanel(QWidget):
             self.bridge_status = EasyConStatus.FAILED
             self.task_state_text = "连接失败"
             self._append_log("error", f"连接伊机控失败: {exc}")
+            self._show_failure_toast(str(exc))
             self._update_bridge_controls()
             return
         self.bridge_connecting = False
@@ -1755,6 +1757,36 @@ class EasyConPanel(QWidget):
             toast.move(center.x() - toast.width() // 2, center.y() - toast.height() // 2)
         toast.show()
         QTimer.singleShot(2000, toast.deleteLater)
+
+    def _show_failure_toast(self, reason: str) -> None:
+        """连接失败弹出提示窗口，3秒后自动消失。"""
+        short = reason.split("\n")[0]
+        if len(short) > 60:
+            short = short[:57] + "..."
+        toast = QLabel(f" 连接失败\n{short}", self)
+        toast.setStyleSheet("""
+            QLabel {
+                background-color: #DC2626;
+                color: white;
+                padding: 14px 28px;
+                border-radius: 10px;
+                font-size: 15px;
+                font-weight: bold;
+            }
+        """)
+        toast.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        toast.adjustSize()
+        window = self.window()
+        if window is not None:
+            center = window.geometry().center()
+            toast.move(center.x() - toast.width() // 2, center.y() - toast.height() // 2)
+        toast.show()
+        QTimer.singleShot(3000, toast.deleteLater)
 
     def send_controller_press(self, button: str) -> None:
         duration = self.controller_duration.value()
