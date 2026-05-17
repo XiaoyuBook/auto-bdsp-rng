@@ -272,7 +272,7 @@ class AutoRngRunner:
             max_wait_frames=self.config.max_wait_frames,
         )
 
-    def run(self, *, max_steps: int = 100) -> AutoRngProgress:
+    def run(self, *, max_steps: int = 10000) -> AutoRngProgress:
         if self.progress.phase == AutoRngPhase.IDLE:
             if self.config.start_phase == AutoRngPhase.CAPTURE_SEED:
                 self._completed_loops += 1
