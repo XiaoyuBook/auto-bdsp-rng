@@ -1009,6 +1009,28 @@ def test_project_xs_advance_counter_advances_as_live_state():
     assert counter.current_advances == 103
 
 
+def test_project_xs_advance_counter_runs_target_callback():
+    counter = ProjectXsAdvanceCounter(current_advances=100, npc=0, next_tick_at=11.018)
+    clock = [10.0]
+    frames: list[int] = []
+    targets: list[int] = []
+
+    def fake_sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    result = counter.run_until(
+        target_advances=105,
+        monotonic=lambda: clock[0],
+        sleep=fake_sleep,
+        on_frame=frames.append,
+        on_target=targets.append,
+    )
+
+    assert result == 105
+    assert frames == [101, 102, 103, 104, 105]
+    assert targets == [105]
+
+
 def test_runner_final_wait_uses_live_advance_loop(tmp_path):
     hit_script = tmp_path / "hit.txt"
     hit_script.write_text("_闪帧 = 60\nA 100\n", encoding="utf-8")

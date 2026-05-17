@@ -58,6 +58,30 @@ class ProjectXsAdvanceCounter:
             advanced += 1
         return advanced
 
+    def run_until(
+        self,
+        target_advances: int,
+        *,
+        monotonic: Callable[[], float],
+        sleep: Callable[[float], None],
+        should_stop: Callable[[], bool] | None = None,
+        on_frame: Callable[[int], None] | None = None,
+        on_target: Callable[[int], None] | None = None,
+    ) -> int:
+        should_stop = (lambda: False) if should_stop is None else should_stop
+        while self.current_advances < target_advances and not should_stop():
+            sleep_seconds = self.next_tick_at - monotonic()
+            if sleep_seconds > 0:
+                sleep(sleep_seconds)
+            advanced = self.advance_to(monotonic())
+            if advanced <= 0:
+                continue
+            if on_frame is not None:
+                on_frame(self.current_advances)
+        if self.current_advances >= target_advances and not should_stop() and on_target is not None:
+            on_target(self.current_advances)
+        return self.current_advances
+
 
 def decide_search_target(candidates: Sequence[object]) -> AutoRngDecision:
     if not candidates:
@@ -587,14 +611,8 @@ class AutoRngRunner:
         )
         self._reset_advance_counter(seed)
         counter = self._advance_counter
-        while counter.current_advances < trigger and not self._stop_requested:
-            sleep_seconds = counter.next_tick_at - self.services.monotonic()
-            if sleep_seconds > 0:
-                self.services.sleep(sleep_seconds)
-            advanced = counter.advance_to(self.services.monotonic())
-            if advanced <= 0:
-                continue
-            live_current = counter.current_advances
+
+        def on_frame(live_current: int) -> None:
             live_remaining = max(0, trigger - live_current)
             self._seed_result = replace(seed, current_advances=live_current, measured_at=self.services.monotonic())
             self._set_progress(
@@ -603,10 +621,24 @@ class AutoRngRunner:
                 current_advances=live_current,
                 remaining_to_trigger=live_remaining,
             )
+
+        target_current: list[int] = []
+
+        def on_target(live_current: int) -> None:
+            target_current.append(live_current)
+
+        counter.run_until(
+            trigger,
+            monotonic=self.services.monotonic,
+            sleep=self.services.sleep,
+            should_stop=self.should_stop,
+            on_frame=on_frame,
+            on_target=on_target,
+        )
         if self._stop_requested:
             return
 
-        new_current = counter.current_advances
+        new_current = target_current[0] if target_current else counter.current_advances
         self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
         msg = f"活帧触发——目前帧数 {new_current} 帧，启动撞闪脚本（撞闪_闪帧 {fixed_flash}）"
         if self.config.debug_output:
