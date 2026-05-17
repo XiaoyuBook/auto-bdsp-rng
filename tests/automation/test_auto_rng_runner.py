@@ -7,6 +7,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngConfig,
     AutoRngDecisionKind,
     AutoRngPhase,
+    AutoRngProgress,
     AutoRngSeedResult,
     AutoRngTarget,
     ShinyCheckResult,
@@ -14,6 +15,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
 from auto_bdsp_rng.automation.auto_rng.runner import (
     AutoRngRunner,
     AutoRngServices,
+    ProjectXsAdvanceCounter,
     decide_after_advance_script,
     decide_search_target,
     decide_target_advance,
@@ -957,6 +959,11 @@ def test_runner_final_wait_flows_directly_to_run_hit(tmp_path):
 
     scripts: list[tuple[str, str]] = []
     calls: list[str] = []
+    clock = [10.0]
+
+    def fake_sleep(seconds: float) -> None:
+        clock[0] += seconds
+
     services = AutoRngServices(
         capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
         # raw=11915: trigger=10403, reidentify后current=10309, remaining=94>60 → FINAL_WAIT
@@ -965,7 +972,8 @@ def test_runner_final_wait_flows_directly_to_run_hit(tmp_path):
             seed="seed-1", current_advances=10309, npc=0,
         ),
         run_script_text=lambda text, name: scripts.append((name, text)),
-        monotonic=lambda: 10.0,
+        monotonic=lambda: clock[0],
+        sleep=fake_sleep,
     )
     runner = AutoRngRunner(
         AutoRngConfig(
@@ -985,7 +993,73 @@ def test_runner_final_wait_flows_directly_to_run_hit(tmp_path):
 
     names = [n for n, _ in scripts]
     assert any("谢米.txt" in n for n in names), f"expected hit script, got {names}"
-    assert runner.progress.phase in (AutoRngPhase.LOOP_CHECK, AutoRngPhase.RUN_HIT_SCRIPT)
+    assert runner.progress.phase in (AutoRngPhase.LOOP_CHECK, AutoRngPhase.RUN_HIT_SCRIPT, AutoRngPhase.COMPLETED)
+
+
+def test_project_xs_advance_counter_advances_as_live_state():
+    counter = ProjectXsAdvanceCounter(current_advances=100, npc=0, next_tick_at=11.018)
+
+    assert counter.advance_to(11.000) == 0
+    assert counter.current_advances == 100
+
+    assert counter.advance_to(11.018) == 1
+    assert counter.current_advances == 101
+
+    assert counter.advance_to(13.054) == 2
+    assert counter.current_advances == 103
+
+
+def test_runner_final_wait_uses_live_advance_loop(tmp_path):
+    hit_script = tmp_path / "hit.txt"
+    hit_script.write_text("_闪帧 = 60\nA 100\n", encoding="utf-8")
+
+    clock = [10.0]
+    sleeps: list[float] = []
+    progress_events: list[AutoRngProgress] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    services = AutoRngServices(
+        run_script_text=lambda _text, _name: None,
+        monotonic=lambda: clock[0],
+        sleep=fake_sleep,
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            fixed_delay=40,
+            fixed_flash_frames=60,
+        ),
+        services=services,
+        progress_callback=progress_events.append,
+    )
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100, npc=0, measured_at=clock[0])
+    runner._locked_target = AutoRngTarget(raw_target_advances=205)
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.FINAL_WAIT,
+        raw_target_advances=205,
+        fixed_delay=40,
+        trigger_advances=105,
+        current_advances=100,
+        remaining_to_trigger=5,
+        final_flash_frames=60,
+    )
+
+    runner._final_wait()
+
+    live_advances = [
+        event.current_advances
+        for event in progress_events
+        if event.phase == AutoRngPhase.FINAL_WAIT and event.current_advances is not None
+    ]
+    assert live_advances == [100, 101, 102, 103, 104, 105]
+    assert len(sleeps) == 5
+    assert all(abs(seconds - 1.018) < 0.000001 for seconds in sleeps)
+    assert runner.progress.phase == AutoRngPhase.RUN_HIT_SCRIPT
+    assert runner.progress.current_advances == 105
 
 
 def test_final_calibrate_update_resets_measured_at_after_wait(tmp_path):

@@ -769,6 +769,63 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
 
 
+def test_auto_rng_progress_current_advances_syncs_header_counter(app):
+    window = MainWindow()
+    window._advance_timer.stop()
+    window._advance_step = 1
+    window._tracked_advances = 990
+    window._update_auto_rng_header(advances=990)
+
+    window._apply_auto_rng_header_progress(
+        AutoRngProgress(
+            phase=AutoRngPhase.RUN_HIT_SCRIPT,
+            loop_index=1,
+            current_advances=1000,
+        )
+    )
+
+    assert window._tracked_advances == 1000
+    assert window.auto_advance_badge.text() == "advance 1000"
+    assert not window._advance_timer.isActive()
+
+
+def test_auto_seed_captured_does_not_start_local_advance_timer(app):
+    window = MainWindow()
+    window._advance_timer.stop()
+
+    window._handle_auto_seed_captured(
+        AutoRngSeedResult(
+            seed=SeedPair64(0x1111111122222222, 0x3333333344444444),
+            current_advances=1234,
+            npc=0,
+        )
+    )
+
+    assert window._tracked_advances == 1234
+    assert window.auto_advance_badge.text() == "advance 1234"
+    assert not window._advance_timer.isActive()
+
+
+def test_advance_tick_catches_up_from_elapsed_time(app, monkeypatch):
+    window = MainWindow()
+    current_time = [100.0]
+    monkeypatch.setattr(main_window_module.time, "monotonic", lambda: current_time[0])
+
+    window._start_auto_advance_tracking(
+        AutoRngSeedResult(
+            seed=SeedPair64(0, 0),
+            current_advances=990,
+            npc=0,
+            measured_at=100.0,
+        )
+    )
+    current_time[0] = 100.0 + 10 * 1.018
+    window._advance_tick()
+
+    assert window._tracked_advances == 1000
+    assert window.auto_advance_badge.text() == "advance 1000"
+
+
 def test_history_panel_reverse_lookup_candidates_are_single_line(app):
     panel = HistoryPanel()
     state = SimpleNamespace(
@@ -1098,8 +1155,9 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
 
     def fake_capture(config, *_args, **_kwargs):
         capture_counts.append(config.blink_count)
-        return SimpleNamespace(offset_time=0.0)
+        return SimpleNamespace(offset_time=100.0)
 
+    monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 105.0)
     monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
 
     def fake_reidentify(current_state, _observation, **_kwargs):
@@ -1113,11 +1171,11 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     QApplication.processEvents()
 
     assert calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
-    assert result.seed == seed_state
-    assert result.current_advances == 42
+    assert result.seed == SeedPair64(0x1111111122222222, 0x3333333344444444)
+    assert result.current_advances == 47
     assert capture_counts == [7]
-    assert int(window.advances_value.text()) >= 42
-    assert window._advance_timer.isActive()
+    assert int(window.advances_value.text()) >= 47
+    assert not window._advance_timer.isActive()
 
 
 def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monkeypatch):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -25,6 +24,39 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
 )
 
 _UNSET = object()
+
+
+@dataclass
+class ProjectXsAdvanceCounter:
+    current_advances: int = 0
+    npc: int = 0
+    next_tick_at: float = 0.0
+    frame_seconds: float = 1.018
+
+    @property
+    def step(self) -> int:
+        return max(1, self.npc + 1)
+
+    def reset(self, *, current_advances: int, npc: int, now: float) -> None:
+        self.current_advances = int(current_advances)
+        self.npc = int(npc)
+        self.next_tick_at = float(now) + self.frame_seconds
+
+    def set_current(self, current_advances: int, *, now: float) -> None:
+        self.current_advances = int(current_advances)
+        self.next_tick_at = float(now) + self.frame_seconds
+
+    def advance_one_frame(self) -> int:
+        self.current_advances += self.step
+        self.next_tick_at += self.frame_seconds
+        return self.current_advances
+
+    def advance_to(self, now: float) -> int:
+        advanced = 0
+        while now + 1e-9 >= self.next_tick_at:
+            self.advance_one_frame()
+            advanced += 1
+        return advanced
 
 
 def decide_search_target(candidates: Sequence[object]) -> AutoRngDecision:
@@ -134,9 +166,10 @@ def finalize_flash_frames(
 ) -> AutoRngDecision:
     now = time.monotonic() if now_monotonic is None else now_monotonic
     trigger_advances = target.raw_target_advances - fixed_delay - fixed_flash_frames
-    elapsed_seconds = max(0.0, now - ref_time)
-    elapsed_advances = math.floor(elapsed_seconds / 1.018) * (npc + 1)
-    live_current_advances = current_advances_at_ref + elapsed_advances
+    counter = ProjectXsAdvanceCounter()
+    counter.reset(current_advances=current_advances_at_ref, npc=npc, now=ref_time)
+    counter.advance_to(now)
+    live_current_advances = counter.current_advances
     remaining_to_trigger = trigger_advances - live_current_advances
     flash_frames = fixed_flash_frames if fixed_flash_frames > 0 else remaining_to_trigger
     common = {
@@ -215,6 +248,7 @@ class AutoRngServices:
     run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], None] | None = None
     stop_current_script: Callable[[], None] | None = None
     monotonic: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
 
 
 class AutoRngRunner:
@@ -253,6 +287,7 @@ class AutoRngRunner:
         self._sync_initial: bool = False  # 本轮初始同步状态（每轮重置）
         self._need_sync_switch: bool = False  # 本次过帧是否需要切换同步状态
         self._need_init_reset: bool = False  # 无目标重试时临时启用初始化
+        self._advance_counter = ProjectXsAdvanceCounter()
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -332,6 +367,7 @@ class AutoRngRunner:
     def _capture_seed(self) -> None:
         self._seed_result = self._with_measurement_time(self.services.capture_seed())
         seed = self._seed_result
+        self._reset_advance_counter(seed)
         self._history("seed_captured", seed.seed_text, seed.current_advances, seed.npc, self.config.max_advances)
         self._set_progress(
             AutoRngPhase.SEARCH_TARGET,
@@ -506,6 +542,7 @@ class AutoRngRunner:
         hint = seed.current_advances + self._requested_advances if self._requested_advances else None
         seed_with_hint = seed if hint is None else replace(seed, expected_advances_hint=hint)
         self._seed_result = self._with_measurement_time(self.services.reidentify(seed_with_hint))
+        self._reset_advance_counter(self._seed_result)
         new_advances = self._seed_result.current_advances
         actual_advance = new_advances - prev_advances
         self._set_progress(
@@ -531,7 +568,7 @@ class AutoRngRunner:
         self._set_progress_from_decision(decision)
 
     def _final_wait(self) -> None:
-        """定时触发：算好还需要多少秒，睡到点直接启动撞闪脚本。"""
+        """Use a Project_Xs-style live frame loop until the hit-script frame."""
         seed = self._require_seed()
         remaining = self.progress.remaining_to_trigger
         fixed_flash = self._fixed_flash_frames()
@@ -539,19 +576,39 @@ class AutoRngRunner:
             self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, "等待量 ≤ 0，跳过，直接启动撞闪脚本")
             return
 
-        wait_seconds = remaining * 1.018 / max(1, seed.npc + 1)
         trigger = (self.progress.raw_target_advances or 0) - self.config.fixed_delay - fixed_flash
+        wait_seconds = remaining * 1.018 / max(1, seed.npc + 1)
         self._set_progress(
             AutoRngPhase.FINAL_WAIT,
-            f"设置定时触发——还需过 {remaining} 帧（约 {wait_seconds:.0f} 秒），"
+            f"设置活帧触发——还需过 {remaining} 帧（约 {wait_seconds:.0f} 秒），"
             f"到脚本启动帧 {trigger} 时自动运行撞闪脚本",
             current_advances=seed.current_advances,
             remaining_to_trigger=remaining,
         )
-        time.sleep(wait_seconds)
-        new_current = seed.current_advances + remaining
+        self._reset_advance_counter(seed)
+        counter = self._advance_counter
+        while counter.current_advances < trigger and not self._stop_requested:
+            sleep_seconds = counter.next_tick_at - self.services.monotonic()
+            if sleep_seconds > 0:
+                self.services.sleep(sleep_seconds)
+            advanced = counter.advance_to(self.services.monotonic())
+            if advanced <= 0:
+                continue
+            live_current = counter.current_advances
+            live_remaining = max(0, trigger - live_current)
+            self._seed_result = replace(seed, current_advances=live_current, measured_at=self.services.monotonic())
+            self._set_progress(
+                AutoRngPhase.FINAL_WAIT,
+                "",
+                current_advances=live_current,
+                remaining_to_trigger=live_remaining,
+            )
+        if self._stop_requested:
+            return
+
+        new_current = counter.current_advances
         self._seed_result = replace(seed, current_advances=new_current, measured_at=self.services.monotonic())
-        msg = f"定时触发——目前帧数 ≈{new_current} 帧，启动撞闪脚本（撞闪_闪帧 {fixed_flash}）"
+        msg = f"活帧触发——目前帧数 {new_current} 帧，启动撞闪脚本（撞闪_闪帧 {fixed_flash}）"
         if self.config.debug_output:
             msg = f"[{time.strftime('%H:%M:%S')}] {msg}"
         self._set_progress(AutoRngPhase.RUN_HIT_SCRIPT, msg,
@@ -851,6 +908,13 @@ class AutoRngRunner:
         if seed_result.measured_at is not None:
             return seed_result
         return replace(seed_result, measured_at=self.services.monotonic())
+
+    def _reset_advance_counter(self, seed_result: AutoRngSeedResult) -> None:
+        self._advance_counter.reset(
+            current_advances=seed_result.current_advances,
+            npc=seed_result.npc,
+            now=self._seed_measured_at(seed_result),
+        )
 
     def _seed_measured_at(self, seed_result: AutoRngSeedResult) -> float:
         if seed_result.measured_at is not None:

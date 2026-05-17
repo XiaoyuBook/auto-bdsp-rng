@@ -64,7 +64,7 @@ from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
-from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices
+from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices, ProjectXsAdvanceCounter
 from auto_bdsp_rng.automation.auto_rng.search import (
     StaticSearchCriteria,
     StaticSearchTarget,
@@ -693,6 +693,8 @@ class MainWindow(QMainWindow):
         self._advance_timer.timeout.connect(self._advance_tick)
         self._tracked_advances = 0
         self._advance_step = 1
+        self._advance_counter = ProjectXsAdvanceCounter()
+        self._advance_counter.reset(current_advances=0, npc=0, now=time.monotonic())
         self._build_actions()
         self._build_ui()
         self._connect_auto_rng_sync_signals()
@@ -2057,7 +2059,9 @@ class MainWindow(QMainWindow):
 
     def _apply_auto_rng_header_progress(self, progress: AutoRngProgress) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
-        advances = progress.current_advances if progress.current_advances is not None else self._tracked_advances
+        if progress.current_advances is not None:
+            self._display_tracked_advances(progress.current_advances)
+        advances = self._tracked_advances
         self._update_auto_rng_header(
             loop_index=progress.loop_index,
             phase_text=phase_text,
@@ -2746,8 +2750,10 @@ class MainWindow(QMainWindow):
                 box.setText(text)
             self._sync_seed64_from_state32()
             self._sync_bdsp_data_from_auto_rng(state.to_seed_pair64())
-        # reidentify 只更新 current_advances，不改变 seed/数据区
-        self._start_auto_advance_tracking(seed_result)
+        # 自动流程的 advance 由 runner 的活帧循环推进，UI 只显示 runner 传来的值。
+        self._advance_timer.stop()
+        self._advance_step = seed_result.npc + 1
+        self._display_tracked_advances(seed_result.current_advances)
 
     def _state32_from_auto_seed_result(self, seed_result: AutoRngSeedResult) -> SeedState32:
         seed = seed_result.seed
@@ -2762,14 +2768,13 @@ class MainWindow(QMainWindow):
 
     def _start_auto_advance_tracking(self, seed_result: AutoRngSeedResult) -> None:
         measured_at = seed_result.measured_at
-        elapsed_advances = 0
-        if measured_at is not None:
-            elapsed_seconds = max(0.0, time.monotonic() - measured_at)
-            elapsed_advances = int(elapsed_seconds / 1.018) * (seed_result.npc + 1)
         self._advance_step = seed_result.npc + 1
-        self._tracked_advances = seed_result.current_advances + elapsed_advances
-        self.advances_value.setText(str(self._tracked_advances))
-        self._update_auto_rng_header(advances=self._tracked_advances)
+        self._advance_counter.reset(
+            current_advances=seed_result.current_advances,
+            npc=seed_result.npc,
+            now=measured_at if measured_at is not None else time.monotonic(),
+        )
+        self._refresh_tracked_advances_from_clock()
         self.timer_value.setText("0")
         self._advance_timer.start()
 
@@ -2960,17 +2965,23 @@ class MainWindow(QMainWindow):
                 search_min=search_min,
                 search_max=search_max,
             )
+            elapsed_seconds = 0
+            offset_time = float(getattr(observation, "offset_time", 0.0) or 0.0)
+            if offset_time > 0:
+                elapsed_seconds = max(0, round(time.perf_counter() - offset_time))
+            elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
+            current_advances = result.advances + elapsed_advances
             # 校验 reidentify 结果与预期的偏差
-            if hint is not None and abs(result.advances - hint) > 20_000:
+            if hint is not None and abs(current_advances - hint) > 20_000:
                 self.auto_rng_tab.captureLog.emit(
-                    f"reidentify 结果 {result.advances} 偏离预期 {hint} 超过 20000，"
+                    f"reidentify 结果 {current_advances} 偏离预期 {hint} 超过 20000，"
                     f"可能识别错误，但仍继续（由上层决策判断）"
                 )
             # reidentify 不改变 seed，只更新 current_advances 位置
             # 保留原始 seed，避免数据区被推进后的状态覆盖
             reidentified = AutoRngSeedResult(
                 seed=seed_result.seed,
-                current_advances=result.advances,
+                current_advances=current_advances,
                 npc=tracking_config.npc,
                 seed_text=seed_result.seed_text,
                 measured_at=time.monotonic(),
@@ -3326,6 +3337,7 @@ class MainWindow(QMainWindow):
     def _stop_advance_tracking(self) -> None:
         self._advance_timer.stop()
         self._tracked_advances = 0
+        self._advance_counter.reset(current_advances=0, npc=max(0, self._advance_step - 1), now=time.monotonic())
         self.advances_value.setText("0")
         self._update_auto_rng_header(advances=0)
         self.timer_value.setText("0")
@@ -3422,11 +3434,25 @@ class MainWindow(QMainWindow):
             log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:150] if result.stdout else '无'}")
 
     def _advance_tick(self) -> None:
-        self._tracked_advances += self._advance_step
+        self._refresh_tracked_advances_from_clock()
+
+    def _refresh_tracked_advances_from_clock(self) -> None:
+        self._advance_counter.advance_to(time.monotonic())
+        self._display_tracked_advances(self._advance_counter.current_advances)
+
+    def _display_tracked_advances(self, advances: int) -> None:
+        self._tracked_advances = int(advances)
         self.advances_value.setText(str(self._tracked_advances))
         self._update_auto_rng_header(advances=self._tracked_advances)
-        # 同步更新自动定点面板的目前帧数
         self.auto_rng_tab.set_live_advances(self._tracked_advances)
+
+    def _set_tracked_advances(self, advances: int) -> None:
+        self._advance_counter.reset(
+            current_advances=int(advances),
+            npc=max(0, self._advance_step - 1),
+            now=time.monotonic(),
+        )
+        self._display_tracked_advances(self._advance_counter.current_advances)
 
     def advance_current_seed(self) -> None:
         advances = int(self.x_to_advance.text() or 0)
@@ -3441,9 +3467,9 @@ class MainWindow(QMainWindow):
         for box, text in zip(self.seed32_inputs, advanced.format_words()):
             box.setText(text)
         self._sync_seed64_from_state32()
-        self._tracked_advances += advances
-        self.advances_value.setText(str(self._tracked_advances))
-        self._update_auto_rng_header(advances=self._tracked_advances)
+        if self._advance_timer.isActive():
+            self._refresh_tracked_advances_from_clock()
+        self._set_tracked_advances(self._tracked_advances + advances)
 
     def capture_seed(self) -> None:
         if self._is_capturing():
@@ -3624,7 +3650,13 @@ class MainWindow(QMainWindow):
             self._sync_seed64_from_state32()
         self.progress_value.setText(f"{total}/{total}")
         self._advance_step = int(self.npc_count.text() or 0) + 1
-        self._tracked_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
+        initial_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
+        self._advance_counter.reset(
+            current_advances=initial_advances,
+            npc=max(0, self._advance_step - 1),
+            now=time.monotonic(),
+        )
+        self._tracked_advances = self._advance_counter.current_advances
         self.advances_value.setText("0")
         self.timer_value.setText("0")
         self._advance_timer.start()
