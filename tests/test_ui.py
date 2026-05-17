@@ -1240,3 +1240,37 @@ def test_main_window_applies_selected_roi(app, monkeypatch):
     assert window.y.text() == "30"
     assert window.w.text() == "40"
     assert window.h.text() == "50"
+
+
+def test_preview_selection_cancel_keeps_previous_roi(app, monkeypatch):
+    window = MainWindow()
+    window.x.setText("1")
+    window.y.setText("2")
+    window.w.setText("30")
+    window.h.setText("40")
+    window._selection_mode = "roi"
+    window._roi_before_selection = (1, 2, 30, 40)
+    window.preview_label.set_selection_enabled(True)
+    monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: False)
+
+    window._handle_preview_selection((10, 20, 50, 60))
+
+    assert (window.x.text(), window.y.text(), window.w.text(), window.h.text()) == ("1", "2", "30", "40")
+    assert window._selection_mode is None
+
+
+def test_preview_selection_cancel_keeps_previous_eye_path(app, monkeypatch, tmp_path):
+    window = MainWindow()
+    old_eye = tmp_path / "old_eye.png"
+    window._eye_image_path = old_eye
+    window._selection_mode = "eye"
+    window.preview_label.set_selection_enabled(True)
+    called = []
+    monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: False)
+    monkeypatch.setattr(window, "apply_selected_eye", lambda _roi: called.append(_roi))
+
+    window._handle_preview_selection((10, 20, 30, 40))
+
+    assert window._eye_image_path == old_eye
+    assert called == []
+    assert window._selection_mode is None

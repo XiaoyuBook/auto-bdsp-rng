@@ -2262,10 +2262,42 @@ class MainWindow(QMainWindow):
         self.preview_label.set_selection_enabled(True)
 
     def _handle_preview_selection(self, roi: object) -> None:
+        if not self._confirm_preview_selection(roi):
+            self._cancel_preview_selection()
+            return
         if self._selection_mode == "eye":
             self.apply_selected_eye(roi)
         else:
             self.apply_selected_roi(roi)
+
+    def _confirm_preview_selection(self, roi: object) -> bool:
+        try:
+            x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
+        except Exception:
+            x = y = width = height = 0
+        if self._selection_mode == "eye":
+            title = "确认眼睛模板"
+            message = f"是否使用当前框选区域作为眼睛模板？\n区域: X={x}, Y={y}, W={width}, H={height}"
+        else:
+            title = "确认眼睛区域"
+            message = f"是否使用当前框选区域作为眼睛 ROI？\n区域: X={x}, Y={y}, W={width}, H={height}"
+        return QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Ok,
+        ) == QMessageBox.StandardButton.Ok
+
+    def _cancel_preview_selection(self) -> None:
+        self.preview_label.set_selection_enabled(False)
+        self._roi_before_selection = None
+        self._selection_mode = None
+        if self._resume_preview_after_selection:
+            self._preview_timer.start()
+            self.preview_button.setText(self._text("stop_preview"))
+        self._resume_preview_after_selection = False
+        self.statusBar().showMessage("已取消框选，继续使用之前的设置")
 
     def apply_selected_roi(self, roi: object) -> None:
         old_roi = self._roi_before_selection or (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
