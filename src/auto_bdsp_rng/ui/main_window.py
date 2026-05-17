@@ -2067,6 +2067,8 @@ class MainWindow(QMainWindow):
             phase_text=phase_text,
             advances=advances,
         )
+        if progress.phase in (AutoRngPhase.COMPLETED, AutoRngPhase.FAILED, AutoRngPhase.IDLE):
+            self._stop_advance_tracking()
 
     def _refresh_config_list(self) -> None:
         self.config_combo.blockSignals(True)
@@ -2782,10 +2784,7 @@ class MainWindow(QMainWindow):
                 box.setText(text)
             self._sync_seed64_from_state32()
             self._sync_bdsp_data_from_auto_rng(state.to_seed_pair64())
-        # 自动流程的 advance 由 runner 的活帧循环推进，UI 只显示 runner 传来的值。
-        self._advance_timer.stop()
-        self._advance_step = seed_result.npc + 1
-        self._display_tracked_advances(seed_result.current_advances)
+        self._start_auto_advance_tracking(seed_result)
 
     def _state32_from_auto_seed_result(self, seed_result: AutoRngSeedResult) -> SeedState32:
         seed = seed_result.seed
