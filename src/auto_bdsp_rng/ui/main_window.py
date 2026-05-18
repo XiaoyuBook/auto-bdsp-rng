@@ -3245,6 +3245,11 @@ class MainWindow(QMainWindow):
                 stat_vals = [int(stats.get(n, 0)) for n in stat_names]
                 use_nature = ni if (ni is not None and 0 <= ni < 25) else 255
                 is_new_ocr = True  # 每个 OCR 尝试默认视作新结果
+                last_ocr_stats = {
+                    "stats": dict(zip(stat_names, stat_vals)),
+                    "nature": nature,
+                    "characteristic": characteristic,
+                }
 
                 # 对组内所有精灵遍历搜索
                 for species_desc in group_species:
@@ -3265,14 +3270,11 @@ class MainWindow(QMainWindow):
                             ranges.append((min(possible), max(possible)) if possible else (31, 0))
                     normalized_ranges = _normalize_iv_ranges(ranges)
                     if normalized_ranges is None:
+                        log(f"[自动反查] {species_desc} 能力值无法反算出合法个体值范围")
                         continue
                     iv_min, iv_max = normalized_ranges
-                    last_ocr_stats = {
-                        "stats": dict(zip(stat_names, stat_vals)),
-                        "iv_min": list(iv_min), "iv_max": list(iv_max),
-                        "nature": nature,
-                        "characteristic": characteristic,
-                    }
+                    last_ocr_stats["iv_min"] = list(iv_min)
+                    last_ocr_stats["iv_max"] = list(iv_max)
                     curr_key = f"{stat_vals}|{iv_min}|{iv_max}"
                     is_new_ocr = curr_key != prev_ocr_key
                     if is_new_ocr:
