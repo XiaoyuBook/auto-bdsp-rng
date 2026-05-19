@@ -114,6 +114,12 @@ def _default_bridge_path() -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _configured_or_default_bridge_path(config: EasyConConfig) -> Path | None:
+    if config.bridge_path is not None and config.bridge_path.exists():
+        return config.bridge_path
+    return _default_bridge_path()
+
+
 class LineNumberArea(QWidget):
     def __init__(self, editor: EasyConScriptEditor) -> None:
         super().__init__(editor)
@@ -789,7 +795,7 @@ class EasyConPanel(QWidget):
         """创建隐藏的配置控件，保留原有业务逻辑所需的所有属性"""
         self.ezcon_path = QLineEdit(str(self.config.ezcon_path or ""))
         self.ezcon_path.setVisible(False)
-        bridge_default = self.config.bridge_path or _default_bridge_path()
+        bridge_default = _configured_or_default_bridge_path(self.config)
         self.bridge_path = QLineEdit(str(bridge_default or ""))
         self.bridge_path.setVisible(False)
         self.browse_ezcon_button = QPushButton()

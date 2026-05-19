@@ -148,6 +148,32 @@ def test_easycon_panel_lists_builtin_scripts(easycon_panel):
     assert easycon_panel.script_list.item(0).text() == "玫瑰公园.txt"
 
 
+def test_easycon_panel_ignores_stale_bridge_config(monkeypatch, tmp_path, app):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    generated_dir = script_dir / ".generated"
+    bundled_bridge = tmp_path / "bundle" / "bridge" / "EasyConBridge" / "EasyConBridge.exe"
+    bundled_bridge.parent.mkdir(parents=True)
+    bundled_bridge.write_text("", encoding="utf-8")
+    stale_bridge = tmp_path / "old-release" / "bridge" / "EasyConBridge" / "EasyConBridge.exe"
+
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "GENERATED_DIR", generated_dir)
+    monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(bridge_path=stale_bridge))
+    monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
+    monkeypatch.setattr(panel_module, "bundled_easycon_bridge_path", lambda: bundled_bridge)
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=Path("D:/EasyCon/ezcon.exe"), version="1.6.3", source="test"),
+    )
+    monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
+
+    panel = EasyConPanel()
+
+    assert Path(panel.bridge_path.text()) == bundled_bridge
+
+
 def test_key_mapping_dialog_layout_fits_fixed_window(app):
     dialog = KeyMappingDialog({})
 
