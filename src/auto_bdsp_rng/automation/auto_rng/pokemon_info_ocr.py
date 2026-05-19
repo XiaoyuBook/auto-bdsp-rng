@@ -12,6 +12,8 @@ from typing import Any
 
 import numpy as np
 
+from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
+
 # ── 全局 PaddleOCR 单例 ────────────────────────────────────────────
 _PADDLE_OCR: object | None = None
 
@@ -20,6 +22,7 @@ def _get_paddle_ocr() -> object:
     global _PADDLE_OCR
     if _PADDLE_OCR is not None:
         return _PADDLE_OCR
+    configure_ocr_runtime()
     try:
         from paddleocr import PaddleOCR
     except ImportError as exc:
@@ -30,6 +33,7 @@ def _get_paddle_ocr() -> object:
 
 def _create_paddle_ocr(factory: Any) -> object:
     attempts = (
+        optimized_paddle_ocr_kwargs(),
         {"lang": "ch", "use_doc_orientation_classify": False, "use_doc_unwarping": False, "use_textline_orientation": False},
         {"lang": "ch", "use_angle_cls": False},
         {"lang": "ch"},

@@ -6,6 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import re
 
+from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
+
 
 _PADDLE_OCR: object | None = None
 
@@ -89,6 +91,7 @@ def read_ocr_text(frame: object) -> str:
 
 
 def read_paddle_ocr_text(frame: object) -> str:
+    configure_ocr_runtime()
     global _PADDLE_OCR
     try:
         from paddleocr import PaddleOCR
@@ -114,6 +117,7 @@ def read_paddle_ocr_text(frame: object) -> str:
 
 def _create_paddle_ocr(factory: Callable[..., object]) -> object:
     attempts = (
+        optimized_paddle_ocr_kwargs(),
         {"lang": "ch", "use_doc_orientation_classify": False, "use_doc_unwarping": False, "use_textline_orientation": False},
         {"lang": "ch", "use_angle_cls": False},
         {"lang": "ch"},

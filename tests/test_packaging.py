@@ -52,6 +52,9 @@ def test_windows_build_includes_ocr_dependencies():
     assert '"tokenizers"' in spec
     assert '"paddleocr",' not in spec.partition("excludes=[")[2].partition("]")[0]
     assert "official_models" in spec
+    assert '"PP-OCRv5_mobile_det"' in spec
+    assert '"PP-OCRv5_mobile_rec"' in spec
+    assert 'tree_datas(str(model_cache), "paddlex_cache/official_models")' not in spec
     assert "runtime_paddlex_cache.py" in spec
     assert "PADDLE_PDX_CACHE_HOME" in runtime_hook
 

@@ -15,6 +15,10 @@ from PyInstaller.utils.hooks import (
 ROOT = Path(SPECPATH).parent
 ENTRY = ROOT / "packaging" / "entry_gui.py"
 ICON = ROOT / "docs" / "assets" / "app-icon.ico"
+OCR_MODEL_NAMES = (
+    "PP-OCRv5_mobile_det",
+    "PP-OCRv5_mobile_rec",
+)
 
 
 def tree_datas(source: str, target: str):
@@ -142,7 +146,9 @@ datas += tree_datas("third_party/PokeFinder/Core/Resources", "third_party/PokeFi
 for site_root in site.getsitepackages():
     model_cache = Path(site_root).parent.parent / "paddlex_cache" / "official_models"
     if model_cache.exists():
-        datas += tree_datas(str(model_cache), "paddlex_cache/official_models")
+        for model_name in OCR_MODEL_NAMES:
+            model_path = model_cache / model_name
+            datas += tree_datas(str(model_path), str(Path("paddlex_cache/official_models") / model_name))
         break
 for root_file in ("CHANGELOG.md", "SPONSORS.md"):
     path = ROOT / root_file
