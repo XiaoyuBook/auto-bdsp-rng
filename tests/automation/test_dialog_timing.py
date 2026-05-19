@@ -67,9 +67,10 @@ def test_measure_dialog_interval_ignores_dialog_visible_at_start_until_clear():
     assert result.interval_seconds == pytest.approx(1.6)
 
 
-def test_normalize_ocr_text_removes_spaces_and_punctuation():
-    assert normalize_ocr_text("谢 米 出 现 了 !") == "谢米出现了"
-    assert normalize_ocr_text("去吧！ 图图犬！") == "去吧图图犬"
+def test_normalize_ocr_text_keeps_exclamation_for_shiny_keyword():
+    assert normalize_ocr_text("谢 米 出 现 了 !") == "谢米出现了!"
+    assert normalize_ocr_text("谢 米 出 现 了 ！") == "谢米出现了！"
+    assert normalize_ocr_text("去吧！ 图图犬！") == "去吧！图图犬！"
 
 
 def test_measure_keyword_interval_uses_ocr_keywords_in_order():
@@ -104,6 +105,22 @@ def test_measure_keyword_interval_ignores_second_keyword_before_first_keyword():
     )
 
     assert result.interval_seconds == pytest.approx(1.2)
+
+
+def test_measure_keyword_interval_requires_exclamation_for_first_keyword():
+    frames = iter([object(), object(), object()])
+    texts = iter(["谢米出现了", "菜单", "去吧！图图犬！"])
+    times = iter([0.0, 0.1, 0.2, 5.1])
+
+    with pytest.raises(TimeoutError):
+        measure_keyword_interval(
+            lambda: next(frames),
+            lambda _frame: next(texts),
+            monotonic=lambda: next(times),
+            sleep=lambda _seconds: None,
+            timeout_seconds=5.0,
+            poll_interval_seconds=0.1,
+        )
 
 
 def test_extract_paddle_text_supports_legacy_and_v3_shapes():

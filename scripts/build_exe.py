@@ -112,6 +112,16 @@ def install_dependencies(python: Path) -> None:
 def verify_ocr_dependencies(python: Path) -> None:
     code = "import paddle, paddleocr; print('OCR dependencies available')"
     run([str(python), "-c", code])
+    cache_home = ROOT / ".venv" / "paddlex_cache"
+    code = (
+        "import os\n"
+        f"os.environ.setdefault('PADDLE_PDX_CACHE_HOME', r'{cache_home}')\n"
+        "import numpy as np\n"
+        "from auto_bdsp_rng.automation.auto_rng.dialog_timing import read_paddle_ocr_text\n"
+        "read_paddle_ocr_text(np.zeros((32, 96, 3), dtype=np.uint8))\n"
+        "print('OCR models available')\n"
+    )
+    run([str(python), "-c", code], cwd=ROOT)
 
 
 def report_private_sponsor_assets() -> None:

@@ -1,6 +1,6 @@
 WAIT 13000
 X  # 打开精灵球界面
-WAIT 400
+WAIT 500
 FOR 2 # 选择大师球，根据需求修改次数
 RIGHT
 WAIT 200
@@ -13,7 +13,7 @@ WAIT 300
 NEXT
 WAIT 2000
 X # 打开背包
-WAIT 400
+WAIT 500
 RIGHT # 选择精灵界面
 WAIT 400
 A 
@@ -25,3 +25,4 @@ WAIT 400
 A 
 WAIT 1500
 RIGHT
+WAIT 500

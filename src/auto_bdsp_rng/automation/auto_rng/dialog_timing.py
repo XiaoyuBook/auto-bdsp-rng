@@ -22,8 +22,7 @@ def suggested_shiny_threshold(interval_seconds: float, *, multiplier: float = 1.
 
 
 def normalize_ocr_text(text: str) -> str:
-    """去掉空格和大部分标点，但保留中文叹号 ！ 用于区分关键文本。"""
-    # 先保留 ！(U+FF01) 和 !(U+0021)，去掉其余标点
+    """去掉空格和噪声，但保留 !/！ 用于闪符对话框匹配。"""
     cleaned = re.sub(r"[^\w！!]+", "", text, flags=re.UNICODE)
     return cleaned
 

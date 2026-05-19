@@ -204,6 +204,7 @@ def _detect_page_type(rows: list[dict[str, object]]) -> str:
 # ── 能力页提取 ────────────────────────────────────────────────────
 
 _STAT_NAMES = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
+_STAT_NAME_SET = set(_STAT_NAMES)
 
 
 def _row_center(bbox: object) -> tuple[float, float]:
@@ -274,6 +275,16 @@ def _extract_stats(rows: list[dict[str, object]]) -> dict[str, int]:
             stats[name] = num_entries[best_idx][2]
             used_num.add(best_idx)
     return stats
+
+
+def _stats_have_obvious_digit_drop(stats: dict[str, int]) -> bool:
+    """Detect OCR results like 66 -> 6 when the rest of the page is large."""
+    if not _STAT_NAME_SET.issubset(stats):
+        return False
+    values = [int(stats[name]) for name in _STAT_NAMES]
+    if max(values) < 50:
+        return False
+    return any(value < 10 for value in values)
 
 
 # ── 笔记页提取 ────────────────────────────────────────────────────
@@ -446,7 +457,7 @@ def extract_pokemon_info(
                 if _detect_page_type(alt_rows) == "stats":
                     stats_rows = alt_rows
             stats = _extract_stats(stats_rows)
-            if len(stats) >= 3:
+            if len(stats) == 6 and not _stats_have_obvious_digit_drop(stats):
                 result["stats"] = stats
         except Exception:
             pass

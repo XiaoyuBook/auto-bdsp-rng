@@ -9,8 +9,10 @@ from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     _detect_page_type,
     _extract_nature_and_characteristic,
     _extract_stats,
+    _stats_have_obvious_digit_drop,
     _is_pixel_red,
     compute_characteristic,
+    extract_pokemon_info,
     _norm,
 )
 
@@ -135,6 +137,37 @@ def test_extract_stats_partial():
 
 def test_extract_stats_empty():
     assert _extract_stats([]) == {}
+
+
+def test_stats_digit_drop_detection_rejects_single_digit_among_large_stats():
+    assert _stats_have_obvious_digit_drop({"HP": 108, "攻击": 2, "防御": 65, "特攻": 74, "特防": 74, "速度": 5})
+    assert not _stats_have_obvious_digit_drop({"HP": 108, "攻击": 66, "防御": 65, "特攻": 74, "特防": 74, "速度": 79})
+
+
+def test_extract_pokemon_info_discards_obvious_digit_drop(monkeypatch):
+    rows = [
+        _row_at("HP", 200, 20),
+        _row_at("108/108", 200, 45),
+        _row_at("特攻", 100, 90),
+        _row_at("攻击", 350, 90),
+        _row_at("74", 100, 115),
+        _row_at("2", 350, 115),
+        _row_at("特防", 100, 210),
+        _row_at("防御", 350, 210),
+        _row_at("74", 100, 235),
+        _row_at("65", 350, 235),
+        _row_at("速度", 200, 270),
+        _row_at("5", 200, 295),
+    ]
+
+    monkeypatch.setattr(
+        "auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr._ocr_rows",
+        lambda *_args, **_kwargs: rows,
+    )
+
+    result = extract_pokemon_info(stats_image=np.zeros((720, 1280, 3), dtype=np.uint8))
+
+    assert result["stats"] is None
 
 
 # ── _extract_nature_and_characteristic ────────────────────────────

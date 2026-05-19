@@ -1,8 +1,22 @@
 from __future__ import annotations
 
 import os
+import sys
 import traceback
 from pathlib import Path
+
+
+def _configure_packaged_paddlex_cache() -> None:
+    if getattr(sys, "frozen", False):
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    else:
+        base_dir = Path(__file__).resolve().parent
+    cache_home = base_dir / "paddlex_cache"
+    if (cache_home / "official_models").exists():
+        os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(cache_home))
+
+
+_configure_packaged_paddlex_cache()
 
 from auto_bdsp_rng.__main__ import main
 

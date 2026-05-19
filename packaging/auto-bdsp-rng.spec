@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import site
 
 from PyInstaller.utils.hooks import (
     collect_all,
@@ -138,6 +139,11 @@ datas += tree_datas("docs/assets", "docs/assets")
 datas += tree_datas("private_assets/sponsor", "private_assets/sponsor")
 datas += tree_datas("third_party/Project_Xs_CHN", "third_party/Project_Xs_CHN")
 datas += tree_datas("third_party/PokeFinder/Core/Resources", "third_party/PokeFinder/Core/Resources")
+for site_root in site.getsitepackages():
+    model_cache = Path(site_root).parent.parent / "paddlex_cache" / "official_models"
+    if model_cache.exists():
+        datas += tree_datas(str(model_cache), "paddlex_cache/official_models")
+        break
 for root_file in ("CHANGELOG.md", "SPONSORS.md"):
     path = ROOT / root_file
     if path.exists():
@@ -154,7 +160,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / "packaging" / "runtime_paddlex_cache.py")],
     excludes=[
         "numpy.tests",
         "pandas.tests",

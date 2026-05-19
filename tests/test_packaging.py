@@ -37,6 +37,7 @@ def test_windows_build_includes_ocr_dependencies():
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts" / "build_exe.py").read_text(encoding="utf-8")
     spec = (root / "packaging" / "auto-bdsp-rng.spec").read_text(encoding="utf-8")
+    runtime_hook = (root / "packaging" / "runtime_paddlex_cache.py").read_text(encoding="utf-8")
 
     assert '".[dev,ocr]"' in script
     assert "verify_ocr_dependencies" in script
@@ -50,6 +51,9 @@ def test_windows_build_includes_ocr_dependencies():
     assert '"python-bidi"' in spec
     assert '"tokenizers"' in spec
     assert '"paddleocr",' not in spec.partition("excludes=[")[2].partition("]")[0]
+    assert "official_models" in spec
+    assert "runtime_paddlex_cache.py" in spec
+    assert "PADDLE_PDX_CACHE_HOME" in runtime_hook
 
 
 def test_packaged_gui_entry_has_ocr_smoke_probe():
@@ -58,6 +62,7 @@ def test_packaged_gui_entry_has_ocr_smoke_probe():
 
     assert "AUTO_BDSP_RNG_OCR_SMOKE" in entry
     assert "read_paddle_ocr_text" in entry
+    assert "PADDLE_PDX_CACHE_HOME" in entry
 
 
 def test_pyinstaller_spec_names_chinese_executable():
