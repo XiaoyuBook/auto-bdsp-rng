@@ -12,6 +12,12 @@ from typing import Any
 
 import numpy as np
 
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
+    STAT_FIELD_NAMES,
+    STAT_REGION_FIELDS,
+    OcrRegion,
+    OcrRegionConfig,
+)
 from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
 
 # ── 全局 PaddleOCR 单例 ────────────────────────────────────────────
@@ -430,9 +436,112 @@ NOTES_ROI = (0.02, 0.52, 0.15, 0.75)
 ImageInput = str | Path | np.ndarray
 
 
+def _ocr_rows_for_region(image: np.ndarray, region: OcrRegion) -> list[dict[str, object]]:
+    return _ocr_rows(image, region.to_relative_bounds(image.shape))
+
+
+def _rows_text(rows: list[dict[str, object]]) -> str:
+    return " ".join(str(row.get("text", "")).strip() for row in rows if str(row.get("text", "")).strip())
+
+
+def _extract_region_number(rows: list[dict[str, object]]) -> int | None:
+    text = _rows_text(rows)
+    match = re.search(r"\d{1,3}", text)
+    if match is None:
+        return None
+    value = int(match.group(0))
+    return value if 0 <= value <= 999 else None
+
+
+def _extract_stats_from_regions(image: np.ndarray, regions: OcrRegionConfig | None) -> dict[str, int] | None:
+    if regions is None or not regions.has_all_stats():
+        return None
+    stats: dict[str, int] = {}
+    for field in STAT_REGION_FIELDS:
+        region = regions.get(field)
+        if region is None:
+            return None
+        value = _extract_region_number(_ocr_rows_for_region(image, region))
+        if value is None:
+            return None
+        stats[STAT_FIELD_NAMES[field]] = value
+    if len(stats) == 6 and not _stats_have_obvious_digit_drop(stats):
+        return stats
+    return None
+
+
+def _legal_characteristics() -> tuple[str, ...]:
+    return tuple(item for group in _CHARACTERISTICS_ZH for item in group)
+
+
+def _match_characteristic_text(text: str) -> str | None:
+    cleaned = _clean_characteristic(text)
+    norm_text = _norm(cleaned)
+    if not norm_text:
+        return None
+    legal_items = _legal_characteristics()
+    for item in legal_items:
+        norm_item = _norm(item)
+        if norm_item and (norm_item in norm_text or norm_text in norm_item):
+            return item
+    try:
+        from difflib import SequenceMatcher
+    except Exception:
+        return cleaned
+    best_item = None
+    best_ratio = 0.0
+    for item in legal_items:
+        ratio = SequenceMatcher(None, norm_text, _norm(item)).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_item = item
+    return best_item if best_item is not None and best_ratio >= 0.72 else None
+
+
+def _extract_notes_from_regions(
+    image: np.ndarray,
+    regions: OcrRegionConfig | None,
+) -> tuple[str | None, str | None]:
+    if regions is None:
+        return None, None
+    nature: str | None = None
+    characteristic: str | None = None
+    nature_region = regions.get("nature")
+    if nature_region is not None:
+        text = _rows_text(_ocr_rows_for_region(image, nature_region))
+        nature = _clean_nature(text) if text else None
+        if nature and not re.match(r"^[一-鿿]{2,4}$", nature):
+            nature = None
+    characteristic_region = regions.get("characteristic")
+    if characteristic_region is not None:
+        text = _rows_text(_ocr_rows_for_region(image, characteristic_region))
+        characteristic = _match_characteristic_text(text)
+        if characteristic is None:
+            height, width = image.shape[:2]
+            expanded = characteristic_region.expanded(width, height)
+            if expanded != characteristic_region.clip(width, height):
+                characteristic = _match_characteristic_text(_rows_text(_ocr_rows_for_region(image, expanded)))
+    return nature, characteristic
+
+
+def recognize_ocr_field(image_input: ImageInput, field: str, region: OcrRegion) -> str:
+    image = _load_image(image_input)
+    rows = _ocr_rows_for_region(image, region)
+    text = _rows_text(rows)
+    if field == "nature":
+        return _clean_nature(text)
+    if field == "characteristic":
+        return _match_characteristic_text(text) or _clean_characteristic(text)
+    if field in STAT_FIELD_NAMES:
+        value = _extract_region_number(rows)
+        return "" if value is None else str(value)
+    return text
+
+
 def extract_pokemon_info(
     stats_image: ImageInput | None = None,
     notes_image: ImageInput | None = None,
+    ocr_regions: OcrRegionConfig | None = None,
 ) -> dict[str, object]:
     """从宝可梦详情页截图中提取结构化信息。
 
@@ -454,27 +563,33 @@ def extract_pokemon_info(
     if stats_image is not None:
         try:
             img = _load_image(stats_image)
-            stats_rows = _ocr_rows(img, STATS_ROI)
-            if _detect_page_type(stats_rows) == "unknown":
-                # 也可能放进错了，用笔记 ROI 再试
-                alt_rows = _ocr_rows(img, NOTES_ROI)
-                if _detect_page_type(alt_rows) == "stats":
-                    stats_rows = alt_rows
-            stats = _extract_stats(stats_rows)
-            if len(stats) == 6 and not _stats_have_obvious_digit_drop(stats):
-                result["stats"] = stats
+            result["stats"] = _extract_stats_from_regions(img, ocr_regions)
+            if result["stats"] is None:
+                stats_rows = _ocr_rows(img, STATS_ROI)
+                if _detect_page_type(stats_rows) == "unknown":
+                    # 也可能放进错了，用笔记 ROI 再试
+                    alt_rows = _ocr_rows(img, NOTES_ROI)
+                    if _detect_page_type(alt_rows) == "stats":
+                        stats_rows = alt_rows
+                stats = _extract_stats(stats_rows)
+                if len(stats) == 6 and not _stats_have_obvious_digit_drop(stats):
+                    result["stats"] = stats
         except Exception:
             pass
     # 笔记页 → nature + characteristic
     if notes_image is not None:
         try:
             img = _load_image(notes_image)
-            notes_rows = _ocr_rows(img, NOTES_ROI)
-            if _detect_page_type(notes_rows) == "unknown":
-                alt_rows = _ocr_rows(img, STATS_ROI)
-                if _detect_page_type(alt_rows) == "notes":
-                    notes_rows = alt_rows
-            nature, chara = _extract_nature_and_characteristic(img, notes_rows)
+            nature, chara = _extract_notes_from_regions(img, ocr_regions)
+            if nature is None or chara is None:
+                notes_rows = _ocr_rows(img, NOTES_ROI)
+                if _detect_page_type(notes_rows) == "unknown":
+                    alt_rows = _ocr_rows(img, STATS_ROI)
+                    if _detect_page_type(alt_rows) == "notes":
+                        notes_rows = alt_rows
+                broad_nature, broad_chara = _extract_nature_and_characteristic(img, notes_rows)
+                nature = nature or broad_nature
+                chara = chara or broad_chara
             result["nature"] = nature
             result["characteristic"] = chara
         except Exception:

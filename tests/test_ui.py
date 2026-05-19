@@ -15,6 +15,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
 from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.gen8_static import State8, StateFilter
@@ -1274,3 +1275,45 @@ def test_preview_selection_cancel_keeps_previous_eye_path(app, monkeypatch, tmp_
     assert window._eye_image_path == old_eye
     assert called == []
     assert window._selection_mode is None
+
+
+def test_preview_label_stores_ocr_overlay_region(app):
+    window = MainWindow()
+
+    window.preview_label.set_ocr_overlay("nature", OcrRegion(10, 20, 30, 40))
+
+    assert window.preview_label._ocr_overlay_field == "nature"
+    assert window.preview_label._ocr_overlay_region == OcrRegion(10, 20, 30, 40)
+
+
+def test_ocr_region_selection_confirm_emits_field_and_roi(app, monkeypatch):
+    window = MainWindow()
+    emitted = []
+    window.ocrRegionSelected.connect(lambda field, roi: emitted.append((field, roi)))
+    window._selection_mode = "ocr_region"
+    window._ocr_selection_field = "characteristic"
+    window.preview_label.set_selection_enabled(True)
+    monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: True)
+
+    window._handle_preview_selection((10, 20, 30, 40))
+
+    assert emitted == [("characteristic", (10, 20, 30, 40))]
+    assert window._selection_mode is None
+    assert window._ocr_selection_field is None
+    assert window.preview_label._ocr_overlay_region == OcrRegion(10, 20, 30, 40)
+
+
+def test_ocr_region_selection_cancel_does_not_emit(app, monkeypatch):
+    window = MainWindow()
+    emitted = []
+    window.ocrRegionSelected.connect(lambda field, roi: emitted.append((field, roi)))
+    window._selection_mode = "ocr_region"
+    window._ocr_selection_field = "nature"
+    window.preview_label.set_selection_enabled(True)
+    monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: False)
+
+    window._handle_preview_selection((10, 20, 30, 40))
+
+    assert emitted == []
+    assert window._selection_mode is None
+    assert window._ocr_selection_field is None

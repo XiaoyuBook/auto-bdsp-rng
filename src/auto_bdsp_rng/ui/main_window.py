@@ -63,7 +63,8 @@ from auto_bdsp_rng.blink_detection import (
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
-from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import OCR_REGION_LABELS, OcrRegion
+from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info, recognize_ocr_field
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices, ProjectXsAdvanceCounter
 from auto_bdsp_rng.automation.auto_rng.search import (
     StaticSearchCriteria,
@@ -82,6 +83,7 @@ from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 from auto_bdsp_rng.ui.help_menu import HelpMenuController
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
+from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
@@ -493,6 +495,8 @@ class RoiPreviewLabel(QLabel):
         self._image_width = 0
         self._image_height = 0
         self._pixmap_rect = QRect()
+        self._ocr_overlay_field: str | None = None
+        self._ocr_overlay_region: OcrRegion | None = None
 
     def set_image_geometry(self, image_width: int, image_height: int, pixmap_rect: QRect) -> None:
         self._image_width = image_width
@@ -505,6 +509,28 @@ class RoiPreviewLabel(QLabel):
         self._drag_current = None
         self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
         self.update()
+
+    def set_ocr_overlay(self, field: str, region: OcrRegion | tuple[int, int, int, int]) -> None:
+        self._ocr_overlay_field = field
+        self._ocr_overlay_region = region if isinstance(region, OcrRegion) else OcrRegion(*(int(value) for value in region))
+        self.update()
+
+    def clear_ocr_overlay(self) -> None:
+        self._ocr_overlay_field = None
+        self._ocr_overlay_region = None
+        self.update()
+
+    def _image_rect_to_widget_rect(self, region: OcrRegion) -> QRect:
+        if self._image_width <= 0 or self._image_height <= 0 or self._pixmap_rect.isNull():
+            return QRect()
+        scale_x = self._pixmap_rect.width() / self._image_width
+        scale_y = self._pixmap_rect.height() / self._image_height
+        return QRect(
+            self._pixmap_rect.left() + round(region.x * scale_x),
+            self._pixmap_rect.top() + round(region.y * scale_y),
+            max(1, round(region.width * scale_x)),
+            max(1, round(region.height * scale_y)),
+        ).intersected(self._pixmap_rect)
 
     def mousePressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if (
@@ -552,6 +578,12 @@ class RoiPreviewLabel(QLabel):
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(QRect(self._drag_start, self._drag_current).normalized().intersected(self._pixmap_rect))
+        if self._ocr_overlay_region is not None:
+            painter = QPainter(self)
+            pen = QPen(QColor("#00A88B"))
+            pen.setWidth(3)
+            painter.setPen(pen)
+            painter.drawRect(self._image_rect_to_widget_rect(self._ocr_overlay_region))
 
 
 class NoWheelDoubleSpinBox(QDoubleSpinBox):
@@ -646,6 +678,7 @@ class MainWindow(QMainWindow):
     autoScriptFinished = Signal(object)
     autoScriptFailed = Signal(str)
     autoHistoryEvent = Signal(str, object)
+    ocrRegionSelected = Signal(str, object)
     uiCallRequested = Signal(object, object, object, object)
 
     def __init__(self) -> None:
@@ -663,6 +696,8 @@ class MainWindow(QMainWindow):
         self._eye_image_path: Path | None = None
         self._latest_preview_frame: object | None = None
         self._roi_before_selection: tuple[int, int, int, int] | None = None
+        self._ocr_selection_field: str | None = None
+        self._ocr_settings_dialog: OcrSettingsDialog | None = None
         self._selection_mode: str | None = None
         self._resume_preview_after_selection = False
         self._resume_preview_after_capture = False
@@ -794,7 +829,7 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
-        self.auto_rng_tab.captureInfoRequested.connect(self._capture_pokemon_info)
+        self.auto_rng_tab.captureInfoRequested.connect(self.open_ocr_settings)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
         self.auto_rng_tab.requestStatsCapture.connect(self._on_request_stats_capture)
         self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
@@ -2245,6 +2280,14 @@ class MainWindow(QMainWindow):
         self._begin_preview_selection("eye")
         self.statusBar().showMessage(self._text("eye_selecting"))
 
+    def start_ocr_region_selection(self, field: str) -> None:
+        if self._is_capturing():
+            return
+        self._ocr_selection_field = field
+        self._begin_preview_selection("ocr_region")
+        label = OCR_REGION_LABELS.get(field, field)
+        self.statusBar().showMessage(f"正在框选 OCR 区域：{label}")
+
     def _begin_preview_selection(self, mode: str) -> None:
         self._selection_mode = mode
         self._resume_preview_after_selection = self._preview_timer.isActive()
@@ -2269,6 +2312,8 @@ class MainWindow(QMainWindow):
             return
         if self._selection_mode == "eye":
             self.apply_selected_eye(roi)
+        elif self._selection_mode == "ocr_region":
+            self.apply_selected_ocr_region(roi)
         else:
             self.apply_selected_roi(roi)
 
@@ -2280,6 +2325,10 @@ class MainWindow(QMainWindow):
         if self._selection_mode == "eye":
             title = "确认眼睛模板"
             message = f"是否使用当前框选区域作为眼睛模板？\n区域: X={x}, Y={y}, W={width}, H={height}"
+        elif self._selection_mode == "ocr_region":
+            label = OCR_REGION_LABELS.get(self._ocr_selection_field or "", self._ocr_selection_field or "OCR")
+            title = "确认 OCR 区域"
+            message = f"是否保存“{label}”区域？\n区域: X={x}, Y={y}, W={width}, H={height}"
         else:
             title = "确认眼睛区域"
             message = f"是否使用当前框选区域作为眼睛 ROI？\n区域: X={x}, Y={y}, W={width}, H={height}"
@@ -2294,12 +2343,32 @@ class MainWindow(QMainWindow):
     def _cancel_preview_selection(self) -> None:
         self.preview_label.set_selection_enabled(False)
         self._roi_before_selection = None
+        self._ocr_selection_field = None
         self._selection_mode = None
         if self._resume_preview_after_selection:
             self._preview_timer.start()
             self.preview_button.setText(self._text("stop_preview"))
         self._resume_preview_after_selection = False
         self.statusBar().showMessage("已取消框选，继续使用之前的设置")
+
+    def apply_selected_ocr_region(self, roi: object) -> None:
+        field = self._ocr_selection_field
+        if not field:
+            self._cancel_preview_selection()
+            return
+        x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
+        region = OcrRegion(x, y, width, height)
+        self.preview_label.set_ocr_overlay(field, region)
+        self.preview_label.set_selection_enabled(False)
+        self._selection_mode = None
+        self._ocr_selection_field = None
+        if self._resume_preview_after_selection:
+            self._preview_timer.start()
+            self.preview_button.setText(self._text("stop_preview"))
+        self._resume_preview_after_selection = False
+        self.ocrRegionSelected.emit(field, region.as_tuple())
+        label = OCR_REGION_LABELS.get(field, field)
+        self.statusBar().showMessage(f"OCR 区域已保存：{label} X={x}, Y={y}, W={width}, H={height}")
 
     def apply_selected_roi(self, roi: object) -> None:
         old_roi = self._roi_before_selection or (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
@@ -2372,6 +2441,47 @@ class MainWindow(QMainWindow):
         self.y.setText(str(roi[1]))
         self.w.setText(str(roi[2]))
         self.h.setText(str(roi[3]))
+
+    def open_ocr_settings(self) -> None:
+        if self._ocr_settings_dialog is None:
+            dialog = OcrSettingsDialog(self, recognizer=self._recognize_ocr_region)
+            dialog.regionSelectionRequested.connect(self.start_ocr_region_selection)
+            dialog.regionDisplayRequested.connect(self._show_ocr_region_overlay)
+            self.ocrRegionSelected.connect(dialog.set_region)
+            self._ocr_settings_dialog = dialog
+        self._ocr_settings_dialog.show()
+        self._ocr_settings_dialog.raise_()
+        self._ocr_settings_dialog.activateWindow()
+
+    def _show_ocr_region_overlay(self, field: str, region: object) -> None:
+        if not isinstance(region, OcrRegion):
+            region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
+        self.preview_label.set_ocr_overlay(field, region)
+        try:
+            self._display_frame(self._current_preview_frame_for_ocr())
+        except Exception:
+            if self._latest_preview_frame is not None:
+                self._display_frame(self._latest_preview_frame)
+        label = OCR_REGION_LABELS.get(field, field)
+        self.statusBar().showMessage(f"显示 OCR 区域：{label}")
+
+    def _current_preview_frame_for_ocr(self) -> object:
+        if self._latest_preview_frame is not None:
+            return self._latest_preview_frame
+        frame = capture_preview_frame(self._config_from_form().capture)
+        frame_copy = getattr(frame, "copy", None)
+        self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
+        self._display_frame(self._latest_preview_frame)
+        return self._latest_preview_frame
+
+    def _recognize_ocr_region(self, field: str, region: OcrRegion) -> str:
+        frame = self._current_preview_frame_for_ocr()
+        return recognize_ocr_field(frame, field, region)
+
+    def _ocr_region_config(self):
+        if self._ocr_settings_dialog is not None:
+            return self._ocr_settings_dialog.region_config
+        return load_ocr_region_config()
 
     def _update_preview_frame(self) -> None:
         try:
@@ -3165,7 +3275,8 @@ class MainWindow(QMainWindow):
             # OCR 笔记页 → 性格 + 个性（只做一次，识别可靠）
             log("[自动反查] 截图笔记页…")
             notes_frame = capture_preview_frame(tracking_config.capture)
-            notes_result = extract_pokemon_info(notes_image=notes_frame)
+            ocr_regions = self._ocr_region_config()
+            notes_result = extract_pokemon_info(notes_image=notes_frame, ocr_regions=ocr_regions)
             nature = notes_result.get("nature")
             characteristic = notes_result.get("characteristic")
             log(f"[自动反查] 性格={nature}, 个性={characteristic}")
@@ -3234,7 +3345,7 @@ class MainWindow(QMainWindow):
             for attempt in range(1, 4):
                 log(f"[自动反查] 能力页 OCR 第{attempt}次…")
                 stats_frame = capture_preview_frame(tracking_config.capture)
-                stats_result = extract_pokemon_info(stats_image=stats_frame)
+                stats_result = extract_pokemon_info(stats_image=stats_frame, ocr_regions=ocr_regions)
                 stats = stats_result.get("stats")
                 if not stats:
                     log(f"[自动反查] 第{attempt}次能力值识别失败")
@@ -3408,7 +3519,8 @@ class MainWindow(QMainWindow):
         log = self.auto_rng_tab.captureLog.emit
 
         # 1) OCR 笔记页
-        notes_result = extract_pokemon_info(notes_image=notes_frame)
+        ocr_regions = self._ocr_region_config()
+        notes_result = extract_pokemon_info(notes_image=notes_frame, ocr_regions=ocr_regions)
         nature = notes_result.get("nature")
         characteristic = notes_result.get("characteristic")
 
@@ -3431,7 +3543,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             log(f"[捕获精灵信息] 截图能力页失败: {exc}")
             return
-        stats_result = extract_pokemon_info(stats_image=stats_frame)
+        stats_result = extract_pokemon_info(stats_image=stats_frame, ocr_regions=self._ocr_region_config())
         stats = stats_result.get("stats")
 
         stat_order = ["性格", "个性", "HP", "攻击", "防御", "特攻", "特防", "速度"]

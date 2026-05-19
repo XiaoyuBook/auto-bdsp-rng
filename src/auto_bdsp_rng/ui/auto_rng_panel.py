@@ -206,11 +206,11 @@ class AutoRngPanel(QWidget):
         left_layout.addWidget(self.debug_output_check)
 
         # ── 右分区：状态 + 按钮 ──
-        self.capture_info_button = QPushButton("捕获精灵信息")
+        self.capture_info_button = QPushButton("OCR设置")
         self.capture_info_button.setObjectName("SecondaryButton")
         self.capture_info_button.setFixedHeight(34)
         self.capture_info_button.setMinimumWidth(120)
-        self.capture_info_button.setToolTip("在笔记页点击，自动切换能力页并提取全部信息")
+        self.capture_info_button.setToolTip("打开 OCR 区域设置窗口")
         self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
 
         right_layout = QHBoxLayout()
