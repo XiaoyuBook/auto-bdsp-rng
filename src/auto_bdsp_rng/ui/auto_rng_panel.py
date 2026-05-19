@@ -247,17 +247,19 @@ class AutoRngPanel(QWidget):
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
+        self.reseeding_threshold = self._spin(0, 1_000_000, 10_000)
         self.shiny_threshold_seconds = QDoubleSpinBox()
         self.shiny_threshold_seconds.setRange(0.0, 999.0)
         self.shiny_threshold_seconds.setDecimals(3)
         self.shiny_threshold_seconds.setSingleStep(0.1)
         self.shiny_threshold_seconds.setValue(0.0)
-        for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
+        for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames, self.reseeding_threshold):
             spin.setFixedWidth(215)
         self.shiny_threshold_seconds.setFixedWidth(215)
         form.addRow("最大帧数", self.max_advances)
         form.addRow("delay", self.fixed_delay)
         form.addRow("最大等待窗口", self.max_wait_frames)
+        form.addRow("预留帧数", self.reseeding_threshold)
         form.addRow("闪光阈值(秒)", self.shiny_threshold_seconds)
         # 同步开关（三态下拉框 + 性格输入）
         sync_row = QHBoxLayout()
@@ -302,10 +304,11 @@ class AutoRngPanel(QWidget):
         self.seed_script_combo = QComboBox()
         self.advance_script_combo = QComboBox()
         self.hit_script_combo = QComboBox()
+        self.exit_script_combo = QComboBox()
         self.reverse_script_combo = QComboBox()
         self.refresh_scripts_button = QPushButton("刷新脚本列表")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.reverse_script_combo):
+        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.exit_script_combo, self.reverse_script_combo):
             combo.setFixedHeight(34)
             combo.setFixedWidth(160)
         self.refresh_scripts_button.setFixedHeight(34)
@@ -316,9 +319,11 @@ class AutoRngPanel(QWidget):
         layout.addWidget(self.advance_script_combo, 0, 3)
         layout.addWidget(QLabel("撞闪脚本"), 1, 0)
         layout.addWidget(self.hit_script_combo, 1, 1)
-        layout.addWidget(QLabel("反查脚本"), 1, 2)
-        layout.addWidget(self.reverse_script_combo, 1, 3)
-        layout.addWidget(self.refresh_scripts_button, 2, 0, 1, 4)
+        layout.addWidget(QLabel("过场脚本"), 1, 2)
+        layout.addWidget(self.exit_script_combo, 1, 3)
+        layout.addWidget(QLabel("反查脚本"), 2, 0)
+        layout.addWidget(self.reverse_script_combo, 2, 1)
+        layout.addWidget(self.refresh_scripts_button, 2, 2, 1, 2)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
@@ -389,7 +394,7 @@ class AutoRngPanel(QWidget):
 
     def refresh_scripts(self) -> None:
         self._scripts = list_auto_scripts(self.script_dir)
-        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.reverse_script_combo):
+        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.exit_script_combo, self.reverse_script_combo):
             combo.blockSignals(True)
             combo.clear()
             combo.addItem("请选择", None)
@@ -526,6 +531,7 @@ class AutoRngPanel(QWidget):
             seed_script_path=self._selected_path(self.seed_script_combo),
             advance_script_path=self._selected_path(self.advance_script_combo),
             hit_script_path=self._selected_path(self.hit_script_combo),
+            exit_script_path=self._selected_path(self.exit_script_combo),
             reverse_script_path=self._selected_path(self.reverse_script_combo),
             record_script_path=choose_default_script(self._scripts, DEFAULT_RECORD_SCRIPT_NAME),
             auto_reverse=self.auto_reverse_combo.currentIndex() == 1,
@@ -534,6 +540,7 @@ class AutoRngPanel(QWidget):
             sync_nature=self.sync_nature_input.text().strip(),
             fixed_delay=self.fixed_delay.value(),
             max_wait_frames=self.max_wait_frames.value(),
+            reseeding_threshold=self.reseeding_threshold.value(),
             loop_mode=str(self.mode_combo.currentData()),
             loop_count=self.loop_count.value(),
             start_phase=start_phase,
@@ -684,16 +691,22 @@ class AutoRngPanel(QWidget):
         s.setValue("max_advances", self.max_advances.value())
         s.setValue("fixed_delay", self.fixed_delay.value())
         s.setValue("max_wait_frames", self.max_wait_frames.value())
+        s.setValue("reseeding_threshold", self.reseeding_threshold.value())
         s.setValue("shiny_threshold", self.shiny_threshold_seconds.value())
         seed_path = self._selected_path(self.seed_script_combo)
         advance_path = self._selected_path(self.advance_script_combo)
         hit_path = self._selected_path(self.hit_script_combo)
+        exit_path = self._selected_path(self.exit_script_combo)
         if seed_path is not None:
             s.setValue("seed_script", str(seed_path))
         if advance_path is not None:
             s.setValue("advance_script", str(advance_path))
         if hit_path is not None:
             s.setValue("hit_script", str(hit_path))
+        if exit_path is not None:
+            s.setValue("exit_script", str(exit_path))
+        else:
+            s.remove("exit_script")
         reverse_path = self._selected_path(self.reverse_script_combo)
         if reverse_path is not None:
             s.setValue("reverse_script", str(reverse_path))
@@ -727,6 +740,8 @@ class AutoRngPanel(QWidget):
             self.fixed_delay.setValue(int(s.value("fixed_delay", 100)))
         if s.contains("max_wait_frames"):
             self.max_wait_frames.setValue(int(s.value("max_wait_frames", 300)))
+        if s.contains("reseeding_threshold"):
+            self.reseeding_threshold.setValue(int(s.value("reseeding_threshold", 10_000)))
         if s.contains("shiny_threshold"):
             self.shiny_threshold_seconds.setValue(float(s.value("shiny_threshold", 0.0)))
         # 恢复脚本选择（脚本列表已通过 refresh_scripts 加载）
@@ -736,6 +751,8 @@ class AutoRngPanel(QWidget):
             self._select_script_by_path(self.advance_script_combo, str(s.value("advance_script", "")))
         if s.contains("hit_script"):
             self._select_script_by_path(self.hit_script_combo, str(s.value("hit_script", "")))
+        if s.contains("exit_script"):
+            self._select_script_by_path(self.exit_script_combo, str(s.value("exit_script", "")))
         if s.contains("reverse_script"):
             self._select_script_by_path(self.reverse_script_combo, str(s.value("reverse_script", "")))
         if s.contains("sync_state"):

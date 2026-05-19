@@ -51,16 +51,18 @@ from auto_bdsp_rng.blink_detection import (
     ProjectXsReidentifyResult,
     ProjectXsTrackingConfig,
     advance_seed_state,
+    capture_pokemon_blinks,
     capture_player_blinks,
     capture_preview_frame,
     load_project_xs_config,
     reidentify_seed_from_observation,
     reidentify_seed_from_observation_noisy,
+    recover_tidsid_seed_from_observation,
     recover_seed_from_observation,
     render_eye_preview,
     save_project_xs_config,
 )
-from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
+from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OCR_REGION_LABELS, OcrRegion
@@ -788,6 +790,8 @@ class MainWindow(QMainWindow):
         self.addAction(copy)
 
     def _build_ui(self) -> None:
+        from auto_bdsp_rng.ui.id_panel import IdPanel
+
         root = QWidget()
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(14, 12, 14, 12)
@@ -826,6 +830,8 @@ class MainWindow(QMainWindow):
         self.easycon_tab = EasyConPanel()
         self.auto_rng_tab = AutoRngPanel()
         self.history_tab = HistoryPanel()
+        self.id_tab = IdPanel(status_callback=lambda text: self.statusBar().showMessage(text))
+        self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
@@ -837,6 +843,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.history_tab, "历史记录")
+        self.tabs.addTab(self.id_tab, "ID 数据区")
         root_layout.addWidget(self.tabs, 1)
         _make_labels_copyable(self.tabs)
 
@@ -920,60 +927,54 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
-        group = QGroupBox("状态")
-        group.setMaximumHeight(95)
+        group = QGroupBox("配置")
+        group.setMaximumHeight(120)
 
-        outer = QVBoxLayout(group)
+        outer = QGridLayout(group)
         outer.setContentsMargins(12, 8, 12, 8)
-        outer.setSpacing(0)
-        outer.addStretch()
+        outer.setHorizontalSpacing(10)
+        outer.setVerticalSpacing(6)
 
-        row = QHBoxLayout()
-        row.setSpacing(28)
-        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        # Progress
         self.progress_label = QLabel("Progress:")
         self.progress_value = QLabel("0/0")
-        pg = QHBoxLayout()
-        pg.setSpacing(4)
-        pg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        pg.addWidget(self.progress_label)
-        pg.addWidget(self.progress_value)
-        row.addLayout(pg)
-
-        # Advances
         self.advances_label = QLabel("Advances:")
         self.advances_value = QLabel("0")
-        ag = QHBoxLayout()
-        ag.setSpacing(4)
-        ag.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        ag.addWidget(self.advances_label)
-        ag.addWidget(self.advances_value)
-        row.addLayout(ag)
-
-        # Timer
         self.timer_label = QLabel("Timer:")
         self.timer_value = QLabel("0")
-        tg = QHBoxLayout()
-        tg.setSpacing(4)
-        tg.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        tg.addWidget(self.timer_label)
-        tg.addWidget(self.timer_value)
-        row.addLayout(tg)
-
-        # X to advance
         self.x_to_advance_label = QLabel("X to advance:")
         self.x_to_advance = self._spin(0, 10_000_000, 165)
         self.advance_button = QPushButton("Advance")
         self.advance_button.clicked.connect(self.advance_current_seed)
-        row.addWidget(self.x_to_advance_label)
-        row.addWidget(self.x_to_advance)
-        row.addWidget(self.advance_button)
+        for widget in (
+            self.progress_label,
+            self.progress_value,
+            self.advances_label,
+            self.advances_value,
+            self.timer_label,
+            self.timer_value,
+            self.x_to_advance_label,
+            self.x_to_advance,
+            self.advance_button,
+        ):
+            widget.hide()
 
-        row.addStretch()
-        outer.addLayout(row)
-        outer.addStretch()
+        self.seed_config_combo = QComboBox()
+        self.seed_config_combo.setFixedHeight(32)
+        self.seed_config_combo.setMinimumWidth(260)
+        self.reidentify_config_combo = QComboBox()
+        self.reidentify_config_combo.setFixedHeight(32)
+        self.reidentify_config_combo.setMinimumWidth(260)
+        self.refresh_seed_configs_button = QPushButton("刷新")
+        self.refresh_seed_configs_button.setFixedHeight(32)
+        self.refresh_seed_configs_button.setFixedWidth(80)
+        self.refresh_seed_configs_button.clicked.connect(self._refresh_config_list)
+
+        outer.addWidget(QLabel("Seed 配置"), 0, 0)
+        outer.addWidget(self.seed_config_combo, 0, 1)
+        outer.addWidget(QLabel("Reidentify 配置"), 1, 0)
+        outer.addWidget(self.reidentify_config_combo, 1, 1)
+        outer.addWidget(self.refresh_seed_configs_button, 1, 2)
+        outer.setColumnStretch(1, 1)
         return group
 
     def _build_controls(self) -> QWidget:
@@ -1017,6 +1018,9 @@ class MainWindow(QMainWindow):
         self.reidentify_button.clicked.connect(self.reidentify_seed)
         self.preview_button = QPushButton()
         self.preview_button.clicked.connect(self.toggle_preview)
+        self.tidsid_button = QPushButton("TID/SID 测种")
+        self.tidsid_button.setFixedHeight(30)
+        self.tidsid_button.clicked.connect(self.capture_tidsid_seed)
         self.save_config_button = QPushButton()
         self.save_config_button.clicked.connect(self.save_current_config)
         self.raw_screenshot_button = QPushButton()
@@ -1025,7 +1029,6 @@ class MainWindow(QMainWindow):
         self.select_roi_button.clicked.connect(self.start_roi_selection)
         self.calibrate_shiny_threshold_button = QPushButton()
         self.calibrate_shiny_threshold_button.clicked.connect(self.calibrate_shiny_threshold)
-        self.calibrate_shiny_threshold_button.hide()
 
         self.monitor_window = QCheckBox()
         self.reidentify_1_pk_npc = QCheckBox()
@@ -1074,6 +1077,7 @@ class MainWindow(QMainWindow):
         for button in (
             self.browse_button,
             self.preview_button,
+            self.tidsid_button,
             self.capture_button,
             self.reidentify_button,
             self.select_roi_button,
@@ -1082,6 +1086,8 @@ class MainWindow(QMainWindow):
         ):
             button.setFixedHeight(34)
             button.setStyleSheet(compact_button_style)
+        self.tidsid_button.setFixedHeight(30)
+        self.tidsid_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; padding: 0 10px; border-radius: 6px; }")
         self.monitor_window.setFixedHeight(28)
         self.reidentify_1_pk_npc.setFixedHeight(28)
 
@@ -1101,12 +1107,12 @@ class MainWindow(QMainWindow):
         checks_row = QHBoxLayout()
         checks_row.setContentsMargins(0, 0, 0, 0)
         checks_row.setSpacing(12)
-        checks_row.addWidget(self.monitor_window)
         checks_row.addWidget(self.reidentify_1_pk_npc)
         checks_row.addStretch(1)
+        checks_row.addWidget(self.calibrate_shiny_threshold_button)
+        layout.addWidget(self.tidsid_button, 2, 0)
         layout.addLayout(checks_row, 2, 1, 1, 3)
-        layout.addWidget(self.calibrate_shiny_threshold_button, 2, 0)
-        layout.addWidget(QLabel(), 3, 0)
+        layout.addWidget(self.monitor_window, 3, 0)
         layout.addWidget(self.window_prefix, 3, 1, 1, 3)
         self._add_form_row(layout, 4, "camera", self.camera)
         layout.addWidget(self.select_roi_button, 5, 1, 1, 3)
@@ -2038,7 +2044,8 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(2, self._text("bdsp_search"))
         self.tabs.setTabText(3, self._text("easycon"))
         self.tabs.setTabText(4, "历史记录" if self.lang == "zh" else "History")
-        self.status_group.setTitle(self._text("status"))
+        self.tabs.setTabText(5, "ID 数据区")
+        self.status_group.setTitle("配置" if self.lang == "zh" else "Config")
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
         self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
@@ -2057,6 +2064,7 @@ class MainWindow(QMainWindow):
         self.reidentify_1_pk_npc.setText(self._text("reidentify_1_pk_npc"))
         self.capture_button.setText(self._text("stop_capture") if self._is_capturing() else self._text("capture_seed"))
         self.reidentify_button.setText(self._text("reidentify_seed"))
+        self.tidsid_button.setText("TID/SID 测种")
         self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
         self.calibrate_shiny_threshold_button.setText("校准闪光判定")
         self.save_config_button.setText(self._text("save_config"))
@@ -2106,6 +2114,9 @@ class MainWindow(QMainWindow):
             self._stop_advance_tracking()
 
     def _refresh_config_list(self) -> None:
+        previous_main = self.config_combo.currentData() if hasattr(self, "config_combo") else None
+        previous_seed = self.seed_config_combo.currentData() if hasattr(self, "seed_config_combo") else None
+        previous_reidentify = self.reidentify_config_combo.currentData() if hasattr(self, "reidentify_config_combo") else None
         self.config_combo.blockSignals(True)
         self.config_combo.clear()
         configs = sorted(PROJECT_XS_CONFIGS.glob("*.json"))
@@ -2113,9 +2124,25 @@ class MainWindow(QMainWindow):
             self.config_combo.addItem(path.name, str(path))
         if configs:
             default = next((index for index, path in enumerate(configs) if path.name == "config_bebe.json"), 0)
-            self.config_combo.setCurrentIndex(default)
+            index = self.config_combo.findData(previous_main) if previous_main else -1
+            self.config_combo.setCurrentIndex(index if index >= 0 else default)
         self.config_combo.blockSignals(False)
+        if hasattr(self, "seed_config_combo"):
+            self._populate_project_xs_combo(self.seed_config_combo, configs, previous_seed)
+        if hasattr(self, "reidentify_config_combo"):
+            self._populate_project_xs_combo(self.reidentify_config_combo, configs, previous_reidentify)
         self._load_config_to_form(self.config_combo.currentText())
+
+    def _populate_project_xs_combo(self, combo: QComboBox, configs: list[Path], previous: object | None) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        for path in configs:
+            combo.addItem(path.name, str(path))
+        if configs:
+            default = next((index for index, path in enumerate(configs) if path.name == "config_bebe.json"), 0)
+            index = combo.findData(previous) if previous else -1
+            combo.setCurrentIndex(index if index >= 0 else default)
+        combo.blockSignals(False)
 
     def _browse_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Project_Xs config", str(PROJECT_XS_CONFIGS), "JSON files (*.json);;All files (*)")
@@ -2129,6 +2156,14 @@ class MainWindow(QMainWindow):
     def _selected_config_path(self) -> str:
         data = self.config_combo.currentData()
         return str(data or self.config_combo.currentText())
+
+    def _selected_auto_seed_config_path(self) -> str:
+        data = self.seed_config_combo.currentData()
+        return str(data or self.seed_config_combo.currentText())
+
+    def _selected_auto_reidentify_config_path(self) -> str:
+        data = self.reidentify_config_combo.currentData()
+        return str(data or self.reidentify_config_combo.currentText())
 
     def _load_config_to_form(self, _text: str) -> None:
         if not hasattr(self, "monitor_window"):
@@ -2716,6 +2751,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "bdsp_seed64_inputs"):
             for output, text in zip(self.bdsp_seed64_inputs, seed64_pair):
                 output.setText(text)
+        if hasattr(self, "id_tab"):
+            self.id_tab.set_seed_pair(state.to_seed_pair64())
         self._auto_refresh_results()
 
     def _current_seed_pair(self) -> SeedPair64:
@@ -2730,6 +2767,21 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             self.statusBar().showMessage(str(exc))
             return
+        state = seed_pair.to_state32()
+        for input_box, text in zip(self.seed32_inputs, state.format_words()):
+            input_box.setText(text)
+        for output, text in zip(self.seed64_outputs, seed_pair.format_seeds()):
+            output.setText(text)
+        if hasattr(self, "id_tab"):
+            self.id_tab.set_seed_pair(seed_pair)
+        self._auto_refresh_results()
+
+    def _sync_state32_from_id_seed64(self, seed_pair: object) -> None:
+        if not isinstance(seed_pair, SeedPair64):
+            return
+        if hasattr(self, "bdsp_seed64_inputs"):
+            for input_box, text in zip(self.bdsp_seed64_inputs, seed_pair.format_seeds()):
+                input_box.setText(text)
         state = seed_pair.to_state32()
         for input_box, text in zip(self.seed32_inputs, state.format_words()):
             input_box.setText(text)
@@ -2809,6 +2861,11 @@ class MainWindow(QMainWindow):
         # 自动连接伊机控（如果尚未连接）
         if not self._ensure_bridge_connected():
             return
+        config = replace(
+            config,
+            seed_config_path=self._selected_auto_seed_config_path(),
+            reidentify_config_path=self._selected_auto_reidentify_config_path(),
+        )
         services = self._build_auto_rng_services(config)
 
         def history_callback(event: str, args: tuple[object, ...]) -> None:
@@ -2917,7 +2974,7 @@ class MainWindow(QMainWindow):
         )
         self._refresh_tracked_advances_from_clock()
         self.timer_value.setText("0")
-        self._advance_timer.start()
+        self._advance_timer.stop()
 
     def _sync_bdsp_data_from_auto_rng(self, seed: SeedPair64) -> None:
         self.auto_rng_tab.set_target_version(self._profile_version)
@@ -2980,7 +3037,11 @@ class MainWindow(QMainWindow):
         self.nature_combo.setCurrentIndex(max(0, self.nature_combo.findData(nature_index)))
 
     def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
-        tracking_config = self._config_from_form()
+        seed_config_path = config.seed_config_path or self._selected_auto_seed_config_path()
+        reidentify_config_path = config.reidentify_config_path or self._selected_auto_reidentify_config_path()
+        tracking_config = load_project_xs_config(seed_config_path, blink_count=DEFAULT_BLINK_COUNT)
+        exit_tracking_config = load_project_xs_config(reidentify_config_path, blink_count=NOISY_REIDENTIFY_BLINK_COUNT)
+        exit_tracking_config = replace(exit_tracking_config, reidentify_1_pk_npc=True)
         self.auto_rng_tab.set_target_version(self._profile_version)
         target_entries = self.auto_rng_tab.targets()
         record, state_filter, shiny_mode = target_entries[0]
@@ -3023,6 +3084,33 @@ class MainWindow(QMainWindow):
             if callable(to_state32):
                 return to_state32()
             raise TypeError("Auto RNG seed result must contain SeedPair64 or SeedState32")
+
+        def reidentify_capture_for(source_config: ProjectXsTrackingConfig) -> BlinkCaptureConfig:
+            blink_count = NOISY_REIDENTIFY_BLINK_COUNT if source_config.reidentify_1_pk_npc else REIDENTIFY_BLINK_COUNT
+            return replace(source_config.capture, blink_count=blink_count)
+
+        def reidentify_from_observation_for(
+            current_state: SeedState32,
+            observation: object,
+            source_config: ProjectXsTrackingConfig,
+            *,
+            search_min: int,
+            search_max: int,
+        ) -> ProjectXsReidentifyResult:
+            if source_config.reidentify_1_pk_npc:
+                return reidentify_seed_from_observation_noisy(
+                    current_state,
+                    observation,  # type: ignore[arg-type]
+                    search_min=search_min,
+                    search_max=search_max,
+                )
+            return reidentify_seed_from_observation(
+                current_state,
+                observation,  # type: ignore[arg-type]
+                npc=source_config.npc,
+                search_min=search_min,
+                search_max=search_max,
+            )
 
         def capture_seed_service() -> AutoRngSeedResult:
             self._capture_cancel.clear()
@@ -3093,16 +3181,16 @@ class MainWindow(QMainWindow):
             else:
                 search_min = 0
             observation = capture_player_blinks(
-                self._reidentify_capture_config(tracking_config.capture),
+                reidentify_capture_for(tracking_config),
                 should_stop=self._capture_cancel.is_set,
                 frame_callback=store_frame,
                 progress_callback=store_progress,
                 show_window=False,
             )
-            result = self._reidentify_from_observation(
+            result = reidentify_from_observation_for(
                 state32_from_result(seed_result),
                 observation,
-                npc=tracking_config.npc,
+                tracking_config,
                 search_min=search_min,
                 search_max=search_max,
             )
@@ -3124,6 +3212,49 @@ class MainWindow(QMainWindow):
                 seed=seed_result.seed,
                 current_advances=current_advances,
                 npc=tracking_config.npc,
+                seed_text=seed_result.seed_text,
+                measured_at=time.monotonic(),
+            )
+            self.autoSeedCaptured.emit(reidentified)
+            self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+            return reidentified
+
+        def reidentify_exit_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
+            self._capture_cancel.clear()
+
+            def store_frame(frame: object) -> None:
+                self.autoCaptureFrameChanged.emit(frame)
+
+            def store_progress(done: int, total: int) -> None:
+                self.autoCaptureProgressChanged.emit(done, total)
+
+            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
+            if preview_was_running:
+                time.sleep(0.3)
+
+            observation = capture_player_blinks(
+                replace(exit_tracking_config.capture, blink_count=NOISY_REIDENTIFY_BLINK_COUNT),
+                should_stop=self._capture_cancel.is_set,
+                frame_callback=store_frame,
+                progress_callback=store_progress,
+                show_window=False,
+            )
+            search_max = max(100_000, config.max_advances, search_criteria.max_advances)
+            result = reidentify_seed_from_observation_noisy(
+                state32_from_result(seed_result),
+                observation,
+                search_min=0,
+                search_max=search_max,
+            )
+            elapsed_seconds = 0
+            offset_time = float(getattr(observation, "offset_time", 0.0) or 0.0)
+            if offset_time > 0:
+                elapsed_seconds = max(0, round(time.perf_counter() - offset_time))
+            npc = 1
+            reidentified = AutoRngSeedResult(
+                seed=seed_result.seed,
+                current_advances=result.advances + elapsed_seconds * (npc + 1),
+                npc=npc,
                 seed_text=seed_result.seed_text,
                 measured_at=time.monotonic(),
             )
@@ -3447,6 +3578,7 @@ class MainWindow(QMainWindow):
         return AutoRngServices(
             capture_seed=capture_seed_service,
             reidentify=reidentify_service,
+            reidentify_exit=reidentify_exit_service,
             search_candidates=search_candidates_service,
             search_sync=search_sync_service,
             run_script_text=run_script_text_service,
@@ -3644,6 +3776,7 @@ class MainWindow(QMainWindow):
         self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
         self.capture_button.setText(self._text("stop_capture"))
         self.reidentify_button.setEnabled(False)
+        self.tidsid_button.setEnabled(False)
         self.statusBar().showMessage(self._text("capturing"))
 
         last_display_frame_at = 0.0
@@ -3715,6 +3848,7 @@ class MainWindow(QMainWindow):
             self._capture_frame = None
         self.progress_value.setText(f"0/{reidentify_blink_count}")
         self.capture_button.setText(self._text("stop_capture"))
+        self.tidsid_button.setEnabled(False)
         self.statusBar().showMessage(f"Capturing {reidentify_blink_count} blinks...")
 
         last_display_frame_at = 0.0
@@ -3756,6 +3890,50 @@ class MainWindow(QMainWindow):
         self._capture_thread.start()
         self._capture_timer.start()
 
+    def capture_tidsid_seed(self) -> None:
+        if self._is_capturing():
+            self._capture_cancel.set()
+            self.capture_button.setText(self._text("stop_capture"))
+            self.statusBar().showMessage(self._text("capture_stopping"))
+            return
+        try:
+            config = self._config_from_form()
+        except ProjectXsIntegrationError as exc:
+            self._show_error("TID/SID capture failed", exc)
+            return
+        if not self._ensure_preview_frame_before_capture():
+            return
+
+        self._pause_preview_for_capture()
+        self.preview_button.setEnabled(False)
+        self.reidentify_button.setEnabled(False)
+        self.tidsid_button.setEnabled(False)
+        self.preview_label.set_selection_enabled(False)
+        self._stop_advance_tracking()
+        self._capture_cancel.clear()
+        self._capture_result = None
+        self._capture_error = None
+        self._capture_mode = "tidsid"
+        self._capture_progress = (0, config.capture.blink_count)
+        with self._capture_lock:
+            self._capture_frame = None
+        self.progress_value.setText(f"0/{config.capture.blink_count}")
+        self.capture_button.setText(self._text("stop_capture"))
+        self.statusBar().showMessage(f"Capturing {config.capture.blink_count} Pokemon blinks...")
+
+        def run_tidsid() -> None:
+            try:
+                observation = capture_pokemon_blinks(config.capture)
+                self._capture_result = recover_tidsid_seed_from_observation(observation)
+                with self._capture_lock:
+                    self._capture_progress = (config.capture.blink_count, config.capture.blink_count)
+            except Exception as exc:  # pragma: no cover - exercised through UI polling
+                self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
+
+        self._capture_thread = threading.Thread(target=run_tidsid, daemon=True)
+        self._capture_thread.start()
+        self._capture_timer.start()
+
     def _poll_capture_thread(self) -> None:
         with self._capture_lock:
             frame = self._capture_frame
@@ -3774,13 +3952,20 @@ class MainWindow(QMainWindow):
             thread.join(timeout=0)
         self.preview_button.setEnabled(True)
         self.reidentify_button.setEnabled(True)
+        self.tidsid_button.setEnabled(True)
         self.capture_button.setText(self._text("capture_seed"))
         self._restore_preview_after_capture()
         if self._capture_error is not None:
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))
             else:
-                title = "Reidentify failed" if self._capture_mode == "reidentify" else "Blink capture failed"
+                title = (
+                    "Reidentify failed"
+                    if self._capture_mode == "reidentify"
+                    else "TID/SID capture failed"
+                    if self._capture_mode == "tidsid"
+                    else "Blink capture failed"
+                )
                 self._show_error(title, self._capture_error)
             return
 
@@ -3808,6 +3993,8 @@ class MainWindow(QMainWindow):
         if self._capture_mode == "reidentify":
             self.advances_value.setText(str(self._tracked_advances))
             self.statusBar().showMessage(self._text("seed_reidentified"))
+        elif self._capture_mode == "tidsid":
+            self.statusBar().showMessage("TID/SID 测种完成")
         else:
             self.statusBar().showMessage(self._text("seed_captured"))
 

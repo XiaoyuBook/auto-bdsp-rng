@@ -14,6 +14,7 @@ class AutoRngPhase(str, Enum):
     DECIDE_ADVANCE = "决策过帧"
     RUN_ADVANCE_SCRIPT = "运行过帧脚本"
     REIDENTIFY = "重新识别位置"
+    EXIT_RESEED = "exit_reseed"
     FINAL_CALIBRATE = "最终校准"
     FINAL_WAIT = "等待触发"
     FINAL_ADJUST = "动态调整闪帧"
@@ -58,8 +59,11 @@ class AutoRngConfig:
     seed_script_path: Path | None = None
     advance_script_path: Path | None = None
     hit_script_path: Path | None = None
+    exit_script_path: Path | None = None
     reverse_script_path: Path | None = None
     record_script_path: Path | None = None
+    seed_config_path: str = ""
+    reidentify_config_path: str = ""
     auto_reverse: bool = False
     reverse_lookup_window: int = 500
     sync_mode: int = 0  # 0=关闭, 1=首位普通精灵, 2=首位同步精灵
@@ -69,6 +73,7 @@ class AutoRngConfig:
     fixed_flash_frames: int = 60
     max_wait_frames: int = 300
     reseed_threshold_frames: int = 990_000
+    reseeding_threshold: int = 10_000
     min_final_flash_frames: int = 5
     loop_mode: str = "single"
     loop_count: int = 1

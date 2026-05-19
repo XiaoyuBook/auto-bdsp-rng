@@ -21,6 +21,7 @@ from auto_bdsp_rng.automation.auto_rng.runner import (
     decide_target_advance,
     finalize_flash_frames,
 )
+from auto_bdsp_rng.automation.auto_rng.scripts import AUTO_ADVANCE_PARAMETER, AUTO_HIT_PARAMETER
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,122 @@ def test_advance_request_at_threshold_reidentifies():
 
     assert decision.kind == AutoRngDecisionKind.REIDENTIFY
     assert decision.phase == AutoRngPhase.REIDENTIFY
+
+
+def test_runner_preserves_original_advance_request_without_exit_script(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 0\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+        search_candidates=lambda _seed: [FakeState(2_000_100)],
+        reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=0),
+        run_script_text=lambda text, name: scripts.append((name, text)),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=100,
+            max_wait_frames=300,
+            reseeding_threshold=10_000,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=5)
+
+    assert (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 2000000\n") in scripts
+
+
+def test_runner_reserves_threshold_before_large_exit_reseed_advance(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    exit_script = tmp_path / "exit.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 0\n", encoding="utf-8")
+    exit_script.write_text("B 100\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+        search_candidates=lambda _seed: [FakeState(2_000_100)],
+        reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=0),
+        run_script_text=lambda text, name: scripts.append((name, text)),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            exit_script_path=exit_script,
+            fixed_delay=100,
+            max_wait_frames=300,
+            reseeding_threshold=10_000,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=5)
+
+    assert (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 1990000\n") in scripts
+    assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+
+
+def test_runner_exit_reseed_runs_exit_script_and_zeroes_underground_advance(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    exit_script = tmp_path / "exit.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n$地下过帧 = 1\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 0\n", encoding="utf-8")
+    exit_script.write_text("B 100\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+    capture_advances = iter([0, 1_990_000])
+    exit_reidentify_calls: list[AutoRngSeedResult] = []
+
+    def capture_seed() -> AutoRngSeedResult:
+        return AutoRngSeedResult(seed="seed-1", current_advances=next(capture_advances), npc=0)
+
+    def reidentify_exit(seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        exit_reidentify_calls.append(seed)
+        return AutoRngSeedResult(seed=seed.seed, current_advances=1_990_000, npc=1)
+
+    services = AutoRngServices(
+        capture_seed=capture_seed,
+        search_candidates=lambda _seed: [FakeState(2_000_100)],
+        reidentify=lambda seed: AutoRngSeedResult(seed=seed.seed, current_advances=2_000_000, npc=1),
+        reidentify_exit=reidentify_exit,
+        run_script_text=lambda text, name: scripts.append((name, text)),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            exit_script_path=exit_script,
+            fixed_delay=100,
+            max_wait_frames=300,
+            reseeding_threshold=10_000,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=12)
+
+    assert (exit_script.name, "B 100\n") in scripts
+    assert exit_reidentify_calls
+    assert (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 10000\n$地下过帧 = 0\n") in scripts
 
 
 def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):

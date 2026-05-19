@@ -24,6 +24,11 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
 )
 
 _UNSET = object()
+_UNDERGROUND_ADVANCE_RE = re.compile(r"(\$地下过帧\s*=\s*)-?\d+")
+
+
+def _zero_underground_advance(text: str) -> str:
+    return _UNDERGROUND_ADVANCE_RE.sub(r"\g<1>0", text)
 
 
 @dataclass
@@ -265,6 +270,7 @@ def _nature_index(name: str) -> int | None:
 class AutoRngServices:
     capture_seed: Callable[[], AutoRngSeedResult] = _missing_service  # type: ignore[assignment]
     reidentify: Callable[[AutoRngSeedResult], AutoRngSeedResult] = _missing_service  # type: ignore[assignment]
+    reidentify_exit: Callable[[AutoRngSeedResult], AutoRngSeedResult] | None = None
     search_candidates: Callable[[AutoRngSeedResult], Sequence[object]] = _missing_service  # type: ignore[assignment]
     search_sync: Callable[[AutoRngSeedResult, int, int | None], list[object]] | None = None
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
@@ -311,6 +317,8 @@ class AutoRngRunner:
         self._sync_initial: bool = False  # 本轮初始同步状态（每轮重置）
         self._need_sync_switch: bool = False  # 本次过帧是否需要切换同步状态
         self._need_init_reset: bool = False  # 无目标重试时临时启用初始化
+        self._reserved_exit_reseed_pending: bool = False
+        self._exit_reseed_done: bool = False
         self._advance_counter = ProjectXsAdvanceCounter()
 
     def stop(self) -> None:
@@ -338,6 +346,8 @@ class AutoRngRunner:
                 self._cycle_started = True
                 self._sync_initial = self.config.sync_mode >= 2
                 self._is_sync_active = self._sync_initial
+                self._reserved_exit_reseed_pending = False
+                self._exit_reseed_done = False
                 self._history("cycle_start", self._completed_loops)
                 self._set_progress(
                     AutoRngPhase.CAPTURE_SEED,
@@ -362,6 +372,8 @@ class AutoRngRunner:
                 self._run_advance_script()
             elif phase == AutoRngPhase.REIDENTIFY:
                 self._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+            elif phase == AutoRngPhase.EXIT_RESEED:
+                self._exit_reseed()
             elif phase == AutoRngPhase.FINAL_CALIBRATE:
                 self._final_calibrate()
             elif phase == AutoRngPhase.FINAL_WAIT:
@@ -513,6 +525,8 @@ class AutoRngRunner:
         self._cycle_started = True
         self._sync_initial = self.config.sync_mode >= 2  # 首位同步精灵
         self._is_sync_active = self._sync_initial
+        self._reserved_exit_reseed_pending = False
+        self._exit_reseed_done = False
         self._history("cycle_start", self._completed_loops)
         text = path.read_text(encoding="utf-8")
         # 无目标重试时临时启用初始化（避免放大模式卡住流程）
@@ -536,14 +550,48 @@ class AutoRngRunner:
             fixed_flash_frames=self._fixed_flash_frames(),
             max_wait_frames=self.config.max_wait_frames,
         )
+        decision = self._apply_exit_reseed_strategy(decision)
         self._requested_advances = decision.requested_advances or 0
         self._set_progress_from_decision(decision)
+
+    def _apply_exit_reseed_strategy(self, decision: AutoRngDecision) -> AutoRngDecision:
+        if self.config.exit_script_path is None:
+            return decision
+        reserve = max(0, int(self.config.reseeding_threshold))
+        remaining = decision.remaining_to_trigger
+        if self._reserved_exit_reseed_pending:
+            if remaining is not None and 0 < remaining <= reserve:
+                return replace(
+                    decision,
+                    kind=AutoRngDecisionKind.REIDENTIFY,
+                    phase=AutoRngPhase.EXIT_RESEED,
+                    requested_advances=0,
+                    message=f"剩余 {remaining} 帧不超过预留帧数 {reserve}，进入过场重测流程",
+                )
+            self._reserved_exit_reseed_pending = False
+            return decision
+        if self._exit_reseed_done:
+            return decision
+        if decision.kind != AutoRngDecisionKind.RUN_ADVANCE_SCRIPT:
+            return decision
+        requested = decision.requested_advances or 0
+        if reserve <= 0 or requested <= reserve:
+            return decision
+        adjusted = requested - reserve
+        self._reserved_exit_reseed_pending = True
+        return replace(
+            decision,
+            requested_advances=adjusted,
+            message=f"{decision.message}；已提前预留 {reserve} 帧，本次过帧 {adjusted} 帧",
+        )
 
     def _run_advance_script(self) -> None:
         path = self.config.advance_script_path
         if path is None:
             raise RuntimeError("过帧脚本未配置")
         text = path.read_text(encoding="utf-8")
+        if self._exit_reseed_done:
+            text = _zero_underground_advance(text)
         # 同步切换：目标在另一同步状态下找到，需要翻转队首
         if self._need_sync_switch and self.config.sync_mode >= 1:
             text = re.sub(r"\$精灵切换开关\s*=\s*\d+", "$精灵切换开关 = 1", text)
@@ -574,6 +622,29 @@ class AutoRngRunner:
             f"重新识别完成——目前帧数 {new_advances} 帧，上次实际过帧 {actual_advance} 帧",
             current_advances=new_advances,
             seed_text=self._seed_result.seed_text,
+        )
+
+    def _exit_reseed(self) -> None:
+        path = self.config.exit_script_path
+        if path is None:
+            self._reserved_exit_reseed_pending = False
+            self._set_progress(AutoRngPhase.SEARCH_TARGET, "未配置过场脚本，跳过过场重测流程")
+            return
+        service = self.services.reidentify_exit
+        if service is None:
+            raise RuntimeError("过场 Reidentify 服务未配置")
+        seed = self._require_seed()
+        self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
+        self._seed_result = self._with_measurement_time(service(seed))
+        self._reset_advance_counter(self._seed_result)
+        self._reserved_exit_reseed_pending = False
+        self._exit_reseed_done = True
+        self._set_progress(
+            AutoRngPhase.SEARCH_TARGET,
+            f"过场重测完成——{path.name}，目前帧数 {self._seed_result.current_advances} 帧",
+            current_advances=self._seed_result.current_advances,
+            seed_text=self._seed_result.seed_text,
+            last_script_path=path,
         )
 
     def _final_calibrate(self) -> None:

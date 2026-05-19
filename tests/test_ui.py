@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("PySide6")
 
-from auto_bdsp_rng.blink_detection import BlinkObservation, ProjectXsReidentifyResult, SeedState32
+from auto_bdsp_rng.blink_detection import (
+    BlinkCaptureConfig,
+    BlinkObservation,
+    ProjectXsReidentifyResult,
+    ProjectXsTrackingConfig,
+    SeedState32,
+)
 from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
@@ -48,6 +55,7 @@ def test_main_window_generates_static_results(app):
         "定点数据区",
         "伊机控",
         "历史记录",
+        "ID 数据区",
     ]
     assert window.tabs.tabText(window.tabs.currentIndex()) == "自动定点乱数"
 
@@ -127,6 +135,44 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
     assert window.capture_button.height() <= 34
 
 
+def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
+    window = MainWindow()
+
+    assert hasattr(window, "seed_config_combo")
+    assert hasattr(window, "reidentify_config_combo")
+    assert window.seed_config_combo.findText("config_bebe.json") >= 0
+    assert window.reidentify_config_combo.findText("config_bebe.json") >= 0
+    assert not window.progress_label.isVisible()
+    assert not window.advance_button.isVisible()
+
+
+def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    calls: list[int] = []
+
+    def fake_capture(config):
+        calls.append(config.blink_count)
+        return SimpleNamespace(intervals=[1, 2, 3])
+
+    monkeypatch.setattr(main_window_module, "capture_pokemon_blinks", fake_capture)
+    monkeypatch.setattr(
+        main_window_module,
+        "recover_tidsid_seed_from_observation",
+        lambda observation: SimpleNamespace(state=seed_state, observation=observation),
+    )
+    window._latest_preview_frame = object()
+
+    window.capture_tidsid_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    assert calls == [40]
+    assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
+    assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
+    assert window.tidsid_button.isEnabled()
+
+
 def test_blink_parameter_spinboxes_ignore_mouse_wheel(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.project_xs_tab)
@@ -193,6 +239,22 @@ def test_auto_rng_reverse_lookup_window_is_configurable(app, tmp_path):
     assert config.reverse_lookup_window == 500
     assert panel.reverse_lookup_window.maximum() == 10_000
     assert panel.reverse_lookup_window.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons
+
+
+def test_auto_rng_panel_persists_exit_script_and_reseeding_threshold(app, tmp_path):
+    (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    (tmp_path / "离开地下.txt").write_text("B 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path)
+
+    panel.exit_script_combo.setCurrentIndex(panel.exit_script_combo.findText("离开地下.txt"))
+    panel.reseeding_threshold.setValue(12345)
+    config = panel.build_config()
+
+    assert config.exit_script_path == tmp_path / "离开地下.txt"
+    assert config.reseeding_threshold == 12345
+    assert panel.refresh_scripts_button.parent() is panel.script_group
 
 
 def test_reverse_lookup_search_span_uses_symmetric_window():
@@ -295,6 +357,7 @@ def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
     )
     for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
         box.setText(text)
+    window._latest_preview_frame = object()
 
     window.reidentify_seed()
     window._capture_thread.join(timeout=2)
@@ -331,6 +394,7 @@ def test_reidentify_noisy_option_uses_20_blinks_and_noisy_reidentify(app, monkey
     for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
         box.setText(text)
     window.reidentify_1_pk_npc.setChecked(True)
+    window._latest_preview_frame = object()
 
     window.reidentify_seed()
     window._capture_thread.join(timeout=2)
@@ -353,6 +417,7 @@ def test_capture_seed_restores_running_preview(app, monkeypatch):
     )
     window._preview_timer.start()
     window.preview_button.setText(window._text("stop_preview"))
+    window._latest_preview_frame = object()
 
     window.capture_seed()
     window._capture_thread.join(timeout=2)
@@ -403,6 +468,7 @@ def test_reidentify_restores_running_preview(app, monkeypatch):
         box.setText(text)
     window._preview_timer.start()
     window.preview_button.setText(window._text("stop_preview"))
+    window._latest_preview_frame = object()
 
     window.reidentify_seed()
     window._capture_thread.join(timeout=2)
@@ -481,8 +547,30 @@ def test_main_window_header_shows_auto_rng_runtime_status(app):
 def test_main_window_has_auto_rng_tab(app):
     window = MainWindow()
 
-    assert window.tabs.count() == 4
-    assert window.tabs.tabText(3) == "自动定点乱数"
+    assert window.tabs.count() == 6
+    assert window.tabs.tabText(0) == "自动定点乱数"
+    assert window.tabs.tabText(5) == "ID 数据区"
+
+
+def test_id_panel_syncs_seed_pair_and_generates_results(app):
+    window = MainWindow()
+
+    _set_bdsp_seed(window)
+    window._sync_state32_from_bdsp_seed64()
+
+    assert [box.text() for box in window.id_tab.seed_inputs] == ["123456789ABCDEF0", "1111111122222222"]
+
+    window.id_tab.seed_inputs[0].setText("AAAAAAAA55555555")
+    window.id_tab.seed_inputs[1].setText("33333333CCCCCCCC")
+    window.id_tab._emit_seed_changed()
+
+    assert [box.text() for box in window.bdsp_seed64_inputs] == ["AAAAAAAA55555555", "33333333CCCCCCCC"]
+
+    window.id_tab.max_advances.setValue(3)
+    window.id_tab.generate_results()
+
+    assert window.id_tab.table.rowCount() == 3
+    assert window.id_tab.table.columnCount() == 5
 
 
 def test_auto_rng_panel_blocks_start_when_required_script_parameter_is_missing(app, tmp_path):
@@ -957,7 +1045,14 @@ def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, mon
 
     assert len(started) == 1
     assert isinstance(started[0], AutoRngRunner)
-    assert started[0].config == config
+    assert started[0].config == AutoRngConfig(
+        script_dir=tmp_path,
+        seed_script_path=seed_script,
+        advance_script_path=advance_script,
+        hit_script_path=hit_script,
+        seed_config_path=window._selected_auto_seed_config_path(),
+        reidentify_config_path=window._selected_auto_reidentify_config_path(),
+    )
 
 
 def test_main_window_auto_rng_start_opens_preview_when_inactive(app, tmp_path, monkeypatch):
@@ -1177,6 +1272,61 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     assert capture_counts == [7]
     assert int(window.advances_value.text()) >= 47
     assert not window._advance_timer.isActive()
+
+
+def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    observation = SimpleNamespace(offset_time=100.0)
+    loaded: list[tuple[str, int]] = []
+    capture_counts: list[int] = []
+    noisy_calls: list[SeedState32] = []
+
+    def fake_load_config(path, blink_count):
+        loaded.append((str(path), blink_count))
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 1, 1),
+                blink_count=blink_count,
+            ),
+            npc=0,
+        )
+
+    def fake_capture(config, *_args, **_kwargs):
+        capture_counts.append(config.blink_count)
+        return observation
+
+    def fake_noisy(current_state, _observation, **_kwargs):
+        noisy_calls.append(current_state)
+        return ProjectXsReidentifyResult(state=current_state, observation=observation, advances=42)
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation_noisy", fake_noisy)
+    monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 105.0)
+
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_config_path=str(tmp_path / "seed.json"),
+            reidentify_config_path=str(tmp_path / "exit.json"),
+        )
+    )
+
+    result = services.reidentify_exit(
+        AutoRngSeedResult(seed=SeedPair64(0x1111111122222222, 0x3333333344444444))
+    )
+    QApplication.processEvents()
+
+    assert loaded == [
+        (str(tmp_path / "seed.json"), 40),
+        (str(tmp_path / "exit.json"), 20),
+    ]
+    assert capture_counts == [20]
+    assert noisy_calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
+    assert result.current_advances == 52
+    assert result.npc == 1
 
 
 def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monkeypatch):
