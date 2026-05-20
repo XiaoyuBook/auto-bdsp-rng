@@ -145,12 +145,13 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     assert window.reidentify_config_combo.findText("config_bebe.json") >= 0
     assert layout.itemAtPosition(0, 0).widget() is window.progress_label
     assert layout.itemAtPosition(0, 1).widget() is window.progress_value
-    assert layout.itemAtPosition(0, 2).widget() is window.advances_label
-    assert layout.itemAtPosition(0, 3).widget() is window.advances_value
-    assert layout.itemAtPosition(1, 1).widget() is window.seed_config_combo
+    assert layout.itemAtPosition(0, 3).widget() is window.seed_config_combo
+    assert layout.itemAtPosition(1, 0).widget() is window.advances_label
+    assert layout.itemAtPosition(1, 1).widget() is window.advances_value
     assert layout.itemAtPosition(1, 3).widget() is window.reidentify_config_combo
-    assert layout.itemAtPosition(1, 4).widget() is window.refresh_seed_configs_button
     assert window.status_group.maximumHeight() >= 112
+    assert window.status_group.maximumWidth() <= 760
+    assert window.refresh_seed_configs_button.isHidden()
     assert window.preview_label.minimumHeight() <= 320
     assert not window.progress_label.isHidden()
     assert not window.advances_label.isHidden()

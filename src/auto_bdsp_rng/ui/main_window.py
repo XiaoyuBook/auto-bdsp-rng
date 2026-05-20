@@ -929,6 +929,7 @@ class MainWindow(QMainWindow):
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox("配置")
         group.setMaximumHeight(120)
+        group.setMaximumWidth(740)
 
         outer = QGridLayout(group)
         outer.setContentsMargins(12, 8, 12, 8)
@@ -956,25 +957,24 @@ class MainWindow(QMainWindow):
 
         self.seed_config_combo = QComboBox()
         self.seed_config_combo.setFixedHeight(32)
-        self.seed_config_combo.setMinimumWidth(260)
+        self.seed_config_combo.setMinimumWidth(340)
         self.reidentify_config_combo = QComboBox()
         self.reidentify_config_combo.setFixedHeight(32)
-        self.reidentify_config_combo.setMinimumWidth(260)
+        self.reidentify_config_combo.setMinimumWidth(340)
         self.refresh_seed_configs_button = QPushButton("刷新")
         self.refresh_seed_configs_button.setFixedHeight(32)
         self.refresh_seed_configs_button.setFixedWidth(80)
         self.refresh_seed_configs_button.clicked.connect(self._refresh_config_list)
+        self.refresh_seed_configs_button.hide()
 
         outer.addWidget(self.progress_label, 0, 0)
         outer.addWidget(self.progress_value, 0, 1)
-        outer.addWidget(self.advances_label, 0, 2)
-        outer.addWidget(self.advances_value, 0, 3)
-        outer.addWidget(QLabel("Seed 配置"), 1, 0)
-        outer.addWidget(self.seed_config_combo, 1, 1)
+        outer.addWidget(QLabel("Seed 配置"), 0, 2)
+        outer.addWidget(self.seed_config_combo, 0, 3)
+        outer.addWidget(self.advances_label, 1, 0)
+        outer.addWidget(self.advances_value, 1, 1)
         outer.addWidget(QLabel("Reidentify 配置"), 1, 2)
         outer.addWidget(self.reidentify_config_combo, 1, 3)
-        outer.addWidget(self.refresh_seed_configs_button, 1, 4)
-        outer.setColumnStretch(1, 1)
         outer.setColumnStretch(3, 1)
         return group
 
