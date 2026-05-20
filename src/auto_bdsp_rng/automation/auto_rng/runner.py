@@ -558,24 +558,28 @@ class AutoRngRunner:
         if self.config.exit_script_path is None:
             return decision
         reserve = max(0, int(self.config.reseeding_threshold))
-        remaining = decision.remaining_to_trigger
-        if self._reserved_exit_reseed_pending:
-            if remaining is not None and 0 < remaining <= reserve:
-                return replace(
-                    decision,
-                    kind=AutoRngDecisionKind.REIDENTIFY,
-                    phase=AutoRngPhase.EXIT_RESEED,
-                    requested_advances=0,
-                    message=f"剩余 {remaining} 帧不超过预留帧数 {reserve}，进入过场重测流程",
-                )
-            self._reserved_exit_reseed_pending = False
+        if reserve <= 0:
             return decision
+        remaining = decision.remaining_to_trigger
+        after_advance_measurement = self._reserved_exit_reseed_pending or self._requested_advances > 0
+        if not self._exit_reseed_done and after_advance_measurement and remaining is not None and 0 < remaining <= reserve:
+            self._reserved_exit_reseed_pending = False
+            return replace(
+                decision,
+                kind=AutoRngDecisionKind.REIDENTIFY,
+                phase=AutoRngPhase.EXIT_RESEED,
+                requested_advances=0,
+                message=f"剩余 {remaining} 帧不超过预留帧数 {reserve}，进入过场重测流程",
+            )
         if self._exit_reseed_done:
+            return decision
+        if self._reserved_exit_reseed_pending:
+            self._reserved_exit_reseed_pending = False
             return decision
         if decision.kind != AutoRngDecisionKind.RUN_ADVANCE_SCRIPT:
             return decision
         requested = decision.requested_advances or 0
-        if reserve <= 0 or requested <= reserve:
+        if requested <= reserve:
             return decision
         adjusted = requested - reserve
         self._reserved_exit_reseed_pending = True
