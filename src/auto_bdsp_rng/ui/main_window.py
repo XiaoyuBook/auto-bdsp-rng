@@ -2831,6 +2831,7 @@ class MainWindow(QMainWindow):
         self._shiny_calibration_worker = worker
         self._shiny_calibration_thread = thread
         self.calibrate_shiny_threshold_button.setText("停止校准")
+        self.auto_rng_tab.captureLog.emit("[闪光判定校准] 开始监控 出现了！ -> 去吧")
         self.statusBar().showMessage("正在后台监控 出现了 -> 去吧 对话框...")
         thread.start()
 
@@ -2838,6 +2839,7 @@ class MainWindow(QMainWindow):
         if self._shiny_calibration_worker is None:
             return
         self.calibrate_shiny_threshold_button.setEnabled(False)
+        self.auto_rng_tab.captureLog.emit("[闪光判定校准] 正在停止...")
         self.statusBar().showMessage("正在停止闪光判定校准...")
         self._shiny_calibration_worker.stop()
 
@@ -2849,14 +2851,20 @@ class MainWindow(QMainWindow):
 
     def _shiny_threshold_calibration_finished(self, interval_seconds: float) -> None:
         self._reset_shiny_threshold_calibration()
+        suggested = suggested_shiny_threshold(interval_seconds)
+        self.auto_rng_tab.captureLog.emit(
+            f"[闪光判定校准] 当前间隔 {interval_seconds:.3f}s，建议阈值 {suggested:.3f}s"
+        )
         self._show_shiny_threshold_dialog(interval_seconds)
 
     def _shiny_threshold_calibration_failed(self, message: str) -> None:
         self._reset_shiny_threshold_calibration()
+        self.auto_rng_tab.captureLog.emit(f"[闪光判定校准] 失败: {message}")
         self._show_error("闪光判定校准失败", RuntimeError(message))
 
     def _shiny_threshold_calibration_cancelled(self) -> None:
         self._reset_shiny_threshold_calibration()
+        self.auto_rng_tab.captureLog.emit("[闪光判定校准] 已停止")
         self.statusBar().showMessage("闪光判定校准已停止")
 
     def _show_shiny_threshold_dialog(self, interval_seconds: float) -> None:
@@ -2880,8 +2888,10 @@ class MainWindow(QMainWindow):
         layout.addLayout(form)
         layout.addWidget(buttons)
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            self.auto_rng_tab.captureLog.emit("[闪光判定校准] 已取消应用阈值")
             return
         self.auto_rng_tab.shiny_threshold_seconds.setValue(threshold.value())
+        self.auto_rng_tab.captureLog.emit(f"[闪光判定校准] 阈值已设置为 {threshold.value():.3f}s")
         self.statusBar().showMessage(f"闪光判定阈值已设置为 {threshold.value():.3f}s")
 
 

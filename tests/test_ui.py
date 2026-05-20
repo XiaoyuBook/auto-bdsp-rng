@@ -687,6 +687,7 @@ def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app,
     elapsed = time.monotonic() - started_at
 
     assert elapsed < 0.1
+    assert "[闪光判定校准] 开始监控" in window.auto_rng_tab.log_view.toPlainText()
     assert window.calibrate_shiny_threshold_button.text() == "停止校准"
     for _ in range(20):
         if shown:
