@@ -36,6 +36,7 @@ def load_ocr_region_config(settings: QSettings | None = None) -> OcrRegionConfig
 class OcrSettingsDialog(QDialog):
     regionSelectionRequested = Signal(str)
     regionDisplayRequested = Signal(str, object)
+    warmupRequested = Signal()
 
     def __init__(
         self,
@@ -48,7 +49,7 @@ class OcrSettingsDialog(QDialog):
         self.setWindowTitle("OCR区域设置")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.resize(720, 360)
+        self.resize(900, 620)
         self._settings = settings or QSettings("auto-bdsp-rng", "OcrSettings")
         self._recognizer = recognizer
         self.region_config = load_ocr_region_config(self._settings)
@@ -69,12 +70,14 @@ class OcrSettingsDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.verticalHeader().setDefaultSectionSize(56)
+        self.table.setMinimumHeight(500)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table, 1)
 
         for row, field in enumerate(OCR_REGION_FIELDS):
@@ -85,6 +88,11 @@ class OcrSettingsDialog(QDialog):
             self.table.setCellWidget(row, 3, self._build_action_cell(field))
 
         actions = QHBoxLayout()
+        self.warmup_button = QPushButton("预热OCR")
+        self.warmup_button.clicked.connect(self.start_warmup)
+        self.warmup_status = QLabel("未预热")
+        actions.addWidget(self.warmup_button)
+        actions.addWidget(self.warmup_status)
         actions.addStretch(1)
         test_current = QPushButton("测试当前项")
         test_current.clicked.connect(self._test_first_configured)
@@ -111,7 +119,8 @@ class OcrSettingsDialog(QDialog):
         )
         for text, callback in buttons:
             button = QPushButton(text)
-            button.setFixedHeight(26)
+            button.setFixedHeight(34)
+            button.setMinimumWidth(72)
             button.clicked.connect(callback)
             layout.addWidget(button)
         layout.addStretch(1)
@@ -176,6 +185,17 @@ class OcrSettingsDialog(QDialog):
         except Exception as exc:
             text = f"失败: {exc}"
         self.table.item(self._field_rows[field], 4).setText(text or "空")
+
+    def start_warmup(self) -> None:
+        self.warmup_button.setEnabled(False)
+        self.warmup_button.setText("预热中…")
+        self.warmup_status.setText("正在初始化 OCR")
+        self.warmupRequested.emit()
+
+    def finish_warmup(self, success: bool, message: str) -> None:
+        self.warmup_button.setEnabled(True)
+        self.warmup_button.setText("重新预热" if success else "预热OCR")
+        self.warmup_status.setText(message)
 
     def test_all(self) -> None:
         for field in OCR_REGION_FIELDS:

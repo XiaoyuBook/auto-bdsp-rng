@@ -63,7 +63,12 @@ from auto_bdsp_rng.blink_detection import (
     save_project_xs_config,
 )
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult
-from auto_bdsp_rng.automation.auto_rng.dialog_timing import measure_keyword_interval, read_ocr_text, suggested_shiny_threshold
+from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
+    measure_keyword_interval,
+    read_ocr_text,
+    read_paddle_ocr_text,
+    suggested_shiny_threshold,
+)
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OCR_REGION_LABELS, OcrRegion
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info, recognize_ocr_field
@@ -687,6 +692,7 @@ class MainWindow(QMainWindow):
     autoScriptFailed = Signal(str)
     autoHistoryEvent = Signal(str, object)
     ocrRegionSelected = Signal(str, object)
+    ocrWarmupFinished = Signal(bool, str)
     uiCallRequested = Signal(object, object, object, object)
 
     def __init__(self) -> None:
@@ -706,6 +712,7 @@ class MainWindow(QMainWindow):
         self._roi_before_selection: tuple[int, int, int, int] | None = None
         self._ocr_selection_field: str | None = None
         self._ocr_settings_dialog: OcrSettingsDialog | None = None
+        self._ocr_warmup_running = False
         self._selection_mode: str | None = None
         self._resume_preview_after_selection = False
         self._resume_preview_after_capture = False
@@ -2489,7 +2496,9 @@ class MainWindow(QMainWindow):
             dialog = OcrSettingsDialog(self, recognizer=self._recognize_ocr_region)
             dialog.regionSelectionRequested.connect(self.start_ocr_region_selection)
             dialog.regionDisplayRequested.connect(self._show_ocr_region_overlay)
+            dialog.warmupRequested.connect(self._start_ocr_warmup)
             self.ocrRegionSelected.connect(dialog.set_region)
+            self.ocrWarmupFinished.connect(dialog.finish_warmup)
             self._ocr_settings_dialog = dialog
         self._ocr_settings_dialog.show()
         self._ocr_settings_dialog.raise_()
@@ -2524,6 +2533,25 @@ class MainWindow(QMainWindow):
         if self._ocr_settings_dialog is not None:
             return self._ocr_settings_dialog.region_config
         return load_ocr_region_config()
+
+    def _start_ocr_warmup(self) -> None:
+        if self._ocr_warmup_running:
+            return
+        self._ocr_warmup_running = True
+
+        def worker() -> None:
+            try:
+                import numpy as np
+
+                read_paddle_ocr_text(np.zeros((32, 96, 3), dtype=np.uint8))
+            except Exception as exc:
+                self.ocrWarmupFinished.emit(False, f"OCR预热失败: {exc}")
+            else:
+                self.ocrWarmupFinished.emit(True, "OCR预热完成")
+            finally:
+                self._ocr_warmup_running = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _update_preview_frame(self) -> None:
         try:
