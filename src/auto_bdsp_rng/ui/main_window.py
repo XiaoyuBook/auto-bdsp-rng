@@ -928,7 +928,7 @@ class MainWindow(QMainWindow):
 
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox("配置")
-        group.setMaximumHeight(76)
+        group.setMaximumHeight(120)
 
         outer = QGridLayout(group)
         outer.setContentsMargins(12, 8, 12, 8)
@@ -969,13 +969,13 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.progress_value, 0, 1)
         outer.addWidget(self.advances_label, 0, 2)
         outer.addWidget(self.advances_value, 0, 3)
-        outer.addWidget(QLabel("Seed 配置"), 0, 4)
-        outer.addWidget(self.seed_config_combo, 0, 5)
-        outer.addWidget(QLabel("Reidentify 配置"), 0, 6)
-        outer.addWidget(self.reidentify_config_combo, 0, 7)
-        outer.addWidget(self.refresh_seed_configs_button, 0, 8)
-        outer.setColumnStretch(5, 1)
-        outer.setColumnStretch(7, 1)
+        outer.addWidget(QLabel("Seed 配置"), 1, 0)
+        outer.addWidget(self.seed_config_combo, 1, 1)
+        outer.addWidget(QLabel("Reidentify 配置"), 1, 2)
+        outer.addWidget(self.reidentify_config_combo, 1, 3)
+        outer.addWidget(self.refresh_seed_configs_button, 1, 4)
+        outer.setColumnStretch(1, 1)
+        outer.setColumnStretch(3, 1)
         return group
 
     def _build_controls(self) -> QWidget:
@@ -1478,7 +1478,7 @@ class MainWindow(QMainWindow):
         self.preview_label.roiSelected.connect(self._handle_preview_selection)
         self.preview_label.setObjectName("Preview")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(480, 360)
+        self.preview_label.setMinimumSize(480, 300)
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.preview_label.setScaledContents(False)
         preview_layout.addWidget(self.preview_label)
