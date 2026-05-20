@@ -149,10 +149,10 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     assert layout.itemAtPosition(1, 0).widget() is window.advances_label
     assert layout.itemAtPosition(1, 1).widget() is window.advances_value
     assert layout.itemAtPosition(1, 3).widget() is window.reidentify_config_combo
-    assert window.status_group.maximumHeight() >= 112
+    assert window.status_group.maximumHeight() >= 148
     assert window.status_group.maximumWidth() <= 760
     assert window.refresh_seed_configs_button.isHidden()
-    assert window.preview_label.minimumHeight() <= 320
+    assert window.preview_label.minimumHeight() <= 270
     assert not window.progress_label.isHidden()
     assert not window.advances_label.isHidden()
     assert window.timer_label.isHidden()

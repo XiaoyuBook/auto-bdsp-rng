@@ -928,13 +928,13 @@ class MainWindow(QMainWindow):
 
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox("配置")
-        group.setMaximumHeight(120)
+        group.setMaximumHeight(150)
         group.setMaximumWidth(740)
 
         outer = QGridLayout(group)
         outer.setContentsMargins(12, 8, 12, 8)
         outer.setHorizontalSpacing(10)
-        outer.setVerticalSpacing(6)
+        outer.setVerticalSpacing(10)
 
         self.progress_label = QLabel("Progress:")
         self.progress_value = QLabel("0/0")
@@ -1478,7 +1478,7 @@ class MainWindow(QMainWindow):
         self.preview_label.roiSelected.connect(self._handle_preview_selection)
         self.preview_label.setObjectName("Preview")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(480, 300)
+        self.preview_label.setMinimumSize(480, 260)
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.preview_label.setScaledContents(False)
         preview_layout.addWidget(self.preview_label)
