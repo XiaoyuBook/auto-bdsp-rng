@@ -573,19 +573,25 @@ class RoiPreviewLabel(QLabel):
 
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().paintEvent(event)
+        needs_drag_rect = self._selection_enabled and self._drag_start is not None and self._drag_current is not None
+        needs_ocr_overlay = self._ocr_overlay_region is not None
+        if not needs_drag_rect and not needs_ocr_overlay:
+            return
+        painter = QPainter(self)
         if self._selection_enabled and self._drag_start is not None and self._drag_current is not None:
-            painter = QPainter(self)
             pen = QPen(QColor("#D7C17C"))
             pen.setWidth(2)
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(QRect(self._drag_start, self._drag_current).normalized().intersected(self._pixmap_rect))
         if self._ocr_overlay_region is not None:
-            painter = QPainter(self)
             pen = QPen(QColor("#00A88B"))
             pen.setWidth(3)
             painter.setPen(pen)
             painter.drawRect(self._image_rect_to_widget_rect(self._ocr_overlay_region))
+        end = getattr(painter, "end", None)
+        if callable(end):
+            end()
 
 
 class NoWheelDoubleSpinBox(QDoubleSpinBox):

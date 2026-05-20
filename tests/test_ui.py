@@ -17,7 +17,7 @@ from auto_bdsp_rng.blink_detection import (
     SeedState32,
 )
 from PySide6.QtCore import QPoint, QPointF, QThread, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtGui import QPaintEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
 
@@ -1447,6 +1447,40 @@ def test_preview_label_stores_ocr_overlay_region(app):
 
     assert window.preview_label._ocr_overlay_field == "nature"
     assert window.preview_label._ocr_overlay_region == OcrRegion(10, 20, 30, 40)
+
+
+def test_preview_label_paints_drag_and_ocr_overlay_with_one_painter(app, monkeypatch):
+    window = MainWindow()
+    label = window.preview_label
+    label.resize(200, 120)
+    label.set_image_geometry(200, 120, label.rect())
+    label.set_selection_enabled(True)
+    label._drag_start = QPoint(10, 10)
+    label._drag_current = QPoint(80, 50)
+    label.set_ocr_overlay("nature", OcrRegion(20, 20, 40, 30))
+    active = {"count": 0}
+
+    class FakePainter:
+        def __init__(self, _device):
+            if active["count"]:
+                raise RuntimeError("nested painter")
+            active["count"] += 1
+
+        def setPen(self, _pen):
+            pass
+
+        def drawRect(self, _rect):
+            pass
+
+        def end(self):
+            active["count"] = 0
+
+        def __del__(self):
+            active["count"] = 0
+
+    monkeypatch.setattr(main_window_module, "QPainter", FakePainter)
+
+    label.paintEvent(QPaintEvent(label.rect()))
 
 
 def test_ocr_region_selection_confirm_emits_field_and_roi(app, monkeypatch):
