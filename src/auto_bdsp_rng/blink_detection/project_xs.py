@@ -362,27 +362,132 @@ def _tracking_blink_controlled(
     return blinks, intervals, offset_time
 
 
-def capture_pokemon_blinks(config: BlinkCaptureConfig) -> PokemonBlinkObservation:
+def _tracking_poke_blink_controlled(
+    eye_image: Any,
+    config: BlinkCaptureConfig,
+    *,
+    should_stop: Callable[[], bool] | None,
+    frame_callback: Callable[[Any], None] | None,
+    progress_callback: Callable[[int, int], None] | None,
+    show_window: bool,
+) -> list[float]:
+    cv2 = _load_cv2()
+    if should_stop is not None and should_stop():
+        return []
+    if config.monitor_window:
+        with _project_xs_import_path():
+            windowcapture = _load_module("windowcapture")
+            video = windowcapture.WindowCapture(config.window_prefix, _project_xs_crop(config.crop))
+    else:
+        backend = cv2.CAP_V4L if sys.platform.startswith("linux") else cv2.CAP_ANY
+        video = cv2.VideoCapture(config.camera, backend)
+        video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        video.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    state_idle = 0xFF
+    state_single = 0xF0
+    state = state_idle
+    intervals: list[float] = []
+    prev_time = time.perf_counter()
+    prev_roi = None
+    roi_x, roi_y, roi_w, roi_h = config.roi
+    eye_width, eye_height = eye_image.shape[::-1]
+
+    try:
+        consecutive_failures = 0
+        while len(intervals) < config.blink_count:
+            if should_stop is not None and should_stop():
+                break
+            ok, frame = video.read()
+            if not ok or frame is None:
+                consecutive_failures += 1
+                if consecutive_failures > 30:
+                    raise ProjectXsIntegrationError(
+                        "鏈娴嬪埌鎹曟崏鐢婚潰锛岃纭鎹曟崏绐楀彛宸叉墦寮€涓旀湭琚渶灏忓寲"
+                    )
+                time.sleep(0.1)
+                continue
+            consecutive_failures = 0
+            time_counter = time.perf_counter()
+            roi = cv2.cvtColor(frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w], cv2.COLOR_RGB2GRAY)
+            if prev_roi is not None and (roi == prev_roi).all():
+                continue
+            prev_roi = roi
+            result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
+            _, match, _, max_loc = cv2.minMaxLoc(result)
+
+            cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (0, 0, 255), 2)
+            if 0.4 < match < config.threshold:
+                cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
+                if state == state_idle:
+                    intervals.append(time_counter - prev_time)
+                    if progress_callback is not None:
+                        progress_callback(len(intervals), config.blink_count)
+                    state = state_single
+                    prev_time = time_counter
+            else:
+                match_location = (max_loc[0] + roi_x, max_loc[1] + roi_y)
+                match_bottom_right = (match_location[0] + eye_width, match_location[1] + eye_height)
+                cv2.rectangle(frame, match_location, match_bottom_right, 255, 2)
+
+            if frame_callback is not None:
+                frame_callback(frame)
+            if show_window:
+                cv2.imshow("view", frame)
+                if cv2.waitKey(1) == ord("q"):
+                    break
+            if state != state_idle and time_counter - prev_time > 0.7:
+                state = state_idle
+    finally:
+        release = getattr(video, "release", None)
+        if callable(release):
+            release()
+        if show_window:
+            cv2.destroyAllWindows()
+    return intervals
+
+
+def capture_pokemon_blinks(
+    config: BlinkCaptureConfig,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+    frame_callback: Callable[[Any], None] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    show_window: bool = True,
+) -> PokemonBlinkObservation:
     """Capture Pokemon blink intervals through Project_Xs tracking logic."""
 
-    rngtool = _load_module("rngtool")
     eye_image = _read_grayscale_image(config.eye_image_path)
 
     try:
-        with _project_xs_import_path():
-            intervals = rngtool.tracking_poke_blink(
+        if should_stop is not None or frame_callback is not None or progress_callback is not None or not show_window:
+            intervals = _tracking_poke_blink_controlled(
                 eye_image,
-                *config.roi,
-                threshold=config.threshold,
-                size=config.blink_count,
-                monitor_window=config.monitor_window,
-                window_prefix=config.window_prefix,
-                crop=_project_xs_crop(config.crop),
-                camera=config.camera,
-                tk_window=None,
+                config,
+                should_stop=should_stop,
+                frame_callback=frame_callback,
+                progress_callback=progress_callback,
+                show_window=show_window,
             )
+        else:
+            rngtool = _load_module("rngtool")
+            with _project_xs_import_path():
+                intervals = rngtool.tracking_poke_blink(
+                    eye_image,
+                    *config.roi,
+                    threshold=config.threshold,
+                    size=config.blink_count,
+                    monitor_window=config.monitor_window,
+                    window_prefix=config.window_prefix,
+                    crop=_project_xs_crop(config.crop),
+                    camera=config.camera,
+                    tk_window=None,
+                )
     except Exception as exc:
         raise ProjectXsIntegrationError(f"Project_Xs Pokemon blink tracking failed: {exc}") from exc
+    if should_stop is not None and should_stop():
+        raise ProjectXsIntegrationError("Pokemon blink capture stopped")
 
     return PokemonBlinkObservation.from_sequence(intervals)
 

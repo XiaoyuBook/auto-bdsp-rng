@@ -252,6 +252,69 @@ def test_capture_pokemon_blinks_uses_project_xs_rngtool(monkeypatch, tmp_path):
     assert observation.intervals == (1.25, 3.5)
 
 
+def test_capture_pokemon_blinks_can_update_preview_without_popup(monkeypatch, tmp_path):
+    class FakeVideoCapture:
+        def __init__(self, *_args):
+            self.value = 0
+
+        def set(self, *_args):
+            return None
+
+        def read(self):
+            self.value += 1
+            return True, np.full((6, 6, 3), self.value, dtype=np.uint8)
+
+        def release(self):
+            return None
+
+    match_values = iter([0.5, 0.95, 0.5])
+
+    def fail_imshow(*_args, **_kwargs):
+        raise AssertionError("Pokemon blink capture should use the embedded preview")
+
+    fake_cv2 = types.SimpleNamespace(
+        CAP_ANY=0,
+        CAP_V4L=0,
+        CAP_PROP_FRAME_WIDTH=3,
+        CAP_PROP_FRAME_HEIGHT=4,
+        CAP_PROP_BUFFERSIZE=5,
+        COLOR_RGB2GRAY=6,
+        TM_CCOEFF_NORMED=7,
+        VideoCapture=FakeVideoCapture,
+        cvtColor=lambda frame, _mode: frame[:, :, 0],
+        matchTemplate=lambda *_args, **_kwargs: np.array([[1.0]]),
+        minMaxLoc=lambda _result: (0.0, next(match_values), (0, 0), (0, 0)),
+        rectangle=lambda *_args, **_kwargs: None,
+        imshow=fail_imshow,
+        waitKey=lambda _delay: -1,
+        destroyAllWindows=lambda: None,
+    )
+    times = iter([0.0, 1.0, 1.8, 3.0])
+    frames: list[np.ndarray] = []
+    progress: list[tuple[int, int]] = []
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setattr(project_xs_module, "_read_grayscale_image", lambda _path: np.ones((1, 1), dtype=np.uint8))
+    monkeypatch.setattr(project_xs_module.time, "perf_counter", lambda: next(times))
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(0, 0, 4, 4),
+        blink_count=2,
+        monitor_window=False,
+    )
+
+    observation = capture_pokemon_blinks(
+        config,
+        should_stop=lambda: False,
+        frame_callback=frames.append,
+        progress_callback=lambda done, total: progress.append((done, total)),
+        show_window=False,
+    )
+
+    assert observation.intervals == (1.0, 2.0)
+    assert len(frames) == 3
+    assert progress == [(1, 2), (2, 2)]
+
+
 def test_capture_player_blinks_keeps_project_xs_src_importable_during_tracking(monkeypatch, tmp_path):
     project_xs_src = str(project_xs_module.PROJECT_XS_SRC)
     monkeypatch.setattr(sys, "path", [path for path in sys.path if path != project_xs_src])

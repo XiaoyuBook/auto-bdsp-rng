@@ -4002,9 +4002,31 @@ class MainWindow(QMainWindow):
         self.capture_button.setText(self._text("stop_capture"))
         self.statusBar().showMessage(f"Capturing {config.capture.blink_count} Pokemon blinks...")
 
+        last_display_frame_at = 0.0
+
+        def store_frame(frame: object) -> None:
+            nonlocal last_display_frame_at
+            now = time.perf_counter()
+            if now - last_display_frame_at < 0.1:
+                return
+            last_display_frame_at = now
+            with self._capture_lock:
+                copy = getattr(frame, "copy", None)
+                self._capture_frame = copy() if callable(copy) else frame
+
+        def store_progress(done: int, total: int) -> None:
+            with self._capture_lock:
+                self._capture_progress = (done, total)
+
         def run_tidsid() -> None:
             try:
-                observation = capture_pokemon_blinks(config.capture)
+                observation = capture_pokemon_blinks(
+                    config.capture,
+                    should_stop=self._capture_cancel.is_set,
+                    frame_callback=store_frame,
+                    progress_callback=store_progress,
+                    show_window=False,
+                )
                 self._capture_result = recover_tidsid_seed_from_observation(observation)
                 with self._capture_lock:
                     self._capture_progress = (config.capture.blink_count, config.capture.blink_count)

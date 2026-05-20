@@ -162,10 +162,18 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
 def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
-    calls: list[int] = []
+    calls: list[tuple[int, bool, bool, bool]] = []
 
-    def fake_capture(config):
-        calls.append(config.blink_count)
+    def fake_capture(config, **kwargs):
+        calls.append(
+            (
+                config.blink_count,
+                kwargs.get("show_window"),
+                callable(kwargs.get("frame_callback")),
+                callable(kwargs.get("progress_callback")),
+            )
+        )
+        kwargs["progress_callback"](config.blink_count, config.blink_count)
         return SimpleNamespace(intervals=[1, 2, 3])
 
     monkeypatch.setattr(main_window_module, "capture_pokemon_blinks", fake_capture)
@@ -180,7 +188,7 @@ def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
 
-    assert calls == [40]
+    assert calls == [(40, False, True, True)]
     assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
     assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
     assert window.tidsid_button.isEnabled()
