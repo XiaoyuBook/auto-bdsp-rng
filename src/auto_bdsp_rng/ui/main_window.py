@@ -4,6 +4,7 @@ import csv
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -63,6 +64,7 @@ from auto_bdsp_rng.blink_detection import (
     save_project_xs_config,
 )
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult
+from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngRunner, AutoTidRngServices, AutoTidSeedResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
     measure_keyword_interval,
     read_ocr_text,
@@ -82,15 +84,18 @@ from auto_bdsp_rng.automation.auto_rng.search import (
 from auto_bdsp_rng.app_settings import set_startup_notice_acknowledged, should_show_startup_notice
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
+from auto_bdsp_rng.gen8_id import IDFilter, generate_ids
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_icon_path, resource_path
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
+from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
 from auto_bdsp_rng.ui.help_menu import HelpMenuController
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
+from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
@@ -378,6 +383,7 @@ TEXT = {
         "bdsp_search": "定点数据区",
         "easycon": "EasyCon",
         "auto_rng": "Auto Static RNG",
+        "auto_tid_rng": "Auto TID RNG",
         "status": "Status",
         "config": "Config",
         "browse": "Browse",
@@ -440,6 +446,7 @@ TEXT = {
         "bdsp_search": "定点数据区",
         "easycon": "伊机控",
         "auto_rng": "自动定点乱数",
+        "auto_tid_rng": "自动 TID 乱数",
         "status": "状态",
         "config": "配置",
         "browse": "浏览",
@@ -692,6 +699,7 @@ class MainWindow(QMainWindow):
     autoScriptFailed = Signal(str)
     autoHistoryEvent = Signal(str, object)
     ocrRegionSelected = Signal(str, object)
+    tidOcrRegionSelected = Signal(object)
     ocrWarmupFinished = Signal(bool, str)
     ocrFullTestFinished = Signal(bool, str)
     uiCallRequested = Signal(object, object, object, object)
@@ -713,6 +721,7 @@ class MainWindow(QMainWindow):
         self._roi_before_selection: tuple[int, int, int, int] | None = None
         self._ocr_selection_field: str | None = None
         self._ocr_settings_dialog: OcrSettingsDialog | None = None
+        self._tid_ocr_dialog: TidOcrDialog | None = None
         self._ocr_warmup_running = False
         self._ocr_full_test_running = False
         self._selection_mode: str | None = None
@@ -844,6 +853,7 @@ class MainWindow(QMainWindow):
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel()
         self.auto_rng_tab = AutoRngPanel()
+        self.auto_tid_rng_tab = AutoTidRngPanel()
         self.history_tab = HistoryPanel()
         self.id_tab = IdPanel(status_callback=lambda text: self.statusBar().showMessage(text))
         self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
@@ -853,12 +863,16 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.captureInfoRequested.connect(self.open_ocr_settings)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
         self.auto_rng_tab.requestStatsCapture.connect(self._on_request_stats_capture)
+        self.auto_tid_rng_tab.startRequested.connect(self._start_auto_tid_rng)
+        self.auto_tid_rng_tab.progressChanged.connect(self._apply_auto_rng_header_progress)
+        self.auto_tid_rng_tab.ocrSettingsRequested.connect(self.open_tid_ocr_settings)
+        self.tidOcrRegionSelected.connect(self.auto_tid_rng_tab.set_ocr_region)
         self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
+        self.tabs.addTab(self.auto_tid_rng_tab, self._text("auto_tid_rng"))
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.history_tab, "历史记录")
-        self.tabs.addTab(self.id_tab, "ID 数据区")
         root_layout.addWidget(self.tabs, 1)
         _make_labels_copyable(self.tabs)
 
@@ -2056,11 +2070,11 @@ class MainWindow(QMainWindow):
     def _apply_language(self) -> None:
         self.title_label.setText(self._text("title"))
         self.tabs.setTabText(0, self._text("auto_rng"))
-        self.tabs.setTabText(1, self._text("project_xs"))
-        self.tabs.setTabText(2, self._text("bdsp_search"))
-        self.tabs.setTabText(3, self._text("easycon"))
-        self.tabs.setTabText(4, "历史记录" if self.lang == "zh" else "History")
-        self.tabs.setTabText(5, "ID 数据区")
+        self.tabs.setTabText(1, self._text("auto_tid_rng"))
+        self.tabs.setTabText(2, self._text("project_xs"))
+        self.tabs.setTabText(3, self._text("bdsp_search"))
+        self.tabs.setTabText(4, self._text("easycon"))
+        self.tabs.setTabText(5, "历史记录" if self.lang == "zh" else "History")
         self.status_group.setTitle("配置" if self.lang == "zh" else "Config")
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
@@ -2116,17 +2130,18 @@ class MainWindow(QMainWindow):
         if advances is not None:
             self.auto_advance_badge.setText(f"advance {advances}")
 
-    def _apply_auto_rng_header_progress(self, progress: AutoRngProgress) -> None:
+    def _apply_auto_rng_header_progress(self, progress: object) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
-        if progress.current_advances is not None:
-            self._display_tracked_advances(progress.current_advances)
+        current_advances = getattr(progress, "current_advances", None)
+        if current_advances is not None:
+            self._display_tracked_advances(int(current_advances))
         advances = self._tracked_advances
         self._update_auto_rng_header(
-            loop_index=progress.loop_index,
+            loop_index=getattr(progress, "loop_index", None),
             phase_text=phase_text,
             advances=advances,
         )
-        if progress.phase in (AutoRngPhase.COMPLETED, AutoRngPhase.FAILED, AutoRngPhase.IDLE):
+        if phase_text in {"已完成", "失败", "空闲"}:
             self._stop_advance_tracking()
 
     def _refresh_config_list(self) -> None:
@@ -2339,6 +2354,12 @@ class MainWindow(QMainWindow):
         label = OCR_REGION_LABELS.get(field, field)
         self.statusBar().showMessage(f"正在框选 OCR 区域：{label}")
 
+    def start_tid_ocr_region_selection(self) -> None:
+        if self._is_capturing():
+            return
+        self._begin_preview_selection("tid_ocr_region")
+        self.statusBar().showMessage("正在框选 TID OCR 区域")
+
     def _begin_preview_selection(self, mode: str) -> None:
         self._selection_mode = mode
         self._resume_preview_after_selection = self._preview_timer.isActive()
@@ -2365,6 +2386,8 @@ class MainWindow(QMainWindow):
             self.apply_selected_eye(roi)
         elif self._selection_mode == "ocr_region":
             self.apply_selected_ocr_region(roi)
+        elif self._selection_mode == "tid_ocr_region":
+            self.apply_selected_tid_ocr_region(roi)
         else:
             self.apply_selected_roi(roi)
 
@@ -2380,6 +2403,9 @@ class MainWindow(QMainWindow):
             label = OCR_REGION_LABELS.get(self._ocr_selection_field or "", self._ocr_selection_field or "OCR")
             title = "确认 OCR 区域"
             message = f"是否保存“{label}”区域？\n区域: X={x}, Y={y}, W={width}, H={height}"
+        elif self._selection_mode == "tid_ocr_region":
+            title = "确认 TID OCR 区域"
+            message = f"是否保存当前区域作为 TID OCR ROI？\n区域: X={x}, Y={y}, W={width}, H={height}"
         else:
             title = "确认眼睛区域"
             message = f"是否使用当前框选区域作为眼睛 ROI？\n区域: X={x}, Y={y}, W={width}, H={height}"
@@ -2420,6 +2446,19 @@ class MainWindow(QMainWindow):
         self.ocrRegionSelected.emit(field, region.as_tuple())
         label = OCR_REGION_LABELS.get(field, field)
         self.statusBar().showMessage(f"OCR 区域已保存：{label} X={x}, Y={y}, W={width}, H={height}")
+
+    def apply_selected_tid_ocr_region(self, roi: object) -> None:
+        x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
+        region = OcrRegion(x, y, width, height)
+        self.preview_label.set_ocr_overlay("tid", region)
+        self.preview_label.set_selection_enabled(False)
+        self._selection_mode = None
+        if self._resume_preview_after_selection:
+            self._preview_timer.start()
+            self.preview_button.setText(self._text("stop_preview"))
+        self._resume_preview_after_selection = False
+        self.tidOcrRegionSelected.emit(region.as_tuple())
+        self.statusBar().showMessage(f"TID OCR 区域已保存：X={x}, Y={y}, W={width}, H={height}")
 
     def apply_selected_roi(self, roi: object) -> None:
         old_roi = self._roi_before_selection or (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
@@ -2508,6 +2547,17 @@ class MainWindow(QMainWindow):
         self._ocr_settings_dialog.raise_()
         self._ocr_settings_dialog.activateWindow()
 
+    def open_tid_ocr_settings(self) -> None:
+        if self._tid_ocr_dialog is None:
+            dialog = TidOcrDialog(self, recognizer=self._recognize_tid_ocr_region)
+            dialog.regionSelectionRequested.connect(self.start_tid_ocr_region_selection)
+            dialog.regionDisplayRequested.connect(self._show_tid_ocr_region_overlay)
+            self.tidOcrRegionSelected.connect(dialog.set_region)
+            self._tid_ocr_dialog = dialog
+        self._tid_ocr_dialog.show()
+        self._tid_ocr_dialog.raise_()
+        self._tid_ocr_dialog.activateWindow()
+
     def _show_ocr_region_overlay(self, field: str, region: object) -> None:
         if not isinstance(region, OcrRegion):
             region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
@@ -2519,6 +2569,17 @@ class MainWindow(QMainWindow):
                 self._display_frame(self._latest_preview_frame)
         label = OCR_REGION_LABELS.get(field, field)
         self.statusBar().showMessage(f"显示 OCR 区域：{label}")
+
+    def _show_tid_ocr_region_overlay(self, region: object) -> None:
+        if not isinstance(region, OcrRegion):
+            region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
+        self.preview_label.set_ocr_overlay("tid", region)
+        try:
+            self._display_frame(self._current_preview_frame_for_ocr())
+        except Exception:
+            if self._latest_preview_frame is not None:
+                self._display_frame(self._latest_preview_frame)
+        self.statusBar().showMessage("显示 TID OCR 区域")
 
     def _current_preview_frame_for_ocr(self) -> object:
         if self._latest_preview_frame is not None:
@@ -2532,6 +2593,10 @@ class MainWindow(QMainWindow):
     def _recognize_ocr_region(self, field: str, region: OcrRegion) -> str:
         frame = self._current_preview_frame_for_ocr()
         return recognize_ocr_field(frame, field, region)
+
+    def _recognize_tid_ocr_region(self, region: OcrRegion) -> str:
+        frame = self._current_preview_frame_for_ocr()
+        return recognize_ocr_field(frame, "tid", region)
 
     def _ocr_region_config(self):
         if self._ocr_settings_dialog is not None:
@@ -2953,6 +3018,158 @@ class MainWindow(QMainWindow):
             self.autoHistoryEvent.emit(event, args)
 
         self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
+
+    def _start_auto_tid_rng(self, config: AutoTidRngConfig) -> None:
+        if not self._ensure_preview_for_auto_rng():
+            return
+        if not self._ensure_bridge_connected():
+            return
+        services = self._build_auto_tid_rng_services(config)
+        self.auto_tid_rng_tab.run_with_runner(AutoTidRngRunner(config, services=services))
+
+    def _build_auto_tid_rng_services(self, config: AutoTidRngConfig) -> AutoTidRngServices:
+        seed_config_path = self._selected_auto_seed_config_path()
+        tracking_config = load_project_xs_config(seed_config_path, blink_count=DEFAULT_BLINK_COUNT)
+
+        def seed_pair_from_result(seed_result: AutoTidSeedResult) -> SeedPair64:
+            seed = seed_result.seed
+            if isinstance(seed, SeedPair64):
+                return seed
+            if isinstance(seed, SeedState32):
+                return seed.to_seed_pair64()
+            to_seed_pair64 = getattr(seed, "to_seed_pair64", None)
+            if callable(to_seed_pair64):
+                return to_seed_pair64()
+            raise TypeError("Auto TID RNG seed result must contain SeedPair64 or SeedState32")
+
+        def sync_tid_seed_to_ui(seed_pair: SeedPair64) -> None:
+            state = seed_pair.to_state32()
+            for box, text in zip(self.seed32_inputs, state.format_words()):
+                box.setText(text)
+            self._sync_seed64_from_state32()
+            if hasattr(self, "id_tab"):
+                self.id_tab.set_seed_pair(seed_pair)
+
+        def capture_tidsid_seed_service() -> AutoTidSeedResult:
+            self._capture_cancel.clear()
+
+            def store_frame(frame: object) -> None:
+                self.autoCaptureFrameChanged.emit(frame)
+
+            def store_progress(done: int, total: int) -> None:
+                self.autoCaptureProgressChanged.emit(done, total)
+
+            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
+            if preview_was_running:
+                time.sleep(0.3)
+            try:
+                observation = capture_pokemon_blinks(
+                    tracking_config.capture,
+                    should_stop=self._capture_cancel.is_set,
+                    frame_callback=store_frame,
+                    progress_callback=store_progress,
+                    show_window=False,
+                )
+                result = recover_tidsid_seed_from_observation(observation)
+            finally:
+                self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+            seed_pair = result.state.to_seed_pair64()
+            self._call_on_ui_thread(lambda: sync_tid_seed_to_ui(seed_pair))
+            return AutoTidSeedResult(
+                seed=seed_pair,
+                current_advances=0,
+                npc=max(0, int(tracking_config.pokemon_npc)),
+                seed_text=" ".join(seed_pair.format_seeds()),
+                measured_at=time.monotonic(),
+            )
+
+        def search_id_states_service(seed_result: AutoTidSeedResult, threshold: int, target_tids: Sequence[int]):
+            return generate_ids(
+                seed_pair_from_result(seed_result),
+                initial_advances=0,
+                max_advances=max(0, int(threshold)) + 1,
+                state_filter=IDFilter(tid=tuple(int(tid) for tid in target_tids)),
+            )
+
+        def lookup_tid_state_service(seed_result: AutoTidSeedResult, tid: int, center_advances: int, window: int):
+            from auto_bdsp_rng.automation.auto_tid_rng import reverse_lookup_span
+
+            start, _end, count = reverse_lookup_span(center_advances, window)
+            states = generate_ids(
+                seed_pair_from_result(seed_result),
+                initial_advances=start,
+                max_advances=count,
+                state_filter=IDFilter(tid=[int(tid)]),
+            )
+            if not states:
+                return None
+            return min(states, key=lambda state: (abs(int(state.advances) - int(center_advances)), int(state.advances)))
+
+        _cli_backend: CliEasyConBackend | None = None
+
+        def _get_cli_backend() -> CliEasyConBackend:
+            nonlocal _cli_backend
+            if _cli_backend is None:
+                _cli_backend = CliEasyConBackend()
+            return _cli_backend
+
+        def run_script_text_service(script_text: str, name: str) -> object:
+            if self.easycon_tab._is_bridge_mode():
+                if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+                    raise RuntimeError("请先连接伊机控 Bridge")
+                self.autoScriptStarted.emit(name)
+                try:
+                    result = self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+                except Exception as exc:
+                    self.autoScriptFailed.emit(str(exc))
+                    raise
+                self.autoScriptFinished.emit(result)
+                return result
+            port = self.easycon_tab.port_combo.currentText()
+            if not port:
+                raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
+            self.autoScriptStarted.emit(name)
+            try:
+                result = _get_cli_backend().run_script_text(script_text, name, port=port)
+                if config.debug_output:
+                    for line in result.stdout.splitlines():
+                        if line.startswith("CLI 模式"):
+                            self.auto_tid_rng_tab.add_log(line)
+            except Exception as exc:
+                self.autoScriptFailed.emit(str(exc))
+                raise
+            self.autoScriptFinished.emit(result)
+            return result
+
+        def recognize_tid_service() -> str:
+            if config.ocr_region is None:
+                raise RuntimeError("未设置 TID OCR ROI")
+            frame = capture_preview_frame(tracking_config.capture)
+            text = recognize_ocr_field(frame, "tid", config.ocr_region)
+            self.auto_tid_rng_tab.add_log(f"[自动TID] OCR 原始结果：{text or '空'}")
+            return text
+
+        def stop_current_script_service() -> None:
+            self._capture_cancel.set()
+            if self.easycon_tab._is_bridge_mode():
+                try:
+                    self.easycon_tab._ensure_bridge_backend().stop_current_script()
+                except Exception:
+                    pass
+            elif _cli_backend is not None:
+                try:
+                    _cli_backend.stop_current_script()
+                except Exception:
+                    pass
+
+        return AutoTidRngServices(
+            capture_seed=capture_tidsid_seed_service,
+            search_id_states=search_id_states_service,
+            lookup_tid_state=lookup_tid_state_service,
+            run_script_text=run_script_text_service,
+            recognize_tid=recognize_tid_service,
+            stop_current_script=stop_current_script_service,
+        )
 
     def _handle_auto_history_event(self, event: str, args: object) -> None:
         values = tuple(args) if isinstance(args, tuple) else tuple()

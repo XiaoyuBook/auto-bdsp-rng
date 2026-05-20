@@ -51,13 +51,14 @@ def test_main_window_generates_static_results(app):
 
     assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
         "自动定点乱数",
+        "自动 TID 乱数",
         "Seed 捕捉",
         "定点数据区",
         "伊机控",
         "历史记录",
-        "ID 数据区",
     ]
     assert window.tabs.tabText(window.tabs.currentIndex()) == "自动定点乱数"
+    assert hasattr(window, "id_tab")
 
     window.tabs.setCurrentWidget(window.bdsp_tab)
     _set_bdsp_seed(window)
@@ -570,7 +571,9 @@ def test_main_window_has_auto_rng_tab(app):
 
     assert window.tabs.count() == 6
     assert window.tabs.tabText(0) == "自动定点乱数"
-    assert window.tabs.tabText(5) == "ID 数据区"
+    assert window.tabs.tabText(1) == "自动 TID 乱数"
+    assert window.tabs.tabText(5) == "历史记录"
+    assert hasattr(window, "id_tab")
 
 
 def test_id_panel_syncs_seed_pair_and_generates_results(app):
