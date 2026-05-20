@@ -137,13 +137,23 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
 
 def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     window = MainWindow()
+    layout = window.status_group.layout()
 
     assert hasattr(window, "seed_config_combo")
     assert hasattr(window, "reidentify_config_combo")
     assert window.seed_config_combo.findText("config_bebe.json") >= 0
     assert window.reidentify_config_combo.findText("config_bebe.json") >= 0
-    assert not window.progress_label.isVisible()
-    assert not window.advance_button.isVisible()
+    assert layout.itemAtPosition(0, 0).widget() is window.progress_label
+    assert layout.itemAtPosition(0, 1).widget() is window.progress_value
+    assert layout.itemAtPosition(0, 2).widget() is window.advances_label
+    assert layout.itemAtPosition(0, 3).widget() is window.advances_value
+    assert layout.itemAtPosition(0, 5).widget() is window.seed_config_combo
+    assert layout.itemAtPosition(0, 7).widget() is window.reidentify_config_combo
+    assert layout.itemAtPosition(0, 8).widget() is window.refresh_seed_configs_button
+    assert not window.progress_label.isHidden()
+    assert not window.advances_label.isHidden()
+    assert window.timer_label.isHidden()
+    assert window.advance_button.isHidden()
 
 
 def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
