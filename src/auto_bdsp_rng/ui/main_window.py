@@ -70,7 +70,7 @@ from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
     suggested_shiny_threshold,
 )
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
-from auto_bdsp_rng.automation.auto_rng.ocr_regions import OCR_REGION_LABELS, OcrRegion
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import NOTE_REGION_FIELDS, OCR_REGION_LABELS, STAT_REGION_FIELDS, OcrRegion
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info, recognize_ocr_field
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices, ProjectXsAdvanceCounter
 from auto_bdsp_rng.automation.auto_rng.search import (
@@ -693,6 +693,7 @@ class MainWindow(QMainWindow):
     autoHistoryEvent = Signal(str, object)
     ocrRegionSelected = Signal(str, object)
     ocrWarmupFinished = Signal(bool, str)
+    ocrFullTestFinished = Signal(bool, str)
     uiCallRequested = Signal(object, object, object, object)
 
     def __init__(self) -> None:
@@ -713,6 +714,7 @@ class MainWindow(QMainWindow):
         self._ocr_selection_field: str | None = None
         self._ocr_settings_dialog: OcrSettingsDialog | None = None
         self._ocr_warmup_running = False
+        self._ocr_full_test_running = False
         self._selection_mode: str | None = None
         self._resume_preview_after_selection = False
         self._resume_preview_after_capture = False
@@ -2497,8 +2499,10 @@ class MainWindow(QMainWindow):
             dialog.regionSelectionRequested.connect(self.start_ocr_region_selection)
             dialog.regionDisplayRequested.connect(self._show_ocr_region_overlay)
             dialog.warmupRequested.connect(self._start_ocr_warmup)
+            dialog.fullTestRequested.connect(self._start_ocr_full_test)
             self.ocrRegionSelected.connect(dialog.set_region)
             self.ocrWarmupFinished.connect(dialog.finish_warmup)
+            self.ocrFullTestFinished.connect(dialog.finish_full_test)
             self._ocr_settings_dialog = dialog
         self._ocr_settings_dialog.show()
         self._ocr_settings_dialog.raise_()
@@ -2550,6 +2554,48 @@ class MainWindow(QMainWindow):
                 self.ocrWarmupFinished.emit(True, "OCR预热完成")
             finally:
                 self._ocr_warmup_running = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _set_ocr_test_result_on_ui(self, field: str, text: str) -> None:
+        dialog = self._ocr_settings_dialog
+        if dialog is not None:
+            dialog.set_recognition_result(field, text)
+
+    def _start_ocr_full_test(self) -> None:
+        if self._ocr_full_test_running:
+            return
+        self._ocr_full_test_running = True
+
+        def worker() -> None:
+            try:
+                import time
+
+                regions = self._ocr_region_config()
+                notes_frame = self._call_on_ui_thread(self._current_preview_frame_for_ocr)
+                for field in NOTE_REGION_FIELDS:
+                    region = regions.get(field)
+                    if region is None:
+                        continue
+                    text = recognize_ocr_field(notes_frame, field, region)
+                    self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
+
+                self._send_easycon_right()
+                time.sleep(2.0)
+
+                stats_frame = self._call_on_ui_thread(lambda: capture_preview_frame(self._config_from_form().capture))
+                for field in STAT_REGION_FIELDS:
+                    region = regions.get(field)
+                    if region is None:
+                        continue
+                    text = recognize_ocr_field(stats_frame, field, region)
+                    self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
+            except Exception as exc:
+                self.ocrFullTestFinished.emit(False, f"测试全部失败: {exc}")
+            else:
+                self.ocrFullTestFinished.emit(True, "测试全部完成")
+            finally:
+                self._ocr_full_test_running = False
 
         threading.Thread(target=worker, daemon=True).start()
 

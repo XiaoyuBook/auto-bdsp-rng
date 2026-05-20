@@ -19,8 +19,10 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
     OCR_REGION_FIELDS,
     OCR_REGION_LABELS,
+    NOTE_REGION_FIELDS,
     OcrRegion,
     OcrRegionConfig,
+    STAT_REGION_FIELDS,
 )
 
 
@@ -37,6 +39,7 @@ class OcrSettingsDialog(QDialog):
     regionSelectionRequested = Signal(str)
     regionDisplayRequested = Signal(str, object)
     warmupRequested = Signal()
+    fullTestRequested = Signal()
 
     def __init__(
         self,
@@ -96,13 +99,13 @@ class OcrSettingsDialog(QDialog):
         actions.addStretch(1)
         test_current = QPushButton("测试当前项")
         test_current.clicked.connect(self._test_first_configured)
-        test_all = QPushButton("测试全部")
-        test_all.clicked.connect(self.test_all)
+        self.test_all_button = QPushButton("测试全部")
+        self.test_all_button.clicked.connect(self.test_all)
         defaults = QPushButton("导入默认区域")
         defaults.clicked.connect(self.import_default_regions)
         close_button = QPushButton("关闭")
         close_button.clicked.connect(self.close)
-        for button in (test_current, test_all, defaults, close_button):
+        for button in (test_current, self.test_all_button, defaults, close_button):
             actions.addWidget(button)
         layout.addLayout(actions)
 
@@ -186,6 +189,9 @@ class OcrSettingsDialog(QDialog):
             text = f"失败: {exc}"
         self.table.item(self._field_rows[field], 4).setText(text or "空")
 
+    def set_recognition_result(self, field: str, text: str) -> None:
+        self.table.item(self._field_rows[field], 4).setText(text or "空")
+
     def start_warmup(self) -> None:
         self.warmup_button.setEnabled(False)
         self.warmup_button.setText("预热中…")
@@ -198,9 +204,20 @@ class OcrSettingsDialog(QDialog):
         self.warmup_status.setText(message)
 
     def test_all(self) -> None:
-        for field in OCR_REGION_FIELDS:
+        self.test_all_button.setEnabled(False)
+        self.test_all_button.setText("测试中…")
+        for field in NOTE_REGION_FIELDS + STAT_REGION_FIELDS:
             if self.region_config.get(field) is not None:
-                self.recognize_field(field)
+                self.table.item(self._field_rows[field], 4).setText("等待中")
+        self.fullTestRequested.emit()
+
+    def finish_full_test(self, success: bool, message: str) -> None:
+        self.test_all_button.setEnabled(True)
+        self.test_all_button.setText("测试全部")
+        if not success:
+            for field in OCR_REGION_FIELDS:
+                if self.table.item(self._field_rows[field], 4).text() == "等待中":
+                    self.table.item(self._field_rows[field], 4).setText(message)
 
     def _test_first_configured(self) -> None:
         for field in OCR_REGION_FIELDS:

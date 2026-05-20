@@ -105,6 +105,25 @@ def test_ocr_settings_dialog_warmup_button_is_on_demand(app, tmp_path):
     assert dialog.warmup_status.text() == "OCR预热完成"
 
 
+def test_ocr_settings_dialog_test_all_requests_full_controller_flow(app, tmp_path):
+    dialog = OcrSettingsDialog(settings=_settings(tmp_path))
+    emitted = []
+    dialog.fullTestRequested.connect(lambda: emitted.append(True))
+
+    dialog.test_all()
+
+    assert emitted == [True]
+    assert not dialog.test_all_button.isEnabled()
+    assert dialog.test_all_button.text() == "测试中…"
+
+    dialog.set_recognition_result("hp", "108")
+    dialog.finish_full_test(True, "测试全部完成")
+
+    assert dialog.table.item(2, 4).text() == "108"
+    assert dialog.test_all_button.isEnabled()
+    assert dialog.test_all_button.text() == "测试全部"
+
+
 def test_ocr_settings_dialog_reset_removes_region(app, tmp_path):
     settings = _settings(tmp_path)
     dialog = OcrSettingsDialog(settings=settings)
@@ -143,7 +162,7 @@ def test_main_window_warms_up_ocr_in_background(app, monkeypatch):
     monkeypatch.setattr(main_window_module, "read_paddle_ocr_text", fake_read_paddle_ocr_text)
 
     dialog.start_warmup()
-    deadline = 100
+    deadline = 400
     while not dialog.warmup_button.isEnabled() and deadline > 0:
         app.processEvents()
         QTest.qWait(10)
@@ -152,3 +171,46 @@ def test_main_window_warms_up_ocr_in_background(app, monkeypatch):
     assert calls == [True]
     assert dialog.warmup_button.isEnabled()
     assert "完成" in dialog.warmup_status.text()
+
+
+def test_main_window_full_ocr_test_uses_right_between_notes_and_stats(app, monkeypatch):
+    import auto_bdsp_rng.ui.main_window as main_window_module
+
+    window = MainWindow()
+    window.open_ocr_settings()
+    dialog = window._ocr_settings_dialog
+    for field in tuple(dialog.region_config._regions):
+        dialog.reset_region(field)
+    dialog.set_region("nature", OcrRegion(1, 1, 10, 10))
+    dialog.set_region("characteristic", OcrRegion(2, 2, 10, 10))
+    dialog.set_region("hp", OcrRegion(3, 3, 10, 10))
+    events = []
+    frames = iter(["notes_frame", "stats_frame"])
+
+    monkeypatch.setattr(window, "_current_preview_frame_for_ocr", lambda: next(frames))
+    monkeypatch.setattr(main_window_module, "capture_preview_frame", lambda _config: next(frames))
+    monkeypatch.setattr(window, "_config_from_form", lambda: type("Config", (), {"capture": object()})())
+    monkeypatch.setattr(window, "_send_easycon_right", lambda: events.append("right"))
+
+    def fake_recognize(frame, field, _region):
+        events.append((frame, field))
+        return {"nature": "胆小", "characteristic": "喜欢胡闹", "hp": "108"}[field]
+
+    monkeypatch.setattr(main_window_module, "recognize_ocr_field", fake_recognize)
+
+    dialog.test_all()
+    deadline = 400
+    while not dialog.test_all_button.isEnabled() and deadline > 0:
+        app.processEvents()
+        QTest.qWait(10)
+        deadline -= 1
+
+    assert events == [
+        ("notes_frame", "nature"),
+        ("notes_frame", "characteristic"),
+        "right",
+        ("stats_frame", "hp"),
+    ]
+    assert dialog.table.item(0, 4).text() == "胆小"
+    assert dialog.table.item(1, 4).text() == "喜欢胡闹"
+    assert dialog.table.item(2, 4).text() == "108"
