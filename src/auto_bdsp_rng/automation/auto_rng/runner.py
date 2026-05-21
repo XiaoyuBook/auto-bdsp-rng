@@ -307,6 +307,7 @@ class AutoRngRunner:
         self._seed_result: AutoRngSeedResult | None = None
         self._locked_target: AutoRngTarget | None = None
         self._missed_target_advance: int | None = None
+        self._last_search_was_missed: bool = False
         self._requested_advances = 0
         self._completed_loops = 0
         self._cycle_started = False
@@ -419,6 +420,11 @@ class AutoRngRunner:
         if sync_enabled and self.config.sync_nature:
             nature_idx = _nature_index(self.config.sync_nature)
         was_missed = self._missed_target_advance is not None
+        was_exit_reseed_overrun = (
+            seed.after_exit_reseed
+            and self._locked_target is not None
+            and seed.current_advances >= self._locked_target.raw_target_advances
+        )
 
         # 双重搜索：仅在有体型筛选时同时查询同步/非同步两张表
         # 无体型筛选时根据同步模式只查一张表
@@ -470,6 +476,7 @@ class AutoRngRunner:
                 reachable_flags.append(sync_flags[i])
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
+            self._last_search_was_missed = was_missed
             self._history("cycle_result", False, None, None, None)
             self._cycle_started = False
             if self.config.loop_mode == "infinite":
@@ -483,6 +490,7 @@ class AutoRngRunner:
             return
         self._locked_target = decision.target
         self._missed_target_advance = None
+        self._last_search_was_missed = was_missed or was_exit_reseed_overrun
         # 判断目标是否需要切换同步状态
         locked_adv = decision.target.raw_target_advances if decision.target else 0
         locked_idx = next((i for i, c in enumerate(reachable) if getattr(c, "advances", 0) == locked_adv), 0)
@@ -550,6 +558,29 @@ class AutoRngRunner:
             fixed_flash_frames=self._fixed_flash_frames(),
             max_wait_frames=self.config.max_wait_frames,
         )
+        if (
+            seed.after_exit_reseed
+            and self._last_search_was_missed
+            and decision.kind == AutoRngDecisionKind.RUN_ADVANCE_SCRIPT
+            and (decision.requested_advances or 0) > self.config.reseed_threshold_frames
+        ):
+            self._reserved_exit_reseed_pending = False
+            self._exit_reseed_done = False
+            self._last_search_was_missed = False
+            self._missed_target_advance = None
+            self._locked_target = None
+            self._need_init_reset = True
+            self._set_progress(
+                AutoRngPhase.RUN_SEED_SCRIPT,
+                f"过场后已错过目标，新目标需过 {decision.requested_advances} 帧，超过重测阈值 {self.config.reseed_threshold_frames}，进入下一轮测种",
+                locked_target=None,
+                raw_target_advances=decision.raw_target_advances,
+                fixed_delay=decision.fixed_delay,
+                trigger_advances=decision.trigger_advances,
+                current_advances=decision.current_advances,
+                remaining_to_trigger=decision.remaining_to_trigger,
+            )
+            return
         decision = self._apply_exit_reseed_strategy(decision)
         self._requested_advances = decision.requested_advances or 0
         self._set_progress_from_decision(decision)

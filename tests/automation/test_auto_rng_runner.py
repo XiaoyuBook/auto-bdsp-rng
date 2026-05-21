@@ -350,6 +350,50 @@ def test_runner_enters_exit_reseed_when_reidentified_remaining_is_within_reserve
     assert runner.progress.remaining_to_trigger == 286
 
 
+def test_runner_restarts_seed_script_after_exit_reseed_miss_when_next_target_exceeds_reseed_threshold(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    exit_script = tmp_path / "exit.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    exit_script.write_text("EXIT\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+    searches = iter([
+        [FakeState(11_788)],
+        [FakeState(1_012_000)],
+    ])
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=11_004),
+        search_candidates=lambda _seed: next(searches),
+        reidentify=lambda seed: AutoRngSeedResult(seed=seed.seed, current_advances=11_442),
+        reidentify_exit=lambda seed: AutoRngSeedResult(seed=seed.seed, current_advances=12_000, npc=1),
+        run_script_text=lambda text, name: scripts.append((name, text)),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            exit_script_path=exit_script,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=0,
+            max_wait_frames=300,
+            reseeding_threshold=10_000,
+            reseed_threshold_frames=900_000,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=11)
+
+    assert (exit_script.name, "EXIT\n") in scripts
+    assert (seed_script.name, "SEED\n") in scripts
+    assert all(text != f"{AUTO_ADVANCE_PARAMETER} = 999940\n" for _name, text in scripts)
+
+
 def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"
