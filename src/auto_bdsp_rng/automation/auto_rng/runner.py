@@ -639,7 +639,7 @@ class AutoRngRunner:
             raise RuntimeError("过场 Reidentify 服务未配置")
         seed = self._require_seed()
         self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
-        self._seed_result = self._with_measurement_time(service(seed))
+        self._seed_result = replace(self._with_measurement_time(service(seed)), after_exit_reseed=True)
         self._reset_advance_counter(self._seed_result)
         self._reserved_exit_reseed_pending = False
         self._exit_reseed_done = True

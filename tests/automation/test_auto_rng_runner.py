@@ -309,6 +309,8 @@ def test_runner_exit_reseed_runs_exit_script_and_zeroes_underground_advance(tmp_
 
     assert (exit_script.name, "B 100\n") in scripts
     assert exit_reidentify_calls
+    assert runner._seed_result is not None
+    assert runner._seed_result.after_exit_reseed is True
     assert (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 10000\n$地下过帧 = 0\n") in scripts
 
 

@@ -3469,6 +3469,8 @@ class MainWindow(QMainWindow):
 
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             self._capture_cancel.clear()
+            source_config = exit_tracking_config if seed_result.after_exit_reseed else tracking_config
+            source_npc = 1 if source_config.reidentify_1_pk_npc else source_config.npc
 
             def store_frame(frame: object) -> None:
                 self.autoCaptureFrameChanged.emit(frame)
@@ -3489,7 +3491,7 @@ class MainWindow(QMainWindow):
             else:
                 search_min = 0
             observation = capture_player_blinks(
-                reidentify_capture_for(tracking_config),
+                reidentify_capture_for(source_config),
                 should_stop=self._capture_cancel.is_set,
                 frame_callback=store_frame,
                 progress_callback=store_progress,
@@ -3498,7 +3500,7 @@ class MainWindow(QMainWindow):
             result = reidentify_from_observation_for(
                 state32_from_result(seed_result),
                 observation,
-                tracking_config,
+                source_config,
                 search_min=search_min,
                 search_max=search_max,
             )
@@ -3506,7 +3508,7 @@ class MainWindow(QMainWindow):
             offset_time = float(getattr(observation, "offset_time", 0.0) or 0.0)
             if offset_time > 0:
                 elapsed_seconds = max(0, round(time.perf_counter() - offset_time))
-            elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
+            elapsed_advances = elapsed_seconds * (source_npc + 1)
             current_advances = result.advances + elapsed_advances
             # 校验 reidentify 结果与预期的偏差
             if hint is not None and abs(current_advances - hint) > 20_000:
@@ -3519,9 +3521,10 @@ class MainWindow(QMainWindow):
             reidentified = AutoRngSeedResult(
                 seed=seed_result.seed,
                 current_advances=current_advances,
-                npc=tracking_config.npc,
+                npc=source_npc,
                 seed_text=seed_result.seed_text,
                 measured_at=time.monotonic(),
+                after_exit_reseed=seed_result.after_exit_reseed,
             )
             self.autoSeedCaptured.emit(reidentified)
             self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))

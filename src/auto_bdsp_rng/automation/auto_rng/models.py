@@ -91,6 +91,7 @@ class AutoRngSeedResult:
     seed_text: str = ""
     measured_at: float | None = None
     expected_advances_hint: int | None = None
+    after_exit_reseed: bool = False
 
 
 @dataclass(frozen=True)

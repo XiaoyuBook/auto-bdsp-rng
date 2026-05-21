@@ -1299,6 +1299,71 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     assert not window._advance_timer.isActive()
 
 
+def test_main_window_auto_rng_reidentify_after_exit_uses_reidentify_config(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    observation = SimpleNamespace(offset_time=100.0)
+    loaded: list[tuple[str, int]] = []
+    capture_counts: list[int] = []
+    normal_calls: list[SeedState32] = []
+    noisy_calls: list[SeedState32] = []
+
+    def fake_load_config(path, blink_count):
+        loaded.append((str(path), blink_count))
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 1, 1),
+                blink_count=blink_count,
+            ),
+            npc=7,
+        )
+
+    def fake_capture(config, *_args, **_kwargs):
+        capture_counts.append(config.blink_count)
+        return observation
+
+    def fake_reidentify(current_state, _observation, **_kwargs):
+        normal_calls.append(current_state)
+        return ProjectXsReidentifyResult(state=current_state, observation=observation, advances=42)
+
+    def fake_noisy(current_state, _observation, **_kwargs):
+        noisy_calls.append(current_state)
+        return ProjectXsReidentifyResult(state=current_state, observation=observation, advances=42)
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation", fake_reidentify)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation_noisy", fake_noisy)
+    monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 105.0)
+
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_config_path=str(tmp_path / "seed.json"),
+            reidentify_config_path=str(tmp_path / "exit.json"),
+        )
+    )
+
+    result = services.reidentify(
+        AutoRngSeedResult(
+            seed=SeedPair64(0x1111111122222222, 0x3333333344444444),
+            after_exit_reseed=True,
+        )
+    )
+
+    assert loaded == [
+        (str(tmp_path / "seed.json"), 40),
+        (str(tmp_path / "exit.json"), 20),
+    ]
+    assert capture_counts == [20]
+    assert normal_calls == []
+    assert noisy_calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
+    assert result.current_advances == 52
+    assert result.npc == 1
+    assert result.after_exit_reseed is True
+
+
 def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_path, monkeypatch):
     window = MainWindow()
     observation = SimpleNamespace(offset_time=100.0)
