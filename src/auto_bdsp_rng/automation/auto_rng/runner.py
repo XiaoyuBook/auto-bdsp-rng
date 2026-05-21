@@ -592,8 +592,7 @@ class AutoRngRunner:
         if reserve <= 0:
             return decision
         remaining = decision.remaining_to_trigger
-        after_advance_measurement = self._reserved_exit_reseed_pending or self._requested_advances > 0
-        if not self._exit_reseed_done and after_advance_measurement and remaining is not None and 0 < remaining <= reserve:
+        if not self._exit_reseed_done and remaining is not None and 0 < remaining <= reserve:
             self._reserved_exit_reseed_pending = False
             return replace(
                 decision,
