@@ -309,6 +309,7 @@ class AutoRngRunner:
         self._missed_target_advance: int | None = None
         self._last_search_was_missed: bool = False
         self._requested_advances = 0
+        self._seed_capture_failures = 0
         self._completed_loops = 0
         self._cycle_started = False
         self._all_candidates: list[object] = []  # 本轮所有候选
@@ -402,7 +403,17 @@ class AutoRngRunner:
             self.history_callback(event, args)
 
     def _capture_seed(self) -> None:
-        self._seed_result = self._with_measurement_time(self.services.capture_seed())
+        try:
+            self._seed_result = self._with_measurement_time(self.services.capture_seed())
+        except Exception as exc:
+            self._seed_capture_failures += 1
+            if self._seed_capture_failures >= 5:
+                raise RuntimeError(f"连续 5 次 seed 捕获失败，自动流程停止: {exc}") from exc
+            self._restart_from_seed_script(
+                f"seed 捕获失败（连续 {self._seed_capture_failures}/5）: {exc}，进入下一轮测种"
+            )
+            return
+        self._seed_capture_failures = 0
         seed = self._seed_result
         self._reset_advance_counter(seed)
         self._history("seed_captured", seed.seed_text, seed.current_advances, seed.npc, self.config.max_advances)
@@ -647,7 +658,11 @@ class AutoRngRunner:
         # 传递预期位置提示，用于约束 reidentify 搜索范围
         hint = seed.current_advances + self._requested_advances if self._requested_advances else None
         seed_with_hint = seed if hint is None else replace(seed, expected_advances_hint=hint)
-        self._seed_result = self._with_measurement_time(self.services.reidentify(seed_with_hint))
+        try:
+            self._seed_result = self._with_measurement_time(self.services.reidentify(seed_with_hint))
+        except Exception as exc:
+            self._restart_from_seed_script(f"reidentify 失败: {exc}，进入下一轮测种")
+            return
         self._reset_advance_counter(self._seed_result)
         new_advances = self._seed_result.current_advances
         actual_advance = new_advances - prev_advances
@@ -669,7 +684,11 @@ class AutoRngRunner:
             raise RuntimeError("过场 Reidentify 服务未配置")
         seed = self._require_seed()
         self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
-        self._seed_result = replace(self._with_measurement_time(service(seed)), after_exit_reseed=True)
+        try:
+            self._seed_result = replace(self._with_measurement_time(service(seed)), after_exit_reseed=True)
+        except Exception as exc:
+            self._restart_from_seed_script(f"过场 reidentify 失败: {exc}，进入下一轮测种")
+            return
         self._reset_advance_counter(self._seed_result)
         self._reserved_exit_reseed_pending = False
         self._exit_reseed_done = True
@@ -1045,6 +1064,19 @@ class AutoRngRunner:
         if seed_result.measured_at is not None:
             return seed_result
         return replace(seed_result, measured_at=self.services.monotonic())
+
+    def _restart_from_seed_script(self, message: str) -> None:
+        self._seed_result = None
+        self._locked_target = None
+        self._missed_target_advance = None
+        self._last_search_was_missed = False
+        self._requested_advances = 0
+        self._reserved_exit_reseed_pending = False
+        self._exit_reseed_done = False
+        self._need_sync_switch = False
+        self._need_init_reset = True
+        self._cycle_started = False
+        self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, message, locked_target=None)
 
     def _reset_advance_counter(self, seed_result: AutoRngSeedResult) -> None:
         self._advance_counter.reset(

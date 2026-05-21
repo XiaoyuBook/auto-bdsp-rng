@@ -616,6 +616,121 @@ def test_runner_starts_by_running_seed_script_before_capture(tmp_path):
     assert events == ["script:BDSP测种.txt", "capture"]
 
 
+def test_runner_reidentify_failure_restarts_seed_script_in_infinite_loop(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+
+    def reidentify(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        raise RuntimeError("Project_Xs reidentify failed")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            loop_mode="infinite",
+            fixed_delay=100,
+            max_wait_frames=300,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+            search_candidates=lambda _seed: [FakeState(1_000)],
+            reidentify=reidentify,
+            run_script_text=lambda text, name: scripts.append((name, text)),
+        ),
+    )
+
+    runner.run(max_steps=7)
+
+    assert scripts == [
+        (seed_script.name, "SEED\n"),
+        (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 840\n"),
+        (seed_script.name, "SEED\n"),
+    ]
+    assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+
+
+def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    hit_script = tmp_path / "hit.txt"
+    exit_script = tmp_path / "exit.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    exit_script.write_text("EXIT\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+
+    def reidentify_exit(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        raise RuntimeError("Project_Xs reidentify failed")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            exit_script_path=exit_script,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            loop_mode="infinite",
+            fixed_delay=0,
+            reseeding_threshold=10_000,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+            search_candidates=lambda _seed: [FakeState(5_000)],
+            reidentify_exit=reidentify_exit,
+            run_script_text=lambda text, name: scripts.append((name, text)),
+        ),
+    )
+
+    runner.run(max_steps=5)
+
+    assert scripts == [
+        (exit_script.name, "EXIT\n"),
+        (seed_script.name, "SEED\n"),
+    ]
+    assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+
+
+def test_runner_retries_seed_capture_failures_until_fifth_failure(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    scripts: list[str] = []
+    attempts = 0
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("Project_Xs seed capture failed")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            loop_mode="infinite",
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            run_script_text=lambda _text, name: scripts.append(name),
+        ),
+    )
+
+    try:
+        runner.run(max_steps=10)
+    except RuntimeError as exc:
+        error = str(exc)
+    else:
+        raise AssertionError("expected fifth seed capture failure to stop the runner")
+
+    assert attempts == 5
+    assert scripts == [seed_script.name] * 5
+    assert "连续 5 次 seed 捕获失败" in error
+
+
 def test_runner_can_start_first_cycle_from_capture_seed_then_resume_seed_script(tmp_path):
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"
