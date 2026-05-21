@@ -299,12 +299,53 @@ def _stats_have_obvious_digit_drop(stats: dict[str, int]) -> bool:
 
 # ── 笔记页提取 ────────────────────────────────────────────────────
 
+_NATURES_ZH = (
+    "勤奋",
+    "怕寂寞",
+    "勇敢",
+    "固执",
+    "顽皮",
+    "大胆",
+    "坦率",
+    "悠闲",
+    "淘气",
+    "乐天",
+    "胆小",
+    "急躁",
+    "认真",
+    "爽朗",
+    "天真",
+    "内敛",
+    "慢吞吞",
+    "冷静",
+    "害羞",
+    "马虎",
+    "温和",
+    "温顺",
+    "自大",
+    "慎重",
+    "浮躁",
+)
+
 # 性格清洗：去掉 "的性格" "性格" "。" 等后缀
 _NATURE_CLEAN = re.compile(r"的性格[。.]?$|性格[。.]?$|[。.]+$")
 
 
 def _clean_nature(text: str) -> str:
-    return _NATURE_CLEAN.sub("", text).strip()
+    cleaned = _NATURE_CLEAN.sub("", text).strip()
+    norm_text = _norm(cleaned).replace("的性格", "").replace("性格", "")
+    if not norm_text:
+        return cleaned
+    for item in _NATURES_ZH:
+        norm_item = _norm(item)
+        if norm_text == norm_item:
+            return item
+    if len(norm_text) >= 2:
+        for item in sorted(_NATURES_ZH, key=len, reverse=True):
+            norm_item = _norm(item)
+            if norm_item in norm_text or norm_text in norm_item:
+                return item
+    return cleaned
 
 
 def _clean_characteristic(text: str) -> str:

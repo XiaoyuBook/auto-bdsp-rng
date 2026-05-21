@@ -43,6 +43,18 @@ def test_clean_nature_strips_suffixes(raw, expected):
     assert _clean_nature(raw) == expected
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("怕寂", "怕寂寞"),
+        ("怕寂寞的", "怕寂寞"),
+        ("怕寂寞的性格。", "怕寂寞"),
+    ],
+)
+def test_clean_nature_matches_partial_or_extra_ocr_text(raw, expected):
+    assert _clean_nature(raw) == expected
+
+
 # ── _clean_characteristic ─────────────────────────────────────────
 
 def test_clean_characteristic_removes_trailing_punctuation():

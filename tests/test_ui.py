@@ -285,6 +285,18 @@ def test_reverse_lookup_search_span_uses_symmetric_window():
     assert _reverse_lookup_search_span(20_000, 20_000) == (10_000, 30_000, 20_000)
 
 
+def test_main_window_waits_around_right_after_notes_ocr(app, monkeypatch):
+    window = MainWindow()
+    events = []
+
+    monkeypatch.setattr(main_window_module.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
+    monkeypatch.setattr(window, "_send_easycon_right", lambda: events.append("right"))
+
+    window._pause_ocr_and_turn_to_stats_page()
+
+    assert events == [("sleep", 0.1), "right", ("sleep", 0.1)]
+
+
 def test_auto_rng_nature_map_matches_ui_nature_order():
     assert [_NATURE_MAP[name] for name in NATURES_ZH] == list(range(25))
     assert _NATURE_MAP["温顺"] == 21

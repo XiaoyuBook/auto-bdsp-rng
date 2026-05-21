@@ -3724,14 +3724,7 @@ class MainWindow(QMainWindow):
             log(f"[自动反查] 性格={nature}, 个性={characteristic}")
 
             # RIGHT → 能力页
-            script_text = "RIGHT 200\n"
-            if self.easycon_tab._is_bridge_mode():
-                self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, "reverse_right")
-            else:
-                port = self.easycon_tab.port_combo.currentText()
-                if port:
-                    from auto_bdsp_rng.automation.easycon import CliEasyConBackend
-                    CliEasyConBackend().run_script_text(script_text, "reverse_right", port=port)
+            self._pause_ocr_and_turn_to_stats_page()
             time.sleep(2.0)
 
             # 能力值 → 个体值 反算（用到的辅助函数只定义一次）
@@ -3969,7 +3962,7 @@ class MainWindow(QMainWindow):
 
         # 2) 发送 RIGHT 切换页面
         try:
-            self._send_easycon_right()
+            self._pause_ocr_and_turn_to_stats_page()
         except Exception as exc:
             log(f"[捕获精灵信息] 发送 RIGHT 指令失败: {exc}")
             return
@@ -4020,6 +4013,11 @@ class MainWindow(QMainWindow):
             cli = CliEasyConBackend()
             result = cli.run_script_text(script_text, "right_press", port=port)
             log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:150] if result.stdout else '无'}")
+
+    def _pause_ocr_and_turn_to_stats_page(self) -> None:
+        time.sleep(0.1)
+        self._send_easycon_right()
+        time.sleep(0.1)
 
     def _advance_tick(self) -> None:
         self._refresh_tracked_advances_from_clock()
