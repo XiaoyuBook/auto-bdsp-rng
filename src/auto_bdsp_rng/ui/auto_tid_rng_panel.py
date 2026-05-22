@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QFont, QGuiApplication
+from PySide6.QtGui import QAction, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -203,7 +203,15 @@ class AutoTidRngPanel(QWidget):
         self.start_button.setObjectName("PrimaryButton")
         self.start_button.setFixedHeight(34)
         self.start_button.setMinimumWidth(88)
+        self.start_menu = QMenu(self.start_button)
+        self.start_from_seed_action = QAction("从测种脚本开始", self.start_button)
+        self.start_from_capture_action = QAction("从捕获 Seed 开始", self.start_button)
+        self.start_menu.addAction(self.start_from_seed_action)
+        self.start_menu.addAction(self.start_from_capture_action)
+        self.start_button.setMenu(self.start_menu)
         self.start_button.clicked.connect(self._start_clicked)
+        self.start_from_seed_action.triggered.connect(self._start_clicked)
+        self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("DangerButton")
         self.stop_button.setFixedHeight(34)
@@ -422,7 +430,7 @@ class AutoTidRngPanel(QWidget):
     def target_tids(self) -> tuple[int, ...]:
         return self.target_display_tids()
 
-    def build_config(self) -> AutoTidRngConfig:
+    def build_config(self, *, start_phase: AutoTidRngPhase = AutoTidRngPhase.RUN_SEED_SCRIPT) -> AutoTidRngConfig:
         target_display_tids = self.target_display_tids()
         if not target_display_tids:
             raise ValueError("请至少添加一个目标 Display TID")
@@ -431,6 +439,7 @@ class AutoTidRngPanel(QWidget):
             seed_script_path=self._selected_path(self.seed_script_combo),
             name_script_path=self._selected_path(self.name_script_combo),
             reverse_id_script_path=self._selected_path(self.reverse_id_script_combo),
+            start_phase=start_phase,
             frame_threshold=self.frame_threshold.value(),
             target_display_tids=target_display_tids,
             delay=self.delay.value(),
@@ -576,9 +585,15 @@ class AutoTidRngPanel(QWidget):
         self.start_button.setEnabled(True)
 
     def _start_clicked(self) -> None:
+        self._start_with_phase(AutoTidRngPhase.RUN_SEED_SCRIPT)
+
+    def _start_from_capture_clicked(self) -> None:
+        self._start_with_phase(AutoTidRngPhase.CAPTURE_TIDSID)
+
+    def _start_with_phase(self, start_phase: AutoTidRngPhase) -> None:
         self._save_panel_state()
         try:
-            config = self.build_config()
+            config = self.build_config(start_phase=start_phase)
             self._validate_config(config)
         except Exception as exc:
             self.status_badge.setText("状态：配置错误")
@@ -592,11 +607,16 @@ class AutoTidRngPanel(QWidget):
         self.stopRequested.emit()
 
     def _validate_config(self, config: AutoTidRngConfig) -> None:
-        if config.seed_script_path is None:
+        if config.start_phase == AutoTidRngPhase.RUN_SEED_SCRIPT and config.seed_script_path is None:
             raise ValueError("请选择测种脚本")
         if config.name_script_path is None:
             raise ValueError("请选择取名脚本")
-        for path in (config.seed_script_path, config.name_script_path):
+        paths = [config.name_script_path]
+        if config.start_phase == AutoTidRngPhase.RUN_SEED_SCRIPT:
+            paths.append(config.seed_script_path)
+        for path in paths:
+            if path is None:
+                continue
             path.read_text(encoding="utf-8")
 
     def _selected_path(self, combo: QComboBox) -> Path | None:

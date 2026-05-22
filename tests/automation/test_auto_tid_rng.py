@@ -137,6 +137,41 @@ def test_auto_tid_runner_waits_until_display_tid_target_then_runs_name_script(tm
     assert sleeps
 
 
+def test_auto_tid_runner_can_start_from_capture_seed(tmp_path: Path) -> None:
+    seed_script = tmp_path / "BDSP娴嬬.txt"
+    name_script = tmp_path / "鍙栧悕.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    name_script.write_text("B 100\n", encoding="utf-8")
+    scripts: list[str] = []
+
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            name_script_path=name_script,
+            frame_threshold=300,
+            target_display_tids=(123456,),
+            delay=0,
+            start_phase=AutoTidRngPhase.CAPTURE_TIDSID,
+        ),
+        services=AutoTidRngServices(
+            capture_seed=lambda: AutoTidSeedResult(seed=SeedPair64(1, 2), measured_at=10.0),
+            search_id_states=lambda _seed, _threshold, _targets: [
+                IDState8(advances=0, tid=1, sid=100, tsv=0, display_tid=123456)
+            ],
+            run_script_text=lambda _text, name: scripts.append(name),
+            monotonic=lambda: 10.0,
+            sleep=lambda _seconds: None,
+        ),
+    )
+
+    runner.run(max_steps=10)
+
+    assert scripts == ["鍙栧悕.txt"]
+    assert runner.progress.phase == AutoTidRngPhase.COMPLETED
+    assert runner.progress.loop_index == 1
+
+
 def test_auto_tid_runner_waits_with_project_xs_munchlax_timing(tmp_path: Path) -> None:
     seed_script = tmp_path / "BDSP测种.txt"
     name_script = tmp_path / "取名.txt"

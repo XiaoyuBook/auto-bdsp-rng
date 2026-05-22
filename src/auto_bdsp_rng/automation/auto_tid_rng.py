@@ -116,6 +116,7 @@ class AutoTidRngConfig:
     seed_script_path: Path | None = None
     name_script_path: Path | None = None
     reverse_id_script_path: Path | None = None
+    start_phase: AutoTidRngPhase = AutoTidRngPhase.RUN_SEED_SCRIPT
     frame_threshold: int = 300
     target_tids: tuple[int, ...] = ()
     target_display_tids: tuple[int, ...] = ()
@@ -311,7 +312,10 @@ class AutoTidRngRunner:
 
     def run(self, *, max_steps: int = 10000) -> AutoTidRngProgress:
         if self.progress.phase == AutoTidRngPhase.IDLE:
-            self._begin_cycle("开始自动 TID 乱数，运行测种脚本")
+            if self.config.start_phase == AutoTidRngPhase.CAPTURE_TIDSID:
+                self._begin_cycle("开始自动 TID 乱数，从捕获 Seed 开始", phase=AutoTidRngPhase.CAPTURE_TIDSID)
+            else:
+                self._begin_cycle("开始自动 TID 乱数，运行测种脚本")
         steps = 0
         while not self._stop_requested and steps < max_steps:
             steps += 1
@@ -338,10 +342,10 @@ class AutoTidRngRunner:
                 break
         return self.progress
 
-    def _begin_cycle(self, message: str) -> None:
+    def _begin_cycle(self, message: str, *, phase: AutoTidRngPhase = AutoTidRngPhase.RUN_SEED_SCRIPT) -> None:
         self._completed_loops += 1
         self._target = None
-        self._set_progress(AutoTidRngPhase.RUN_SEED_SCRIPT, message, loop_index=self._completed_loops)
+        self._set_progress(phase, message, loop_index=self._completed_loops)
 
     def _loop_or_complete(self, message: str) -> None:
         self._begin_cycle(message)

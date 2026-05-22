@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
-from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig
+from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase
 from auto_bdsp_rng.gen8_id import IDState8
 from auto_bdsp_rng.rng_core import SeedState32
 from auto_bdsp_rng.ui import MainWindow
@@ -37,6 +37,7 @@ def test_auto_tid_panel_builds_config_with_target_list(app, tmp_path: Path) -> N
     for path in (seed_script, name_script):
         path.write_text("A 100\n", encoding="utf-8")
     panel = AutoTidRngPanel(script_dir=tmp_path)
+    panel.target_list.clear()
     panel.frame_threshold.setValue(300)
     panel.delay.setValue(20)
     panel.add_target_display_tid(1)
@@ -52,6 +53,24 @@ def test_auto_tid_panel_builds_config_with_target_list(app, tmp_path: Path) -> N
     assert config.target_display_tids == (1, 222222)
     assert config.seed_script_path == seed_script
     assert config.name_script_path == name_script
+
+
+def test_auto_tid_panel_can_start_from_capture_seed_via_menu(app, tmp_path: Path) -> None:
+    seed_script = tmp_path / "BDSP娴嬬.txt"
+    name_script = tmp_path / "鍙栧悕.txt"
+    for path in (seed_script, name_script):
+        path.write_text("A 100\n", encoding="utf-8")
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    panel.add_target_display_tid(123456)
+    panel.seed_script_combo.setCurrentIndex(panel.seed_script_combo.findText(seed_script.name))
+    panel.name_script_combo.setCurrentIndex(panel.name_script_combo.findText(name_script.name))
+    emitted: list[AutoTidRngConfig] = []
+    panel.startRequested.connect(emitted.append)
+
+    panel.start_from_capture_action.trigger()
+
+    assert emitted
+    assert emitted[-1].start_phase == AutoTidRngPhase.CAPTURE_TIDSID
 
 
 def test_auto_tid_panel_replaces_log_with_operable_id_table(app, tmp_path: Path) -> None:
