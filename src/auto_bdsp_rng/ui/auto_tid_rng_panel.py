@@ -211,6 +211,7 @@ class AutoTidRngPanel(QWidget):
         self.start_menu.addAction(self.start_from_seed_action)
         self.start_menu.addAction(self.start_from_capture_action)
         self.start_button.setMenu(self.start_menu)
+        self.start_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.start_button.clicked.connect(self._start_clicked)
         self.start_from_seed_action.triggered.connect(self._start_clicked)
         self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)

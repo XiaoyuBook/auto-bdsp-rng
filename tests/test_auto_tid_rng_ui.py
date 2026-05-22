@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication, QListView
+from PySide6.QtWidgets import QApplication, QListView, QToolButton
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
@@ -71,6 +71,14 @@ def test_auto_tid_panel_can_start_from_capture_seed_via_menu(app, tmp_path: Path
 
     assert emitted
     assert emitted[-1].start_phase == AutoTidRngPhase.CAPTURE_TIDSID
+
+
+def test_auto_tid_start_button_uses_split_menu_for_capture_seed(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+
+    assert panel.start_button.menu() is panel.start_menu
+    assert panel.start_button.popupMode() == QToolButton.ToolButtonPopupMode.MenuButtonPopup
+    assert panel.start_from_capture_action in panel.start_menu.actions()
 
 
 def test_auto_tid_panel_replaces_log_with_operable_id_table(app, tmp_path: Path) -> None:

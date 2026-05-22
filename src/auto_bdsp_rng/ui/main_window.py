@@ -4090,10 +4090,20 @@ class MainWindow(QMainWindow):
 
     def _advance_tick(self) -> None:
         self._refresh_tracked_advances_from_clock()
+        self._schedule_advance_timer()
 
     def _refresh_tracked_advances_from_clock(self) -> None:
         self._advance_counter.advance_to(time.monotonic())
         self._display_tracked_advances(self._advance_counter.current_advances)
+
+    def _schedule_advance_timer(self) -> None:
+        interval_ms = 1018
+        if isinstance(self._advance_counter, ProjectXsMunchlaxAdvanceCounter):
+            seconds = self._advance_counter.next_tick_at - time.monotonic()
+            interval_ms = max(1, round(seconds * 1000))
+        self._advance_timer.setInterval(interval_ms)
+        if not self._advance_timer.isActive():
+            self._advance_timer.start()
 
     def _display_tracked_advances(self, advances: int) -> None:
         self._tracked_advances = int(advances)
@@ -4411,7 +4421,7 @@ class MainWindow(QMainWindow):
         self._tracked_advances = self._advance_counter.current_advances
         self.advances_value.setText("0")
         self.timer_value.setText("0")
-        self._advance_timer.start()
+        self._schedule_advance_timer()
         if self._capture_mode == "reidentify":
             self.advances_value.setText(str(self._tracked_advances))
             self.statusBar().showMessage(self._text("seed_reidentified"))

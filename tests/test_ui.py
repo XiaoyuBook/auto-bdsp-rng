@@ -229,6 +229,47 @@ def test_tidsid_capture_starts_project_xs_munchlax_tracking(app, monkeypatch):
     assert window._advance_counter.next_tick_at == pytest.approx(100.0 + _project_xs_munchlax_interval(seed_state))
 
 
+def test_tidsid_tracking_timer_schedules_next_munchlax_blink(app, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0x01020304, 0x11121314, 0x21222324, 0x31323334)
+    now_values = iter([100.0, 100.0, 100.0])
+    monkeypatch.setattr(main_window_module.time, "monotonic", lambda: next(now_values))
+    monkeypatch.setattr(
+        main_window_module,
+        "capture_pokemon_blinks",
+        lambda config, **kwargs: SimpleNamespace(intervals=[]),
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "recover_tidsid_seed_from_observation",
+        lambda observation: SimpleNamespace(state=seed_state, observation=observation),
+    )
+    window._latest_preview_frame = object()
+
+    window.capture_tidsid_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    expected_ms = round(_project_xs_munchlax_interval(seed_state) * 1000)
+    assert window._advance_timer.interval() == expected_ms
+
+
+def test_munchlax_advance_tick_reschedules_to_following_blink(app, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0x01020304, 0x11121314, 0x21222324, 0x31323334)
+    counter = ProjectXsMunchlaxAdvanceCounter()
+    counter.reset(current_advances=0, seed=seed_state, now=100.0)
+    first_tick = counter.next_tick_at
+    window._advance_counter = counter
+    window._advance_timer.setInterval(1018)
+    monkeypatch.setattr(main_window_module.time, "monotonic", lambda: first_tick)
+
+    window._advance_tick()
+
+    assert window._tracked_advances == 1
+    assert window._advance_timer.interval() == round((counter.next_tick_at - first_tick) * 1000)
+
+
 def test_blink_parameter_spinboxes_ignore_mouse_wheel(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.project_xs_tab)
