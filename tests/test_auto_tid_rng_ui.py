@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,10 +10,13 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 
+from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig
 from auto_bdsp_rng.gen8_id import IDState8
+from auto_bdsp_rng.rng_core import SeedState32
 from auto_bdsp_rng.ui import MainWindow
+import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 
@@ -117,6 +121,44 @@ def test_main_window_starts_auto_tid_runner_from_panel_signal(app, tmp_path: Pat
 
     assert len(started) == 1
     assert started[0].config == config
+
+
+def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow()
+    loaded: list[tuple[str, int]] = []
+    captured: list[int] = []
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+
+    def fake_load_config(path, blink_count):
+        loaded.append((str(path), blink_count))
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 1, 1),
+                blink_count=blink_count,
+            ),
+        )
+
+    def fake_capture(config, **kwargs):
+        captured.append(config.blink_count)
+        kwargs["progress_callback"](config.blink_count, config.blink_count)
+        return SimpleNamespace(intervals=[])
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
+    monkeypatch.setattr(main_window_module, "capture_pokemon_blinks", fake_capture)
+    monkeypatch.setattr(
+        main_window_module,
+        "recover_tidsid_seed_from_observation",
+        lambda observation: SimpleNamespace(state=seed_state, observation=observation),
+    )
+    services = window._build_auto_tid_rng_services(AutoTidRngConfig(script_dir=tmp_path))
+
+    result = services.capture_seed()
+
+    assert loaded[-1][1] == 64
+    assert captured == [64]
+    assert result.seed == seed_state.to_seed_pair64()
 
 
 def test_main_window_tid_ocr_region_selection_confirm_emits_region(app, monkeypatch) -> None:

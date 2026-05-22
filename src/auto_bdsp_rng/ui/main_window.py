@@ -109,6 +109,7 @@ APP_TITLE = "珍钻复刻自动乱数"
 APP_DISPLAY_TITLE = f"{APP_TITLE} v{__version__}"
 APP_USER_MODEL_ID = "XiaoyuBook.auto-bdsp-rng"
 DEFAULT_BLINK_COUNT = 40
+TIDSID_BLINK_COUNT = 64
 REIDENTIFY_BLINK_COUNT = 7
 NOISY_REIDENTIFY_BLINK_COUNT = 20
 
@@ -3066,7 +3067,7 @@ class MainWindow(QMainWindow):
 
     def _build_auto_tid_rng_services(self, config: AutoTidRngConfig) -> AutoTidRngServices:
         seed_config_path = self._selected_auto_seed_config_path()
-        tracking_config = load_project_xs_config(seed_config_path, blink_count=DEFAULT_BLINK_COUNT)
+        tracking_config = load_project_xs_config(seed_config_path, blink_count=TIDSID_BLINK_COUNT)
 
         def seed_pair_from_result(seed_result: AutoTidSeedResult) -> SeedPair64:
             seed = seed_result.seed
@@ -4287,6 +4288,7 @@ class MainWindow(QMainWindow):
             return
         try:
             config = self._config_from_form()
+            config = replace(config, capture=replace(config.capture, blink_count=TIDSID_BLINK_COUNT))
         except ProjectXsIntegrationError as exc:
             self._show_error("TID/SID capture failed", exc)
             return

@@ -196,7 +196,7 @@ def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
 
-    assert calls == [(40, False, True, True)]
+    assert calls == [(64, False, True, True)]
     assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
     assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
     assert window.tidsid_button.isEnabled()
