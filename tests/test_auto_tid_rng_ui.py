@@ -8,13 +8,13 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QListView
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase
 from auto_bdsp_rng.gen8_id import IDState8
-from auto_bdsp_rng.rng_core import SeedState32
+from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
@@ -92,8 +92,36 @@ def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_
     panel = AutoTidRngPanel(script_dir=tmp_path)
 
     assert panel.target_list.maximumHeight() <= 140
+    assert panel.target_list.viewMode() == QListView.ViewMode.IconMode
+    assert panel.target_list.flow() == QListView.Flow.LeftToRight
+    assert panel.target_list.isWrapping()
     assert panel.id_table.minimumHeight() >= 320
     assert panel.id_table.horizontalHeader().stretchLastSection()
+
+
+def test_auto_tid_panel_shows_target_count_in_wrapped_target_list(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    panel.target_list.clear()
+
+    for value in range(12):
+        panel.add_target_display_tid(value)
+
+    assert panel.target_count_label.text() == "12 个目标"
+    assert panel.target_list.gridSize().width() >= 80
+    assert panel.target_list.gridSize().height() <= 36
+
+
+def test_auto_tid_panel_seed_display_generates_id_table_from_threshold(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    seed_pair = SeedPair64(0x0123456789ABCDEF, 0x0FEDCBA987654321)
+    panel.frame_threshold.setValue(4)
+
+    panel.set_tid_seed(seed_pair)
+
+    assert [box.text() for box in panel.tid_seed_inputs] == list(seed_pair.format_seeds())
+    assert panel.id_table.rowCount() == 5
+    assert panel.id_table.item(0, 0).text() == "0"
+    assert panel.id_result_count.text() == "5 条结果"
 
 
 def test_tid_ocr_dialog_is_non_modal_and_has_two_primary_actions(app, tmp_path: Path) -> None:
@@ -178,6 +206,8 @@ def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Pat
     assert loaded[-1][1] == 64
     assert captured == [64]
     assert result.seed == seed_state.to_seed_pair64()
+    assert [box.text() for box in window.auto_tid_rng_tab.tid_seed_inputs] == list(seed_state.format_seed64_pair())
+    assert window.auto_tid_rng_tab.id_table.rowCount() == window.auto_tid_rng_tab.frame_threshold.value() + 1
 
 
 def test_main_window_tid_ocr_region_selection_confirm_emits_region(app, monkeypatch) -> None:

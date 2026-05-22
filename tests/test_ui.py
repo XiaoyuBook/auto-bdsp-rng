@@ -199,6 +199,8 @@ def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     assert calls == [(64, False, True, True)]
     assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
     assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
+    assert [box.text() for box in window.auto_tid_rng_tab.tid_seed_inputs] == list(seed_state.format_seed64_pair())
+    assert window.auto_tid_rng_tab.id_table.rowCount() == window.auto_tid_rng_tab.frame_threshold.value() + 1
     assert window.tidsid_button.isEnabled()
 
 

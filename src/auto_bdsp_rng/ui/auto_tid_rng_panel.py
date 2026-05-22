@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSize, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QListView,
     QMenu,
     QPlainTextEdit,
     QPushButton,
@@ -39,7 +40,8 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_rng.scripts import DEFAULT_SEED_SCRIPT_NAME, choose_default_script, list_auto_scripts
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase, AutoTidRngProgress
-from auto_bdsp_rng.gen8_id import IDState8
+from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
+from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import resource_path
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
@@ -263,12 +265,27 @@ class AutoTidRngPanel(QWidget):
         target_layout = QVBoxLayout(target_panel)
         target_layout.setContentsMargins(12, 10, 12, 12)
         target_layout.setSpacing(8)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
         target_title = QLabel("目标 Display TID")
         target_title.setObjectName("SectionTitle")
-        target_layout.addWidget(target_title)
+        self.target_count_label = QLabel("0 个目标")
+        self.target_count_label.setObjectName("MutedLabel")
+        title_row.addWidget(target_title)
+        title_row.addStretch(1)
+        title_row.addWidget(self.target_count_label)
+        target_layout.addLayout(title_row)
         self.target_list = QListWidget()
-        self.target_list.setMinimumHeight(86)
-        self.target_list.setMaximumHeight(118)
+        self.target_list.setViewMode(QListView.ViewMode.IconMode)
+        self.target_list.setFlow(QListView.Flow.LeftToRight)
+        self.target_list.setWrapping(True)
+        self.target_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.target_list.setMovement(QListView.Movement.Static)
+        self.target_list.setSpacing(6)
+        self.target_list.setGridSize(QSize(92, 32))
+        self.target_list.setUniformItemSizes(True)
+        self.target_list.setMinimumHeight(76)
+        self.target_list.setMaximumHeight(98)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         target_layout.addWidget(self.target_list, 1)
@@ -362,6 +379,19 @@ class AutoTidRngPanel(QWidget):
 
         toolbar = QHBoxLayout()
         self.id_result_count = QLabel("0 条结果")
+        seed_bar = QHBoxLayout()
+        seed_bar.setSpacing(6)
+        self.tid_seed_inputs: list[QLineEdit] = []
+        for label_text in ("Seed0", "Seed1"):
+            label = QLabel(label_text)
+            seed_box = QLineEdit()
+            seed_box.setReadOnly(True)
+            seed_box.setFixedHeight(32)
+            seed_box.setMinimumWidth(230)
+            seed_box.setPlaceholderText("未捕获")
+            self.tid_seed_inputs.append(seed_box)
+            seed_bar.addWidget(label)
+            seed_bar.addWidget(seed_box, 1)
         self.copy_button = QPushButton("复制")
         self.copy_button.setFixedHeight(32)
         self.copy_button.setFixedWidth(72)
@@ -371,7 +401,9 @@ class AutoTidRngPanel(QWidget):
         self.export_button.setFixedWidth(88)
         self.export_button.clicked.connect(self.export_results)
         toolbar.addWidget(self.id_result_count)
-        toolbar.addStretch(1)
+        toolbar.addSpacing(18)
+        toolbar.addLayout(seed_bar, 1)
+        toolbar.addSpacing(18)
         toolbar.addWidget(self.copy_button)
         toolbar.addWidget(self.export_button)
         layout.addLayout(toolbar)
@@ -415,6 +447,7 @@ class AutoTidRngPanel(QWidget):
         item = QListWidgetItem(f"{tid:06d}")
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         self.target_list.addItem(item)
+        self._refresh_target_count()
 
     def add_target_tid(self, tid: int) -> None:
         self.add_target_display_tid(tid)
@@ -429,6 +462,19 @@ class AutoTidRngPanel(QWidget):
 
     def target_tids(self) -> tuple[int, ...]:
         return self.target_display_tids()
+
+    def set_tid_seed(self, seed: SeedPair64 | SeedState32) -> None:
+        seed_pair = seed.to_seed_pair64() if isinstance(seed, SeedState32) else seed
+        for box, text in zip(self.tid_seed_inputs, seed_pair.format_seeds()):
+            box.setText(text)
+        self.set_id_states(
+            generate_ids(
+                seed_pair,
+                initial_advances=0,
+                max_advances=max(0, int(self.frame_threshold.value())) + 1,
+                state_filter=IDFilter(),
+            )
+        )
 
     def build_config(self, *, start_phase: AutoTidRngPhase = AutoTidRngPhase.RUN_SEED_SCRIPT) -> AutoTidRngConfig:
         target_display_tids = self.target_display_tids()
@@ -660,13 +706,18 @@ class AutoTidRngPanel(QWidget):
         row = self.target_list.currentRow()
         if row >= 0:
             self.target_list.takeItem(row)
+            self._refresh_target_count()
 
     def _normalize_edited_target_item(self, item: QListWidgetItem) -> None:
         value = self._parse_tid(item.text())
         if value is None:
             item.setText("000000")
-            return
-        item.setText(f"{value:06d}")
+        else:
+            item.setText(f"{value:06d}")
+        self._refresh_target_count()
+
+    def _refresh_target_count(self) -> None:
+        self.target_count_label.setText(f"{self.target_list.count()} 个目标")
 
     def _parse_tid(self, text: str) -> int | None:
         try:
@@ -745,6 +796,7 @@ class AutoTidRngPanel(QWidget):
             self._select_script_by_path(self.reverse_id_script_combo, str(s.value("reverse_id_script", "")))
         if s.contains("debug_output"):
             self.debug_output_check.setChecked(s.value("debug_output") == "true")
+        self._refresh_target_count()
 
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()

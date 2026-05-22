@@ -3087,6 +3087,8 @@ class MainWindow(QMainWindow):
             self._sync_seed64_from_state32()
             if hasattr(self, "id_tab"):
                 self.id_tab.set_seed_pair(seed_pair)
+            if hasattr(self, "auto_tid_rng_tab"):
+                self.auto_tid_rng_tab.set_tid_seed(seed_pair)
 
         def capture_tidsid_seed_service() -> AutoTidSeedResult:
             self._capture_cancel.clear()
@@ -4394,6 +4396,7 @@ class MainWindow(QMainWindow):
         self.progress_value.setText(f"{total}/{total}")
         initial_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
         if self._capture_mode == "tidsid":
+            self.auto_tid_rng_tab.set_tid_seed(result.state)
             self._advance_step = 1
             self._advance_counter = ProjectXsMunchlaxAdvanceCounter()
             self._advance_counter.reset(current_advances=0, seed=result.state, now=time.monotonic())
