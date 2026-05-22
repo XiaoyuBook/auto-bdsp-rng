@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QSpinBox,
@@ -147,20 +148,21 @@ class AutoTidRngPanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         layout.addWidget(self._build_toolbar())
 
         content = QWidget(self)
         grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
         grid.addWidget(self._build_config_group(), 0, 0)
         grid.addWidget(self._build_runtime_group(), 0, 1)
         self._legacy_log_group = self._build_log_group()
         self._legacy_log_group.setVisible(False)
         grid.addWidget(self._build_id_table_group(), 1, 0, 1, 2)
-        grid.setColumnStretch(0, 0)
+        grid.setColumnMinimumWidth(0, 430)
+        grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         grid.setRowStretch(1, 1)
         layout.addWidget(content, 1)
@@ -223,14 +225,14 @@ class AutoTidRngPanel(QWidget):
         return toolbar
 
     def _build_config_group(self) -> QGroupBox:
-        group = QGroupBox("基础参数")
-        group.setMinimumWidth(380)
-        group.setMaximumWidth(420)
+        group = QGroupBox("基础参数与目标")
+        group.setMinimumWidth(430)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
-        form = QFormLayout()
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
         self.frame_threshold = self._spin(0, 1_000_000_000, 300)
         self.delay = self._spin(0, 1_000_000_000, 0)
@@ -239,18 +241,26 @@ class AutoTidRngPanel(QWidget):
         self.reverse_lookup_window.setSuffix(" 帧")
         self.reverse_lookup_window.setVisible(False)
         for spin in (self.frame_threshold, self.delay, self.reverse_lookup_window):
-            spin.setFixedWidth(215)
-        form.addRow("帧数阈值", self.frame_threshold)
-        form.addRow("delay", self.delay)
+            spin.setMinimumWidth(150)
+        form.addWidget(QLabel("帧数阈值"), 0, 0)
+        form.addWidget(self.frame_threshold, 0, 1)
+        form.addWidget(QLabel("delay"), 0, 2)
+        form.addWidget(self.delay, 0, 3)
+        form.setColumnStretch(1, 1)
+        form.setColumnStretch(3, 1)
         layout.addLayout(form)
 
-        target_group = QGroupBox("目标 Display TID 列表")
-        target_group.setMaximumHeight(190)
-        target_layout = QVBoxLayout(target_group)
-        target_layout.setContentsMargins(10, 10, 10, 10)
-        target_layout.setSpacing(6)
+        target_panel = QWidget()
+        target_panel.setObjectName("InlinePanel")
+        target_layout = QVBoxLayout(target_panel)
+        target_layout.setContentsMargins(12, 10, 12, 12)
+        target_layout.setSpacing(8)
+        target_title = QLabel("目标 Display TID")
+        target_title.setObjectName("SectionTitle")
+        target_layout.addWidget(target_title)
         self.target_list = QListWidget()
-        self.target_list.setMaximumHeight(110)
+        self.target_list.setMinimumHeight(86)
+        self.target_list.setMaximumHeight(118)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         target_layout.addWidget(self.target_list, 1)
@@ -271,34 +281,34 @@ class AutoTidRngPanel(QWidget):
             edit_row.addWidget(button)
         edit_row.insertWidget(0, self.target_input, 1)
         target_layout.addLayout(edit_row)
-        layout.addWidget(target_group, 1)
+        layout.addWidget(target_panel, 1)
         return group
 
     def _build_runtime_group(self) -> QGroupBox:
-        group = QGroupBox("脚本与结果")
+        group = QGroupBox("脚本")
+        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
-        script_grid = QGridLayout()
-        script_grid.setHorizontalSpacing(8)
-        script_grid.setVerticalSpacing(8)
+        script_grid = QFormLayout()
+        script_grid.setHorizontalSpacing(10)
+        script_grid.setVerticalSpacing(10)
+        script_grid.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.seed_script_combo = QComboBox()
         self.name_script_combo = QComboBox()
         self.reverse_id_script_combo = QComboBox()
         self.reverse_id_script_combo.setVisible(False)
         for combo in (self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo):
             combo.setFixedHeight(34)
-            combo.setMinimumWidth(220)
+            combo.setMinimumWidth(260)
         self.refresh_scripts_button = QPushButton("刷新脚本列表")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         self.refresh_scripts_button.setFixedHeight(34)
-        script_grid.addWidget(QLabel("测种脚本"), 0, 0)
-        script_grid.addWidget(self.seed_script_combo, 0, 1)
-        script_grid.addWidget(QLabel("取名脚本"), 1, 0)
-        script_grid.addWidget(self.name_script_combo, 1, 1)
-        script_grid.addWidget(self.refresh_scripts_button, 2, 1)
+        script_grid.addRow("测种脚本", self.seed_script_combo)
+        script_grid.addRow("取名脚本", self.name_script_combo)
         layout.addLayout(script_grid)
+        layout.addWidget(self.refresh_scripts_button, 0, Qt.AlignmentFlag.AlignRight)
 
         self.ocr_region_label = QLabel("TID ROI：未设置")
         self.ocr_region_label.setVisible(False)
@@ -324,7 +334,6 @@ class AutoTidRngPanel(QWidget):
         result_form.addRow("OCR TID", self.ocr_result)
         result_form.addRow("实际 delay", self.actual_delay_result)
         layout.addWidget(result_group)
-        layout.addStretch(1)
         return group
 
     def _build_log_group(self) -> QGroupBox:

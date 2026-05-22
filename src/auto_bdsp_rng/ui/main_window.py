@@ -1789,6 +1789,16 @@ class MainWindow(QMainWindow):
                 max-height: 34px;
                 padding: 0 14px;
             }
+            QWidget#InlinePanel {
+                background: #F9FAFB;
+                border: 1px solid #E5E7EB;
+                border-radius: 8px;
+            }
+            QLabel#SectionTitle {
+                color: #111827;
+                font-weight: 700;
+                font-size: 13px;
+            }
 
             /* ── 预览 ── */
             QLabel#Preview {
