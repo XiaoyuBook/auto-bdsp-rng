@@ -92,6 +92,13 @@ class AutoRngSeedResult:
     measured_at: float | None = None
     expected_advances_hint: int | None = None
     after_exit_reseed: bool = False
+    advance_mode: str = "linear"
+    timing_seed: Any | None = None
+    timeline_npc: int = 0
+    pokemon_npc: int = 0
+    white_delay: float = 0.0
+    advance_delay: int = 0
+    advance_delay_2: int = 0
 
 
 @dataclass(frozen=True)

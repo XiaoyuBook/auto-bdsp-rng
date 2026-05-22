@@ -16,12 +16,15 @@ from auto_bdsp_rng.automation.auto_rng.runner import (
     AutoRngRunner,
     AutoRngServices,
     ProjectXsAdvanceCounter,
+    ProjectXsTimelineAdvanceCounter,
     decide_after_advance_script,
     decide_search_target,
     decide_target_advance,
     finalize_flash_frames,
 )
 from auto_bdsp_rng.automation.auto_rng.scripts import AUTO_ADVANCE_PARAMETER, AUTO_HIT_PARAMETER
+from auto_bdsp_rng.blink_detection.project_xs import plan_timeline
+from auto_bdsp_rng.rng_core.seed import SeedState32
 
 
 @dataclass(frozen=True)
@@ -1388,6 +1391,64 @@ def test_project_xs_advance_counter_runs_target_callback():
     assert targets == [105]
 
 
+def test_project_xs_timeline_counter_matches_project_xs_plan_timeline():
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    current = 500
+    now = 10.0
+    counter = ProjectXsTimelineAdvanceCounter()
+    counter.reset(
+        current_advances=current,
+        state=state,
+        now=now,
+        timeline_npc=0,
+        pokemon_npc=1,
+    )
+    expected_events = plan_timeline(
+        state,
+        max_events=4,
+        timeline_npc=0,
+        pokemon_npc=1,
+        start_advances=current,
+        start_time=now,
+    )
+
+    assert counter.advance_to(expected_events[0].scheduled_time - 0.001) == 0
+    assert counter.current_advances == current
+
+    for index, event in enumerate(expected_events, start=1):
+        assert counter.advance_to(event.scheduled_time) == 1
+        assert counter.current_advances == event.advance
+        assert counter.current_advances == current + index
+
+
+def test_project_xs_timeline_counter_applies_delay_fields_like_project_xs():
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    counter = ProjectXsTimelineAdvanceCounter()
+    counter.reset(
+        current_advances=100,
+        state=state,
+        now=5.0,
+        timeline_npc=0,
+        pokemon_npc=0,
+        white_delay=0.5,
+        advance_delay=7,
+        advance_delay_2=13,
+    )
+
+    assert counter.advance_to(5.499) == 0
+    assert counter.current_advances == 100
+    assert counter.advance_to(5.5) == 7
+    assert counter.current_advances == 107
+
+    first_event_time = 5.5 + 1.017
+    assert counter.advance_to(first_event_time) == 1
+    assert counter.current_advances == 108
+
+    eleventh_event_time = 5.5 + 1.017 * 11
+    assert counter.advance_to(eleventh_event_time) == 23
+    assert counter.current_advances == 131
+
+
 def test_runner_final_wait_uses_live_advance_loop(tmp_path):
     hit_script = tmp_path / "hit.txt"
     hit_script.write_text("_闪帧 = 60\nA 100\n", encoding="utf-8")
@@ -1439,6 +1500,73 @@ def test_runner_final_wait_uses_live_advance_loop(tmp_path):
     assert all(abs(seconds - 1.018) < 0.000001 for seconds in sleeps)
     assert runner.progress.phase == AutoRngPhase.RUN_HIT_SCRIPT
     assert runner.progress.current_advances == 105
+
+
+def test_runner_final_wait_uses_project_xs_timeline_mode(tmp_path):
+    hit_script = tmp_path / "hit.txt"
+    hit_script.write_text("_闪帧 = 60\nA 100\n", encoding="utf-8")
+
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    clock = [10.0]
+    progress_events: list[AutoRngProgress] = []
+
+    def fake_sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    expected_events = plan_timeline(
+        state,
+        max_events=3,
+        timeline_npc=0,
+        pokemon_npc=1,
+        start_advances=100,
+        start_time=10.0,
+    )
+    trigger = expected_events[1].advance
+    services = AutoRngServices(
+        run_script_text=lambda _text, _name: None,
+        monotonic=lambda: clock[0],
+        sleep=fake_sleep,
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            fixed_delay=40,
+            fixed_flash_frames=60,
+        ),
+        services=services,
+        progress_callback=progress_events.append,
+    )
+    runner._seed_result = AutoRngSeedResult(
+        seed="seed-1",
+        current_advances=100,
+        measured_at=10.0,
+        advance_mode="timeline",
+        timing_seed=state,
+        timeline_npc=0,
+        pokemon_npc=1,
+    )
+    runner._locked_target = AutoRngTarget(raw_target_advances=trigger + 100)
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.FINAL_WAIT,
+        raw_target_advances=trigger + 100,
+        fixed_delay=40,
+        trigger_advances=trigger,
+        current_advances=100,
+        remaining_to_trigger=trigger - 100,
+        final_flash_frames=60,
+    )
+
+    runner._final_wait()
+
+    live_advances = [
+        event.current_advances
+        for event in progress_events
+        if event.phase == AutoRngPhase.FINAL_WAIT and event.current_advances is not None
+    ]
+    assert live_advances == [100, expected_events[0].advance, expected_events[1].advance]
+    assert runner.progress.phase == AutoRngPhase.RUN_HIT_SCRIPT
+    assert runner.progress.current_advances == trigger
 
 
 def test_final_calibrate_update_resets_measured_at_after_wait(tmp_path):

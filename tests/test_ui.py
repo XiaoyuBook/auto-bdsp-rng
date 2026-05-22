@@ -1329,6 +1329,11 @@ def test_main_window_auto_rng_reidentify_after_exit_uses_reidentify_config(app, 
                 blink_count=blink_count,
             ),
             npc=7,
+            pokemon_npc=2,
+            timeline_npc=3,
+            white_delay=0.5,
+            advance_delay=11,
+            advance_delay_2=13,
         )
 
     def fake_capture(config, *_args, **_kwargs):
@@ -1371,9 +1376,15 @@ def test_main_window_auto_rng_reidentify_after_exit_uses_reidentify_config(app, 
     assert capture_counts == [20]
     assert normal_calls == []
     assert noisy_calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
-    assert result.current_advances == 52
-    assert result.npc == 1
+    assert result.current_advances == 82
+    assert result.npc == 7
     assert result.after_exit_reseed is True
+    assert result.advance_mode == "timeline"
+    assert result.pokemon_npc == 2
+    assert result.timeline_npc == 3
+    assert result.white_delay == 0.5
+    assert result.advance_delay == 11
+    assert result.advance_delay_2 == 13
 
 
 def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_path, monkeypatch):
@@ -1393,6 +1404,11 @@ def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_pa
                 blink_count=blink_count,
             ),
             npc=0,
+            pokemon_npc=2,
+            timeline_npc=3,
+            white_delay=0.5,
+            advance_delay=11,
+            advance_delay_2=13,
         )
 
     def fake_capture(config, *_args, **_kwargs):
@@ -1427,8 +1443,14 @@ def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_pa
     ]
     assert capture_counts == [20]
     assert noisy_calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
-    assert result.current_advances == 52
-    assert result.npc == 1
+    assert result.current_advances == 47
+    assert result.npc == 0
+    assert result.advance_mode == "timeline"
+    assert result.pokemon_npc == 2
+    assert result.timeline_npc == 3
+    assert result.white_delay == 0.5
+    assert result.advance_delay == 11
+    assert result.advance_delay_2 == 13
 
 
 def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monkeypatch):

@@ -3470,7 +3470,7 @@ class MainWindow(QMainWindow):
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             self._capture_cancel.clear()
             source_config = exit_tracking_config if seed_result.after_exit_reseed else tracking_config
-            source_npc = 1 if source_config.reidentify_1_pk_npc else source_config.npc
+            source_npc = source_config.npc
 
             def store_frame(frame: object) -> None:
                 self.autoCaptureFrameChanged.emit(frame)
@@ -3510,6 +3510,9 @@ class MainWindow(QMainWindow):
                 elapsed_seconds = max(0, round(time.perf_counter() - offset_time))
             elapsed_advances = elapsed_seconds * (source_npc + 1)
             current_advances = result.advances + elapsed_advances
+            timing_seed = result.state
+            if elapsed_advances:
+                timing_seed = advance_seed_state(timing_seed, elapsed_advances).state
             # 校验 reidentify 结果与预期的偏差
             if hint is not None and abs(current_advances - hint) > 20_000:
                 self.auto_rng_tab.captureLog.emit(
@@ -3525,6 +3528,13 @@ class MainWindow(QMainWindow):
                 seed_text=seed_result.seed_text,
                 measured_at=time.monotonic(),
                 after_exit_reseed=seed_result.after_exit_reseed,
+                advance_mode="timeline" if source_config.reidentify_1_pk_npc else "linear",
+                timing_seed=timing_seed if source_config.reidentify_1_pk_npc else None,
+                timeline_npc=source_config.timeline_npc,
+                pokemon_npc=max(1, source_config.pokemon_npc) if source_config.reidentify_1_pk_npc else source_config.pokemon_npc,
+                white_delay=source_config.white_delay,
+                advance_delay=source_config.advance_delay,
+                advance_delay_2=source_config.advance_delay_2,
             )
             self.autoSeedCaptured.emit(reidentified)
             self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
@@ -3561,13 +3571,24 @@ class MainWindow(QMainWindow):
             offset_time = float(getattr(observation, "offset_time", 0.0) or 0.0)
             if offset_time > 0:
                 elapsed_seconds = max(0, round(time.perf_counter() - offset_time))
-            npc = 1
+            npc = exit_tracking_config.npc
+            elapsed_advances = elapsed_seconds * (npc + 1)
+            timing_seed = result.state
+            if elapsed_advances:
+                timing_seed = advance_seed_state(timing_seed, elapsed_advances).state
             reidentified = AutoRngSeedResult(
                 seed=seed_result.seed,
-                current_advances=result.advances + elapsed_seconds * (npc + 1),
+                current_advances=result.advances + elapsed_advances,
                 npc=npc,
                 seed_text=seed_result.seed_text,
                 measured_at=time.monotonic(),
+                advance_mode="timeline",
+                timing_seed=timing_seed,
+                timeline_npc=exit_tracking_config.timeline_npc,
+                pokemon_npc=max(1, exit_tracking_config.pokemon_npc),
+                white_delay=exit_tracking_config.white_delay,
+                advance_delay=exit_tracking_config.advance_delay,
+                advance_delay_2=exit_tracking_config.advance_delay_2,
             )
             self.autoSeedCaptured.emit(reidentified)
             self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))

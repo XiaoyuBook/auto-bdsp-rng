@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import heapq
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
@@ -22,6 +23,8 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     read_advance_script_offset,
     read_integer_parameter,
 )
+from auto_bdsp_rng.rng_core.generators import BDSPXorshift
+from auto_bdsp_rng.rng_core.seed import SeedPair64, SeedState32
 
 _UNSET = object()
 _UNDERGROUND_ADVANCE_RE = re.compile(r"(\$地下过帧\s*=\s*)-?\d+")
@@ -76,6 +79,138 @@ class ProjectXsAdvanceCounter:
         should_stop = (lambda: False) if should_stop is None else should_stop
         while self.current_advances < target_advances and not should_stop():
             sleep_seconds = self.next_tick_at - monotonic()
+            if sleep_seconds > 0:
+                sleep(sleep_seconds)
+            advanced = self.advance_to(monotonic())
+            if advanced <= 0:
+                continue
+            if on_frame is not None:
+                on_frame(self.current_advances)
+        if self.current_advances >= target_advances and not should_stop() and on_target is not None:
+            on_target(self.current_advances)
+        return self.current_advances
+
+
+@dataclass
+class ProjectXsTimelineAdvanceCounter:
+    current_advances: int = 0
+    timeline_npc: int = 0
+    pokemon_npc: int = 0
+    white_delay: float = 0.0
+    advance_delay: int = 0
+    advance_delay_2: int = 0
+    _timeline_start_at: float = 0.0
+    _started: bool = False
+    _delay2_countdown: int = 10
+    _rng: BDSPXorshift | None = None
+    _queue: list[tuple[float, int, int]] | None = None
+    _sequence: int = 0
+
+    def reset(
+        self,
+        *,
+        current_advances: int,
+        state: SeedState32,
+        now: float,
+        timeline_npc: int = 0,
+        pokemon_npc: int = 0,
+        white_delay: float = 0.0,
+        advance_delay: int = 0,
+        advance_delay_2: int = 0,
+    ) -> None:
+        if timeline_npc < 0 or pokemon_npc < 0:
+            raise ValueError("timeline NPC counts must be non-negative")
+        self.current_advances = int(current_advances)
+        self.timeline_npc = int(timeline_npc)
+        self.pokemon_npc = int(pokemon_npc)
+        self.white_delay = max(0.0, float(white_delay))
+        self.advance_delay = max(0, int(advance_delay))
+        self.advance_delay_2 = max(0, int(advance_delay_2))
+        self._timeline_start_at = float(now) + self.white_delay
+        self._started = False
+        self._delay2_countdown = 10
+        self._rng = BDSPXorshift(state)
+        self._queue = []
+        self._sequence = 0
+
+    def _rangefloat(self, minimum: float, maximum: float) -> float:
+        if self._rng is None:
+            raise RuntimeError("timeline counter has not been reset")
+        temp = (self._rng.next() & 0x7FFFFF) / 8388607.0
+        return temp * minimum + (1 - temp) * maximum
+
+    def _push(self, scheduled_time: float, event_type: int) -> None:
+        if self._queue is None:
+            raise RuntimeError("timeline counter has not been reset")
+        self._sequence += 1
+        heapq.heappush(self._queue, (float(scheduled_time), int(event_type), self._sequence))
+
+    def _start(self) -> int:
+        if self._started:
+            return 0
+        if self._rng is None:
+            raise RuntimeError("timeline counter has not been reset")
+        self._started = True
+        self._rng.next()
+        advanced = 0
+        if self.advance_delay:
+            self._rng.advance(self.advance_delay)
+            self.current_advances += self.advance_delay
+            advanced += self.advance_delay
+        for _ in range(self.timeline_npc + 1):
+            self._push(self._timeline_start_at + 1.017, 0)
+        for _ in range(self.pokemon_npc):
+            self._push(self._timeline_start_at + self._rangefloat(3, 12) + 0.285, 1)
+        return advanced
+
+    def _next_event_time(self) -> float:
+        if not self._started:
+            return self._timeline_start_at
+        if not self._queue:
+            return float("inf")
+        return self._queue[0][0]
+
+    def advance_to(self, now: float) -> int:
+        if self._rng is None or self._queue is None:
+            raise RuntimeError("timeline counter has not been reset")
+        advanced = 0
+        now = float(now)
+        if not self._started:
+            if now + 1e-9 < self._timeline_start_at:
+                return 0
+            advanced += self._start()
+        while self._queue and now + 1e-9 >= self._queue[0][0]:
+            scheduled_time, event_type, _sequence = heapq.heappop(self._queue)
+            self.current_advances += 1
+            advanced += 1
+            if self.advance_delay_2:
+                if self._delay2_countdown > 0:
+                    self._delay2_countdown -= 1
+                elif self._delay2_countdown != -1:
+                    self._delay2_countdown -= 1
+                    self._rng.advance(self.advance_delay_2)
+                    self.current_advances += self.advance_delay_2
+                    advanced += self.advance_delay_2
+            if event_type == 0:
+                self._rng.next()
+                self._push(scheduled_time + 1.017, 0)
+            else:
+                self._push(scheduled_time + self._rangefloat(3, 12) + 0.285, 1)
+        return advanced
+
+    def run_until(
+        self,
+        target_advances: int,
+        *,
+        monotonic: Callable[[], float],
+        sleep: Callable[[float], None],
+        should_stop: Callable[[], bool] | None = None,
+        on_frame: Callable[[int], None] | None = None,
+        on_target: Callable[[int], None] | None = None,
+    ) -> int:
+        should_stop = (lambda: False) if should_stop is None else should_stop
+        while self.current_advances < target_advances and not should_stop():
+            sleep_seconds = self._next_event_time() - monotonic()
             if sleep_seconds > 0:
                 sleep(sleep_seconds)
             advanced = self.advance_to(monotonic())
@@ -321,7 +456,7 @@ class AutoRngRunner:
         self._need_init_reset: bool = False  # 无目标重试时临时启用初始化
         self._reserved_exit_reseed_pending: bool = False
         self._exit_reseed_done: bool = False
-        self._advance_counter = ProjectXsAdvanceCounter()
+        self._advance_counter: ProjectXsAdvanceCounter | ProjectXsTimelineAdvanceCounter = ProjectXsAdvanceCounter()
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -1079,11 +1214,45 @@ class AutoRngRunner:
         self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, message, locked_target=None)
 
     def _reset_advance_counter(self, seed_result: AutoRngSeedResult) -> None:
-        self._advance_counter.reset(
+        self._advance_counter = self._build_advance_counter(seed_result)
+
+    def _build_advance_counter(
+        self,
+        seed_result: AutoRngSeedResult,
+    ) -> ProjectXsAdvanceCounter | ProjectXsTimelineAdvanceCounter:
+        if seed_result.advance_mode == "timeline":
+            counter = ProjectXsTimelineAdvanceCounter()
+            counter.reset(
+                current_advances=seed_result.current_advances,
+                state=self._timing_state(seed_result),
+                now=self._seed_measured_at(seed_result),
+                timeline_npc=seed_result.timeline_npc,
+                pokemon_npc=seed_result.pokemon_npc,
+                white_delay=seed_result.white_delay,
+                advance_delay=seed_result.advance_delay,
+                advance_delay_2=seed_result.advance_delay_2,
+            )
+            return counter
+        counter = ProjectXsAdvanceCounter()
+        counter.reset(
             current_advances=seed_result.current_advances,
             npc=seed_result.npc,
             now=self._seed_measured_at(seed_result),
         )
+        return counter
+
+    def _timing_state(self, seed_result: AutoRngSeedResult) -> SeedState32:
+        seed = seed_result.timing_seed if seed_result.timing_seed is not None else seed_result.seed
+        if isinstance(seed, SeedState32):
+            return seed
+        if isinstance(seed, SeedPair64):
+            return seed.to_state32()
+        to_state32 = getattr(seed, "to_state32", None)
+        if callable(to_state32):
+            state = to_state32()
+            if isinstance(state, SeedState32):
+                return state
+        raise RuntimeError("timeline advance requires a SeedState32 timing seed")
 
     def _seed_measured_at(self, seed_result: AutoRngSeedResult) -> float:
         if seed_result.measured_at is not None:
