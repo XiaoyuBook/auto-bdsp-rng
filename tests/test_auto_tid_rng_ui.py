@@ -65,6 +65,14 @@ def test_auto_tid_panel_replaces_log_with_operable_id_table(app, tmp_path: Path)
     assert panel.export_button.isEnabled()
 
 
+def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+
+    assert panel.target_list.maximumHeight() <= 140
+    assert panel.id_table.minimumHeight() >= 320
+    assert panel.id_table.horizontalHeader().stretchLastSection()
+
+
 def test_tid_ocr_dialog_is_non_modal_and_has_two_primary_actions(app, tmp_path: Path) -> None:
     dialog = TidOcrDialog(settings=_settings(tmp_path))
 

@@ -24,9 +24,10 @@ from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication,
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
+from auto_bdsp_rng.automation.auto_tid_rng import ProjectXsMunchlaxAdvanceCounter
 from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.gen8_static import State8, StateFilter
-from auto_bdsp_rng.rng_core import SeedPair64
+from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
@@ -44,6 +45,12 @@ def app(monkeypatch):
 def _set_bdsp_seed(window: MainWindow) -> None:
     window.bdsp_seed64_inputs[0].setText("123456789ABCDEF0")
     window.bdsp_seed64_inputs[1].setText("1111111122222222")
+
+
+def _project_xs_munchlax_interval(state: SeedState32) -> float:
+    rng = BDSPXorshift(state)
+    temp = (rng.next() & 0x7FFFFF) / 8388607.0
+    return temp * 3.0 + (1.0 - temp) * 12.0 + 0.285
 
 
 def test_main_window_generates_static_results(app):
@@ -193,6 +200,31 @@ def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
     assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
     assert window.tidsid_button.isEnabled()
+
+
+def test_tidsid_capture_starts_project_xs_munchlax_tracking(app, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0x01020304, 0x11121314, 0x21222324, 0x31323334)
+    monkeypatch.setattr(main_window_module.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        main_window_module,
+        "capture_pokemon_blinks",
+        lambda config, **kwargs: SimpleNamespace(intervals=[]),
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "recover_tidsid_seed_from_observation",
+        lambda observation: SimpleNamespace(state=seed_state, observation=observation),
+    )
+    window._latest_preview_frame = object()
+
+    window.capture_tidsid_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    assert isinstance(window._advance_counter, ProjectXsMunchlaxAdvanceCounter)
+    assert window._advance_counter.current_advances == 0
+    assert window._advance_counter.next_tick_at == pytest.approx(100.0 + _project_xs_munchlax_interval(seed_state))
 
 
 def test_blink_parameter_spinboxes_ignore_mouse_wheel(app):
@@ -673,6 +705,38 @@ def test_auto_rng_panel_can_start_from_capture_seed_via_menu(app, tmp_path):
     assert len(emitted) == 1
     assert emitted[0].start_phase == AutoRngPhase.CAPTURE_SEED
     assert emitted[0].seed_script_path == tmp_path / "BDSP测种.txt"
+
+
+def test_auto_rng_panel_can_start_from_reidentify_via_menu(app, tmp_path):
+    (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path)
+    emitted: list[AutoRngConfig] = []
+    panel.startRequested.connect(lambda config: emitted.append(config))
+    panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
+
+    panel.start_from_reidentify_action.trigger()
+
+    assert len(emitted) == 1
+    assert emitted[0].start_phase == AutoRngPhase.REIDENTIFY
+
+
+def test_main_window_reidentify_start_requires_existing_seed(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    config = AutoRngConfig(script_dir=tmp_path, start_phase=AutoRngPhase.REIDENTIFY)
+    started: list[object] = []
+    warnings: list[str] = []
+    monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
+    monkeypatch.setattr(main_window_module.QMessageBox, "warning", lambda _parent, _title, text: warnings.append(text))
+    for box in window.seed32_inputs:
+        box.clear()
+
+    window._start_auto_rng(config)
+
+    assert not started
+    assert warnings
+    assert "Seed" in warnings[0]
 
 
 def test_main_window_exposes_shiny_threshold_calibration_button_on_seed_capture_tab(app):

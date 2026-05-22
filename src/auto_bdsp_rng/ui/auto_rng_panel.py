@@ -167,8 +167,10 @@ class AutoRngPanel(QWidget):
         self.start_menu = QMenu(self.start_button)
         self.start_from_seed_action = QAction("从测种开始", self.start_button)
         self.start_from_capture_action = QAction("从捕获 Seed 开始", self.start_button)
+        self.start_from_reidentify_action = QAction("从 Reidentify 开始", self.start_button)
         self.start_menu.addAction(self.start_from_seed_action)
         self.start_menu.addAction(self.start_from_capture_action)
+        self.start_menu.addAction(self.start_from_reidentify_action)
         self.start_button.setMenu(self.start_menu)
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("DangerButton")
@@ -193,6 +195,7 @@ class AutoRngPanel(QWidget):
         self.start_button.clicked.connect(self._start_clicked)
         self.start_from_seed_action.triggered.connect(self._start_clicked)
         self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)
+        self.start_from_reidentify_action.triggered.connect(self._start_from_reidentify_clicked)
         self.stop_button.clicked.connect(self._stop_clicked)
 
         # ── 左分区：运行模式 + 次数 + 调试 ──
@@ -504,6 +507,9 @@ class AutoRngPanel(QWidget):
 
     def _start_from_capture_clicked(self) -> None:
         self._start_with_phase(AutoRngPhase.CAPTURE_SEED)
+
+    def _start_from_reidentify_clicked(self) -> None:
+        self._start_with_phase(AutoRngPhase.REIDENTIFY)
 
     def _start_with_phase(self, start_phase: AutoRngPhase) -> None:
         self._save_panel_state()

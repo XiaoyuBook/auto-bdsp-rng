@@ -819,6 +819,31 @@ def test_runner_runs_advance_script_then_reidentifies_when_request_is_within_thr
     assert runner.progress.current_advances == 600
 
 
+def test_runner_can_start_from_reidentify_with_current_seed(tmp_path):
+    calls: list[str] = []
+    services = AutoRngServices(
+        current_seed=lambda: calls.append("current_seed") or AutoRngSeedResult(seed="seed-0", current_advances=0),
+        reidentify=lambda seed: calls.append(f"reidentify:{seed.seed}") or AutoRngSeedResult(
+            seed=seed.seed,
+            current_advances=123,
+        ),
+        search_candidates=lambda _seed: [],
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            start_phase=AutoRngPhase.REIDENTIFY,
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=3)
+
+    assert calls == ["current_seed", "reidentify:seed-0"]
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+    assert runner.progress.current_advances == 123
+
+
 def test_runner_final_calibrate_runs_fixed_hit_script(tmp_path):
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"

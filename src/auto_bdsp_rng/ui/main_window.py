@@ -64,7 +64,13 @@ from auto_bdsp_rng.blink_detection import (
     save_project_xs_config,
 )
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult
-from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngRunner, AutoTidRngServices, AutoTidSeedResult
+from auto_bdsp_rng.automation.auto_tid_rng import (
+    AutoTidRngConfig,
+    AutoTidRngRunner,
+    AutoTidRngServices,
+    AutoTidSeedResult,
+    ProjectXsMunchlaxAdvanceCounter,
+)
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
     measure_keyword_interval,
     read_ocr_text,
@@ -3012,6 +3018,12 @@ class MainWindow(QMainWindow):
             self.preview_button.setText(self._text("stop_preview"))
 
     def _start_auto_rng(self, config: AutoRngConfig) -> None:
+        if config.start_phase == AutoRngPhase.REIDENTIFY:
+            try:
+                self._current_auto_rng_seed_result()
+            except ValueError as exc:
+                QMessageBox.warning(self, "缺少 Seed", f"从 Reidentify 开始需要先填入有效 Seed。\n{exc}")
+                return
         if not self._ensure_preview_for_auto_rng():
             return
         # 自动连接伊机控（如果尚未连接）
@@ -3279,9 +3291,20 @@ class MainWindow(QMainWindow):
             return to_state32()
         raise TypeError("Auto RNG seed result must contain SeedPair64 or SeedState32")
 
+    def _current_auto_rng_seed_result(self) -> AutoRngSeedResult:
+        state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
+        return AutoRngSeedResult(
+            seed=state,
+            current_advances=0,
+            npc=max(0, int(self.npc_count.text() or 0)),
+            seed_text=" ".join(state.format_seed64_pair()),
+            measured_at=time.monotonic(),
+        )
+
     def _start_auto_advance_tracking(self, seed_result: AutoRngSeedResult) -> None:
         measured_at = seed_result.measured_at
         self._advance_step = seed_result.npc + 1
+        self._advance_counter = ProjectXsAdvanceCounter()
         self._advance_counter.reset(
             current_advances=seed_result.current_advances,
             npc=seed_result.npc,
@@ -3473,6 +3496,9 @@ class MainWindow(QMainWindow):
             # 测种完成后恢复预览（如果之前是开着的）
             self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
             return seed_result
+
+        def current_seed_service() -> AutoRngSeedResult:
+            return self._call_on_ui_thread(self._current_auto_rng_seed_result)  # type: ignore[return-value]
 
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             self._capture_cancel.clear()
@@ -3908,6 +3934,7 @@ class MainWindow(QMainWindow):
                     log(f"[自动反查] {species_tag}advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
 
         return AutoRngServices(
+            current_seed=current_seed_service,
             capture_seed=capture_seed_service,
             reidentify=reidentify_service,
             reidentify_exit=reidentify_exit_service,
@@ -3945,6 +3972,7 @@ class MainWindow(QMainWindow):
     def _stop_advance_tracking(self) -> None:
         self._advance_timer.stop()
         self._tracked_advances = 0
+        self._advance_counter = ProjectXsAdvanceCounter()
         self._advance_counter.reset(current_advances=0, npc=max(0, self._advance_step - 1), now=time.monotonic())
         self.advances_value.setText("0")
         self._update_auto_rng_header(advances=0)
@@ -4061,11 +4089,25 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.set_live_advances(self._tracked_advances)
 
     def _set_tracked_advances(self, advances: int) -> None:
-        self._advance_counter.reset(
-            current_advances=int(advances),
-            npc=max(0, self._advance_step - 1),
-            now=time.monotonic(),
-        )
+        now = time.monotonic()
+        if isinstance(self._advance_counter, ProjectXsMunchlaxAdvanceCounter):
+            try:
+                seed = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
+            except ValueError:
+                self._advance_counter = ProjectXsAdvanceCounter()
+                self._advance_counter.reset(
+                    current_advances=int(advances),
+                    npc=max(0, self._advance_step - 1),
+                    now=now,
+                )
+            else:
+                self._advance_counter.reset(current_advances=int(advances), seed=seed, now=now)
+        else:
+            self._advance_counter.reset(
+                current_advances=int(advances),
+                npc=max(0, self._advance_step - 1),
+                now=now,
+            )
         self._display_tracked_advances(self._advance_counter.current_advances)
 
     def advance_current_seed(self) -> None:
@@ -4338,13 +4380,19 @@ class MainWindow(QMainWindow):
                 box.setText(text)
             self._sync_seed64_from_state32()
         self.progress_value.setText(f"{total}/{total}")
-        self._advance_step = int(self.npc_count.text() or 0) + 1
         initial_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
-        self._advance_counter.reset(
-            current_advances=initial_advances,
-            npc=max(0, self._advance_step - 1),
-            now=time.monotonic(),
-        )
+        if self._capture_mode == "tidsid":
+            self._advance_step = 1
+            self._advance_counter = ProjectXsMunchlaxAdvanceCounter()
+            self._advance_counter.reset(current_advances=0, seed=result.state, now=time.monotonic())
+        else:
+            self._advance_step = int(self.npc_count.text() or 0) + 1
+            self._advance_counter = ProjectXsAdvanceCounter()
+            self._advance_counter.reset(
+                current_advances=initial_advances,
+                npc=max(0, self._advance_step - 1),
+                now=time.monotonic(),
+            )
         self._tracked_advances = self._advance_counter.current_advances
         self.advances_value.setText("0")
         self.timer_value.setText("0")

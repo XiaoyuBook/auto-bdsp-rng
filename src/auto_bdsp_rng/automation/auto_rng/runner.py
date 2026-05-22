@@ -403,6 +403,7 @@ def _nature_index(name: str) -> int | None:
 
 @dataclass(frozen=True)
 class AutoRngServices:
+    current_seed: Callable[[], AutoRngSeedResult] | None = None
     capture_seed: Callable[[], AutoRngSeedResult] = _missing_service  # type: ignore[assignment]
     reidentify: Callable[[AutoRngSeedResult], AutoRngSeedResult] = _missing_service  # type: ignore[assignment]
     reidentify_exit: Callable[[AutoRngSeedResult], AutoRngSeedResult] | None = None
@@ -491,6 +492,24 @@ class AutoRngRunner:
                     "开始自动流程，从捕获 seed 开始",
                     loop_index=self._completed_loops,
                 )
+            elif self.config.start_phase == AutoRngPhase.REIDENTIFY:
+                if self.services.current_seed is None:
+                    raise RuntimeError("从 reidentify 开始需要当前 Seed")
+                self._completed_loops += 1
+                self._cycle_started = True
+                self._sync_initial = self.config.sync_mode >= 2
+                self._is_sync_active = self._sync_initial
+                self._reserved_exit_reseed_pending = False
+                self._exit_reseed_done = False
+                self._seed_result = self._with_measurement_time(self.services.current_seed())
+                self._history("cycle_start", self._completed_loops)
+                self._set_progress(
+                    AutoRngPhase.REIDENTIFY,
+                    "开始自动流程，从 reidentify 开始",
+                    loop_index=self._completed_loops,
+                    seed_text=self._seed_result.seed_text,
+                    current_advances=self._seed_result.current_advances,
+                )
             else:
                 self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "开始自动流程，运行测种脚本")
         steps = 0
@@ -508,7 +527,8 @@ class AutoRngRunner:
             elif phase == AutoRngPhase.RUN_ADVANCE_SCRIPT:
                 self._run_advance_script()
             elif phase == AutoRngPhase.REIDENTIFY:
-                self._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+                next_phase = AutoRngPhase.DECIDE_ADVANCE if self._locked_target is not None else AutoRngPhase.SEARCH_TARGET
+                self._reidentify(next_phase)
             elif phase == AutoRngPhase.EXIT_RESEED:
                 self._exit_reseed()
             elif phase == AutoRngPhase.FINAL_CALIBRATE:

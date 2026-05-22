@@ -224,8 +224,8 @@ class AutoTidRngPanel(QWidget):
 
     def _build_config_group(self) -> QGroupBox:
         group = QGroupBox("基础参数")
-        group.setMinimumWidth(450)
-        group.setMaximumWidth(450)
+        group.setMinimumWidth(380)
+        group.setMaximumWidth(420)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
@@ -245,12 +245,17 @@ class AutoTidRngPanel(QWidget):
         layout.addLayout(form)
 
         target_group = QGroupBox("目标 Display TID 列表")
+        target_group.setMaximumHeight(190)
         target_layout = QVBoxLayout(target_group)
+        target_layout.setContentsMargins(10, 10, 10, 10)
+        target_layout.setSpacing(6)
         self.target_list = QListWidget()
+        self.target_list.setMaximumHeight(110)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         target_layout.addWidget(self.target_list, 1)
         edit_row = QHBoxLayout()
+        edit_row.setSpacing(6)
         self.target_input = QLineEdit()
         self.target_input.setPlaceholderText("000000-999999")
         self.target_input.setFixedHeight(34)
@@ -262,6 +267,7 @@ class AutoTidRngPanel(QWidget):
         self.delete_target_button.clicked.connect(self._delete_selected_target)
         for button in (self.add_target_button, self.update_target_button, self.delete_target_button):
             button.setFixedHeight(34)
+            button.setFixedWidth(58)
             edit_row.addWidget(button)
         edit_row.insertWidget(0, self.target_input, 1)
         target_layout.addLayout(edit_row)
@@ -365,6 +371,7 @@ class AutoTidRngPanel(QWidget):
         self.id_table.searchStatusChanged.connect(self.status_badge.setText)
         self.id_table.verticalHeader().setVisible(False)
         self.id_table.horizontalHeader().setStretchLastSection(True)
+        self.id_table.setMinimumHeight(360)
         layout.addWidget(self.id_table, 1)
         return group
 

@@ -9,9 +9,69 @@ from pathlib import Path
 from typing import Any
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
-from auto_bdsp_rng.automation.auto_rng.runner import ProjectXsAdvanceCounter
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
-from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
+from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64, SeedState32
+
+
+@dataclass
+class ProjectXsMunchlaxAdvanceCounter:
+    """Project_Xs TID/SID counter: one advance at each Munchlax blink interval."""
+
+    current_advances: int = 0
+    next_tick_at: float = 0.0
+    _rng: BDSPXorshift | None = None
+
+    def reset(self, *, current_advances: int, seed: SeedPair64 | SeedState32 | Any, now: float) -> None:
+        self.current_advances = int(current_advances)
+        self._rng = BDSPXorshift(_seed_state_from_value(seed))
+        self.next_tick_at = float(now) + self._next_interval()
+
+    def _rangefloat(self, minimum: float, maximum: float) -> float:
+        if self._rng is None:
+            raise RuntimeError("Munchlax counter has not been reset")
+        temp = (self._rng.next() & 0x7FFFFF) / 8388607.0
+        return temp * minimum + (1.0 - temp) * maximum
+
+    def _next_interval(self) -> float:
+        return self._rangefloat(3.0, 12.0) + 0.285
+
+    def advance_one_blink(self) -> int:
+        if self._rng is None:
+            raise RuntimeError("Munchlax counter has not been reset")
+        self.current_advances += 1
+        self.next_tick_at += self._next_interval()
+        return self.current_advances
+
+    def advance_to(self, now: float) -> int:
+        advanced = 0
+        while float(now) + 1e-9 >= self.next_tick_at:
+            self.advance_one_blink()
+            advanced += 1
+        return advanced
+
+    def run_until(
+        self,
+        target_advances: int,
+        *,
+        monotonic: Callable[[], float],
+        sleep: Callable[[float], None],
+        should_stop: Callable[[], bool] | None = None,
+        on_frame: Callable[[int], None] | None = None,
+        on_target: Callable[[int], None] | None = None,
+    ) -> int:
+        should_stop = (lambda: False) if should_stop is None else should_stop
+        while self.current_advances < target_advances and not should_stop():
+            sleep_seconds = self.next_tick_at - monotonic()
+            if sleep_seconds > 0:
+                sleep(sleep_seconds)
+            advanced = self.advance_to(monotonic())
+            if advanced <= 0:
+                continue
+            if on_frame is not None:
+                on_frame(self.current_advances)
+        if self.current_advances >= target_advances and not should_stop() and on_target is not None:
+            on_target(self.current_advances)
+        return self.current_advances
 
 
 class AutoTidRngPhase(str, Enum):
@@ -146,6 +206,20 @@ def reverse_lookup_span(center_advances: int, window: int) -> tuple[int, int, in
     return start, end, end - start + 1
 
 
+def _seed_state_from_value(seed: SeedPair64 | SeedState32 | Any) -> SeedState32:
+    if isinstance(seed, SeedState32):
+        return seed
+    if isinstance(seed, SeedPair64):
+        return seed.to_state32()
+    to_state32 = getattr(seed, "to_state32", None)
+    if callable(to_state32):
+        return to_state32()
+    to_seed_pair64 = getattr(seed, "to_seed_pair64", None)
+    if callable(to_seed_pair64):
+        return to_seed_pair64().to_state32()
+    raise TypeError("Auto TID RNG seed result must contain SeedPair64 or SeedState32")
+
+
 def _seed_pair_from_result(seed_result: AutoTidSeedResult) -> SeedPair64:
     seed = seed_result.seed
     if isinstance(seed, SeedPair64):
@@ -224,7 +298,7 @@ class AutoTidRngRunner:
         self._seed_result: AutoTidSeedResult | None = None
         self._target: AutoTidTarget | None = None
         self._completed_loops = 0
-        self._advance_counter = ProjectXsAdvanceCounter()
+        self._advance_counter = ProjectXsMunchlaxAdvanceCounter()
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -362,7 +436,7 @@ class AutoTidRngRunner:
             return
         self._advance_counter.reset(
             current_advances=int(seed.current_advances),
-            npc=int(seed.npc),
+            seed=seed.seed,
             now=float(seed.measured_at if seed.measured_at is not None else self.services.monotonic()),
         )
 
