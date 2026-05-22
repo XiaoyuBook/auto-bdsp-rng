@@ -18,7 +18,8 @@ class AutoTidRngPhase(str, Enum):
     IDLE = "空闲"
     RUN_SEED_SCRIPT = "运行测种脚本"
     CAPTURE_TIDSID = "TID/SID测种"
-    SEARCH_TARGET = "搜索目标TID"
+    SEARCH_TARGET = "搜索目标Display TID"
+    WAIT_NAME_TRIGGER = "等待取名帧"
     RUN_NAME_SCRIPT = "运行取名脚本"
     WAIT_REVERSE_TRIGGER = "等待反查帧"
     RUN_REVERSE_ID_SCRIPT = "运行反查ID脚本"
@@ -57,6 +58,7 @@ class AutoTidRngConfig:
     reverse_id_script_path: Path | None = None
     frame_threshold: int = 300
     target_tids: tuple[int, ...] = ()
+    target_display_tids: tuple[int, ...] = ()
     delay: int = 0
     reverse_lookup_window: int = 50
     ocr_region: OcrRegion | None = None
@@ -82,6 +84,7 @@ class AutoTidRngProgress:
     current_advances: int | None = None
     target_tid: int | None = None
     target_sid: int | None = None
+    target_display_tid: int | None = None
     target_advances: int | None = None
     trigger_advances: int | None = None
     remaining_to_trigger: int | None = None
@@ -89,6 +92,7 @@ class AutoTidRngProgress:
     ocr_tid: int | None = None
     ocr_advances: int | None = None
     actual_delay: int | None = None
+    id_states: tuple[IDState8, ...] = ()
     last_script_path: Path | None = None
     log_message: str = ""
 
@@ -118,6 +122,23 @@ def select_target_tid(
     return AutoTidTarget.from_state(min(matches, key=lambda state: int(state.advances)))
 
 
+def select_target_display_tid(
+    states: Sequence[IDState8],
+    target_display_tids: Sequence[int],
+    *,
+    frame_threshold: int,
+) -> AutoTidTarget | None:
+    targets = {int(tid) for tid in target_display_tids}
+    matches = [
+        state
+        for state in states
+        if int(state.display_tid) in targets and 0 <= int(state.advances) <= int(frame_threshold)
+    ]
+    if not matches:
+        return None
+    return AutoTidTarget.from_state(min(matches, key=lambda state: int(state.advances)))
+
+
 def reverse_lookup_span(center_advances: int, window: int) -> tuple[int, int, int]:
     clamped_window = max(0, min(10_000, int(window)))
     start = max(0, int(center_advances) - clamped_window)
@@ -140,13 +161,14 @@ def _seed_pair_from_result(seed_result: AutoTidSeedResult) -> SeedPair64:
 def _default_search_id_states(
     seed_result: AutoTidSeedResult,
     frame_threshold: int,
-    target_tids: Sequence[int],
+    target_display_tids: Sequence[int],
 ) -> Sequence[IDState8]:
+    _ = target_display_tids
     return generate_ids(
         _seed_pair_from_result(seed_result),
         initial_advances=0,
         max_advances=max(0, int(frame_threshold)) + 1,
-        state_filter=IDFilter(tid=tuple(int(tid) for tid in target_tids)),
+        state_filter=IDFilter(),
     )
 
 
@@ -226,6 +248,8 @@ class AutoTidRngRunner:
                 self._capture_tidsid()
             elif phase == AutoTidRngPhase.SEARCH_TARGET:
                 self._search_target()
+            elif phase == AutoTidRngPhase.WAIT_NAME_TRIGGER:
+                self._wait_name_trigger()
             elif phase == AutoTidRngPhase.RUN_NAME_SCRIPT:
                 self._run_name_script()
             elif phase == AutoTidRngPhase.WAIT_REVERSE_TRIGGER:
@@ -246,13 +270,7 @@ class AutoTidRngRunner:
         self._set_progress(AutoTidRngPhase.RUN_SEED_SCRIPT, message, loop_index=self._completed_loops)
 
     def _loop_or_complete(self, message: str) -> None:
-        if self.config.loop_mode == "infinite":
-            self._begin_cycle(message)
-            return
-        if self.config.loop_mode == "count" and self._completed_loops < max(1, int(self.config.loop_count)):
-            self._begin_cycle(message)
-            return
-        self._set_progress(AutoTidRngPhase.COMPLETED, message, loop_index=self._completed_loops)
+        self._begin_cycle(message)
 
     def _emit(self, progress: AutoTidRngProgress) -> None:
         if self.log_callback is not None and progress.log_message:
@@ -292,27 +310,36 @@ class AutoTidRngRunner:
 
     def _search_target(self) -> None:
         seed = self._require_seed()
-        states = list(self.services.search_id_states(seed, self.config.frame_threshold, self.config.target_tids))
-        target = select_target_tid(states, self.config.target_tids, frame_threshold=self.config.frame_threshold)
+        target_display_tids = self._target_display_tids()
+        states = list(self.services.search_id_states(seed, self.config.frame_threshold, target_display_tids))
+        target = select_target_display_tid(states, target_display_tids, frame_threshold=self.config.frame_threshold)
         if target is None:
-            self._loop_or_complete(
-                f"阈值 {self.config.frame_threshold} 帧内未命中目标 TID，"
-                "按当前循环设置结束或进入下一轮"
+            message = f"阈值 {self.config.frame_threshold} 帧内未命中目标 Display TID，重新运行测种脚本"
+            self._set_progress(
+                AutoTidRngPhase.SEARCH_TARGET,
+                message,
+                current_advances=seed.current_advances,
+                id_states=tuple(states),
             )
+            self._loop_or_complete(message)
             return
         trigger = target.advances - int(self.config.delay)
         self._target = target
         if trigger < 0:
-            self._fail("目标帧数小于 delay，无法在有效帧启动反查 ID 脚本。")
+            self._loop_or_complete(
+                f"目标 Display TID {target.display_tid:06d} @ Adv {target.advances} 小于 delay {self.config.delay}，重新测种"
+            )
             return
         self._set_progress(
-            AutoTidRngPhase.RUN_NAME_SCRIPT,
-            f"命中目标 TID {target.tid} @ Adv {target.advances}，反查脚本启动帧 {trigger}",
+            AutoTidRngPhase.WAIT_NAME_TRIGGER,
+            f"命中目标 Display TID {target.display_tid:06d} @ Adv {target.advances}，取名脚本触发帧 {trigger}",
             target_tid=target.tid,
             target_sid=target.sid,
+            target_display_tid=target.display_tid,
             target_advances=target.advances,
             trigger_advances=trigger,
             current_advances=seed.current_advances,
+            id_states=tuple(states),
         )
 
     def _run_name_script(self) -> None:
@@ -322,7 +349,46 @@ class AutoTidRngRunner:
         except Exception as exc:
             self._fail(str(exc))
             return
-        self._set_progress(AutoTidRngPhase.WAIT_REVERSE_TRIGGER, f"取名脚本完成——{path.name}", last_script_path=path)
+        self._set_progress(AutoTidRngPhase.COMPLETED, f"取名脚本完成——{path.name}", last_script_path=path)
+
+    def _wait_name_trigger(self) -> None:
+        seed = self._require_seed()
+        trigger = self.progress.trigger_advances
+        if trigger is None:
+            self._fail("取名脚本触发帧尚未计算")
+            return
+        if trigger < int(seed.current_advances):
+            self._loop_or_complete(f"已超过取名脚本触发帧 {trigger}，当前帧 {seed.current_advances}，重新测种")
+            return
+        self._advance_counter.reset(
+            current_advances=int(seed.current_advances),
+            npc=int(seed.npc),
+            now=float(seed.measured_at if seed.measured_at is not None else self.services.monotonic()),
+        )
+
+        def on_frame(live_current: int) -> None:
+            self._set_progress(
+                AutoTidRngPhase.WAIT_NAME_TRIGGER,
+                "",
+                current_advances=live_current,
+                remaining_to_trigger=max(0, trigger - live_current),
+            )
+
+        self._advance_counter.run_until(
+            trigger,
+            monotonic=self.services.monotonic,
+            sleep=self.services.sleep,
+            should_stop=self.should_stop,
+            on_frame=on_frame,
+        )
+        if self._stop_requested:
+            return
+        self._set_progress(
+            AutoTidRngPhase.RUN_NAME_SCRIPT,
+            f"到达取名脚本触发帧 {trigger}，运行取名脚本",
+            current_advances=trigger,
+            remaining_to_trigger=0,
+        )
 
     def _wait_reverse_trigger(self) -> None:
         seed = self._require_seed()
@@ -420,6 +486,11 @@ class AutoTidRngRunner:
             raise RuntimeError("目标 TID 尚未锁定")
         return self._target
 
+    def _target_display_tids(self) -> tuple[int, ...]:
+        if self.config.target_display_tids:
+            return tuple(int(value) for value in self.config.target_display_tids)
+        return tuple(int(value) for value in self.config.target_tids)
+
     def _set_progress(self, phase: AutoTidRngPhase, message: str = "", **updates: object) -> None:
         values = {
             "phase": phase,
@@ -428,6 +499,7 @@ class AutoTidRngRunner:
             "current_advances": updates.get("current_advances", self.progress.current_advances),
             "target_tid": updates.get("target_tid", self.progress.target_tid),
             "target_sid": updates.get("target_sid", self.progress.target_sid),
+            "target_display_tid": updates.get("target_display_tid", self.progress.target_display_tid),
             "target_advances": updates.get("target_advances", self.progress.target_advances),
             "trigger_advances": updates.get("trigger_advances", self.progress.trigger_advances),
             "remaining_to_trigger": updates.get("remaining_to_trigger", self.progress.remaining_to_trigger),
@@ -435,6 +507,7 @@ class AutoTidRngRunner:
             "ocr_tid": updates.get("ocr_tid", self.progress.ocr_tid),
             "ocr_advances": updates.get("ocr_advances", self.progress.ocr_advances),
             "actual_delay": updates.get("actual_delay", self.progress.actual_delay),
+            "id_states": updates.get("id_states", self.progress.id_states),
             "last_script_path": updates.get("last_script_path", self.progress.last_script_path),
             "log_message": message,
         }

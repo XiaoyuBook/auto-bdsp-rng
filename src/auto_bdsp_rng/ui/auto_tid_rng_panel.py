@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+import csv
+import time
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -21,8 +24,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QSpinBox,
     QToolButton,
     QVBoxLayout,
@@ -32,6 +38,7 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_rng.scripts import DEFAULT_SEED_SCRIPT_NAME, choose_default_script, list_auto_scripts
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase, AutoTidRngProgress
+from auto_bdsp_rng.gen8_id import IDState8
 from auto_bdsp_rng.resources import resource_path
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
@@ -46,6 +53,50 @@ class _CopyableLog(QPlainTextEdit):
         self.setReadOnly(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.setUndoRedoEnabled(False)
+
+
+class _IdResultTable(QTableWidget):
+    searchStatusChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._search_text = ""
+        self._last_search_at = 0.0
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        text = event.text()
+        if text and text.isprintable() and not event.modifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier
+        ):
+            now = time.monotonic()
+            if now - self._last_search_at > 1.0:
+                self._search_text = ""
+            self._last_search_at = now
+            self._search_text += text
+            if self._select_next_prefix_match(self._search_text):
+                self.searchStatusChanged.emit(f"查找: {self._search_text}")
+            else:
+                self.searchStatusChanged.emit(f"未找到: {self._search_text}")
+            event.accept()
+            return
+        self._search_text = ""
+        super().keyPressEvent(event)
+
+    def _select_next_prefix_match(self, prefix: str) -> bool:
+        if self.rowCount() <= 0 or self.columnCount() <= 0:
+            return False
+        column = self.currentColumn()
+        if column < 0:
+            column = 0
+        start = self.currentRow()
+        for offset in range(1, self.rowCount() + 1):
+            row = (start + offset) % self.rowCount()
+            item = self.item(row, column)
+            if item is not None and item.text().lower().startswith(prefix.lower()):
+                self.setCurrentCell(row, column)
+                self.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                return True
+        return False
 
 
 class AutoTidRngWorker(QObject):
@@ -106,7 +157,9 @@ class AutoTidRngPanel(QWidget):
         grid.setVerticalSpacing(12)
         grid.addWidget(self._build_config_group(), 0, 0)
         grid.addWidget(self._build_runtime_group(), 0, 1)
-        grid.addWidget(self._build_log_group(), 1, 0, 1, 2)
+        self._legacy_log_group = self._build_log_group()
+        self._legacy_log_group.setVisible(False)
+        grid.addWidget(self._build_id_table_group(), 1, 0, 1, 2)
         grid.setColumnStretch(0, 0)
         grid.setColumnStretch(1, 1)
         grid.setRowStretch(1, 1)
@@ -129,13 +182,16 @@ class AutoTidRngPanel(QWidget):
         self.mode_combo.addItem("单次", "single")
         self.mode_combo.addItem("循环 N 次", "count")
         self.mode_combo.addItem("无限循环", "infinite")
+        self.mode_combo.setVisible(False)
         self.mode_combo.setFixedHeight(34)
         self.mode_combo.setFixedWidth(120)
         self.loop_count = self._spin(1, 9999, 1)
         self.loop_count.setFixedWidth(80)
+        self.loop_count.setVisible(False)
         self.debug_output_check = QCheckBox("调试")
         self.debug_output_check.setFixedHeight(34)
         self.debug_output_check.setFixedWidth(64)
+        self.debug_output_check.setVisible(False)
 
         self.status_badge = QLabel("状态：空闲")
         self.status_badge.setObjectName("Badge")
@@ -156,12 +212,9 @@ class AutoTidRngPanel(QWidget):
         self.ocr_button.setFixedHeight(34)
         self.ocr_button.setMinimumWidth(120)
         self.ocr_button.clicked.connect(self.ocrSettingsRequested.emit)
+        self.ocr_button.setVisible(False)
 
-        row.addWidget(QLabel("运行模式"))
-        row.addWidget(self.mode_combo)
-        row.addWidget(QLabel("次数"))
-        row.addWidget(self.loop_count)
-        row.addWidget(self.debug_output_check)
+        row.addWidget(QLabel("自动 TID：按 Display TID 命中后取名"))
         row.addStretch(1)
         row.addWidget(self.status_badge)
         row.addWidget(self.start_button)
@@ -184,14 +237,14 @@ class AutoTidRngPanel(QWidget):
         self.reverse_lookup_window = self._spin(0, 10_000, 50)
         self.reverse_lookup_window.setPrefix("±")
         self.reverse_lookup_window.setSuffix(" 帧")
+        self.reverse_lookup_window.setVisible(False)
         for spin in (self.frame_threshold, self.delay, self.reverse_lookup_window):
             spin.setFixedWidth(215)
         form.addRow("帧数阈值", self.frame_threshold)
         form.addRow("delay", self.delay)
-        form.addRow("反查范围", self.reverse_lookup_window)
         layout.addLayout(form)
 
-        target_group = QGroupBox("目标 TID 列表")
+        target_group = QGroupBox("目标 Display TID 列表")
         target_layout = QVBoxLayout(target_group)
         self.target_list = QListWidget()
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -199,7 +252,7 @@ class AutoTidRngPanel(QWidget):
         target_layout.addWidget(self.target_list, 1)
         edit_row = QHBoxLayout()
         self.target_input = QLineEdit()
-        self.target_input.setPlaceholderText("0-65535")
+        self.target_input.setPlaceholderText("000000-999999")
         self.target_input.setFixedHeight(34)
         self.add_target_button = QPushButton("添加")
         self.add_target_button.clicked.connect(self._add_target_from_input)
@@ -227,6 +280,7 @@ class AutoTidRngPanel(QWidget):
         self.seed_script_combo = QComboBox()
         self.name_script_combo = QComboBox()
         self.reverse_id_script_combo = QComboBox()
+        self.reverse_id_script_combo.setVisible(False)
         for combo in (self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo):
             combo.setFixedHeight(34)
             combo.setMinimumWidth(220)
@@ -237,18 +291,18 @@ class AutoTidRngPanel(QWidget):
         script_grid.addWidget(self.seed_script_combo, 0, 1)
         script_grid.addWidget(QLabel("取名脚本"), 1, 0)
         script_grid.addWidget(self.name_script_combo, 1, 1)
-        script_grid.addWidget(QLabel("反查 ID 脚本"), 2, 0)
-        script_grid.addWidget(self.reverse_id_script_combo, 2, 1)
-        script_grid.addWidget(self.refresh_scripts_button, 3, 1)
+        script_grid.addWidget(self.refresh_scripts_button, 2, 1)
         layout.addLayout(script_grid)
 
         self.ocr_region_label = QLabel("TID ROI：未设置")
+        self.ocr_region_label.setVisible(False)
         self.ocr_region_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         layout.addWidget(self.ocr_region_label)
 
         result_group = QGroupBox("校准结果")
+        result_group.setVisible(False)
         result_form = QFormLayout(result_group)
         result_form.setVerticalSpacing(8)
         self.target_result = QLabel("-")
@@ -274,6 +328,44 @@ class AutoTidRngPanel(QWidget):
         self.log_view.setObjectName("LogView")
         self.log_view.setFont(QFont("Consolas", 10))
         layout.addWidget(self.log_view)
+        self.log_view.setVisible(False)
+        return group
+
+    def _build_id_table_group(self) -> QGroupBox:
+        group = QGroupBox("ID 数据表")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        self.id_result_count = QLabel("0 条结果")
+        self.copy_button = QPushButton("复制")
+        self.copy_button.setFixedHeight(32)
+        self.copy_button.setFixedWidth(72)
+        self.copy_button.clicked.connect(self.copy_results)
+        self.export_button = QPushButton("导出 CSV")
+        self.export_button.setFixedHeight(32)
+        self.export_button.setFixedWidth(88)
+        self.export_button.clicked.connect(self.export_results)
+        toolbar.addWidget(self.id_result_count)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.copy_button)
+        toolbar.addWidget(self.export_button)
+        layout.addLayout(toolbar)
+
+        self._id_states: list[IDState8] = []
+        self.id_table = _IdResultTable()
+        self.id_table.setColumnCount(5)
+        self.id_table.setHorizontalHeaderLabels(("Adv", "TID", "SID", "TSV", "Display TID"))
+        self.id_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.id_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.id_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.id_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.id_table.customContextMenuRequested.connect(self._show_table_context_menu)
+        self.id_table.searchStatusChanged.connect(self.status_badge.setText)
+        self.id_table.verticalHeader().setVisible(False)
+        self.id_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.id_table, 1)
         return group
 
     def refresh_scripts(self) -> None:
@@ -292,15 +384,18 @@ class AutoTidRngPanel(QWidget):
         self._select_script(self.name_script_combo, self._choose_script_by_keywords(("取名", "name")))
         self._select_script(self.reverse_id_script_combo, self._choose_script_by_keywords(("反查ID", "反查 ID", "id")))
 
-    def add_target_tid(self, tid: int) -> None:
-        tid = self._validate_tid_value(tid)
-        if tid in self.target_tids():
+    def add_target_display_tid(self, tid: int) -> None:
+        tid = self._validate_display_tid_value(tid)
+        if tid in self.target_display_tids():
             return
-        item = QListWidgetItem(str(tid))
+        item = QListWidgetItem(f"{tid:06d}")
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         self.target_list.addItem(item)
 
-    def target_tids(self) -> tuple[int, ...]:
+    def add_target_tid(self, tid: int) -> None:
+        self.add_target_display_tid(tid)
+
+    def target_display_tids(self) -> tuple[int, ...]:
         values: list[int] = []
         for row in range(self.target_list.count()):
             value = self._parse_tid(self.target_list.item(row).text())
@@ -308,17 +403,20 @@ class AutoTidRngPanel(QWidget):
                 values.append(value)
         return tuple(values)
 
+    def target_tids(self) -> tuple[int, ...]:
+        return self.target_display_tids()
+
     def build_config(self) -> AutoTidRngConfig:
-        target_tids = self.target_tids()
-        if not target_tids:
-            raise ValueError("请至少添加一个目标 TID")
+        target_display_tids = self.target_display_tids()
+        if not target_display_tids:
+            raise ValueError("请至少添加一个目标 Display TID")
         return AutoTidRngConfig(
             script_dir=self.script_dir,
             seed_script_path=self._selected_path(self.seed_script_combo),
             name_script_path=self._selected_path(self.name_script_combo),
             reverse_id_script_path=self._selected_path(self.reverse_id_script_combo),
             frame_threshold=self.frame_threshold.value(),
-            target_tids=target_tids,
+            target_display_tids=target_display_tids,
             delay=self.delay.value(),
             reverse_lookup_window=self.reverse_lookup_window.value(),
             ocr_region=self._ocr_region,
@@ -358,9 +456,14 @@ class AutoTidRngPanel(QWidget):
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         self.status_badge.setText(f"状态：{phase_text}")
         self.progressChanged.emit(progress)
+        if progress.id_states:
+            self.set_id_states(list(progress.id_states))
         if progress.target_tid is not None and progress.target_advances is not None:
             sid_text = "-" if progress.target_sid is None else str(progress.target_sid)
-            self.target_result.setText(f"TID {progress.target_tid} / SID {sid_text} / Adv {progress.target_advances}")
+            display = "-" if progress.target_display_tid is None else f"{progress.target_display_tid:06d}"
+            self.target_result.setText(
+                f"Display TID {display} / TID {progress.target_tid} / SID {sid_text} / Adv {progress.target_advances}"
+            )
         if progress.trigger_advances is not None:
             self.trigger_result.setText(str(progress.trigger_advances))
         if progress.ocr_tid is not None:
@@ -377,6 +480,69 @@ class AutoTidRngPanel(QWidget):
         lines = str(message).splitlines() or [""]
         stamped = [line if _TIMESTAMP_RE.match(line) else f"[{timestamp}] {line}" for line in lines]
         self.log_view.appendPlainText("\n".join(stamped))
+
+    def set_id_states(self, states: list[IDState8]) -> None:
+        self._id_states = list(states)
+        self.id_table.setRowCount(len(self._id_states))
+        for row, state in enumerate(self._id_states):
+            values = (
+                str(state.advances),
+                str(state.tid),
+                str(state.sid),
+                str(state.tsv),
+                f"{state.display_tid:06d}",
+            )
+            for column, value in enumerate(values):
+                self.id_table.setItem(row, column, QTableWidgetItem(value))
+        self.id_result_count.setText(f"{len(self._id_states)} 条结果")
+
+    def _table_text(self) -> str:
+        rows = ["Adv\tTID\tSID\tTSV\tDisplay TID"]
+        for state in self._id_states:
+            rows.append(
+                "\t".join(
+                    (
+                        str(state.advances),
+                        str(state.tid),
+                        str(state.sid),
+                        str(state.tsv),
+                        f"{state.display_tid:06d}",
+                    )
+                )
+            )
+        return "\n".join(rows)
+
+    def _show_table_context_menu(self, position) -> None:
+        menu = QMenu(self.id_table)
+        copy_action = menu.addAction("复制")
+        csv_action = menu.addAction("导出 CSV")
+        selected = menu.exec(self.id_table.viewport().mapToGlobal(position))
+        if selected == copy_action:
+            self.copy_results()
+        elif selected == csv_action:
+            self.export_results()
+
+    def copy_results(self) -> None:
+        if not self._id_states:
+            self.status_badge.setText("没有可复制的 ID 数据")
+            return
+        QGuiApplication.clipboard().setText(self._table_text())
+        self.status_badge.setText(f"已复制 {len(self._id_states)} 条 ID 数据")
+
+    def export_results(self) -> None:
+        if not self._id_states:
+            self.status_badge.setText("没有可导出的 ID 数据")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "导出 ID 数据", "auto_tid_id_results.csv", "CSV files (*.csv)")
+        if not path:
+            return
+        output = Path(path)
+        with output.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(("Adv", "TID", "SID", "TSV", "Display TID"))
+            for state in self._id_states:
+                writer.writerow((state.advances, state.tid, state.sid, state.tsv, f"{state.display_tid:06d}"))
+        self.status_badge.setText(f"已导出 {output.name}")
 
     def _runner_finished(self, progress: object) -> None:
         if isinstance(progress, AutoTidRngProgress):
@@ -414,11 +580,7 @@ class AutoTidRngPanel(QWidget):
             raise ValueError("请选择测种脚本")
         if config.name_script_path is None:
             raise ValueError("请选择取名脚本")
-        if config.reverse_id_script_path is None:
-            raise ValueError("请选择反查 ID 脚本")
-        if config.ocr_region is None:
-            raise ValueError("请先设置 TID OCR ROI")
-        for path in (config.seed_script_path, config.name_script_path, config.reverse_id_script_path):
+        for path in (config.seed_script_path, config.name_script_path):
             path.read_text(encoding="utf-8")
 
     def _selected_path(self, combo: QComboBox) -> Path | None:
@@ -445,18 +607,18 @@ class AutoTidRngPanel(QWidget):
     def _add_target_from_input(self) -> None:
         value = self._parse_tid(self.target_input.text())
         if value is None:
-            self.add_log("目标 TID 必须是 0-65535 的数字")
+            self.add_log("目标 Display TID 必须是 0-999999 的数字")
             return
-        self.add_target_tid(value)
+        self.add_target_display_tid(value)
         self.target_input.clear()
 
     def _update_selected_target(self) -> None:
         item = self.target_list.currentItem()
         value = self._parse_tid(self.target_input.text())
         if item is None or value is None:
-            self.add_log("请选择目标并输入 0-65535 的 TID")
+            self.add_log("请选择目标并输入 0-999999 的 Display TID")
             return
-        item.setText(str(value))
+        item.setText(f"{value:06d}")
 
     def _delete_selected_target(self) -> None:
         row = self.target_list.currentRow()
@@ -466,20 +628,23 @@ class AutoTidRngPanel(QWidget):
     def _normalize_edited_target_item(self, item: QListWidgetItem) -> None:
         value = self._parse_tid(item.text())
         if value is None:
-            item.setText("0")
+            item.setText("000000")
             return
-        item.setText(str(value))
+        item.setText(f"{value:06d}")
 
     def _parse_tid(self, text: str) -> int | None:
         try:
-            return self._validate_tid_value(int(str(text).strip(), 0))
+            return self._validate_display_tid_value(int(str(text).strip(), 10))
         except Exception:
             return None
 
     def _validate_tid_value(self, value: int) -> int:
+        return self._validate_display_tid_value(value)
+
+    def _validate_display_tid_value(self, value: int) -> int:
         value = int(value)
-        if not 0 <= value <= 65535:
-            raise ValueError("TID 必须在 0-65535 范围内")
+        if not 0 <= value <= 999_999:
+            raise ValueError("Display TID 必须在 0-999999 范围内")
         return value
 
     def _refresh_ocr_region_text(self) -> None:
@@ -498,7 +663,7 @@ class AutoTidRngPanel(QWidget):
         s.setValue("frame_threshold", self.frame_threshold.value())
         s.setValue("delay", self.delay.value())
         s.setValue("reverse_lookup_window", self.reverse_lookup_window.value())
-        s.setValue("target_tids", json.dumps(list(self.target_tids()), separators=(",", ":")))
+        s.setValue("target_tids", json.dumps(list(self.target_display_tids()), separators=(",", ":")))
         for key, combo in (
             ("seed_script", self.seed_script_combo),
             ("name_script", self.name_script_combo),

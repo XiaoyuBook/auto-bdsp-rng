@@ -3035,7 +3035,12 @@ class MainWindow(QMainWindow):
         if not self._ensure_bridge_connected():
             return
         services = self._build_auto_tid_rng_services(config)
-        self.auto_tid_rng_tab.run_with_runner(AutoTidRngRunner(config, services=services))
+        runner = AutoTidRngRunner(
+            config,
+            services=services,
+            log_callback=lambda message: self.autoHistoryEvent.emit("auto_tid_log", (message,)),
+        )
+        self.auto_tid_rng_tab.run_with_runner(runner)
 
     def _build_auto_tid_rng_services(self, config: AutoTidRngConfig) -> AutoTidRngServices:
         seed_config_path = self._selected_auto_seed_config_path()
@@ -3093,12 +3098,12 @@ class MainWindow(QMainWindow):
                 measured_at=time.monotonic(),
             )
 
-        def search_id_states_service(seed_result: AutoTidSeedResult, threshold: int, target_tids: Sequence[int]):
+        def search_id_states_service(seed_result: AutoTidSeedResult, threshold: int, target_display_tids: Sequence[int]):
             return generate_ids(
                 seed_pair_from_result(seed_result),
                 initial_advances=0,
                 max_advances=max(0, int(threshold)) + 1,
-                state_filter=IDFilter(tid=tuple(int(tid) for tid in target_tids)),
+                state_filter=IDFilter(),
             )
 
         def lookup_tid_state_service(seed_result: AutoTidSeedResult, tid: int, center_advances: int, window: int):
@@ -3188,6 +3193,8 @@ class MainWindow(QMainWindow):
             h.cycle_start(int(values[0]))
         elif event == "seed_captured" and len(values) >= 4:
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
+        elif event == "auto_tid_log" and len(values) >= 1:
+            h.auto_tid_log(str(values[0]))
         elif event == "candidates_found" and len(values) >= 2:
             flags = list(values[2]) if len(values) >= 3 else None
             delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None

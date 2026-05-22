@@ -153,6 +153,7 @@ class HistoryPanel(QWidget):
         layout.addLayout(toolbar)
 
         self.view = _CopyableTextEdit()
+        self.text_view = self.view
         self.view.setFont(QFont("Consolas", 10))
         self.view.setStyleSheet("QPlainTextEdit { padding: 12px; }")
         layout.addWidget(self.view, 1)
@@ -200,6 +201,9 @@ class HistoryPanel(QWidget):
             self._sep_thin()
             self._ts(f"重新测种，当前 Seed: {seed_text}  初始帧: {initial_advances}  (原始 Seed: {self._original_seed_text})")
             self._sep_thin()
+
+    def auto_tid_log(self, message: str) -> None:
+        self._ts(f"[自动TID] {message}")
 
     def candidates_found(
         self, candidates: list[object], locked_index: int,
