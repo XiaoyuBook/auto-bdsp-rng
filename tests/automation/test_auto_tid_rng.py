@@ -245,3 +245,41 @@ def test_auto_tid_runner_retries_seed_script_when_display_tid_not_in_threshold(t
 
     assert runner.progress.phase == AutoTidRngPhase.COMPLETED
     assert scripts == ["BDSP测种.txt", "BDSP测种.txt", "取名.txt"]
+
+
+def test_auto_tid_runner_capture_start_only_skips_seed_script_for_first_cycle(tmp_path: Path) -> None:
+    seed_script = tmp_path / "BDSP测种.txt"
+    name_script = tmp_path / "取名.txt"
+    for path in (seed_script, name_script):
+        path.write_text("A 100\n", encoding="utf-8")
+    scripts: list[str] = []
+    searches = [[], [IDState8(advances=42, tid=1, sid=100, tsv=0, display_tid=123456)]]
+    clock = [10.0]
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            name_script_path=name_script,
+            frame_threshold=300,
+            target_display_tids=(123456,),
+            delay=0,
+            start_phase=AutoTidRngPhase.CAPTURE_TIDSID,
+        ),
+        services=AutoTidRngServices(
+            capture_seed=lambda: AutoTidSeedResult(seed=SeedPair64(1, 2), measured_at=clock[0]),
+            search_id_states=lambda _seed, _threshold, _targets: searches.pop(0),
+            run_script_text=lambda _text, name: scripts.append(name),
+            monotonic=lambda: clock[0],
+            sleep=sleep,
+        ),
+    )
+
+    runner.run(max_steps=10)
+
+    assert runner.progress.phase == AutoTidRngPhase.COMPLETED
+    assert scripts == ["BDSP测种.txt", "取名.txt"]
+    assert runner.progress.loop_index == 2

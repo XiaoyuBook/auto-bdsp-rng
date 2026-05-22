@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import QApplication, QLineEdit, QSpinBox
+from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QSpinBox
 from PySide6.QtGui import QKeyEvent, QTextCursor
 
 import auto_bdsp_rng.ui.easycon_panel as panel_module
@@ -81,6 +81,65 @@ def test_key_mapping_dialog_updates_visible_key_text(app):
 
     assert dialog.get_mapping()["A"] == Qt.Key.Key_M
     assert dialog._buttons["A"].text() == "M"
+
+
+def test_easycon_config_persists_key_mapping(tmp_path):
+    config_path = tmp_path / "config.json"
+    config = EasyConConfig(key_mapping={"A": int(Qt.Key.Key_M), "LSUp": int(Qt.Key.Key_U)})
+
+    panel_module.save_config(config, config_path)
+    restored = panel_module.load_config(config_path)
+
+    assert restored.key_mapping == {"A": int(Qt.Key.Key_M), "LSUp": int(Qt.Key.Key_U)}
+
+
+def test_easycon_panel_restores_configured_key_mapping(monkeypatch, tmp_path, app):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    generated_dir = script_dir / ".generated"
+    saved_configs: list[EasyConConfig] = []
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "GENERATED_DIR", generated_dir)
+    monkeypatch.setattr(
+        panel_module,
+        "load_config",
+        lambda: EasyConConfig(mock_enabled=True, key_mapping={"A": int(Qt.Key.Key_M)}),
+    )
+    monkeypatch.setattr(panel_module, "save_config", lambda config: saved_configs.append(config) or tmp_path / "config.json")
+    monkeypatch.setattr(
+        panel_module,
+        "discover_ezcon",
+        lambda _config: EasyConInstallation(path=Path("D:/EasyCon/ezcon.exe"), version="1.6.3", source="test"),
+    )
+    monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
+
+    panel = EasyConPanel()
+
+    assert panel.key_mapping["A"] == int(Qt.Key.Key_M)
+    assert panel.key_mapping["B"] == DEFAULT_KEY_MAPPING["B"]
+
+
+def test_easycon_panel_saves_key_mapping_after_dialog_accept(monkeypatch, tmp_path, easycon_panel):
+    saved_configs: list[EasyConConfig] = []
+
+    class FakeDialog:
+        def __init__(self, mapping, parent=None):
+            self.mapping = dict(mapping)
+            self.mapping["A"] = int(Qt.Key.Key_M)
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def get_mapping(self):
+            return dict(self.mapping)
+
+    monkeypatch.setattr(panel_module, "KeyMappingDialog", FakeDialog)
+    monkeypatch.setattr(panel_module, "save_config", lambda config: saved_configs.append(config) or tmp_path / "config.json")
+
+    easycon_panel.open_key_mapping()
+
+    assert easycon_panel.key_mapping["A"] == int(Qt.Key.Key_M)
+    assert saved_configs[-1].key_mapping["A"] == int(Qt.Key.Key_M)
 
 
 class FakeBridgeBackend:

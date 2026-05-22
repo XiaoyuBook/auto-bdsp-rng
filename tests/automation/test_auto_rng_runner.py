@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngConfig,
     AutoRngDecisionKind,
@@ -265,6 +267,113 @@ def test_runner_reserves_threshold_before_large_exit_reseed_advance(tmp_path):
 
     assert (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 1990000\n") in scripts
     assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+
+
+def test_runner_recaptures_seed_when_advance_exceeds_configured_reseed_threshold(tmp_path):
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 2\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=97,
+            max_wait_frames=360,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+            search_candidates=lambda _seed: [FakeState(909_885)],
+            run_script_text=lambda text, name: scripts.append((name, text)),
+        ),
+    )
+
+    runner.run(max_steps=4)
+
+    assert (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 909786\n") in scripts
+    assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+    assert runner.progress.log_message == "过帧量 909786 超过重测阈值 900000，重新捕获 seed"
+
+
+def test_runner_logs_advance_script_start_before_running_service(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    exit_script = tmp_path / "exit.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    exit_script.write_text("EXIT\n", encoding="utf-8")
+    events: list[str] = []
+    scripts: list[tuple[str, str]] = []
+
+    def run_script(text: str, name: str) -> None:
+        events.append(f"service:{name}")
+        scripts.append((name, text))
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            exit_script_path=exit_script,
+            fixed_delay=100,
+            max_wait_frames=450,
+            reseeding_threshold=10_000,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+            search_candidates=lambda _seed: [FakeState(2_840_819)],
+            run_script_text=run_script,
+        ),
+        progress_callback=lambda progress: events.append(progress.log_message or ""),
+    )
+
+    runner.run(max_steps=4)
+
+    start_index = events.index("启动过帧脚本——advance.txt，本次过帧 2830659 帧")
+    service_index = events.index("service:advance.txt")
+    assert start_index < service_index
+    assert (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 2830659\n") in scripts
+
+
+def test_runner_reports_advance_script_start_failure_with_script_name(tmp_path):
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    messages: list[str] = []
+
+    def fail_script(_text: str, _name: str) -> None:
+        raise RuntimeError("串口未就绪")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=100,
+            max_wait_frames=450,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+            search_candidates=lambda _seed: [FakeState(2_840_819)],
+            run_script_text=fail_script,
+        ),
+        progress_callback=lambda progress: messages.append(progress.log_message or ""),
+    )
+
+    with pytest.raises(RuntimeError, match="串口未就绪"):
+        runner.run(max_steps=4)
+
+    assert "过帧脚本启动失败——advance.txt: 串口未就绪" in messages
 
 
 def test_runner_exit_reseed_runs_exit_script_and_zeroes_underground_advance(tmp_path):

@@ -374,13 +374,13 @@ def decide_after_advance_script(requested_advances: int, *, reseed_threshold_fra
             kind=AutoRngDecisionKind.CAPTURE_SEED,
             phase=AutoRngPhase.CAPTURE_SEED,
             requested_advances=requested_advances,
-            message="过帧量超过阈值，重新捕获 seed",
+            message=f"过帧量 {requested_advances} 超过重测阈值 {reseed_threshold_frames}，重新捕获 seed",
         )
     return AutoRngDecision(
         kind=AutoRngDecisionKind.REIDENTIFY,
         phase=AutoRngPhase.REIDENTIFY,
         requested_advances=requested_advances,
-        message="过帧量未超过阈值，执行 reidentify",
+        message=f"过帧量 {requested_advances} 未超过重测阈值 {reseed_threshold_frames}，执行 reidentify",
     )
 
 
@@ -796,7 +796,20 @@ class AutoRngRunner:
         if self._need_sync_switch and self.config.sync_mode >= 1:
             text = re.sub(r"\$精灵切换开关\s*=\s*\d+", "$精灵切换开关 = 1", text)
         text = prepare_advance_script_text(text, self._requested_advances)
-        self.services.run_script_text(text, path.name)
+        self._set_progress(
+            AutoRngPhase.RUN_ADVANCE_SCRIPT,
+            f"启动过帧脚本——{path.name}，本次过帧 {self._requested_advances} 帧",
+            last_script_path=path,
+        )
+        try:
+            self.services.run_script_text(text, path.name)
+        except Exception as exc:
+            self._set_progress(
+                AutoRngPhase.RUN_ADVANCE_SCRIPT,
+                f"过帧脚本启动失败——{path.name}: {exc}",
+                last_script_path=path,
+            )
+            raise
         # 执行后翻转内部同步状态
         if self._need_sync_switch:
             self._is_sync_active = not self._is_sync_active

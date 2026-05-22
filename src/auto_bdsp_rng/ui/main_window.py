@@ -3154,18 +3154,25 @@ class MainWindow(QMainWindow):
             return _cli_backend
 
         def run_script_text_service(script_text: str, name: str) -> object:
-            if self.easycon_tab._is_bridge_mode():
-                if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+            is_bridge, bridge_status, port, bridge_backend = self._call_on_ui_thread(
+                lambda: (
+                    self.easycon_tab._is_bridge_mode(),
+                    self.easycon_tab.bridge_status,
+                    self.easycon_tab.port_combo.currentText(),
+                    self.easycon_tab._ensure_bridge_backend() if self.easycon_tab._is_bridge_mode() else None,
+                )
+            )
+            if is_bridge:
+                if bridge_status != EasyConStatus.BRIDGE_CONNECTED:
                     raise RuntimeError("请先连接伊机控 Bridge")
                 self.autoScriptStarted.emit(name)
                 try:
-                    result = self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+                    result = bridge_backend.run_script_text(script_text, name)
                 except Exception as exc:
                     self.autoScriptFailed.emit(str(exc))
                     raise
                 self.autoScriptFinished.emit(result)
                 return result
-            port = self.easycon_tab.port_combo.currentText()
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             self.autoScriptStarted.emit(name)
@@ -3676,23 +3683,27 @@ class MainWindow(QMainWindow):
                 _cli_backend = CliEasyConBackend()
             return _cli_backend
 
-        def _cli_port() -> str:
-            return self.easycon_tab.port_combo.currentText()
-
         def run_script_text_service(script_text: str, name: str) -> object:
-            if self.easycon_tab._is_bridge_mode():
-                if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+            is_bridge, bridge_status, port, bridge_backend = self._call_on_ui_thread(
+                lambda: (
+                    self.easycon_tab._is_bridge_mode(),
+                    self.easycon_tab.bridge_status,
+                    self.easycon_tab.port_combo.currentText(),
+                    self.easycon_tab._ensure_bridge_backend() if self.easycon_tab._is_bridge_mode() else None,
+                )
+            )
+            if is_bridge:
+                if bridge_status != EasyConStatus.BRIDGE_CONNECTED:
                     raise RuntimeError("请先连接伊机控 Bridge")
                 self.autoScriptStarted.emit(name)
                 try:
-                    result = self.easycon_tab._ensure_bridge_backend().run_script_text(script_text, name)
+                    result = bridge_backend.run_script_text(script_text, name)
                 except Exception as exc:
                     self.autoScriptFailed.emit(str(exc))
                     raise
                 self.autoScriptFinished.emit(result)
                 return result
             # CLI 模式：通过 ezcon.exe 执行脚本
-            port = _cli_port()
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             self.autoScriptStarted.emit(name)

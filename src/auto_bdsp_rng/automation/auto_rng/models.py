@@ -72,7 +72,7 @@ class AutoRngConfig:
     fixed_delay: int = 100
     fixed_flash_frames: int = 60
     max_wait_frames: int = 300
-    reseed_threshold_frames: int = 990_000
+    reseed_threshold_frames: int = 900_000
     reseeding_threshold: int = 10_000
     min_final_flash_frames: int = 5
     loop_mode: str = "single"

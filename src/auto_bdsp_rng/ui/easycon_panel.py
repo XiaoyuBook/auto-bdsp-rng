@@ -394,7 +394,7 @@ class EasyConPanel(QWidget):
         self._syncing_parameters = False
         self.virtual_controller_enabled = False
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
-        self.key_mapping: dict[str, int] = dict(DEFAULT_KEY_MAPPING)
+        self.key_mapping: dict[str, int] = {**DEFAULT_KEY_MAPPING, **self.config.key_mapping}
         self._recording = False
         self._recorded_lines: list[str] = []
         self._last_record_ts: float = 0.0
@@ -1597,6 +1597,7 @@ class EasyConPanel(QWidget):
             mock_enabled=self.mock_check.isChecked(),
             recent_scripts=self.config.recent_scripts,
             script_parameters=self.config.script_parameters,
+            key_mapping=self.key_mapping,
             keep_generated=self.config.keep_generated,
             keep_log_lines=self.log_keep_lines.value() if hasattr(self, "log_keep_lines") else self.config.keep_log_lines,
         )
@@ -1840,6 +1841,7 @@ class EasyConPanel(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.key_mapping = dialog.get_mapping()
+        self._save_config_from_ui()
         self._append_log("info", "按键映射已更新")
         # 如果虚拟手柄已启用，先关闭再重新启用以应用新映射
         if self.virtual_controller_enabled:

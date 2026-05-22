@@ -730,7 +730,7 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     assert config.fixed_delay == 1200
     assert config.max_wait_frames == 300
     assert config.start_phase == AutoRngPhase.RUN_SEED_SCRIPT
-    assert config.reseed_threshold_frames == 990_000
+    assert config.reseed_threshold_frames == 900_000
     assert config.min_final_flash_frames == 5
 
 
