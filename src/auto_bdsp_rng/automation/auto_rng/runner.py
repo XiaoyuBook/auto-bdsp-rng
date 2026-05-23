@@ -827,9 +827,15 @@ class AutoRngRunner:
         hint = seed.current_advances + self._requested_advances if self._requested_advances else None
         seed_with_hint = seed if hint is None else replace(seed, expected_advances_hint=hint)
         try:
-            self._seed_result = self._with_measurement_time(self.services.reidentify(seed_with_hint))
+            self._seed_result = self._with_measurement_time(
+                self._call_reidentify_with_retry(
+                    self.services.reidentify,
+                    seed_with_hint,
+                    label="reidentify",
+                )
+            )
         except Exception as exc:
-            self._restart_from_seed_script(f"reidentify 失败: {exc}，进入下一轮测种")
+            self._restart_from_seed_script(f"reidentify 连续 2 次失败: {exc}，进入下一轮测种")
             return
         self._reset_advance_counter(self._seed_result)
         new_advances = self._seed_result.current_advances
@@ -853,9 +859,18 @@ class AutoRngRunner:
         seed = self._require_seed()
         self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
         try:
-            self._seed_result = replace(self._with_measurement_time(service(seed)), after_exit_reseed=True)
+            self._seed_result = replace(
+                self._with_measurement_time(
+                    self._call_reidentify_with_retry(
+                        service,
+                        seed,
+                        label="过场 reidentify",
+                    )
+                ),
+                after_exit_reseed=True,
+            )
         except Exception as exc:
-            self._restart_from_seed_script(f"过场 reidentify 失败: {exc}，进入下一轮测种")
+            self._restart_from_seed_script(f"过场 reidentify 连续 2 次失败: {exc}，进入下一轮测种")
             return
         self._reset_advance_counter(self._seed_result)
         self._reserved_exit_reseed_pending = False
@@ -1232,6 +1247,39 @@ class AutoRngRunner:
         if seed_result.measured_at is not None:
             return seed_result
         return replace(seed_result, measured_at=self.services.monotonic())
+
+    def _call_reidentify_with_retry(
+        self,
+        service: Callable[[AutoRngSeedResult], AutoRngSeedResult],
+        seed: AutoRngSeedResult,
+        *,
+        label: str,
+    ) -> AutoRngSeedResult:
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            try:
+                return service(seed)
+            except Exception as exc:
+                last_error = exc
+                if attempt == 1:
+                    self._emit(
+                        AutoRngProgress(
+                            phase=self.progress.phase,
+                            loop_index=self.progress.loop_index,
+                            log_message=f"{label} 第 1 次失败: {exc}，重试一次",
+                            locked_target=self.progress.locked_target,
+                            raw_target_advances=self.progress.raw_target_advances,
+                            fixed_delay=self.progress.fixed_delay,
+                            trigger_advances=self.progress.trigger_advances,
+                            current_advances=self.progress.current_advances,
+                            remaining_to_trigger=self.progress.remaining_to_trigger,
+                            final_flash_frames=self.progress.final_flash_frames,
+                            last_script_path=self.progress.last_script_path,
+                            seed_text=self.progress.seed_text,
+                        )
+                    )
+        assert last_error is not None
+        raise last_error
 
     def _restart_from_seed_script(self, message: str) -> None:
         self._seed_result = None

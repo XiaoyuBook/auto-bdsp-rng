@@ -736,8 +736,11 @@ def test_runner_reidentify_failure_restarts_seed_script_in_infinite_loop(tmp_pat
     advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
     hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
     scripts: list[tuple[str, str]] = []
+    attempts = 0
 
     def reidentify(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
         raise RuntimeError("Project_Xs reidentify failed")
 
     runner = AutoRngRunner(
@@ -765,7 +768,55 @@ def test_runner_reidentify_failure_restarts_seed_script_in_infinite_loop(tmp_pat
         (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 840\n"),
         (seed_script.name, "SEED\n"),
     ]
+    assert attempts == 2
     assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+
+
+def test_runner_continues_when_second_reidentify_attempt_succeeds(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+    attempts = 0
+
+    def reidentify(seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("Project_Xs reidentify failed")
+        return AutoRngSeedResult(seed=seed.seed, current_advances=600)
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            loop_mode="infinite",
+            fixed_delay=100,
+            max_wait_frames=300,
+            reseeding_threshold=900_000,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
+            search_candidates=lambda _seed: [FakeState(1_000)],
+            reidentify=reidentify,
+            run_script_text=lambda text, name: scripts.append((name, text)),
+        ),
+    )
+
+    runner.run(max_steps=6)
+
+    assert attempts == 2
+    assert scripts == [
+        (seed_script.name, "SEED\n"),
+        (advance_script.name, f"{AUTO_ADVANCE_PARAMETER} = 840\n"),
+    ]
+    assert runner.progress.phase == AutoRngPhase.DECIDE_ADVANCE
+    assert runner.progress.current_advances == 600
 
 
 def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
@@ -776,8 +827,11 @@ def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
     hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
     exit_script.write_text("EXIT\n", encoding="utf-8")
     scripts: list[tuple[str, str]] = []
+    attempts = 0
 
     def reidentify_exit(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
         raise RuntimeError("Project_Xs reidentify failed")
 
     runner = AutoRngRunner(
@@ -805,6 +859,7 @@ def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
         (exit_script.name, "EXIT\n"),
         (seed_script.name, "SEED\n"),
     ]
+    assert attempts == 2
     assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
 
 

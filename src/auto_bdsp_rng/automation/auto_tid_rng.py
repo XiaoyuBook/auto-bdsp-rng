@@ -374,7 +374,7 @@ class AutoTidRngRunner:
         try:
             seed = self.services.capture_seed()
         except Exception as exc:
-            self._fail(f"TID/SID 测种失败: {exc}")
+            self._loop_or_complete(f"TID/SID 测种失败: {exc}，重新运行测种脚本")
             return
         if seed.measured_at is None:
             seed = replace(seed, measured_at=self.services.monotonic())

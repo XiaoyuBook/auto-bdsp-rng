@@ -283,3 +283,48 @@ def test_auto_tid_runner_capture_start_only_skips_seed_script_for_first_cycle(tm
     assert runner.progress.phase == AutoTidRngPhase.COMPLETED
     assert scripts == ["BDSP测种.txt", "取名.txt"]
     assert runner.progress.loop_index == 2
+
+
+def test_auto_tid_runner_restarts_seed_script_when_capture_seed_fails(tmp_path: Path) -> None:
+    seed_script = tmp_path / "BDSP测种.txt"
+    name_script = tmp_path / "取名.txt"
+    for path in (seed_script, name_script):
+        path.write_text("A 100\n", encoding="utf-8")
+    scripts: list[str] = []
+    capture_attempts = 0
+    clock = [10.0]
+
+    def capture_seed() -> AutoTidSeedResult:
+        nonlocal capture_attempts
+        capture_attempts += 1
+        if capture_attempts == 1:
+            raise RuntimeError("Project_Xs seed capture failed")
+        return AutoTidSeedResult(seed=SeedPair64(1, 2), measured_at=clock[0])
+
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            name_script_path=name_script,
+            frame_threshold=300,
+            target_display_tids=(123456,),
+            delay=0,
+            start_phase=AutoTidRngPhase.CAPTURE_TIDSID,
+        ),
+        services=AutoTidRngServices(
+            capture_seed=capture_seed,
+            search_id_states=lambda _seed, _threshold, _targets: [
+                IDState8(advances=42, tid=1, sid=100, tsv=0, display_tid=123456)
+            ],
+            run_script_text=lambda _text, name: scripts.append(name),
+            monotonic=lambda: clock[0],
+            sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        ),
+    )
+
+    runner.run(max_steps=10)
+
+    assert capture_attempts == 2
+    assert runner.progress.phase == AutoTidRngPhase.COMPLETED
+    assert scripts == ["BDSP测种.txt", "取名.txt"]
+    assert runner.progress.loop_index == 2
