@@ -83,6 +83,20 @@ def test_key_mapping_dialog_updates_visible_key_text(app):
     assert dialog._buttons["A"].text() == "M"
 
 
+def test_key_mapping_dialog_close_accepts_changed_mapping(app):
+    dialog = KeyMappingDialog(DEFAULT_KEY_MAPPING)
+
+    dialog._select_button("A")
+    QApplication.sendEvent(
+        dialog,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_M, Qt.KeyboardModifier.NoModifier),
+    )
+    dialog.close()
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.get_mapping()["A"] == Qt.Key.Key_M
+
+
 def test_easycon_config_persists_key_mapping(tmp_path):
     config_path = tmp_path / "config.json"
     config = EasyConConfig(key_mapping={"A": int(Qt.Key.Key_M), "LSUp": int(Qt.Key.Key_U)})

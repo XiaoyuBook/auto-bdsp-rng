@@ -277,6 +277,8 @@ class KeyMappingDialog(QDialog):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._mapping = dict(mapping)
         self._active_name: str | None = None
+        self._dirty = False
+        self._rejecting = False
         self._buttons: dict[str, QPushButton] = {}
         self._build_ui()
         self._load_mapping()
@@ -321,14 +323,14 @@ class KeyMappingDialog(QDialog):
             btn.clicked.connect(lambda checked, n=name: self._select_button(n))
             self._buttons[name] = btn
 
-        ok_btn = QPushButton("确定")
+        ok_btn = QPushButton("确定", self)
         ok_btn.setGeometry(239, 652, 223, 53)
         ok_btn.setStyleSheet(
             "QPushButton { background: #f7f7f7; border: 1px solid #cfcfcf; border-radius: 3px; font-size: 14px; }"
             " QPushButton:hover { background: #ffffff; border-color: #8ab4f8; }"
         )
         ok_btn.clicked.connect(self.accept)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton("取消", self)
         cancel_btn.setGeometry(537, 652, 223, 53)
         cancel_btn.setStyleSheet(
             "QPushButton { background: #f7f7f7; border: 1px solid #cfcfcf; border-radius: 3px; font-size: 14px; }"
@@ -359,6 +361,7 @@ class KeyMappingDialog(QDialog):
         if key == Qt.Key.Key_Escape:
             key = 0
         self._mapping[self._active_name] = key
+        self._dirty = True
         btn = self._buttons[self._active_name]
         key_name = _qt_key_name(key)
         label = btn.property("label") or self._active_name
@@ -366,6 +369,17 @@ class KeyMappingDialog(QDialog):
         btn.setToolTip(f"{label}: {key_name or '未绑定'}")
         btn.setChecked(False)
         self._active_name = None
+
+    def reject(self) -> None:
+        self._rejecting = True
+        super().reject()
+
+    def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._dirty and not self._rejecting:
+            self.accept()
+            event.accept()
+            return
+        super().closeEvent(event)
 
     def get_mapping(self) -> dict[str, int]:
         return dict(self._mapping)
