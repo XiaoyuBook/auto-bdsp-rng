@@ -230,13 +230,20 @@ def capture_player_blinks(
     frame_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     show_window: bool = True,
+    discard_first_blink_within_seconds: float | None = None,
 ) -> BlinkObservation:
     """Capture player blink observations through Project_Xs tracking logic."""
 
     eye_image = _read_grayscale_image(config.eye_image_path)
 
     try:
-        if should_stop is not None or frame_callback is not None or progress_callback is not None or not show_window:
+        if (
+            should_stop is not None
+            or frame_callback is not None
+            or progress_callback is not None
+            or not show_window
+            or discard_first_blink_within_seconds is not None
+        ):
             blinks, intervals, offset_time = _tracking_blink_controlled(
                 eye_image,
                 config,
@@ -244,6 +251,7 @@ def capture_player_blinks(
                 frame_callback=frame_callback,
                 progress_callback=progress_callback,
                 show_window=show_window,
+                discard_first_blink_within_seconds=discard_first_blink_within_seconds,
             )
         else:
             rngtool = _load_module("rngtool")
@@ -275,6 +283,7 @@ def _tracking_blink_controlled(
     frame_callback: Callable[[Any], None] | None,
     progress_callback: Callable[[int, int], None] | None,
     show_window: bool,
+    discard_first_blink_within_seconds: float | None = None,
 ) -> tuple[list[int], list[int], float]:
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
@@ -299,6 +308,8 @@ def _tracking_blink_controlled(
     prev_time = 0.0
     offset_time = 0.0
     prev_roi = None
+    capture_started_at = time.perf_counter()
+    skipped_current_blink = False
     roi_x, roi_y, roi_w, roi_h = config.roi
     eye_width, eye_height = eye_image.shape[::-1]
 
@@ -329,16 +340,26 @@ def _tracking_blink_controlled(
             if 0.01 < match < config.threshold:
                 cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
                 if state == state_idle:
-                    blinks.append(0)
-                    intervals.append(round((time_counter - prev_time) / 1.017))
-                    if progress_callback is not None:
-                        progress_callback(len(intervals), config.blink_count)
-                    if len(intervals) == config.blink_count:
-                        offset_time = time_counter
+                    should_discard = (
+                        discard_first_blink_within_seconds is not None
+                        and not blinks
+                        and time_counter - capture_started_at <= discard_first_blink_within_seconds
+                    )
+                    if should_discard:
+                        skipped_current_blink = True
+                    else:
+                        skipped_current_blink = False
+                        blinks.append(0)
+                        intervals.append(round((time_counter - prev_time) / 1.017))
+                        if progress_callback is not None:
+                            progress_callback(len(intervals), config.blink_count)
+                        if len(intervals) == config.blink_count:
+                            offset_time = time_counter
                     state = state_single
                     prev_time = time_counter
                 elif state == state_single and time_counter - prev_time > 0.3:
-                    blinks[-1] = 1
+                    if not skipped_current_blink:
+                        blinks[-1] = 1
                     state = state_double
             else:
                 match_location = (max_loc[0] + roi_x, max_loc[1] + roi_y)
@@ -353,6 +374,7 @@ def _tracking_blink_controlled(
                     break
             if state != state_idle and time_counter - prev_time > 0.7:
                 state = state_idle
+                skipped_current_blink = False
     finally:
         release = getattr(video, "release", None)
         if callable(release):
@@ -370,6 +392,7 @@ def _tracking_poke_blink_controlled(
     frame_callback: Callable[[Any], None] | None,
     progress_callback: Callable[[int, int], None] | None,
     show_window: bool,
+    discard_first_blink_within_seconds: float | None = None,
 ) -> list[float]:
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
@@ -389,7 +412,8 @@ def _tracking_poke_blink_controlled(
     state_single = 0xF0
     state = state_idle
     intervals: list[float] = []
-    prev_time = time.perf_counter()
+    capture_started_at = time.perf_counter()
+    prev_time = capture_started_at
     prev_roi = None
     roi_x, roi_y, roi_w, roi_h = config.roi
     eye_width, eye_height = eye_image.shape[::-1]
@@ -421,9 +445,15 @@ def _tracking_poke_blink_controlled(
             if 0.4 < match < config.threshold:
                 cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
                 if state == state_idle:
-                    intervals.append(time_counter - prev_time)
-                    if progress_callback is not None:
-                        progress_callback(len(intervals), config.blink_count)
+                    should_discard = (
+                        discard_first_blink_within_seconds is not None
+                        and not intervals
+                        and time_counter - capture_started_at <= discard_first_blink_within_seconds
+                    )
+                    if not should_discard:
+                        intervals.append(time_counter - prev_time)
+                        if progress_callback is not None:
+                            progress_callback(len(intervals), config.blink_count)
                     state = state_single
                     prev_time = time_counter
             else:
@@ -455,13 +485,20 @@ def capture_pokemon_blinks(
     frame_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     show_window: bool = True,
+    discard_first_blink_within_seconds: float | None = None,
 ) -> PokemonBlinkObservation:
     """Capture Pokemon blink intervals through Project_Xs tracking logic."""
 
     eye_image = _read_grayscale_image(config.eye_image_path)
 
     try:
-        if should_stop is not None or frame_callback is not None or progress_callback is not None or not show_window:
+        if (
+            should_stop is not None
+            or frame_callback is not None
+            or progress_callback is not None
+            or not show_window
+            or discard_first_blink_within_seconds is not None
+        ):
             intervals = _tracking_poke_blink_controlled(
                 eye_image,
                 config,
@@ -469,6 +506,7 @@ def capture_pokemon_blinks(
                 frame_callback=frame_callback,
                 progress_callback=progress_callback,
                 show_window=show_window,
+                discard_first_blink_within_seconds=discard_first_blink_within_seconds,
             )
         else:
             rngtool = _load_module("rngtool")

@@ -4,7 +4,7 @@ import csv
 import sys
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -48,7 +48,6 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
-    BlinkObservation,
     ProjectXsIntegrationError,
     ProjectXsReidentifyResult,
     ProjectXsTrackingConfig,
@@ -113,6 +112,7 @@ DEFAULT_BLINK_COUNT = 40
 TIDSID_BLINK_COUNT = 64
 REIDENTIFY_BLINK_COUNT = 7
 NOISY_REIDENTIFY_BLINK_COUNT = 20
+AUTO_CAPTURE_WARMUP_DISCARD_SECONDS = 1.0
 
 
 def configure_application_identity(app: QApplication) -> QIcon:
@@ -172,30 +172,6 @@ def _normalize_iv_ranges(ranges: object) -> tuple[list[int], list[int]] | None:
         iv_max.append(high)
     return iv_min, iv_max
 
-
-def _capture_config_with_hidden_warmup_blink(config: BlinkCaptureConfig) -> BlinkCaptureConfig:
-    return replace(config, blink_count=int(config.blink_count) + 1)
-
-
-def _discard_hidden_warmup_blink(observation: object) -> object:
-    if not isinstance(observation, BlinkObservation) or len(observation.blinks) <= 1:
-        return observation
-    return BlinkObservation.from_sequences(
-        observation.blinks[1:],
-        observation.intervals[1:],
-        observation.offset_time,
-    )
-
-
-def _hide_warmup_blink_progress(
-    callback: Callable[[int, int], None],
-) -> Callable[[int, int], None]:
-    def wrapped(done: int, total: int) -> None:
-        visible_total = max(0, int(total) - 1)
-        visible_done = max(0, min(visible_total, int(done) - 1))
-        callback(visible_done, visible_total)
-
-    return wrapped
 
 NATURES = (
     "Hardy",
@@ -3135,6 +3111,7 @@ class MainWindow(QMainWindow):
                     frame_callback=store_frame,
                     progress_callback=store_progress,
                     show_window=False,
+                    discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
                 )
                 result = recover_tidsid_seed_from_observation(observation)
             finally:
@@ -3512,11 +3489,12 @@ class MainWindow(QMainWindow):
 
             try:
                 observation = capture_player_blinks(
-                    _capture_config_with_hidden_warmup_blink(tracking_config.capture),
+                    tracking_config.capture,
                     should_stop=self._capture_cancel.is_set,
                     frame_callback=store_frame,
-                    progress_callback=_hide_warmup_blink_progress(store_progress),
+                    progress_callback=store_progress,
                     show_window=False,
+                    discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
                 )
             except ProjectXsIntegrationError:
                 self._call_on_ui_thread(
@@ -3526,7 +3504,6 @@ class MainWindow(QMainWindow):
                     )
                 )
                 raise
-            observation = _discard_hidden_warmup_blink(observation)
             result = recover_seed_from_observation(observation, npc=tracking_config.npc)
             elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
             elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
@@ -3571,13 +3548,13 @@ class MainWindow(QMainWindow):
             else:
                 search_min = 0
             observation = capture_player_blinks(
-                _capture_config_with_hidden_warmup_blink(reidentify_capture_for(source_config)),
+                reidentify_capture_for(source_config),
                 should_stop=self._capture_cancel.is_set,
                 frame_callback=store_frame,
-                progress_callback=_hide_warmup_blink_progress(store_progress),
+                progress_callback=store_progress,
                 show_window=False,
+                discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
             )
-            observation = _discard_hidden_warmup_blink(observation)
             result = reidentify_from_observation_for(
                 state32_from_result(seed_result),
                 observation,
@@ -3635,15 +3612,13 @@ class MainWindow(QMainWindow):
                 time.sleep(0.3)
 
             observation = capture_player_blinks(
-                _capture_config_with_hidden_warmup_blink(
-                    replace(exit_tracking_config.capture, blink_count=NOISY_REIDENTIFY_BLINK_COUNT)
-                ),
+                replace(exit_tracking_config.capture, blink_count=NOISY_REIDENTIFY_BLINK_COUNT),
                 should_stop=self._capture_cancel.is_set,
                 frame_callback=store_frame,
-                progress_callback=_hide_warmup_blink_progress(store_progress),
+                progress_callback=store_progress,
                 show_window=False,
+                discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
             )
-            observation = _discard_hidden_warmup_blink(observation)
             search_max = max(100_000, config.max_advances, search_criteria.max_advances)
             result = reidentify_seed_from_observation_noisy(
                 state32_from_result(seed_result),

@@ -1268,12 +1268,14 @@ def test_main_window_auto_rng_services_search_uses_multi_targets(app, tmp_path, 
 def test_main_window_auto_rng_capture_service_uses_project_xs(app, tmp_path, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
-    observation = BlinkObservation.from_sequences([9, 1, 0], [99, 12, 24], offset_time=100.0)
+    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=100.0)
     captured_counts: list[int] = []
+    warmup_windows: list[float | None] = []
     recovered_observations: list[BlinkObservation] = []
 
-    def fake_capture(config, *_args, **_kwargs):
+    def fake_capture(config, *_args, **kwargs):
         captured_counts.append(config.blink_count)
+        warmup_windows.append(kwargs.get("discard_first_blink_within_seconds"))
         return observation
 
     def fake_recover(actual_observation, npc):
@@ -1290,7 +1292,8 @@ def test_main_window_auto_rng_capture_service_uses_project_xs(app, tmp_path, mon
     assert result.seed == seed_state
     assert result.current_advances == 0
     assert result.seed_text == "1111111122222222 3333333344444444"
-    assert captured_counts == [41]
+    assert captured_counts == [40]
+    assert warmup_windows == [1.0]
     assert recovered_observations[0].blinks == (1, 0)
     assert recovered_observations[0].intervals == (12, 24)
 
@@ -1298,13 +1301,12 @@ def test_main_window_auto_rng_capture_service_uses_project_xs(app, tmp_path, mon
 def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_path, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
-    observation = BlinkObservation.from_sequences([9, 1, 0], [99, 12, 24], offset_time=100.0)
+    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=100.0)
     displayed_frames: list[object] = []
     generated = []
 
     def fake_capture(_config, **kwargs):
-        kwargs["progress_callback"](1, 41)
-        kwargs["progress_callback"](4, 41)
+        kwargs["progress_callback"](3, 40)
         kwargs["frame_callback"]("frame-1")
         return observation
 
@@ -1403,11 +1405,13 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
     calls: list[SeedState32] = []
     capture_counts: list[int] = []
+    warmup_windows: list[float | None] = []
     passed_observations: list[BlinkObservation] = []
-    observation = BlinkObservation.from_sequences([9, 1, 0], [99, 12, 24], offset_time=100.0)
+    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=100.0)
 
-    def fake_capture(config, *_args, **_kwargs):
+    def fake_capture(config, *_args, **kwargs):
         capture_counts.append(config.blink_count)
+        warmup_windows.append(kwargs.get("discard_first_blink_within_seconds"))
         return observation
 
     monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 105.0)
@@ -1427,7 +1431,8 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     assert calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
     assert result.seed == SeedPair64(0x1111111122222222, 0x3333333344444444)
     assert result.current_advances == 47
-    assert capture_counts == [8]
+    assert capture_counts == [7]
+    assert warmup_windows == [1.0]
     assert passed_observations[0].blinks == (1, 0)
     assert passed_observations[0].intervals == (12, 24)
     assert int(window.advances_value.text()) >= 47
@@ -1496,7 +1501,7 @@ def test_main_window_auto_rng_reidentify_after_exit_uses_reidentify_config(app, 
         (str(tmp_path / "seed.json"), 40),
         (str(tmp_path / "exit.json"), 20),
     ]
-    assert capture_counts == [21]
+    assert capture_counts == [20]
     assert normal_calls == []
     assert noisy_calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
     assert result.current_advances == 82
@@ -1564,7 +1569,7 @@ def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_pa
         (str(tmp_path / "seed.json"), 40),
         (str(tmp_path / "exit.json"), 20),
     ]
-    assert capture_counts == [21]
+    assert capture_counts == [20]
     assert noisy_calls == [SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)]
     assert result.current_advances == 47
     assert result.npc == 0

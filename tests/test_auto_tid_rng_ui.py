@@ -182,6 +182,7 @@ def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Pat
     window = MainWindow()
     loaded: list[tuple[str, int]] = []
     captured: list[int] = []
+    warmup_windows: list[float | None] = []
     seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
 
     def fake_load_config(path, blink_count):
@@ -197,6 +198,7 @@ def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Pat
 
     def fake_capture(config, **kwargs):
         captured.append(config.blink_count)
+        warmup_windows.append(kwargs.get("discard_first_blink_within_seconds"))
         kwargs["progress_callback"](config.blink_count, config.blink_count)
         return SimpleNamespace(intervals=[])
 
@@ -213,6 +215,7 @@ def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Pat
 
     assert loaded[-1][1] == 64
     assert captured == [64]
+    assert warmup_windows == [1.0]
     assert result.seed == seed_state.to_seed_pair64()
     assert [box.text() for box in window.auto_tid_rng_tab.tid_seed_inputs] == list(seed_state.format_seed64_pair())
     assert window.auto_tid_rng_tab.id_table.rowCount() == window.auto_tid_rng_tab.frame_threshold.value() + 1
