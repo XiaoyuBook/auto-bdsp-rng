@@ -56,7 +56,9 @@ def measure_keyword_interval(
             if script_done.is_set():
                 if script_ended_at is None:
                     script_ended_at = now
-                if now - script_ended_at > grace_seconds:
+                if first_seen_at is None and now - script_ended_at > grace_seconds:
+                    break
+                if first_seen_at is not None and now - first_seen_at > timeout_seconds:
                     break
             elif now - started_at > hard_timeout_seconds:
                 # 脚本运行过久，兜底保护

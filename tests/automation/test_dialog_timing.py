@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 import pytest
 
@@ -105,6 +107,27 @@ def test_measure_keyword_interval_ignores_second_keyword_before_first_keyword():
     )
 
     assert result.interval_seconds == pytest.approx(1.2)
+
+
+def test_measure_keyword_interval_waits_for_second_keyword_after_script_grace():
+    done = threading.Event()
+    done.set()
+    frames = iter([object(), object(), object()])
+    texts = iter(["菜单", "谢米出现了！", "去吧！图图犬！"])
+    times = iter([0.0, 0.0, 29.9, 31.2, 31.3])
+
+    result = measure_keyword_interval(
+        lambda: next(frames),
+        lambda _frame: next(texts),
+        monotonic=lambda: next(times),
+        sleep=lambda _seconds: None,
+        timeout_seconds=5.0,
+        poll_interval_seconds=0.1,
+        script_done=done,
+        grace_seconds=30.0,
+    )
+
+    assert result.interval_seconds == pytest.approx(1.3)
 
 
 def test_measure_keyword_interval_requires_exclamation_for_first_keyword():
