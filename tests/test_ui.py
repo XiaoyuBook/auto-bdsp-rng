@@ -12,6 +12,7 @@ pytest.importorskip("PySide6")
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     BlinkObservation,
+    ProjectXsIntegrationError,
     ProjectXsReidentifyResult,
     ProjectXsTrackingConfig,
     SeedState32,
@@ -1341,6 +1342,28 @@ def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_p
     assert generated[-1].state_filter.iv_min[0] == 31
 
 
+def test_main_window_auto_rng_capture_stop_does_not_show_failure_dialog(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    warnings: list[tuple[str, str]] = []
+
+    def fake_capture(_config, **_kwargs):
+        window._capture_cancel.set()
+        raise ProjectXsIntegrationError("Blink capture stopped")
+
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, text: warnings.append((title, text)),
+    )
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    with pytest.raises(ProjectXsIntegrationError, match="Blink capture stopped"):
+        services.capture_seed()
+
+    assert warnings == []
+
+
 def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp_path, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
@@ -1590,6 +1613,7 @@ def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monk
             calls.append((script_text, name))
             return "ok"
 
+    window.easycon_tab.backend_mode.setCurrentIndex(0)
     window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
     monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
@@ -1615,6 +1639,7 @@ def test_main_window_auto_rng_run_script_syncs_easycon_status_and_output(app, tm
                 stdout="done\n",
             )
 
+    window.easycon_tab.backend_mode.setCurrentIndex(0)
     window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
     monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
@@ -1626,6 +1651,36 @@ def test_main_window_auto_rng_run_script_syncs_easycon_status_and_output(app, tm
     assert "自动流程运行脚本: hit.txt" in window.easycon_tab.log_view.toPlainText()
     assert "done" in window.easycon_tab.log_view.toPlainText()
     assert window.easycon_tab.easycon_status.currentMessage() == "已完成，连接保持"
+
+
+def test_main_window_auto_rng_run_script_raises_on_easycon_failure(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    started = datetime(2026, 5, 24, 12, 0, 0)
+    ended = datetime(2026, 5, 24, 12, 0, 1)
+
+    class FakeBackend:
+        def run_script_text(self, script_text: str, name: str) -> EasyConRunResult:
+            return EasyConRunResult(
+                status=EasyConStatus.FAILED,
+                exit_code=1,
+                started_at=started,
+                ended_at=ended,
+                script_path=tmp_path / name,
+                port="COM7",
+                stdout="CLI 模式[right_press]: 准备\n",
+                stderr="串口连接失败: COM7\n",
+            )
+
+    window.easycon_tab.backend_mode.setCurrentIndex(0)
+    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    with pytest.raises(RuntimeError, match="串口连接失败"):
+        services.run_script_text("A 100", "BDSP测种.txt")
+    QApplication.processEvents()
+
+    assert "串口连接失败" in window.easycon_tab.log_view.toPlainText()
 
 
 def test_main_window_applies_selected_roi(app, monkeypatch):

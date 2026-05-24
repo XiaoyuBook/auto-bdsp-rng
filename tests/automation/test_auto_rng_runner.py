@@ -898,6 +898,41 @@ def test_runner_retries_seed_capture_failures_until_fifth_failure(tmp_path):
     assert "连续 5 次 seed 捕获失败" in error
 
 
+def test_runner_treats_seed_capture_stop_as_user_cancel(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    logs: list[str] = []
+    attempts = 0
+    runner: AutoRngRunner | None = None
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
+        assert runner is not None
+        runner.stop()
+        raise RuntimeError("Blink capture stopped")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            loop_mode="infinite",
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            run_script_text=lambda _text, _name: None,
+        ),
+        log_callback=logs.append,
+    )
+
+    progress = runner.run(max_steps=3)
+
+    assert attempts == 1
+    assert progress.phase == AutoRngPhase.IDLE
+    assert not any("seed 捕获失败" in log for log in logs)
+
+
 def test_runner_can_start_first_cycle_from_capture_seed_then_resume_seed_script(tmp_path):
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"

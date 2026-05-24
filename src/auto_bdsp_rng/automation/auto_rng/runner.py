@@ -463,7 +463,7 @@ class AutoRngRunner:
         self._stop_requested = True
         if self.services.stop_current_script is not None:
             self.services.stop_current_script()
-        self._emit(AutoRngProgress(phase=AutoRngPhase.IDLE, log_message="已请求停止自动流程"))
+        self._set_progress(AutoRngPhase.IDLE, "已请求停止自动流程")
 
     def should_stop(self) -> bool:
         return self._stop_requested
@@ -561,6 +561,8 @@ class AutoRngRunner:
         try:
             self._seed_result = self._with_measurement_time(self.services.capture_seed())
         except Exception as exc:
+            if self._stop_requested:
+                return
             self._seed_capture_failures += 1
             if self._seed_capture_failures >= 5:
                 raise RuntimeError(f"连续 5 次 seed 捕获失败，自动流程停止: {exc}") from exc

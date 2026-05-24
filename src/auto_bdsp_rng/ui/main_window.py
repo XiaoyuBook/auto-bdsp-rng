@@ -88,7 +88,7 @@ from auto_bdsp_rng.automation.auto_rng.search import (
     generate_static_candidates_multi,
 )
 from auto_bdsp_rng.app_settings import set_startup_notice_acknowledged, should_show_startup_notice
-from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConStatus
+from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_id import IDFilter, generate_ids
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
@@ -171,6 +171,19 @@ def _normalize_iv_ranges(ranges: object) -> tuple[list[int], list[int]] | None:
         iv_min.append(low)
         iv_max.append(high)
     return iv_min, iv_max
+
+
+def _auto_script_failure_message(result: object, name: str) -> str | None:
+    if not isinstance(result, EasyConRunResult):
+        return None
+    if result.exit_code in (None, 0) and result.status == EasyConStatus.COMPLETED:
+        return None
+    if result.exit_code == 130 or result.status == EasyConStatus.CANCELLED:
+        return None
+    detail = (result.stderr or result.stdout or result.status.value).strip()
+    if not detail:
+        detail = f"exit code: {result.exit_code if result.exit_code is not None else '无'}"
+    return f"伊机控脚本执行失败——{name}: {detail}"
 
 
 NATURES = (
@@ -3175,6 +3188,10 @@ class MainWindow(QMainWindow):
                     self.autoScriptFailed.emit(str(exc))
                     raise
                 self.autoScriptFinished.emit(result)
+                failure_message = _auto_script_failure_message(result, name)
+                if failure_message is not None:
+                    self.autoScriptFailed.emit(failure_message)
+                    raise RuntimeError(failure_message)
                 return result
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
@@ -3189,6 +3206,10 @@ class MainWindow(QMainWindow):
                 self.autoScriptFailed.emit(str(exc))
                 raise
             self.autoScriptFinished.emit(result)
+            failure_message = _auto_script_failure_message(result, name)
+            if failure_message is not None:
+                self.autoScriptFailed.emit(failure_message)
+                raise RuntimeError(failure_message)
             return result
 
         def recognize_tid_service() -> str:
@@ -3497,13 +3518,16 @@ class MainWindow(QMainWindow):
                     discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
                 )
             except ProjectXsIntegrationError:
-                self._call_on_ui_thread(
-                    lambda: QMessageBox.warning(
-                        self, "捕捉失败",
-                        "未检测到捕捉画面，请确认 Project_Xs 捕捉窗口已打开且未被最小化，然后重新开始。"
+                if not self._capture_cancel.is_set():
+                    self._call_on_ui_thread(
+                        lambda: QMessageBox.warning(
+                            self, "捕捉失败",
+                            "未检测到捕捉画面，请确认 Project_Xs 捕捉窗口已打开且未被最小化，然后重新开始。"
+                        )
                     )
-                )
                 raise
+            finally:
+                self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
             result = recover_seed_from_observation(observation, npc=tracking_config.npc)
             elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
             elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
@@ -3517,8 +3541,6 @@ class MainWindow(QMainWindow):
                 measured_at=time.monotonic(),
             )
             self.autoSeedCaptured.emit(seed_result)
-            # 测种完成后恢复预览（如果之前是开着的）
-            self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
             return seed_result
 
         def current_seed_service() -> AutoRngSeedResult:
@@ -3708,6 +3730,10 @@ class MainWindow(QMainWindow):
                     self.autoScriptFailed.emit(str(exc))
                     raise
                 self.autoScriptFinished.emit(result)
+                failure_message = _auto_script_failure_message(result, name)
+                if failure_message is not None:
+                    self.autoScriptFailed.emit(failure_message)
+                    raise RuntimeError(failure_message)
                 return result
             # CLI 模式：通过 ezcon.exe 执行脚本
             if not port:
@@ -3724,6 +3750,10 @@ class MainWindow(QMainWindow):
                 self.autoScriptFailed.emit(str(exc))
                 raise
             self.autoScriptFinished.emit(result)
+            failure_message = _auto_script_failure_message(result, name)
+            if failure_message is not None:
+                self.autoScriptFailed.emit(failure_message)
+                raise RuntimeError(failure_message)
             return result
 
         def stop_current_script_service() -> None:
