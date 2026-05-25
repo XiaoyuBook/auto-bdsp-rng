@@ -102,6 +102,23 @@ class _IdResultTable(QTableWidget):
         return False
 
 
+class _TargetListWidget(QListWidget):
+    targetRemoved = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        item = self.itemAt(event.position().toPoint())
+        if item is not None:
+            rect = self.visualItemRect(item)
+            if event.position().toPoint().x() >= rect.right() - 24:
+                row = self.row(item)
+                if row >= 0:
+                    self.takeItem(row)
+                    self.targetRemoved.emit()
+                    event.accept()
+                    return
+        super().mouseReleaseEvent(event)
+
+
 class AutoTidRngWorker(QObject):
     progressChanged = Signal(object)
     finished = Signal(object)
@@ -158,8 +175,7 @@ class AutoTidRngPanel(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(10)
-        grid.addWidget(self._build_config_group(), 0, 0)
-        grid.addWidget(self._build_runtime_group(), 0, 1)
+        grid.addWidget(self._build_top_controls_group(), 0, 0, 1, 2)
         self._legacy_log_group = self._build_log_group()
         self._legacy_log_group.setVisible(False)
         grid.addWidget(self._build_target_group(), 1, 0, 1, 2)
@@ -263,6 +279,78 @@ class AutoTidRngPanel(QWidget):
         layout.addLayout(form)
         return group
 
+    def _build_top_controls_group(self) -> QGroupBox:
+        group = QGroupBox("基础参数与脚本")
+        group.setObjectName("AutoTidTopControls")
+        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        layout = QGridLayout(group)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(8)
+
+        self.frame_threshold = self._spin(0, 1_000_000_000, 300)
+        self.delay = self._spin(0, 1_000_000_000, 0)
+        self.reverse_lookup_window = self._spin(0, 10_000, 50)
+        self.reverse_lookup_window.setPrefix("±")
+        self.reverse_lookup_window.setSuffix(" 帧")
+        self.reverse_lookup_window.setVisible(False)
+        self.frame_threshold.setFixedWidth(130)
+        self.delay.setFixedWidth(110)
+        self.reverse_lookup_window.setFixedWidth(110)
+
+        self.seed_script_combo = QComboBox()
+        self.name_script_combo = QComboBox()
+        self.reverse_id_script_combo = QComboBox()
+        self.reverse_id_script_combo.setVisible(False)
+        for combo, width in (
+            (self.seed_script_combo, 220),
+            (self.name_script_combo, 220),
+            (self.reverse_id_script_combo, 220),
+        ):
+            combo.setFixedHeight(34)
+            combo.setFixedWidth(width)
+        self.refresh_scripts_button = QPushButton("刷新脚本列表")
+        self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
+        self.refresh_scripts_button.setFixedHeight(34)
+        self.refresh_scripts_button.setFixedWidth(116)
+
+        layout.addWidget(QLabel("帧数阈值"), 0, 0)
+        layout.addWidget(self.frame_threshold, 0, 1)
+        layout.addWidget(QLabel("delay"), 0, 2)
+        layout.addWidget(self.delay, 0, 3)
+        layout.addWidget(QLabel("测种脚本"), 0, 4)
+        layout.addWidget(self.seed_script_combo, 0, 5)
+        layout.addWidget(QLabel("取名脚本"), 0, 6)
+        layout.addWidget(self.name_script_combo, 0, 7)
+        layout.addWidget(self.refresh_scripts_button, 0, 8)
+        layout.setColumnStretch(9, 1)
+
+        self.ocr_region_label = QLabel("TID ROI：未设置")
+        self.ocr_region_label.setVisible(False)
+        self.ocr_region_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        layout.addWidget(self.ocr_region_label, 1, 0, 1, 9)
+
+        result_group = QGroupBox("校准结果")
+        result_group.setVisible(False)
+        result_form = QFormLayout(result_group)
+        result_form.setVerticalSpacing(8)
+        self.target_result = QLabel("-")
+        self.trigger_result = QLabel("-")
+        self.ocr_result = QLabel("-")
+        self.actual_delay_result = QLabel("-")
+        for label in (self.target_result, self.trigger_result, self.ocr_result, self.actual_delay_result):
+            label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+            )
+        result_form.addRow("命中目标", self.target_result)
+        result_form.addRow("反查启动帧", self.trigger_result)
+        result_form.addRow("OCR TID", self.ocr_result)
+        result_form.addRow("实际 delay", self.actual_delay_result)
+        layout.addWidget(result_group, 2, 0, 1, 9)
+        return group
+
     def _build_target_group(self) -> QGroupBox:
         group = QGroupBox("目标 Display TID")
         layout = QVBoxLayout(group)
@@ -271,20 +359,18 @@ class AutoTidRngPanel(QWidget):
 
         target_panel = QWidget()
         target_panel.setObjectName("InlinePanel")
-        target_layout = QVBoxLayout(target_panel)
+        target_layout = QGridLayout(target_panel)
         target_layout.setContentsMargins(12, 10, 12, 12)
-        target_layout.setSpacing(8)
+        target_layout.setHorizontalSpacing(12)
+        target_layout.setVerticalSpacing(8)
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
-        target_title = QLabel("目标 Display TID")
-        target_title.setObjectName("SectionTitle")
         self.target_count_label = QLabel("0 个目标")
         self.target_count_label.setObjectName("MutedLabel")
-        title_row.addWidget(target_title)
         title_row.addStretch(1)
         title_row.addWidget(self.target_count_label)
-        target_layout.addLayout(title_row)
-        self.target_list = QListWidget()
+        target_layout.addLayout(title_row, 0, 0, 1, 2)
+        self.target_list = _TargetListWidget()
         self.target_list.setObjectName("TargetPool")
         self.target_list.setViewMode(QListView.ViewMode.IconMode)
         self.target_list.setFlow(QListView.Flow.LeftToRight)
@@ -294,16 +380,25 @@ class AutoTidRngPanel(QWidget):
         self.target_list.setSpacing(6)
         self.target_list.setGridSize(QSize(92, 32))
         self.target_list.setUniformItemSizes(True)
-        self.target_list.setMinimumHeight(104)
+        self.target_list.setMinimumHeight(116)
         self.target_list.setMaximumHeight(140)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
-        target_layout.addWidget(self.target_list, 1)
-        edit_row = QHBoxLayout()
-        edit_row.setSpacing(8)
+        self.target_list.targetRemoved.connect(self._refresh_target_count)
+        target_layout.addWidget(self.target_list, 1, 0, 2, 1)
+
+        action_panel = QWidget()
+        action_panel.setObjectName("TargetPoolActions")
+        action_panel.setFixedWidth(360)
+        action_panel.setMinimumHeight(116)
+        action_panel.setMaximumHeight(140)
+        action_layout = QVBoxLayout(action_panel)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
         self.target_input = QLineEdit()
         self.target_input.setPlaceholderText("000000-999999，可粘贴多个")
         self.target_input.setFixedHeight(34)
+        self.target_input.setMaximumWidth(360)
         self.add_target_button = QPushButton("添加")
         self.add_target_button.clicked.connect(self._add_target_from_input)
         self.update_target_button = QPushButton("更新")
@@ -311,14 +406,24 @@ class AutoTidRngPanel(QWidget):
         self.update_target_button.setVisible(False)
         self.delete_target_button = QPushButton("删除")
         self.delete_target_button.clicked.connect(self._delete_selected_target)
+        self.delete_target_button.setVisible(False)
         self.clear_targets_button = QPushButton("清空")
         self.clear_targets_button.clicked.connect(self._clear_targets)
         for button in (self.add_target_button, self.update_target_button, self.delete_target_button, self.clear_targets_button):
             button.setFixedHeight(34)
-            button.setFixedWidth(72)
-            edit_row.addWidget(button)
-        edit_row.insertWidget(0, self.target_input, 1)
-        target_layout.addLayout(edit_row)
+        action_layout.addWidget(self.target_input)
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        self.add_target_button.setFixedWidth(176)
+        self.clear_targets_button.setFixedWidth(176)
+        button_row.addWidget(self.add_target_button)
+        button_row.addWidget(self.clear_targets_button)
+        action_layout.addLayout(button_row)
+        action_layout.addWidget(self.update_target_button)
+        action_layout.addWidget(self.delete_target_button)
+        action_layout.addStretch(1)
+        target_layout.addWidget(action_panel, 1, 1, 2, 1, Qt.AlignmentFlag.AlignTop)
+        target_layout.setColumnStretch(0, 1)
         layout.addWidget(target_panel, 1)
         return group
 
@@ -457,7 +562,8 @@ class AutoTidRngPanel(QWidget):
         tid = self._validate_display_tid_value(tid)
         if tid in self.target_display_tids():
             return
-        item = QListWidgetItem(f"{tid:06d}")
+        item = QListWidgetItem(self._target_item_text(tid))
+        item.setData(Qt.ItemDataRole.UserRole, tid)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         self.target_list.addItem(item)
         self._refresh_target_count()
@@ -468,9 +574,12 @@ class AutoTidRngPanel(QWidget):
     def target_display_tids(self) -> tuple[int, ...]:
         values: list[int] = []
         for row in range(self.target_list.count()):
-            value = self._parse_tid(self.target_list.item(row).text())
+            item = self.target_list.item(row)
+            value = item.data(Qt.ItemDataRole.UserRole)
+            if value is None:
+                value = self._parse_tid(item.text())
             if value is not None:
-                values.append(value)
+                values.append(int(value))
         return tuple(values)
 
     def target_tids(self) -> tuple[int, ...]:
@@ -714,7 +823,8 @@ class AutoTidRngPanel(QWidget):
         if item is None or value is None:
             self.add_log("请选择目标并输入 0-999999 的 Display TID")
             return
-        item.setText(f"{value:06d}")
+        item.setData(Qt.ItemDataRole.UserRole, value)
+        item.setText(self._target_item_text(value))
 
     def _delete_selected_target(self) -> None:
         row = self.target_list.currentRow()
@@ -729,17 +839,25 @@ class AutoTidRngPanel(QWidget):
     def _normalize_edited_target_item(self, item: QListWidgetItem) -> None:
         value = self._parse_tid(item.text())
         if value is None:
-            item.setText("000000")
-        else:
-            item.setText(f"{value:06d}")
+            value = 0
+        item.setData(Qt.ItemDataRole.UserRole, value)
+        text = self._target_item_text(value)
+        if item.text() != text:
+            item.setText(text)
         self._refresh_target_count()
+
+    def _target_item_text(self, value: int) -> str:
+        return f"{value:06d} ×"
 
     def _refresh_target_count(self) -> None:
         self.target_count_label.setText(f"{self.target_list.count()} 个目标")
 
     def _parse_tid(self, text: str) -> int | None:
         try:
-            return self._validate_display_tid_value(int(str(text).strip(), 10))
+            match = re.search(r"\d{1,6}", str(text))
+            if match is None:
+                return None
+            return self._validate_display_tid_value(int(match.group(0), 10))
         except Exception:
             return None
 

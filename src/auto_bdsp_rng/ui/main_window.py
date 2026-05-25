@@ -1818,6 +1818,8 @@ class MainWindow(QMainWindow):
                 background: #FFFFFF;
                 border: 1px solid #D1D5DB;
                 border-radius: 8px;
+                min-height: 116px;
+                max-height: 140px;
                 padding: 8px;
             }
             QListWidget#TargetPool::item {

@@ -7,8 +7,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication, QListView, QToolButton
+from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QListView, QToolButton, QWidget
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
@@ -107,6 +108,23 @@ def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_
     assert panel.id_table.horizontalHeader().stretchLastSection()
 
 
+def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+
+    top_controls = panel.findChild(QWidget, "AutoTidTopControls")
+
+    assert top_controls is not None
+    assert panel.frame_threshold.parentWidget() is top_controls
+    assert panel.delay.parentWidget() is top_controls
+    assert panel.seed_script_combo.parentWidget() is top_controls
+    assert panel.name_script_combo.parentWidget() is top_controls
+    assert panel.refresh_scripts_button.parentWidget() is top_controls
+    assert panel.frame_threshold.maximumWidth() <= 140
+    assert panel.delay.maximumWidth() <= 120
+    assert panel.seed_script_combo.maximumWidth() <= 220
+    assert panel.name_script_combo.maximumWidth() <= 220
+
+
 def test_auto_tid_panel_shows_target_count_in_wrapped_target_list(app, tmp_path: Path) -> None:
     panel = AutoTidRngPanel(script_dir=tmp_path)
     panel.target_list.clear()
@@ -117,6 +135,36 @@ def test_auto_tid_panel_shows_target_count_in_wrapped_target_list(app, tmp_path:
     assert panel.target_count_label.text() == "12 个目标"
     assert panel.target_list.gridSize().width() >= 80
     assert panel.target_list.gridSize().height() <= 36
+
+
+def test_auto_tid_target_chips_show_close_marker_but_store_plain_tids(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    panel.target_list.clear()
+
+    panel.add_target_display_tid(1)
+    panel.add_target_display_tid(123456)
+
+    assert panel.target_list.item(0).text() == "000001 ×"
+    assert panel.target_list.item(1).text() == "123456 ×"
+    assert panel.target_display_tids() == (1, 123456)
+
+
+def test_auto_tid_target_chip_close_marker_deletes_that_target(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    panel.target_list.clear()
+    panel.add_target_display_tid(1)
+    panel.add_target_display_tid(123456)
+    panel.show()
+    app.processEvents()
+
+    item = panel.target_list.item(0)
+    rect = panel.target_list.visualItemRect(item)
+    close_pos = rect.topRight() + QPoint(-8, rect.height() // 2)
+
+    QTest.mouseClick(panel.target_list.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, close_pos)
+
+    assert panel.target_display_tids() == (123456,)
+    assert panel.target_count_label.text() == "1 个目标"
 
 
 def test_auto_tid_target_pool_has_multiline_space_and_bulk_add(app, tmp_path: Path) -> None:
@@ -131,11 +179,21 @@ def test_auto_tid_target_pool_has_multiline_space_and_bulk_add(app, tmp_path: Pa
     assert panel.target_list.objectName() == "TargetPool"
     assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 3
     assert panel.target_list.maximumHeight() <= 150
+    target_actions = panel.findChild(QWidget, "TargetPoolActions")
+    assert target_actions is not None
+    assert panel.target_input.parentWidget() is target_actions
+    assert panel.add_target_button.parentWidget() is target_actions
+    assert panel.clear_targets_button.parentWidget() is target_actions
+    assert panel.target_input.maximumWidth() <= 360
+    assert target_actions.minimumHeight() >= panel.target_list.gridSize().height() * 3
+    assert target_actions.maximumHeight() <= panel.target_list.maximumHeight()
+    assert panel.delete_target_button.isVisible() is False
 
     panel.clear_targets_button.click()
 
     assert panel.target_display_tids() == ()
     assert panel.target_count_label.text() == "0 个目标"
+    assert panel.findChildren(type(panel.target_count_label), "SectionTitle") == []
 
 
 def test_auto_tid_panel_seed_display_generates_id_table_from_threshold(app, tmp_path: Path) -> None:
@@ -195,6 +253,20 @@ def test_main_window_starts_auto_tid_runner_from_panel_signal(app, tmp_path: Pat
 
     assert len(started) == 1
     assert started[0].config == config
+
+
+def test_main_window_styles_keep_auto_tid_target_pool_multiline(app) -> None:
+    window = MainWindow()
+    panel = window.auto_tid_rng_tab
+    panel.target_list.clear()
+    for value in (1, 123456, 654321, 777777, 888888, 999999, 135790, 246800, 314159, 271828, 424242, 515151):
+        panel.add_target_display_tid(value)
+
+    window.show()
+    app.processEvents()
+
+    assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 3
+    assert panel.target_list.verticalScrollBar().isVisible() is False
 
 
 def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Path, monkeypatch) -> None:
