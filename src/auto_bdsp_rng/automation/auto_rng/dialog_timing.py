@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import re
 
@@ -34,7 +34,7 @@ def measure_keyword_interval(
     read_text: Callable[[object], str],
     *,
     first_keyword: str = "出现了！",
-    second_keyword: str = "去吧",
+    second_keyword: str | Sequence[str] = ("去吧", "上吧"),
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     should_stop: Callable[[], bool] | None = None,
@@ -43,12 +43,19 @@ def measure_keyword_interval(
     script_done: threading.Event | None = None,
     grace_seconds: float = 30.0,
     hard_timeout_seconds: float = 120.0,
+    debug_callback: Callable[[str, float, float | None], None] | None = None,
 ) -> DialogTimingResult:
     first = normalize_ocr_text(first_keyword)
-    second = normalize_ocr_text(second_keyword)
+    second_keywords = (second_keyword,) if isinstance(second_keyword, str) else tuple(second_keyword)
+    seconds = tuple(normalize_ocr_text(keyword) for keyword in second_keywords)
     started_at = monotonic()
     first_seen_at: float | None = None
     script_ended_at: float | None = None
+
+    def emit_debug(event: str, now: float, interval: float | None = None) -> None:
+        if debug_callback is not None:
+            debug_callback(event, now - started_at, interval)
+
     while True:
         now = monotonic()
         if script_done is not None:
@@ -57,13 +64,23 @@ def measure_keyword_interval(
                 if script_ended_at is None:
                     script_ended_at = now
                 if first_seen_at is None and now - script_ended_at > grace_seconds:
+                    emit_debug("timeout_before_first", now)
                     break
                 if first_seen_at is not None and now - first_seen_at > timeout_seconds:
+                    emit_debug("timeout_after_first", now, now - first_seen_at)
                     break
             elif now - started_at > hard_timeout_seconds:
                 # 脚本运行过久，兜底保护
+                if first_seen_at is None:
+                    emit_debug("timeout_before_first", now)
+                else:
+                    emit_debug("timeout_after_first", now, now - first_seen_at)
                 break
         elif now - started_at > timeout_seconds:
+            if first_seen_at is None:
+                emit_debug("timeout_before_first", now)
+            else:
+                emit_debug("timeout_after_first", now, now - first_seen_at)
             break
         if should_stop is not None and should_stop():
             raise RuntimeError("Dialog timing calibration stopped")
@@ -72,10 +89,13 @@ def measure_keyword_interval(
         if first_seen_at is None:
             if first in text:
                 first_seen_at = now
-        elif second in text:
+                emit_debug("first_seen", now)
+        elif any(second in text for second in seconds):
+            emit_debug("second_seen", now, now - first_seen_at)
             return DialogTimingResult(first_seen_at, now, now - first_seen_at)
         sleep(poll_interval_seconds)
-    raise TimeoutError(f"Timed out while waiting for OCR keywords: {first_keyword} -> {second_keyword}")
+    second_label = "/".join(second_keywords)
+    raise TimeoutError(f"Timed out while waiting for OCR keywords: {first_keyword} -> {second_label}")
 
 
 def read_ocr_text(frame: object) -> str:

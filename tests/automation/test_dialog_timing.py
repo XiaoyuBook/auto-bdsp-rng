@@ -79,6 +79,29 @@ def test_measure_keyword_interval_uses_ocr_keywords_in_order():
     frames = iter([object(), object(), object(), object(), object()])
     texts = iter(["菜单", "谢米出现了！", "谢米出现了！", "空白", "去吧！图图犬！"])
     times = iter([0.0, 0.1, 0.2, 0.3, 2.6, 2.7])
+    events: list[tuple[str, float, float | None]] = []
+
+    result = measure_keyword_interval(
+        lambda: next(frames),
+        lambda _frame: next(texts),
+        monotonic=lambda: next(times),
+        sleep=lambda _seconds: None,
+        timeout_seconds=5.0,
+        poll_interval_seconds=0.1,
+        debug_callback=lambda event, elapsed, interval: events.append((event, elapsed, interval)),
+    )
+
+    assert result.interval_seconds == pytest.approx(2.5)
+    assert events == [
+        ("first_seen", pytest.approx(0.2), None),
+        ("second_seen", pytest.approx(2.7), pytest.approx(2.5)),
+    ]
+
+
+def test_measure_keyword_interval_ignores_second_keyword_before_first_keyword():
+    frames = iter([object(), object(), object(), object()])
+    texts = iter(["去吧！", "菜单", "谢米出现了！", "去吧！图图犬！"])
+    times = iter([0.0, 0.1, 0.2, 0.3, 1.5])
 
     result = measure_keyword_interval(
         lambda: next(frames),
@@ -89,13 +112,13 @@ def test_measure_keyword_interval_uses_ocr_keywords_in_order():
         poll_interval_seconds=0.1,
     )
 
-    assert result.interval_seconds == pytest.approx(2.5)
+    assert result.interval_seconds == pytest.approx(1.2)
 
 
-def test_measure_keyword_interval_ignores_second_keyword_before_first_keyword():
+def test_measure_keyword_interval_accepts_shangba_as_second_keyword():
     frames = iter([object(), object(), object(), object()])
-    texts = iter(["去吧！", "菜单", "谢米出现了！", "去吧！图图犬！"])
-    times = iter([0.0, 0.1, 0.2, 0.3, 1.5])
+    texts = iter(["菜单", "谢米出现了！", "上吧！图图犬！", "空白"])
+    times = iter([0.0, 0.1, 0.2, 1.4, 5.4])
 
     result = measure_keyword_interval(
         lambda: next(frames),
@@ -144,6 +167,33 @@ def test_measure_keyword_interval_requires_exclamation_for_first_keyword():
             timeout_seconds=5.0,
             poll_interval_seconds=0.1,
         )
+
+
+def test_measure_keyword_interval_reports_timeout_after_first_keyword():
+    done = threading.Event()
+    done.set()
+    frames = iter([object(), object(), object()])
+    texts = iter(["菜单", "谢米出现了！", "空白"])
+    times = iter([0.0, 0.0, 0.5, 5.6])
+    events: list[tuple[str, float, float | None]] = []
+
+    with pytest.raises(TimeoutError):
+        measure_keyword_interval(
+            lambda: next(frames),
+            lambda _frame: next(texts),
+            monotonic=lambda: next(times),
+            sleep=lambda _seconds: None,
+            timeout_seconds=5.0,
+            poll_interval_seconds=0.1,
+            script_done=done,
+            grace_seconds=30.0,
+            debug_callback=lambda event, elapsed, interval: events.append((event, elapsed, interval)),
+        )
+
+    assert events == [
+        ("first_seen", pytest.approx(0.5), None),
+        ("timeout_after_first", pytest.approx(5.6), pytest.approx(5.1)),
+    ]
 
 
 def test_extract_paddle_text_supports_legacy_and_v3_shapes():

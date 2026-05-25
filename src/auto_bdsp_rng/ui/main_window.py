@@ -3785,6 +3785,25 @@ class MainWindow(QMainWindow):
             # 脚本和 OCR 并行：脚本线程运行撞闪，主线程监测闪符
             script_thread = threading.Thread(target=run_script, daemon=True)
             script_thread.start()
+
+            def log_ocr_debug(event: str, elapsed: float, interval: float | None) -> None:
+                if not config.debug_output:
+                    return
+                if event == "first_seen":
+                    self.auto_rng_tab.captureLog.emit(f"[OCR判闪] 已识别 出现了！ t={elapsed:.3f}s")
+                elif event == "second_seen":
+                    interval_text = "-" if interval is None else f"{interval:.3f}s"
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 已识别 去吧/上吧 t={elapsed:.3f}s，间隔 {interval_text}"
+                    )
+                elif event == "timeout_before_first":
+                    self.auto_rng_tab.captureLog.emit(f"[OCR判闪] 超时：未识别到 出现了！ t={elapsed:.3f}s")
+                elif event == "timeout_after_first":
+                    interval_text = "-" if interval is None else f"{interval:.3f}s"
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 超时：已识别 出现了！，但 {interval_text} 内未识别到 去吧/上吧"
+                    )
+
             try:
                 timing = measure_keyword_interval(
                     lambda: capture_preview_frame(tracking_config.capture),
@@ -3794,6 +3813,7 @@ class MainWindow(QMainWindow):
                     script_done=script_done,
                     grace_seconds=30.0,
                     hard_timeout_seconds=300.0,
+                    debug_callback=log_ocr_debug if config.debug_output else None,
                 )
             except TimeoutError:
                 stop_current_script_service()
