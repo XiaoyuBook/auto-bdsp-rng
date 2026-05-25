@@ -119,6 +119,25 @@ def test_auto_tid_panel_shows_target_count_in_wrapped_target_list(app, tmp_path:
     assert panel.target_list.gridSize().height() <= 36
 
 
+def test_auto_tid_target_pool_has_multiline_space_and_bulk_add(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    panel.target_list.clear()
+
+    panel.target_input.setText("000001, 123456 654321\n999999")
+    panel._add_target_from_input()
+
+    assert panel.target_display_tids() == (1, 123456, 654321, 999999)
+    assert panel.target_count_label.text() == "4 个目标"
+    assert panel.target_list.objectName() == "TargetPool"
+    assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 3
+    assert panel.target_list.maximumHeight() <= 150
+
+    panel.clear_targets_button.click()
+
+    assert panel.target_display_tids() == ()
+    assert panel.target_count_label.text() == "0 个目标"
+
+
 def test_auto_tid_panel_seed_display_generates_id_table_from_threshold(app, tmp_path: Path) -> None:
     panel = AutoTidRngPanel(script_dir=tmp_path)
     seed_pair = SeedPair64(0x0123456789ABCDEF, 0x0FEDCBA987654321)

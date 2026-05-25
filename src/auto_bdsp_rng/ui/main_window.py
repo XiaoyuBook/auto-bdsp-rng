@@ -1814,6 +1814,28 @@ class MainWindow(QMainWindow):
                 border: 1px solid #E5E7EB;
                 border-radius: 8px;
             }
+            QListWidget#TargetPool {
+                background: #FFFFFF;
+                border: 1px solid #D1D5DB;
+                border-radius: 8px;
+                padding: 8px;
+            }
+            QListWidget#TargetPool::item {
+                background: #FFFFFF;
+                border: 1px solid #D1D5DB;
+                border-radius: 12px;
+                padding: 4px 10px;
+                margin: 2px;
+            }
+            QListWidget#TargetPool::item:selected {
+                background: #E6F6F0;
+                border-color: #10A37F;
+                color: #0E8F70;
+            }
+            QListWidget#TargetPool::item:hover:!selected {
+                background: #F3F4F6;
+                border-color: #9CA3AF;
+            }
             QLabel#SectionTitle {
                 color: #111827;
                 font-weight: 700;
