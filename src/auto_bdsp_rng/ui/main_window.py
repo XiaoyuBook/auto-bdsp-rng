@@ -151,6 +151,10 @@ def _reverse_lookup_search_span(target_advances: int, window: int) -> tuple[int,
     return start, end, end - start
 
 
+def _reverse_species_label(description: str) -> str:
+    return POKEMON_LABELS_ZH.get(description, description)
+
+
 def _normalize_iv_ranges(ranges: object) -> tuple[list[int], list[int]] | None:
     iv_min: list[int] = []
     iv_max: list[int] = []
@@ -3858,7 +3862,7 @@ class MainWindow(QMainWindow):
             log(f"[自动反查] 性格={nature}, 个性={characteristic}")
 
             # RIGHT → 能力页
-            self._pause_ocr_and_turn_to_stats_page()
+            self._pause_ocr_and_turn_to_stats_page(log_details=False)
             time.sleep(2.0)
 
             # 能力值 → 个体值 反算（用到的辅助函数只定义一次）
@@ -3880,7 +3884,7 @@ class MainWindow(QMainWindow):
             target_desc = search_criteria.record.description
             group_species = REVERSE_GROUPS.get(target_desc, [target_desc])
             if len(group_species) > 1:
-                log(f"[自动反查] 多地精灵组: {', '.join(group_species)}")
+                log(f"[自动反查] 多地精灵组: {', '.join(_reverse_species_label(desc) for desc in group_species)}")
 
             all_records = get_static_encounters()
             species_records = {
@@ -3933,6 +3937,7 @@ class MainWindow(QMainWindow):
 
                 # 对组内所有精灵遍历搜索
                 for species_desc in group_species:
+                    species_label = _reverse_species_label(species_desc)
                     species_record = species_records[species_desc]
                     species_base = species_record.species_info.stats
                     species_level = species_record.template.level
@@ -3950,7 +3955,7 @@ class MainWindow(QMainWindow):
                             ranges.append((min(possible), max(possible)) if possible else (31, 0))
                     normalized_ranges = _normalize_iv_ranges(ranges)
                     if normalized_ranges is None:
-                        log(f"[自动反查] {species_desc} 能力值无法反算出合法个体值范围")
+                        log(f"[自动反查] {species_label} 能力值无法反算出合法个体值范围")
                         continue
                     iv_min, iv_max = normalized_ranges
                     last_ocr_stats["iv_min"] = list(iv_min)
@@ -3960,7 +3965,7 @@ class MainWindow(QMainWindow):
                     if is_new_ocr:
                         prev_ocr_key = curr_key
                         for i, name in enumerate(stat_names):
-                            log(f"[自动反查] {species_desc} {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{species_base[i]} Lv{species_level})")
+                            log(f"[自动反查] {species_label} {name}={stat_vals[i]} → IV {iv_min[i]}-{iv_max[i]} (基础{species_base[i]} Lv{species_level})")
                     else:
                         log(f"[自动反查] 第{attempt}次 OCR 结果与上次相同，跳过重复输出")
 
@@ -3975,7 +3980,7 @@ class MainWindow(QMainWindow):
                     for c in species_candidates:
                         object.__setattr__(c, "_reverse_species", species_desc)
                     if is_new_ocr:
-                        log(f"[自动反查] {species_desc} PokeFinder 搜索: {len(species_candidates)} 个候选")
+                        log(f"[自动反查] {species_label} PokeFinder 搜索: {len(species_candidates)} 个候选")
 
                     if characteristic and species_candidates:
                         matched: list[object] = []
@@ -3986,7 +3991,7 @@ class MainWindow(QMainWindow):
                             ec_val = int(getattr(state, "ec", 0))
                             if compute_characteristic(ec_val, state_ivs) == characteristic:
                                 matched.append(state)
-                        log(f"[自动反查] {species_desc} 个性({characteristic})匹配: {len(matched)} 个")
+                        log(f"[自动反查] {species_label} 个性({characteristic})匹配: {len(matched)} 个")
                         species_candidates = matched
 
                     candidates.extend(species_candidates)
@@ -4010,7 +4015,8 @@ class MainWindow(QMainWindow):
                     state_ivs = getattr(state, "ivs", None)
                     iv_text = " / ".join(f"{name}={int(state_ivs[i])}" for i, name in enumerate(["HP","攻击","防御","特攻","特防","速度"])) if state_ivs is not None and len(state_ivs) == 6 else "?"
                     pid_val = int(getattr(state, "pid", 0))
-                    species_tag = f"[{getattr(state, '_reverse_species', '')}] " if getattr(state, '_reverse_species', '') else ""
+                    species = getattr(state, "_reverse_species", "")
+                    species_tag = f"[{_reverse_species_label(species)}] " if species else ""
                     log(f"[自动反查] {species_tag}advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
 
         return AutoRngServices(
@@ -4131,28 +4137,32 @@ class MainWindow(QMainWindow):
                 parts.append(f"{key}=?")
         log(f"[捕获精灵信息] {' / '.join(parts)}")
 
-    def _send_easycon_right(self) -> None:
+    def _send_easycon_right(self, *, log_details: bool = True) -> None:
         """通过伊机控发送 RIGHT d-pad 按钮。"""
         log = self.auto_rng_tab.captureLog.emit
         script_text = "RIGHT 200\n"
         if self.easycon_tab._is_bridge_mode():
-            log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT 200")
+            if log_details:
+                log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT 200")
             backend = self.easycon_tab._ensure_bridge_backend()
             result = backend.run_script_text(script_text, "right_press")
-            log(f"[捕获精灵信息] Bridge 脚本完成: exit_code={result.exit_code}")
+            if log_details:
+                log(f"[捕获精灵信息] Bridge 脚本完成: exit_code={result.exit_code}")
         else:
-            log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT 200")
+            if log_details:
+                log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT 200")
             port = self.easycon_tab.port_combo.currentText()
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             from auto_bdsp_rng.automation.easycon import CliEasyConBackend
             cli = CliEasyConBackend()
             result = cli.run_script_text(script_text, "right_press", port=port)
-            log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:150] if result.stdout else '无'}")
+            if log_details:
+                log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:150] if result.stdout else '无'}")
 
-    def _pause_ocr_and_turn_to_stats_page(self) -> None:
+    def _pause_ocr_and_turn_to_stats_page(self, *, log_details: bool = True) -> None:
         time.sleep(0.1)
-        self._send_easycon_right()
+        self._send_easycon_right(log_details=log_details)
         time.sleep(0.1)
 
     def _advance_tick(self) -> None:

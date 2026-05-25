@@ -32,7 +32,7 @@ from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
-from auto_bdsp_rng.ui.main_window import NATURES_ZH, _normalize_iv_ranges, _reverse_lookup_search_span
+from auto_bdsp_rng.ui.main_window import NATURES_ZH, _normalize_iv_ranges, _reverse_lookup_search_span, _reverse_species_label
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 
@@ -361,16 +361,34 @@ def test_reverse_lookup_search_span_uses_symmetric_window():
     assert _reverse_lookup_search_span(20_000, 20_000) == (10_000, 30_000, 20_000)
 
 
+def test_reverse_species_label_uses_chinese_names():
+    assert _reverse_species_label("Registeel") == "雷吉斯奇鲁"
+    assert _reverse_species_label("Regirock") == "雷吉洛克"
+    assert _reverse_species_label("Unknownmon") == "Unknownmon"
+
+
 def test_main_window_waits_around_right_after_notes_ocr(app, monkeypatch):
     window = MainWindow()
     events = []
 
     monkeypatch.setattr(main_window_module.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
-    monkeypatch.setattr(window, "_send_easycon_right", lambda: events.append("right"))
+    monkeypatch.setattr(window, "_send_easycon_right", lambda log_details=True: events.append(("right", log_details)))
 
     window._pause_ocr_and_turn_to_stats_page()
 
-    assert events == [("sleep", 0.1), "right", ("sleep", 0.1)]
+    assert events == [("sleep", 0.1), ("right", True), ("sleep", 0.1)]
+
+
+def test_main_window_can_silence_internal_right_logs(app, monkeypatch):
+    window = MainWindow()
+    events = []
+
+    monkeypatch.setattr(main_window_module.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
+    monkeypatch.setattr(window, "_send_easycon_right", lambda log_details=True: events.append(("right", log_details)))
+
+    window._pause_ocr_and_turn_to_stats_page(log_details=False)
+
+    assert events == [("sleep", 0.1), ("right", False), ("sleep", 0.1)]
 
 
 def test_auto_rng_nature_map_matches_ui_nature_order():
