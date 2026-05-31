@@ -580,6 +580,57 @@ def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
     assert runner.progress.phase == AutoRngPhase.COMPLETED
 
 
+def test_runner_stops_infinite_loop_when_same_seed_repeatedly_has_no_candidates(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    captures: list[str] = []
+    scripts: list[str] = []
+    services = AutoRngServices(
+        capture_seed=lambda: captures.append("seed") or AutoRngSeedResult(seed="stale-seed", current_advances=0),
+        search_candidates=lambda _seed: [],
+        run_script_text=lambda _text, name: scripts.append(name),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            loop_mode="infinite",
+        ),
+        services=services,
+    )
+
+    with pytest.raises(RuntimeError, match="连续 3 次捕获到相同 seed 且无候选"):
+        runner.run(max_steps=12)
+
+    assert captures == ["seed", "seed", "seed"]
+    assert scripts == ["BDSP测种.txt", "BDSP测种.txt", "BDSP测种.txt"]
+
+
+def test_runner_allows_no_candidate_retries_with_different_seeds(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    seeds = iter(["seed-1", "seed-2", "seed-3"])
+    scripts: list[str] = []
+    services = AutoRngServices(
+        capture_seed=lambda: AutoRngSeedResult(seed=next(seeds), current_advances=0),
+        search_candidates=lambda _seed: [],
+        run_script_text=lambda _text, name: scripts.append(name),
+    )
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            loop_mode="infinite",
+        ),
+        services=services,
+    )
+
+    runner.run(max_steps=9)
+
+    assert scripts == ["BDSP测种.txt", "BDSP测种.txt", "BDSP测种.txt"]
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+
+
 def test_runner_preserves_sync_candidate_source_and_nature(tmp_path):
     seed_script = tmp_path / "seed.txt"
     hit_script = tmp_path / "hit.txt"

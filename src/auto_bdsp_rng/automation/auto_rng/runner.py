@@ -28,10 +28,24 @@ from auto_bdsp_rng.rng_core.seed import SeedPair64, SeedState32
 
 _UNSET = object()
 _UNDERGROUND_ADVANCE_RE = re.compile(r"(\$地下过帧\s*=\s*)-?\d+")
+_REPEATED_NO_CANDIDATE_SEED_LIMIT = 3
 
 
 def _zero_underground_advance(text: str) -> str:
     return _UNDERGROUND_ADVANCE_RE.sub(r"\g<1>0", text)
+
+
+def _seed_identity(seed_result: AutoRngSeedResult) -> str:
+    if seed_result.seed_text:
+        return seed_result.seed_text
+    seed = seed_result.seed
+    words = getattr(seed, "words", None)
+    if words is not None:
+        try:
+            return " ".join(f"{int(word):08X}" for word in words)
+        except (TypeError, ValueError):
+            pass
+    return repr(seed)
 
 
 @dataclass
@@ -457,6 +471,8 @@ class AutoRngRunner:
         self._need_init_reset: bool = False  # 无目标重试时临时启用初始化
         self._reserved_exit_reseed_pending: bool = False
         self._exit_reseed_done: bool = False
+        self._last_no_candidate_seed_key: str | None = None
+        self._repeated_no_candidate_seed_count: int = 0
         self._advance_counter: ProjectXsAdvanceCounter | ProjectXsTimelineAdvanceCounter = ProjectXsAdvanceCounter()
 
     def stop(self) -> None:
@@ -644,6 +660,7 @@ class AutoRngRunner:
                 reachable_flags.append(sync_flags[i])
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
+            self._record_no_candidate_seed(seed)
             self._last_search_was_missed = was_missed
             self._history("cycle_result", False, None, None, None)
             self._cycle_started = False
@@ -656,6 +673,7 @@ class AutoRngRunner:
             else:
                 self._set_progress(AutoRngPhase.COMPLETED, "无候选，自动流程已完成", loop_index=self._completed_loops)
             return
+        self._clear_no_candidate_seed_guard()
         self._locked_target = decision.target
         self._missed_target_advance = None
         self._last_search_was_missed = was_missed or was_exit_reseed_overrun
@@ -1239,6 +1257,23 @@ class AutoRngRunner:
         }
         self.progress = replace(self.progress, **values)
         self._emit(self.progress)
+
+    def _record_no_candidate_seed(self, seed: AutoRngSeedResult) -> None:
+        seed_key = _seed_identity(seed)
+        if seed_key == self._last_no_candidate_seed_key:
+            self._repeated_no_candidate_seed_count += 1
+        else:
+            self._last_no_candidate_seed_key = seed_key
+            self._repeated_no_candidate_seed_count = 1
+        if self._repeated_no_candidate_seed_count >= _REPEATED_NO_CANDIDATE_SEED_LIMIT:
+            raise RuntimeError(
+                f"连续 {_REPEATED_NO_CANDIDATE_SEED_LIMIT} 次捕获到相同 seed 且无候选，"
+                "可能眼睛 ROI 或眼睛模板不正确，请停止后重新框选眼睛区域再开始"
+            )
+
+    def _clear_no_candidate_seed_guard(self) -> None:
+        self._last_no_candidate_seed_key = None
+        self._repeated_no_candidate_seed_count = 0
 
     def _require_seed(self) -> AutoRngSeedResult:
         if self._seed_result is None:
