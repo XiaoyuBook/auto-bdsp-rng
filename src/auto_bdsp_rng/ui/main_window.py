@@ -155,6 +155,23 @@ def _reverse_species_label(description: str) -> str:
     return POKEMON_LABELS_ZH.get(description, description)
 
 
+_REVERSE_LOOKUP_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("Articuno", "Zapdos", "Moltres"),
+    ("Raikou", "Entei", "Suicune"),
+    ("Regirock", "Regice", "Registeel"),
+    ("Latias", "Latios"),
+)
+_REVERSE_LOOKUP_GROUP_BY_DESCRIPTION = {
+    description: group
+    for group in _REVERSE_LOOKUP_GROUPS
+    for description in group
+}
+
+
+def _reverse_lookup_group_descriptions(description: str) -> tuple[str, ...]:
+    return _REVERSE_LOOKUP_GROUP_BY_DESCRIPTION.get(description, (description,))
+
+
 def _normalize_iv_ranges(ranges: object) -> tuple[list[int], list[int]] | None:
     iv_min: list[int] = []
     iv_max: list[int] = []
@@ -2079,6 +2096,7 @@ class MainWindow(QMainWindow):
     def _set_profile_version(self, version: GameVersion) -> None:
         self._profile_version = version
         self.profile_game_value.setText(self._game_label(version))
+        self.auto_rng_tab.set_target_version(version)
         self._refresh_encounters()
 
     def open_profile_manager(self) -> None:
@@ -3894,19 +3912,8 @@ class MainWindow(QMainWindow):
             from auto_bdsp_rng.gen8_static.models import StateFilter
             from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
 
-            # 多地精灵组合：反查时遍历同组所有成员
-            REVERSE_GROUPS: dict[str, list[str]] = {
-                "Raikou":   ["Raikou", "Entei", "Suicune"],
-                "Entei":    ["Raikou", "Entei", "Suicune"],
-                "Suicune":  ["Raikou", "Entei", "Suicune"],
-                "Regirock": ["Regirock", "Regice", "Registeel"],
-                "Regice":   ["Regirock", "Regice", "Registeel"],
-                "Registeel":["Regirock", "Regice", "Registeel"],
-                "Latias":   ["Latias", "Latios"],
-                "Latios":   ["Latias", "Latios"],
-            }
             target_desc = search_criteria.record.description
-            group_species = REVERSE_GROUPS.get(target_desc, [target_desc])
+            group_species = _reverse_lookup_group_descriptions(target_desc)
             if len(group_species) > 1:
                 log(f"[自动反查] 多地精灵组: {', '.join(_reverse_species_label(desc) for desc in group_species)}")
 

@@ -367,6 +367,13 @@ def test_reverse_species_label_uses_chinese_names():
     assert _reverse_species_label("Unknownmon") == "Unknownmon"
 
 
+def test_reverse_lookup_groups_include_legendary_birds():
+    assert main_window_module._reverse_lookup_group_descriptions("Articuno") == ("Articuno", "Zapdos", "Moltres")
+    assert main_window_module._reverse_lookup_group_descriptions("Zapdos") == ("Articuno", "Zapdos", "Moltres")
+    assert main_window_module._reverse_lookup_group_descriptions("Moltres") == ("Articuno", "Zapdos", "Moltres")
+    assert main_window_module._reverse_lookup_group_descriptions("Unknownmon") == ("Unknownmon",)
+
+
 def test_main_window_waits_around_right_after_notes_ocr(app, monkeypatch):
     window = MainWindow()
     events = []
@@ -724,6 +731,22 @@ def test_auto_rng_start_button_uses_primary_toolbutton_style(app):
     assert window.auto_rng_tab.start_button.isEnabled()
     assert window.auto_rng_tab.start_button.objectName() == "PrimaryButton"
     assert "QToolButton#PrimaryButton" in window.styleSheet()
+
+
+def test_profile_version_syncs_auto_rng_target_choices(app):
+    window = MainWindow()
+
+    window._set_profile_version(main_window_module.GameVersion.SP)
+
+    assert window.auto_rng_tab._target_version == main_window_module.GameVersion.SP
+    form = window.auto_rng_tab.target_form
+    form.category_combo.setCurrentIndex(form.category_combo.findData("ramanasParkPureSpace"))
+    bird_descriptions = [
+        form.encounter_combo.itemData(index).description
+        for index in range(form.encounter_combo.count())
+        if form.encounter_combo.itemData(index).description in {"Articuno", "Zapdos", "Moltres"}
+    ]
+    assert bird_descriptions == ["Articuno", "Zapdos", "Moltres"]
 
 
 def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_path):
