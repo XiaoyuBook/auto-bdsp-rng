@@ -68,6 +68,7 @@ class _CopyableTextEdit(QPlainTextEdit):
 
 
 SCRIPT_DIR = resource_path("script")
+DEFAULT_SHINY_THRESHOLD_SECONDS = 4.0
 _TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
 
 
@@ -107,7 +108,12 @@ class AutoRngPanel(QWidget):
     captureLog = Signal(str)  # 临时：后台线程日志输出
     requestStatsCapture = Signal(object, object)  # 临时：后台请求主线程截图能力页(nature, characteristic)
 
-    def __init__(self, parent: QWidget | None = None, script_dir: Path = SCRIPT_DIR) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        script_dir: Path = SCRIPT_DIR,
+        settings: QSettings | None = None,
+    ) -> None:
         super().__init__(parent)
         self.script_dir = script_dir
         self._scripts: list[Path] = []
@@ -115,7 +121,7 @@ class AutoRngPanel(QWidget):
         self._runner_worker: AutoRngWorker | None = None
         self._target_version = GameVersion.BD
         self._targets: list[tuple[StaticEncounterRecord, StateFilter, str]] = []
-        self._settings = QSettings("auto-bdsp-rng", "AutoRngPanel")
+        self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
         self._build_ui()
         self.refresh_scripts()
         self._restore_panel_state()
@@ -255,7 +261,7 @@ class AutoRngPanel(QWidget):
         self.shiny_threshold_seconds.setRange(0.0, 999.0)
         self.shiny_threshold_seconds.setDecimals(3)
         self.shiny_threshold_seconds.setSingleStep(0.1)
-        self.shiny_threshold_seconds.setValue(0.0)
+        self.shiny_threshold_seconds.setValue(DEFAULT_SHINY_THRESHOLD_SECONDS)
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames, self.reseeding_threshold):
             spin.setFixedWidth(215)
         self.shiny_threshold_seconds.setFixedWidth(215)

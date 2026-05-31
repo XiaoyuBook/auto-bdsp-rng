@@ -17,7 +17,7 @@ from auto_bdsp_rng.blink_detection import (
     ProjectXsTrackingConfig,
     SeedState32,
 )
-from PySide6.QtCore import QPoint, QPointF, QThread, Qt
+from PySide6.QtCore import QPoint, QPointF, QSettings, QThread, Qt
 from PySide6.QtGui import QPaintEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
@@ -46,6 +46,12 @@ def app(monkeypatch):
 def _set_bdsp_seed(window: MainWindow) -> None:
     window.bdsp_seed64_inputs[0].setText("123456789ABCDEF0")
     window.bdsp_seed64_inputs[1].setText("1111111122222222")
+
+
+def _auto_rng_settings(tmp_path: Path) -> QSettings:
+    settings = QSettings(str(tmp_path / "auto_rng.ini"), QSettings.Format.IniFormat)
+    settings.clear()
+    return settings
 
 
 def _project_xs_munchlax_interval(state: SeedState32) -> float:
@@ -870,6 +876,23 @@ def test_auto_rng_panel_includes_editable_shiny_threshold_in_config(app, tmp_pat
     config = panel.build_config()
 
     assert config.shiny_threshold_seconds == 2.8
+
+
+def test_auto_rng_panel_defaults_shiny_threshold_to_four_seconds_without_saved_setting(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+
+    assert panel.shiny_threshold_seconds.value() == 4.0
+    assert panel.build_config().shiny_threshold_seconds == 4.0
+
+
+def test_auto_rng_panel_restores_saved_shiny_threshold(app, tmp_path):
+    settings = _auto_rng_settings(tmp_path)
+    settings.setValue("shiny_threshold", 2.5)
+
+    panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
+
+    assert panel.shiny_threshold_seconds.value() == 2.5
+    assert panel.build_config().shiny_threshold_seconds == 2.5
 
 
 def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
