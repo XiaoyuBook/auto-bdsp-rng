@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QImage, QIntValidator, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -747,7 +747,7 @@ class MainWindow(QMainWindow):
     ocrFullTestFinished = Signal(bool, str)
     uiCallRequested = Signal(object, object, object, object)
 
-    def __init__(self) -> None:
+    def __init__(self, profile_settings: QSettings | None = None) -> None:
         super().__init__()
         self.setWindowTitle(APP_DISPLAY_TITLE)
         if app_icon_path().exists():
@@ -755,6 +755,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1150, 900)
         self.resize(1150, 900)
         self.lang = "zh"
+        self._profile_settings = profile_settings or QSettings("auto-bdsp-rng", "MainWindowProfile")
         self._profile_version = GameVersion.BD
         self._active_record: StaticEncounterRecord | None = None
         self._records: tuple[StaticEncounterRecord, ...] = ()
@@ -801,6 +802,7 @@ class MainWindow(QMainWindow):
         self._advance_counter.reset(current_advances=0, npc=0, now=time.monotonic())
         self._build_actions()
         self._build_ui()
+        self._restore_profile_settings()
         self._connect_auto_rng_sync_signals()
         self._apply_theme()
         self._refresh_config_list()
@@ -2093,6 +2095,60 @@ class MainWindow(QMainWindow):
         labels = GAME_LABELS_ZH if self.lang == "zh" else GAME_LABELS_EN
         return labels.get(version, str(version))
 
+    @staticmethod
+    def _profile_settings_bool(value: object, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _profile_settings_int(value: object, default: int) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(0, min(65535, number))
+
+    def _restore_profile_settings(self) -> None:
+        settings = self._profile_settings
+        self.profile_name.setText(str(settings.value("name", self.profile_name.text()) or "-"))
+        self.tid.setText(str(self._profile_settings_int(settings.value("tid", self.tid.text()), 12345)))
+        self.sid.setText(str(self._profile_settings_int(settings.value("sid", self.sid.text()), 54321)))
+        self.national_dex.setChecked(
+            self._profile_settings_bool(settings.value("national_dex"), self.national_dex.isChecked())
+        )
+        self.shiny_charm.setChecked(
+            self._profile_settings_bool(settings.value("shiny_charm"), self.shiny_charm.isChecked())
+        )
+        self.oval_charm.setChecked(
+            self._profile_settings_bool(settings.value("oval_charm"), self.oval_charm.isChecked())
+        )
+        version_value = str(settings.value("version", self._profile_version.value) or self._profile_version.value)
+        try:
+            version = GameVersion(version_value)
+        except ValueError:
+            version = self._profile_version
+        self._set_profile_version(version)
+        self._update_tsv()
+
+    def _save_profile_settings(self) -> None:
+        settings = self._profile_settings
+        settings.setValue("name", self.profile_name.text() or "-")
+        settings.setValue("tid", self._profile_settings_int(self.tid.text(), 0))
+        settings.setValue("sid", self._profile_settings_int(self.sid.text(), 0))
+        settings.setValue("version", self._profile_version.value)
+        settings.setValue("national_dex", self.national_dex.isChecked())
+        settings.setValue("shiny_charm", self.shiny_charm.isChecked())
+        settings.setValue("oval_charm", self.oval_charm.isChecked())
+        settings.sync()
+
     def _set_profile_version(self, version: GameVersion) -> None:
         self._profile_version = version
         self.profile_game_value.setText(self._game_label(version))
@@ -2139,7 +2195,12 @@ class MainWindow(QMainWindow):
         self.shiny_charm.setChecked(shiny_charm.isChecked())
         self.oval_charm.setChecked(oval_charm.isChecked())
         self._set_profile_version(GameVersion(version.currentData()))
+        self._save_profile_settings()
         self.statusBar().showMessage("存档信息已应用" if self.lang == "zh" else "Profile applied")
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._save_profile_settings()
+        super().closeEvent(event)
 
     def _change_language(self) -> None:
         self.lang = "zh"

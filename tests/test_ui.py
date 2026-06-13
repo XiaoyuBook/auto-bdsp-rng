@@ -54,6 +54,12 @@ def _auto_rng_settings(tmp_path: Path) -> QSettings:
     return settings
 
 
+def _profile_settings(tmp_path: Path) -> QSettings:
+    settings = QSettings(str(tmp_path / "profile.ini"), QSettings.Format.IniFormat)
+    settings.clear()
+    return settings
+
+
 def _project_xs_munchlax_interval(state: SeedState32) -> float:
     rng = BDSPXorshift(state)
     temp = (rng.next() & 0x7FFFFF) / 8388607.0
@@ -753,6 +759,52 @@ def test_profile_version_syncs_auto_rng_target_choices(app):
         if form.encounter_combo.itemData(index).description in {"Articuno", "Zapdos", "Moltres"}
     ]
     assert bird_descriptions == ["Articuno", "Zapdos", "Moltres"]
+
+
+def test_main_window_restores_profile_settings(app, tmp_path):
+    settings = _profile_settings(tmp_path)
+    settings.setValue("name", "Pearl main")
+    settings.setValue("tid", 24680)
+    settings.setValue("sid", 13579)
+    settings.setValue("version", main_window_module.GameVersion.SP.value)
+    settings.setValue("national_dex", True)
+    settings.setValue("shiny_charm", True)
+    settings.setValue("oval_charm", True)
+
+    window = MainWindow(profile_settings=settings)
+
+    assert window.profile_name.text() == "Pearl main"
+    assert window.tid.text() == "24680"
+    assert window.sid.text() == "13579"
+    assert window.tsv.text() == str(24680 ^ 13579)
+    assert window._profile_version == main_window_module.GameVersion.SP
+    assert window.profile_game_value.text() == "明亮珍珠"
+    assert window.auto_rng_tab._target_version == main_window_module.GameVersion.SP
+    assert window.national_dex.isChecked()
+    assert window.shiny_charm.isChecked()
+    assert window.oval_charm.isChecked()
+
+
+def test_main_window_saves_profile_settings_on_close(app, tmp_path):
+    settings = _profile_settings(tmp_path)
+    window = MainWindow(profile_settings=settings)
+    window.profile_name.setText("Diamond main")
+    window.tid.setText("11111")
+    window.sid.setText("22222")
+    window.national_dex.setChecked(True)
+    window.shiny_charm.setChecked(False)
+    window.oval_charm.setChecked(True)
+    window._set_profile_version(main_window_module.GameVersion.BD)
+
+    window.close()
+
+    assert settings.value("name") == "Diamond main"
+    assert int(settings.value("tid")) == 11111
+    assert int(settings.value("sid")) == 22222
+    assert settings.value("version") == main_window_module.GameVersion.BD.value
+    assert settings.value("national_dex", type=bool)
+    assert not settings.value("shiny_charm", type=bool)
+    assert settings.value("oval_charm", type=bool)
 
 
 def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_path):
