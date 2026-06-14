@@ -367,6 +367,23 @@ def test_auto_rng_panel_persists_exit_script_and_reseeding_threshold(app, tmp_pa
     assert panel.refresh_scripts_button.parent() is panel.script_group
 
 
+def test_auto_rng_panel_defaults_reseeding_threshold_to_500000_without_saved_setting(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+
+    assert panel.reseeding_threshold.value() == 500_000
+    assert panel.build_config().reseeding_threshold == 500_000
+
+
+def test_auto_rng_panel_restores_saved_reseeding_threshold(app, tmp_path):
+    settings = _auto_rng_settings(tmp_path)
+    settings.setValue("reseeding_threshold", 12345)
+
+    panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
+
+    assert panel.reseeding_threshold.value() == 12345
+    assert panel.build_config().reseeding_threshold == 12345
+
+
 def test_reverse_lookup_search_span_uses_symmetric_window():
     assert _reverse_lookup_search_span(500, 500) == (0, 1000, 1000)
     assert _reverse_lookup_search_span(2000, 500) == (1500, 2500, 1000)

@@ -69,6 +69,7 @@ class _CopyableTextEdit(QPlainTextEdit):
 
 SCRIPT_DIR = resource_path("script")
 DEFAULT_SHINY_THRESHOLD_SECONDS = 4.0
+DEFAULT_RESEEDING_THRESHOLD_FRAMES = 500_000
 _TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
 
 
@@ -256,7 +257,7 @@ class AutoRngPanel(QWidget):
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, 1_000_000_000, 100)
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
-        self.reseeding_threshold = self._spin(0, 1_000_000, 10_000)
+        self.reseeding_threshold = self._spin(0, 1_000_000, DEFAULT_RESEEDING_THRESHOLD_FRAMES)
         self.shiny_threshold_seconds = QDoubleSpinBox()
         self.shiny_threshold_seconds.setRange(0.0, 999.0)
         self.shiny_threshold_seconds.setDecimals(3)
@@ -753,7 +754,7 @@ class AutoRngPanel(QWidget):
         if s.contains("max_wait_frames"):
             self.max_wait_frames.setValue(int(s.value("max_wait_frames", 300)))
         if s.contains("reseeding_threshold"):
-            self.reseeding_threshold.setValue(int(s.value("reseeding_threshold", 10_000)))
+            self.reseeding_threshold.setValue(int(s.value("reseeding_threshold", DEFAULT_RESEEDING_THRESHOLD_FRAMES)))
         if s.contains("shiny_threshold"):
             self.shiny_threshold_seconds.setValue(float(s.value("shiny_threshold", 0.0)))
         # 恢复脚本选择（脚本列表已通过 refresh_scripts 加载）
