@@ -274,11 +274,7 @@ class AboutDialog(QDialog):
         QApplication.clipboard().setText(AUTHOR_EMAIL)
 
     def _show_qr_popup(self, path: Path | None, title: str) -> None:
-        if path is None or not path.exists():
-            return
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            return
+        pixmap = QPixmap(str(path)) if path is not None and path.exists() else QPixmap()
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
         dlg.setMinimumSize(400, 440)
@@ -286,8 +282,14 @@ class AboutDialog(QDialog):
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 16, 16, 16)
         img = QLabel()
-        img.setPixmap(pixmap.scaled(360, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if pixmap.isNull():
+            message = "当前构建未包含此二维码" if path is None or not path.exists() else "二维码图片无法读取"
+            img.setText(message)
+            img.setWordWrap(True)
+            img.setStyleSheet("color: #666; padding: 32px; border: 1px solid #c8c6c0; background: #f7f6f3;")
+        else:
+            img.setPixmap(pixmap.scaled(360, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         layout.addWidget(img, 1)
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(dlg.accept)

@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMainWindow
 
 
 @pytest.fixture
@@ -78,6 +78,23 @@ def test_sponsor_assets_are_optional(tmp_path, monkeypatch, app):
     found = sponsor_dialog.find_sponsor_assets()
     assert found.alipay == alipay
     assert found.wechat == wechat
+
+
+def test_about_qr_popup_shows_fallback_when_asset_missing(app, monkeypatch):
+    from auto_bdsp_rng.ui.about_dialog import AboutDialog
+
+    shown_messages: list[str] = []
+
+    def capture_exec(dialog: QDialog) -> int:
+        shown_messages.extend(label.text() for label in dialog.findChildren(QLabel) if label.text())
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(QDialog, "exec", capture_exec)
+
+    dialog = AboutDialog()
+    dialog._show_qr_popup(None, "微信赞赏")
+
+    assert any("当前构建未包含此二维码" in message for message in shown_messages)
 
 
 def test_markdown_viewer_returns_missing_message(tmp_path):
