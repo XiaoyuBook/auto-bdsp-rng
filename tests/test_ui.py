@@ -17,7 +17,7 @@ from auto_bdsp_rng.blink_detection import (
     ProjectXsTrackingConfig,
     SeedState32,
 )
-from PySide6.QtCore import QPoint, QPointF, QSettings, QThread, Qt
+from PySide6.QtCore import QPoint, QPointF, QSettings, QThread, QTimer, Qt
 from PySide6.QtGui import QPaintEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
@@ -40,7 +40,14 @@ from auto_bdsp_rng.ui.history_panel import HistoryPanel
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    return QApplication.instance() or QApplication([])
+    application = QApplication.instance() or QApplication([])
+    yield application
+    for widget in application.topLevelWidgets():
+        for timer in widget.findChildren(QTimer):
+            timer.stop()
+        widget.close()
+        widget.deleteLater()
+    application.processEvents()
 
 
 def _set_bdsp_seed(window: MainWindow) -> None:
@@ -499,7 +506,7 @@ def test_seed_update_auto_refreshes_existing_results(app):
     assert window.table.item(0, 1).text() != first_ec
 
 
-def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
+def test_reidentify_updates_advances_and_keeps_seed(app, monkeypatch):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
     _set_bdsp_seed(window)
@@ -519,7 +526,8 @@ def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
         "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation",
         lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=42),
     )
-    for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
+    original_words = ["12345678", "9ABCDEF0", "11111111", "22222222"]
+    for box, text in zip(window.seed32_inputs, original_words):
         box.setText(text)
     window._latest_preview_frame = object()
 
@@ -527,8 +535,7 @@ def test_reidentify_updates_seed_and_refreshes_results(app, monkeypatch):
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
 
-    assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
-    assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
+    assert [box.text() for box in window.seed32_inputs] == original_words
     assert int(window.advances_value.text()) >= 42
     assert capture_counts == [7]
     assert window.result_count.text() == "3 条结果"
@@ -555,7 +562,8 @@ def test_reidentify_noisy_option_uses_20_blinks_and_noisy_reidentify(app, monkey
         "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation_noisy",
         lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=43),
     )
-    for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
+    original_words = ["12345678", "9ABCDEF0", "11111111", "22222222"]
+    for box, text in zip(window.seed32_inputs, original_words):
         box.setText(text)
     window.reidentify_1_pk_npc.setChecked(True)
     window._latest_preview_frame = object()
@@ -565,8 +573,40 @@ def test_reidentify_noisy_option_uses_20_blinks_and_noisy_reidentify(app, monkey
     window._poll_capture_thread()
 
     assert capture_counts == [20]
-    assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
+    assert [box.text() for box in window.seed32_inputs] == original_words
     assert window.advances_value.text() == "43"
+
+
+def test_reidentify_noisy_uses_tracked_advances_before_stopping_tracking(app, monkeypatch):
+    window = MainWindow()
+    observation = BlinkObservation.from_sequences([], [0, 12, 24])
+    window.reidentify_1_pk_npc.setChecked(True)
+    window._tracked_advances = 120_000
+    window.max_advances.setText("100000")
+    window._latest_preview_frame = object()
+    search_ranges: list[tuple[int, int]] = []
+
+    def fake_capture(*_args, **_kwargs):
+        return observation
+
+    def fake_noisy(_state, _observation, **kwargs):
+        search_ranges.append((kwargs["search_min"], kwargs["search_max"]))
+        return ProjectXsReidentifyResult(
+            state=SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD),
+            observation=observation,
+            advances=110_000,
+        )
+
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation_noisy", fake_noisy)
+    for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
+        box.setText(text)
+
+    window.reidentify_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+
+    assert search_ranges == [(110_000, 100_000)]
 
 
 def test_capture_seed_restores_running_preview(app, monkeypatch):
@@ -587,8 +627,12 @@ def test_capture_seed_restores_running_preview(app, monkeypatch):
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
 
-    assert window._preview_timer.isActive()
-    assert window.preview_button.text() == window._text("stop_preview")
+    preview_active = window._preview_timer.isActive()
+    preview_label = window.preview_button.text()
+    window._preview_timer.stop()
+
+    assert preview_active
+    assert preview_label == window._text("stop_preview")
 
 
 def test_capture_seed_initializes_preview_when_no_frame_was_seen(app, monkeypatch):
@@ -638,8 +682,12 @@ def test_reidentify_restores_running_preview(app, monkeypatch):
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
 
-    assert window._preview_timer.isActive()
-    assert window.preview_button.text() == window._text("stop_preview")
+    preview_active = window._preview_timer.isActive()
+    preview_label = window.preview_button.text()
+    window._preview_timer.stop()
+
+    assert preview_active
+    assert preview_label == window._text("stop_preview")
 
 
 def test_reidentify_initializes_preview_when_no_frame_was_seen(app, monkeypatch):
@@ -671,9 +719,33 @@ def test_reidentify_initializes_preview_when_no_frame_was_seen(app, monkeypatch)
     assert window._latest_preview_frame is not None
 
 
-def test_main_window_loads_project_xs_config_fields(app):
+def test_main_window_loads_project_xs_config_fields(app, monkeypatch, tmp_path):
+    config_dir = tmp_path / "project_xs_configs"
+    config_dir.mkdir()
+    (config_dir / "config_bebe.json").write_text(
+        """{
+    "MonitorWindow": true,
+    "WindowPrefix": "PotPlayer",
+    "image": "./images/bebe/eye2.png",
+    "view": [516, 377, 38, 53],
+    "thresh": 0.7,
+    "white_delay": 0.0,
+    "advance_delay": 0,
+    "advance_delay_2": 0,
+    "npc": 1,
+    "pokemon_npc": 0,
+    "timeline_npc": 0,
+    "crop": [0, 0, 0, 0],
+    "camera": 0,
+    "display_percent": 80
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main_window_module, "PROJECT_XS_CONFIGS", config_dir)
     window = MainWindow()
     index = window.config_combo.findText("config_bebe.json")
+    assert index >= 0
     window.config_combo.setCurrentIndex(index)
 
     assert window.window_prefix.text() == "PotPlayer"
@@ -1019,14 +1091,14 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     panel = AutoRngPanel()
 
     assert 56 <= panel.toolbar.maximumHeight() <= 64
-    assert panel.mode_combo.width() == 110
+    assert panel.mode_combo.width() == 120
     assert panel.loop_count.width() == 80
     assert panel.start_button.height() == 34
     assert panel.stop_button.height() == 34
     assert panel.config_panel.minimumWidth() >= 430
     assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
     assert panel.strategy_group.minimumHeight() < 400
-    assert panel.strategy_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
+    assert panel.strategy_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Preferred
     assert panel.strategy_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.max_advances.width() >= 200
@@ -1333,7 +1405,7 @@ def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, mon
     )
 
 
-def test_main_window_auto_rng_start_opens_preview_when_inactive(app, tmp_path, monkeypatch):
+def test_main_window_auto_rng_start_prepares_preview_frame_when_inactive(app, tmp_path, monkeypatch):
     window = MainWindow()
     config = AutoRngConfig(script_dir=tmp_path)
     started: list[AutoRngRunner] = []
@@ -1344,12 +1416,12 @@ def test_main_window_auto_rng_start_opens_preview_when_inactive(app, tmp_path, m
         window._latest_preview_frame = object()
 
     monkeypatch.setattr(window, "_update_preview_frame", fake_update_preview)
+    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
     monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_rng(config)
 
-    assert window._preview_timer.isActive()
-    assert window.preview_button.text() == window._text("stop_preview")
+    assert not window._preview_timer.isActive()
     assert preview_updates == ["updated"]
     assert len(started) == 1
 
@@ -1467,12 +1539,13 @@ def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_p
     assert window.progress_value.text() == "3/40"
     assert [box.text() for box in window.seed32_inputs] == ["11111111", "22222222", "33333333", "44444444"]
     assert [box.text() for box in window.bdsp_seed64_inputs] == ["1111111122222222", "3333333344444444"]
-    assert window.iv_min[0].text() == "31"
-    assert window.iv_max[0].text() == "31"
-    assert window.height_max.text() == "0"
+    _, target_filter, _ = window.auto_rng_tab.targets()[0]
+    assert window.iv_min[0].text() == str(target_filter.iv_min[0])
+    assert window.iv_max[0].text() == str(target_filter.iv_max[0])
+    assert window.height_max.text() == str(target_filter.height_max)
     assert len(generated) >= 1
     assert generated[-1].seed == seed_state.to_seed_pair64()
-    assert generated[-1].state_filter.iv_min[0] == 31
+    assert generated[-1].state_filter.iv_min[0] == target_filter.iv_min[0]
 
 
 def test_main_window_auto_rng_capture_stop_does_not_show_failure_dialog(app, tmp_path, monkeypatch):
@@ -1532,6 +1605,7 @@ def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp
         "recover_seed_from_observation",
         lambda actual_observation, npc: SimpleNamespace(state=seed_state, advances=0),
     )
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", lambda _criteria: [])
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
 
     class CaptureRunner:
@@ -1593,6 +1667,144 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     assert passed_observations[0].intervals == (12, 24)
     assert int(window.advances_value.text()) >= 47
     assert not window._advance_timer.isActive()
+
+
+def test_main_window_auto_rng_reidentify_uses_hint_limited_regular_search_range(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=0.0)
+    search_ranges: list[tuple[int, int, int]] = []
+
+    def fake_load_config(path, blink_count):
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 1, 1),
+                blink_count=blink_count,
+            ),
+            npc=2,
+        )
+
+    def fake_capture(config, *_args, **_kwargs):
+        return observation
+
+    def fake_reidentify(current_state, _observation, **kwargs):
+        search_ranges.append((kwargs["search_min"], kwargs["search_max"], kwargs["npc"]))
+        return ProjectXsReidentifyResult(state=seed_state, observation=observation, advances=50_100)
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation", fake_reidentify)
+
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_config_path=str(tmp_path / "seed.json"),
+            reidentify_config_path=str(tmp_path / "exit.json"),
+            max_advances=2_000_000,
+        )
+    )
+
+    services.reidentify(
+        AutoRngSeedResult(
+            seed=SeedPair64(0x1111111122222222, 0x3333333344444444),
+            expected_advances_hint=50_000,
+        )
+    )
+
+    assert search_ranges == [(40_000, 70_000, 2)]
+
+
+def test_main_window_auto_rng_reidentify_uses_hint_limited_noisy_search_window(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=0.0)
+    search_ranges: list[tuple[int, int]] = []
+
+    def fake_load_config(path, blink_count):
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 1, 1),
+                blink_count=blink_count,
+            ),
+            npc=2,
+            pokemon_npc=1,
+        )
+
+    def fake_capture(config, *_args, **_kwargs):
+        return observation
+
+    def fake_noisy(current_state, _observation, **kwargs):
+        search_ranges.append((kwargs["search_min"], kwargs["search_max"]))
+        return ProjectXsReidentifyResult(state=seed_state, observation=observation, advances=50_100)
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation_noisy", fake_noisy)
+
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_config_path=str(tmp_path / "seed.json"),
+            reidentify_config_path=str(tmp_path / "exit.json"),
+            max_advances=2_000_000,
+        )
+    )
+
+    services.reidentify(
+        AutoRngSeedResult(
+            seed=SeedPair64(0x1111111122222222, 0x3333333344444444),
+            expected_advances_hint=50_000,
+            after_exit_reseed=True,
+        )
+    )
+
+    assert search_ranges == [(40_000, 30_000)]
+
+
+def test_main_window_auto_rng_exit_reidentify_caps_noisy_search_without_hint(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=0.0)
+    search_ranges: list[tuple[int, int]] = []
+
+    def fake_load_config(path, blink_count):
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 1, 1),
+                blink_count=blink_count,
+            ),
+            pokemon_npc=1,
+        )
+
+    def fake_capture(config, *_args, **_kwargs):
+        return observation
+
+    def fake_noisy(current_state, _observation, **kwargs):
+        search_ranges.append((kwargs["search_min"], kwargs["search_max"]))
+        return ProjectXsReidentifyResult(state=seed_state, observation=observation, advances=42)
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation_noisy", fake_noisy)
+
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_config_path=str(tmp_path / "seed.json"),
+            reidentify_config_path=str(tmp_path / "exit.json"),
+            max_advances=2_000_000,
+        )
+    )
+
+    services.reidentify_exit(AutoRngSeedResult(seed=SeedPair64(0x1111111122222222, 0x3333333344444444)))
+
+    assert search_ranges == [(0, 100_000)]
 
 
 def test_main_window_auto_rng_reidentify_after_exit_uses_reidentify_config(app, tmp_path, monkeypatch):

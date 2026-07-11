@@ -29,9 +29,8 @@ bool is_shiny(u32 pid, u16 tsv) {
 
 u32 force_shiny(u32 pid, u16 tsv, u8 target_shiny) {
     if (get_shiny(pid, tsv) == target_shiny) return pid & U32_MAX;
-    u16 high = (pid >> 16) & 0xFFFF;
     u16 low = pid & 0xFFFF;
-    high = (high ^ tsv ^ (2 - target_shiny)) & 0xFFFF;
+    u16 high = (low ^ tsv ^ (2 - target_shiny)) & 0xFFFF;
     return ((high << 16) | low) & U32_MAX;
 }
 

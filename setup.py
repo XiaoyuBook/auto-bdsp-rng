@@ -12,6 +12,7 @@ ext_modules = [
         [
             "src/auto_bdsp_rng/rng_core/native/bindings.cpp",
             "src/auto_bdsp_rng/rng_core/native/generator.cpp",
+            "src/auto_bdsp_rng/rng_core/native/reidentify.cpp",
         ],
         cxx_std=17,
         include_dirs=["src/auto_bdsp_rng/rng_core/native"],

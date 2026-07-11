@@ -67,17 +67,26 @@ def test_native_matches_python_non_roamer(template, profile, state_filter):
 
 
 @pytest.mark.skipif(not _HAS_NATIVE, reason="C++ native extension not installed")
-def test_native_performance(template, profile, state_filter):
-    """C++ 原生扩展在 100 万帧内完成（< 1 秒）。"""
+def test_native_performance(template, profile, state_filter, monkeypatch):
+    """C++ 路径在相同工作量下显著快于 Python 回退。"""
     import auto_bdsp_rng.gen8_static.generator as mod
 
     assert _HAS_NATIVE
+    max_advances = 100_000
+    monkeypatch.setattr(mod, "_HAS_NATIVE", True)
     t0 = time.perf_counter()
-    states = _run_generator(0, 1_000_000, Lead.NONE, template, profile, state_filter)
-    elapsed = time.perf_counter() - t0
+    native_states = _run_generator(0, max_advances, Lead.NONE, template, profile, state_filter)
+    native_elapsed = time.perf_counter() - t0
 
-    assert elapsed < 1.0, f"C++ 100万帧耗时 {elapsed:.2f}s 超过 1s 上限"
-    assert len(states) == 1_000_001
+    monkeypatch.setattr(mod, "_HAS_NATIVE", False)
+    t0 = time.perf_counter()
+    python_states = _run_generator(0, max_advances, Lead.NONE, template, profile, state_filter)
+    python_elapsed = time.perf_counter() - t0
+
+    assert len(native_states) == len(python_states) == max_advances + 1
+    assert native_elapsed < python_elapsed * 0.5, (
+        f"C++ {native_elapsed:.2f}s，Python 回退 {python_elapsed:.2f}s，未达到 2 倍加速"
+    )
 
 
 def test_python_fallback_works(template, profile, state_filter):

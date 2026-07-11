@@ -113,6 +113,9 @@ TIDSID_BLINK_COUNT = 64
 REIDENTIFY_BLINK_COUNT = 7
 NOISY_REIDENTIFY_BLINK_COUNT = 20
 AUTO_CAPTURE_WARMUP_DISCARD_SECONDS = 1.0
+REIDENTIFY_HINT_BEFORE_FRAMES = 10_000
+REIDENTIFY_HINT_AFTER_FRAMES = 20_000
+NOISY_REIDENTIFY_MAX_SEARCH_FRAMES = 100_000
 
 
 def configure_application_identity(app: QApplication) -> QIcon:
@@ -2402,11 +2405,17 @@ class MainWindow(QMainWindow):
         search_max: int,
     ) -> ProjectXsReidentifyResult:
         if self.reidentify_1_pk_npc.isChecked():
+            if search_max <= search_min:
+                noisy_search_max = NOISY_REIDENTIFY_MAX_SEARCH_FRAMES
+            elif search_min > 0:
+                noisy_search_max = min(NOISY_REIDENTIFY_MAX_SEARCH_FRAMES, search_max - search_min)
+            else:
+                noisy_search_max = min(search_max, NOISY_REIDENTIFY_MAX_SEARCH_FRAMES)
             return reidentify_seed_from_observation_noisy(
                 state,
                 observation,  # type: ignore[arg-type]
                 search_min=search_min,
-                search_max=search_max,
+                search_max=noisy_search_max,
             )
         return reidentify_seed_from_observation(
             state,
@@ -3601,6 +3610,39 @@ class MainWindow(QMainWindow):
                 search_max=search_max,
             )
 
+        def reidentify_search_args(
+            source_config: ProjectXsTrackingConfig,
+            hint: int | None,
+        ) -> tuple[int, int]:
+            if hint is not None:
+                search_min = max(0, int(hint) - REIDENTIFY_HINT_BEFORE_FRAMES)
+                search_upper = max(search_min + 1, int(hint) + REIDENTIFY_HINT_AFTER_FRAMES)
+                if source_config.reidentify_1_pk_npc:
+                    return search_min, max(1, search_upper - search_min)
+                return search_min, search_upper
+            if source_config.reidentify_1_pk_npc:
+                return 0, NOISY_REIDENTIFY_MAX_SEARCH_FRAMES
+            return 0, max(100_000, config.max_advances, search_criteria.max_advances)
+
+        def log_reidentify_debug(
+            label: str,
+            source_config: ProjectXsTrackingConfig,
+            search_min: int,
+            search_max: int,
+            elapsed_seconds: float,
+            result: ProjectXsReidentifyResult,
+        ) -> None:
+            if not config.debug_output:
+                return
+            if source_config.reidentify_1_pk_npc:
+                search_text = f"{search_min}..{search_min + search_max}（窗口 {search_max}）"
+            else:
+                search_text = f"{search_min}..{search_max}"
+            backend = getattr(result, "backend", "unknown")
+            self.auto_rng_tab.captureLog.emit(
+                f"{label} 搜索范围 {search_text}，后端 {backend}，计算耗时 {elapsed_seconds:.3f}s"
+            )
+
         def capture_seed_service() -> AutoRngSeedResult:
             self._capture_cancel.clear()
 
@@ -3669,13 +3711,8 @@ class MainWindow(QMainWindow):
             if preview_was_running:
                 time.sleep(0.3)
 
-            # 约束 reidentify 搜索范围：按预期位置缩小 search_min
-            search_max = max(100_000, config.max_advances, search_criteria.max_advances)
             hint = seed_result.expected_advances_hint
-            if hint is not None:
-                search_min = max(0, hint - 10_000)
-            else:
-                search_min = 0
+            search_min, search_max = reidentify_search_args(source_config, hint)
             observation = capture_player_blinks(
                 reidentify_capture_for(source_config),
                 should_stop=self._capture_cancel.is_set,
@@ -3684,12 +3721,21 @@ class MainWindow(QMainWindow):
                 show_window=False,
                 discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
             )
+            reidentify_started_at = time.perf_counter()
             result = reidentify_from_observation_for(
                 state32_from_result(seed_result),
                 observation,
                 source_config,
                 search_min=search_min,
                 search_max=search_max,
+            )
+            log_reidentify_debug(
+                "reidentify",
+                source_config,
+                search_min,
+                search_max,
+                time.perf_counter() - reidentify_started_at,
+                result,
             )
             elapsed_seconds = 0
             offset_time = float(getattr(observation, "offset_time", 0.0) or 0.0)
@@ -3748,12 +3794,21 @@ class MainWindow(QMainWindow):
                 show_window=False,
                 discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
             )
-            search_max = max(100_000, config.max_advances, search_criteria.max_advances)
+            search_min, search_max = reidentify_search_args(exit_tracking_config, None)
+            reidentify_started_at = time.perf_counter()
             result = reidentify_seed_from_observation_noisy(
                 state32_from_result(seed_result),
                 observation,
-                search_min=0,
+                search_min=search_min,
                 search_max=search_max,
+            )
+            log_reidentify_debug(
+                "过场 reidentify",
+                exit_tracking_config,
+                search_min,
+                search_max,
+                time.perf_counter() - reidentify_started_at,
+                result,
             )
             elapsed_seconds = 0
             offset_time = float(getattr(observation, "offset_time", 0.0) or 0.0)
@@ -4407,6 +4462,7 @@ class MainWindow(QMainWindow):
         self.preview_button.setEnabled(False)
         self.reidentify_button.setEnabled(False)
         self.preview_label.set_selection_enabled(False)
+        tracked_advances = self._tracked_advances
         self._stop_advance_tracking()
         self._capture_cancel.clear()
         self._capture_result = None
@@ -4451,7 +4507,7 @@ class MainWindow(QMainWindow):
                     current_state,
                     observation,
                     npc=config.npc,
-                    search_min=max(0, self._tracked_advances - 10_000) if self._tracked_advances else 0,
+                    search_min=max(0, tracked_advances - 10_000) if tracked_advances else 0,
                     search_max=max(100_000, int(self.max_advances.text() or 0) if hasattr(self, "max_advances") else 100_000),
                 )
             except Exception as exc:  # pragma: no cover - exercised through UI polling

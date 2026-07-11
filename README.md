@@ -231,7 +231,7 @@ README 依据当前仓库完整提交历史整理。项目大致经历了以下�
 
 ## C++ 原生 RNG 扩展
 
-BDSP 定点搜索的核心 RNG 遍历已从纯 Python 移植为 C++17 + pybind11 扩展模块（`src/auto_bdsp_rng/rng_core/native/`），包含 Xorshift / Xoroshiro / RNGList 环形缓冲区 / StaticGenerator8 的完整算法实现，与 PokeFinder 堆栈完全一致。Python 侧 `StaticGenerator8.generate()` 在 import 成功时自动走 C++ 路径，未编译时回退到 Python 实现。
+BDSP 定点搜索和 Project_Xs reidentify 的核心 RNG 计算已从纯 Python 移植为 C++17 + pybind11 扩展模块（`src/auto_bdsp_rng/rng_core/native/`）。模块包含 Xorshift / Xoroshiro / RNGList 环形缓冲区 / StaticGenerator8，以及普通 reidentify 与 `Reidentify 1 PK NPC` noisy reidentify；原生结果按 Project_Xs 逻辑对齐。Python 侧在 import 成功时优先走 C++ 路径，未编译、输入不支持或原生搜索无匹配时回退到 Python 实现。
 
 构建依赖 `pybind11>=2.12` 和 `/utf-8` MSVC 编译选项已加入 `setup.py` 与 `pyproject.toml`。安装项目时自动编译：
 

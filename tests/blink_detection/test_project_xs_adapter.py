@@ -177,7 +177,29 @@ def test_recover_seed_from_observation_wraps_project_xs_failures(monkeypatch):
         recover_seed_from_observation(observation)
 
 
-def test_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
+def test_reidentify_seed_from_observation_prefers_native(monkeypatch):
+    native_calls: list[tuple[SeedState32, tuple[int, ...], int, int, int]] = []
+
+    def fake_native(state, observation, *, npc=0, search_min=0, search_max=0):
+        native_calls.append((state, observation.intervals, npc, search_min, search_max))
+        return SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD), 42
+
+    def fail_reidentify(*_args, **_kwargs):
+        raise AssertionError("Project_Xs fallback should not be used when native succeeds")
+
+    monkeypatch.setattr(project_xs_module, "_try_native_reidentify_by_intervals", fake_native)
+    monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(reidentiy_by_intervals=fail_reidentify))
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    observation = BlinkObservation.from_sequences([], [0, 12, 24])
+
+    result = reidentify_seed_from_observation(state, observation, npc=1, search_min=10, search_max=100)
+
+    assert native_calls == [(state, (0, 12, 24), 1, 10, 100)]
+    assert result.advances == 42
+    assert result.state.format_seed64_pair() == ("AAAAAAAABBBBBBBB", "CCCCCCCCDDDDDDDD")
+
+
+def test_reidentify_seed_from_observation_falls_back_to_project_xs_rngtool(monkeypatch):
     def fake_reidentify(rng, intervals, npc=0, search_min=0, search_max=0, return_advance=False):
         assert rng.get_state() == [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222]
         assert intervals == [0, 12, 24]
@@ -187,6 +209,7 @@ def test_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
         assert return_advance is True
         return FakeRng(), 42
 
+    monkeypatch.setattr(project_xs_module, "_try_native_reidentify_by_intervals", lambda *_args, **_kwargs: None)
     monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
     monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(reidentiy_by_intervals=fake_reidentify))
     state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
@@ -198,7 +221,29 @@ def test_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
     assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
 
 
-def test_noisy_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypatch):
+def test_noisy_reidentify_seed_from_observation_prefers_native(monkeypatch):
+    native_calls: list[tuple[SeedState32, tuple[int, ...], int, int]] = []
+
+    def fake_native(state, observation, *, search_min=0, search_max=0):
+        native_calls.append((state, observation.intervals, search_min, search_max))
+        return SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD), 43
+
+    def fail_reidentify_noisy(*_args, **_kwargs):
+        raise AssertionError("Project_Xs noisy fallback should not be used when native succeeds")
+
+    monkeypatch.setattr(project_xs_module, "_try_native_reidentify_by_intervals_noisy", fake_native)
+    monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(reidentiy_by_intervals_noisy=fail_reidentify_noisy))
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    observation = BlinkObservation.from_sequences([], [0, 12, 24])
+
+    result = reidentify_seed_from_observation_noisy(state, observation, search_min=10, search_max=100)
+
+    assert native_calls == [(state, (0, 12, 24), 10, 100)]
+    assert result.advances == 43
+    assert result.state.format_seed64_pair() == ("AAAAAAAABBBBBBBB", "CCCCCCCCDDDDDDDD")
+
+
+def test_noisy_reidentify_seed_from_observation_falls_back_to_project_xs_rngtool(monkeypatch):
     def fake_reidentify_noisy(rng, intervals, search_min=0, search_max=0):
         assert rng.get_state() == [0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222]
         assert intervals == [0, 12, 24]
@@ -206,6 +251,7 @@ def test_noisy_reidentify_seed_from_observation_uses_project_xs_rngtool(monkeypa
         assert search_max == 100
         return FakeRng(), 43
 
+    monkeypatch.setattr(project_xs_module, "_try_native_reidentify_by_intervals_noisy", lambda *_args, **_kwargs: None)
     monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
     monkeypatch.setitem(
         sys.modules,

@@ -656,6 +656,75 @@ def recover_seed_from_observation(
     return ProjectXsSeedResult(state=state, observation=observation)
 
 
+def _state_from_seed_pair(seed0: int, seed1: int) -> SeedState32:
+    return SeedState32.from_words(
+        (
+            (int(seed0) >> 32) & 0xFFFFFFFF,
+            int(seed0) & 0xFFFFFFFF,
+            (int(seed1) >> 32) & 0xFFFFFFFF,
+            int(seed1) & 0xFFFFFFFF,
+        )
+    )
+
+
+def _try_native_reidentify_by_intervals(
+    state: SeedState32,
+    observation: BlinkObservation,
+    *,
+    npc: int = 0,
+    search_min: int = 0,
+    search_max: int = 1_000_000,
+) -> tuple[SeedState32, int] | None:
+    try:
+        native = importlib.import_module("auto_bdsp_rng.rng_core._native")
+        seed0, seed1 = state.seed64_pair
+        result = native.reidentify_by_intervals(
+            seed0,
+            seed1,
+            list(observation.intervals),
+            int(npc),
+            int(search_min),
+            int(search_max),
+        )
+    except Exception:
+        return None
+    if result is None:
+        return None
+    try:
+        native_seed0, native_seed1, advances = result
+        return _state_from_seed_pair(int(native_seed0), int(native_seed1)), int(advances)
+    except (TypeError, ValueError) as exc:
+        raise ProjectXsIntegrationError("Native reidentify returned an invalid result") from exc
+
+
+def _try_native_reidentify_by_intervals_noisy(
+    state: SeedState32,
+    observation: BlinkObservation,
+    *,
+    search_min: int = 0,
+    search_max: int = 100_000,
+) -> tuple[SeedState32, int] | None:
+    try:
+        native = importlib.import_module("auto_bdsp_rng.rng_core._native")
+        seed0, seed1 = state.seed64_pair
+        result = native.reidentify_by_intervals_noisy(
+            seed0,
+            seed1,
+            list(observation.intervals),
+            int(search_min),
+            int(search_max),
+        )
+    except Exception:
+        return None
+    if result is None:
+        return None
+    try:
+        native_seed0, native_seed1, advances = result
+        return _state_from_seed_pair(int(native_seed0), int(native_seed1)), int(advances)
+    except (TypeError, ValueError) as exc:
+        raise ProjectXsIntegrationError("Native noisy reidentify returned an invalid result") from exc
+
+
 def reidentify_seed_from_observation(
     state: SeedState32,
     observation: BlinkObservation,
@@ -665,6 +734,22 @@ def reidentify_seed_from_observation(
     search_max: int = 1_000_000,
 ) -> ProjectXsReidentifyResult:
     """Reidentify Project_Xs Xorshift state from later blink intervals."""
+
+    native_result = _try_native_reidentify_by_intervals(
+        state,
+        observation,
+        npc=npc,
+        search_min=search_min,
+        search_max=search_max,
+    )
+    if native_result is not None:
+        reidentified_state, advances = native_result
+        return ProjectXsReidentifyResult(
+            state=reidentified_state,
+            observation=observation,
+            advances=advances,
+            backend="native",
+        )
 
     rngtool = _load_module("rngtool")
     xorshift = _load_module("xorshift")
@@ -693,6 +778,7 @@ def reidentify_seed_from_observation(
         state=reidentified_state,
         observation=observation,
         advances=int(advances),
+        backend="python",
     )
 
 
@@ -704,6 +790,21 @@ def reidentify_seed_from_observation_noisy(
     search_max: int = 100_000,
 ) -> ProjectXsReidentifyResult:
     """Reidentify Project_Xs Xorshift state with the 1 Pokemon NPC noisy flow."""
+
+    native_result = _try_native_reidentify_by_intervals_noisy(
+        state,
+        observation,
+        search_min=search_min,
+        search_max=search_max,
+    )
+    if native_result is not None:
+        reidentified_state, advances = native_result
+        return ProjectXsReidentifyResult(
+            state=reidentified_state,
+            observation=observation,
+            advances=advances,
+            backend="native",
+        )
 
     rngtool = _load_module("rngtool")
     xorshift = _load_module("xorshift")
@@ -730,6 +831,7 @@ def reidentify_seed_from_observation_noisy(
         state=reidentified_state,
         observation=observation,
         advances=int(advances),
+        backend="python",
     )
 
 

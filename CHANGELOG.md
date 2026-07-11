@@ -79,6 +79,14 @@
 
 
 
+# 2.1.5
+
+- 普通 reidentify 与 `Reidentify 1 PK NPC` noisy reidentify 优先使用 C++ 原生搜索；结果与 Project_Xs 原版一致，原生不可用、输入不支持或无匹配时继续回退到 Python 实现
+- 自动流程按预期 advances 缩小重新识别范围并记录搜索范围、计算后端和耗时；手动 noisy reidentify 保留当前活帧快照，避免停止活帧后从 0 帧重新搜索
+- 原生重新识别显著减少 Python 列表、切片和候选分配，普通 100 万帧与 noisy 10 万帧搜索在本机基准中均获得约百倍加速
+- 修正 Python 回退与 C++ 原生定点生成器的 RNGList 推进及强制闪 PID 计算，使两条路径继续与 PokeFinder 样例一致
+
+
 # 2.1.4
 
 - 修复关于项目页微信/支付宝赞赏按钮在二维码缺失或读取失败时看起来无响应的问题

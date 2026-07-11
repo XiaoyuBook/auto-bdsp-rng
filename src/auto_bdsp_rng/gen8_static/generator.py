@@ -273,7 +273,6 @@ class StaticGenerator8:
 
         states: list[State8] = []
         for count in range(self.max_advances + 1):
-            rng_list.advance_state()
             ec = rng_list.next()
             sidtid = rng_list.next()
             pid = rng_list.next()
@@ -296,31 +295,26 @@ class StaticGenerator8:
             nature = _generate_nature(rng_list, self.lead)
             height, weight = _generate_height_weight(rng_list)
 
-            # 统一过滤（与 PokeFinder 一致）
-            if not sf.skip:
-                if sf.ability != 255 and sf.ability != ability:
-                    continue
-                if sf.gender != 255 and sf.gender != gender:
-                    continue
-                if sf.shiny != 255 and not (sf.shiny & shiny):
-                    continue
-                if not sf.natures[nature]:
-                    continue
-                if not sf.hidden_powers[hidden_power(ivs)]:
-                    continue
-                if height < sf.height_min or height > sf.height_max:
-                    continue
-                if weight < sf.weight_min or weight > sf.weight_max:
-                    continue
-                if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
-                    continue
-
-            states.append(State8(
-                advances=self.initial_advances + count,
-                ec=ec, sidtid=sidtid, pid=pid, ivs=tuple(ivs),
-                ability=ability, gender=gender, level=self.template.level,
-                nature=nature, shiny=shiny, height=height, weight=weight,
-            ))
+            # PokeFinder advances the ring buffer once after every encounter,
+            # including encounters rejected by the filter.
+            matches_filter = sf.skip or (
+                (sf.ability == 255 or sf.ability == ability)
+                and (sf.gender == 255 or sf.gender == gender)
+                and (sf.shiny == 255 or bool(sf.shiny & shiny))
+                and sf.natures[nature]
+                and sf.hidden_powers[hidden_power(ivs)]
+                and sf.height_min <= height <= sf.height_max
+                and sf.weight_min <= weight <= sf.weight_max
+                and all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6))
+            )
+            if matches_filter:
+                states.append(State8(
+                    advances=self.initial_advances + count,
+                    ec=ec, sidtid=sidtid, pid=pid, ivs=tuple(ivs),
+                    ability=ability, gender=gender, level=self.template.level,
+                    nature=nature, shiny=shiny, height=height, weight=weight,
+                ))
+            rng_list.advance_state()
         return states
 
     def generate_roamer(self, seed0: int, seed1: int) -> list[State8]:

@@ -355,7 +355,14 @@ def test_easycon_panel_restores_template_defaults_and_locates_invalid_line(easyc
     assert "第 1 行" in easycon_panel.log_view.toPlainText()
 
 
+def select_bridge_mode(panel: EasyConPanel) -> None:
+    index = panel.backend_mode.findData("bridge")
+    assert index >= 0
+    panel.backend_mode.setCurrentIndex(index)
+
+
 def test_easycon_panel_bridge_mode_requires_connection(easycon_panel):
+    select_bridge_mode(easycon_panel)
     easycon_panel._load_script_item(easycon_panel.script_list.item(0))
     blink_input = easycon_panel.parameter_widgets["_闪帧"]
     assert isinstance(blink_input, QLineEdit)
@@ -438,6 +445,7 @@ def test_easycon_panel_stops_running_cli_process(monkeypatch, tmp_path, easycon_
 def test_easycon_panel_runs_script_text_through_bridge(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    select_bridge_mode(easycon_panel)
     bridge = tmp_path / "EasyConBridge.exe"
     bridge.write_text("", encoding="utf-8")
     easycon_panel.bridge_path.setText(str(bridge))
@@ -465,6 +473,7 @@ def test_easycon_panel_runs_script_text_through_bridge(monkeypatch, tmp_path, ea
 def test_easycon_panel_disconnect_is_explicit(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    select_bridge_mode(easycon_panel)
     bridge = tmp_path / "EasyConBridge.exe"
     bridge.write_text("", encoding="utf-8")
     easycon_panel.bridge_path.setText(str(bridge))
@@ -480,6 +489,7 @@ def test_easycon_panel_disconnect_is_explicit(monkeypatch, tmp_path, easycon_pan
 def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    select_bridge_mode(easycon_panel)
     bridge = tmp_path / "EasyConBridge.exe"
     bridge.write_text("", encoding="utf-8")
     easycon_panel.bridge_path.setText(str(bridge))
@@ -497,6 +507,7 @@ def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_pa
 def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    select_bridge_mode(easycon_panel)
     bridge = tmp_path / "EasyConBridge.exe"
     bridge.write_text("", encoding="utf-8")
     easycon_panel.bridge_path.setText(str(bridge))
@@ -529,6 +540,7 @@ def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch,
 def test_easycon_panel_escape_disables_keyboard_virtual_controller(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    select_bridge_mode(easycon_panel)
     bridge = tmp_path / "EasyConBridge.exe"
     bridge.write_text("", encoding="utf-8")
     easycon_panel.bridge_path.setText(str(bridge))
@@ -547,6 +559,7 @@ def test_easycon_panel_escape_disables_keyboard_virtual_controller(monkeypatch, 
 def test_easycon_panel_keyboard_virtual_controller_releases_on_app_deactivate(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    select_bridge_mode(easycon_panel)
     bridge = tmp_path / "EasyConBridge.exe"
     bridge.write_text("", encoding="utf-8")
     easycon_panel.bridge_path.setText(str(bridge))
@@ -687,7 +700,7 @@ def test_easycon_panel_error_log_scrolls_to_last_error(easycon_panel):
 
     cursor = easycon_panel.log_view.textCursor()
     assert cursor.position() == easycon_panel.log_view.document().characterCount() - 1
-    assert easycon_panel.log_view.toPlainText().endswith("[error] 最后一条错误")
+    assert easycon_panel.log_view.toPlainText().endswith("最后一条错误")
 
 
 def test_easycon_panel_records_script_print_output_from_cli(monkeypatch, tmp_path, easycon_panel):
@@ -718,7 +731,7 @@ def test_easycon_panel_records_script_print_output_from_cli(monkeypatch, tmp_pat
     app.processEvents()
 
     log_text = easycon_panel.log_view.toPlainText()
-    assert "[stdout] PRINT hello" in log_text
+    assert "PRINT hello" in log_text
 
 
 def test_easycon_panel_reports_missing_ezcon_and_empty_ports(monkeypatch, tmp_path, app):

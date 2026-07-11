@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from auto_bdsp_rng.gen8_static import Lead, PersonalInfo8, Profile8, Shiny, State8, StateFilter, StaticGenerator8, StaticTemplate8
 
 
@@ -71,7 +73,14 @@ def test_non_roamer_fixed_ivs_match_pokefinder_omanyte_sample():
     ]
 
 
-def test_non_roamer_shaymin_square_sample_matches_pokefinder_ui():
+@pytest.mark.parametrize("use_native", [False, True])
+def test_non_roamer_shaymin_square_sample_matches_pokefinder_ui(monkeypatch, use_native):
+    import auto_bdsp_rng.gen8_static.generator as generator_module
+
+    if use_native and not generator_module._HAS_NATIVE:
+        pytest.skip("C++ native extension not installed")
+    monkeypatch.setattr(generator_module, "_HAS_NATIVE", use_native)
+
     template = StaticTemplate8(
         species=492,
         shiny=Shiny.RANDOM,

@@ -134,7 +134,8 @@ def test_final_calibrate_does_not_run_hit_script_when_too_close():
     decision = finalize_flash_frames(
         target,
         fixed_delay=100,
-        current_advances_at_ref=875,
+        fixed_flash_frames=60,
+        current_advances_at_ref=825,
         ref_time=1.0,
         now_monotonic=1.0,
         npc=0,
@@ -142,7 +143,7 @@ def test_final_calibrate_does_not_run_hit_script_when_too_close():
     )
 
     assert decision.kind == AutoRngDecisionKind.TARGET_TOO_CLOSE
-    assert decision.flash_frames == 25
+    assert decision.flash_frames == 60
 
 
 def test_runner_clears_locked_target_when_final_calibrate_abandons_target(tmp_path):
@@ -172,12 +173,12 @@ def test_runner_clears_locked_target_when_final_calibrate_abandons_target(tmp_pa
         services=services,
     )
 
-    runner.run(max_steps=5)
+    runner.run(max_steps=4)
 
     assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
     assert runner.progress.locked_target is None
-    assert "最终剩余帧" in runner.progress.log_message
-    assert "放弃本目标" in runner.progress.log_message
+    assert "不足 6 帧" in runner.progress.log_message
+    assert "放弃" in runner.progress.log_message
 
 
 def test_no_candidates_decides_to_run_seed_script():
@@ -651,7 +652,7 @@ def test_runner_preserves_sync_candidate_source_and_nature(tmp_path):
             seed_script_path=seed_script,
             hit_script_path=hit_script,
             fixed_delay=100,
-            sync_mode=1,
+            sync_mode=2,
             sync_nature="勤奋",
             start_phase=AutoRngPhase.CAPTURE_SEED,
         ),
@@ -666,7 +667,7 @@ def test_runner_preserves_sync_candidate_source_and_nature(tmp_path):
 
     runner.run(max_steps=2)
 
-    assert calls == [(255, None), (0, 0)]
+    assert calls == [(0, 0)]
     candidates_event = next(args for event, args in history if event == "candidates_found")
     candidates, locked_index, sync_flags, _delay = candidates_event
     assert locked_index == 0
@@ -695,7 +696,7 @@ def test_runner_does_not_label_secondary_no_sync_candidate_as_sync(tmp_path):
             seed_script_path=seed_script,
             hit_script_path=hit_script,
             fixed_delay=100,
-            sync_mode=2,
+            sync_mode=1,
             sync_nature="勤奋",
             start_phase=AutoRngPhase.CAPTURE_SEED,
         ),
@@ -1241,7 +1242,7 @@ def test_runner_does_not_reidentify_again_after_entering_final_calibrate(tmp_pat
     assert calls == ["reidentify"]
     assert scripts == [
         ("BDSP测种.txt", "A 100\n"),
-        ("bdsp过帧.txt", "_目标帧数 = 840\n"),
+        ("bdsp过帧.txt", "_目标帧数 = 660\n"),
         ("谢米.txt", "_闪帧 = 60\n"),
     ]
     assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
@@ -1278,10 +1279,10 @@ def test_runner_recomputes_hit_start_at_script_start_using_whole_elapsed_frames(
 
     runner.run(max_steps=9)
 
-    assert scripts[-1] == ("谢米.txt", "_闪帧 = 60\n")
-    assert runner.progress.current_advances == 839
-    assert runner.progress.remaining_to_trigger == 1
-    assert runner.progress.final_flash_frames == 60
+    assert scripts[-1] == ("谢米.txt", "_闪帧 = 5\n")
+    assert runner.progress.current_advances == 835
+    assert runner.progress.remaining_to_trigger == 6
+    assert runner.progress.final_flash_frames == 5
 
 
 def test_runner_single_mode_completes_after_hit_script(tmp_path):
@@ -1386,10 +1387,10 @@ def test_runner_uses_hit_monitor_and_restarts_seed_script_when_not_shiny(tmp_pat
 
     runner.run(max_steps=7)
 
-    assert monitor_calls == [("_闪帧 = 60\n", "谢米.txt", 2.8)]
+    assert monitor_calls == [("_闪帧 = 39\n", "谢米.txt", 2.8)]
     assert scripts == ["BDSP测种.txt", "BDSP测种.txt"]
-    assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
-    assert runner.progress.loop_index == 1
+    assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
+    assert runner.progress.loop_index == 2
 
 
 def test_runner_stops_after_hit_monitor_reports_shiny(tmp_path):
@@ -1518,7 +1519,7 @@ def test_remaining_equal_flash_triggers_final_calibrate():
 
     decision = decide_target_advance(
         target,
-        current_advances=10403,
+        current_advances=10343,
         fixed_delay=1452,
         fixed_flash_frames=60,
         max_wait_frames=500,
@@ -1529,21 +1530,21 @@ def test_remaining_equal_flash_triggers_final_calibrate():
     assert decision.phase == AutoRngPhase.FINAL_CALIBRATE
 
 
-def test_remaining_less_than_flash_triggers_target_missed():
-    """remaining < fixed_flash_frames 时已错过脚本启动窗口。"""
+def test_remaining_less_than_flash_triggers_final_adjust():
+    """remaining < fixed_flash_frames 时进入动态闪帧调整。"""
     target = AutoRngTarget(raw_target_advances=11915)
 
     decision = decide_target_advance(
         target,
-        current_advances=10410,
+        current_advances=10350,
         fixed_delay=1452,
         fixed_flash_frames=60,
         max_wait_frames=500,
     )
 
     assert decision.remaining_to_trigger == 53  # < 60
-    assert decision.kind == AutoRngDecisionKind.TARGET_MISSED
-    assert decision.phase == AutoRngPhase.SEARCH_TARGET
+    assert decision.kind == AutoRngDecisionKind.FINAL_ADJUST
+    assert decision.phase == AutoRngPhase.FINAL_ADJUST
 
 
 def test_still_runs_advance_script_when_remaining_exceeds_max_wait():
@@ -2004,4 +2005,4 @@ def test_runner_final_adjust_dynamic_flash(tmp_path):
     hit_texts = [t for n, t in scripts if "谢米" in n]
     assert hit_texts, f"expected hit script call, got {scripts}"
     assert "_闪帧 = 19" in hit_texts[0], f"expected dynamic flash 19, got {hit_texts[0]}"
-    assert runner.progress.phase in (AutoRngPhase.LOOP_CHECK, AutoRngPhase.RUN_HIT_SCRIPT)
+    assert runner.progress.phase == AutoRngPhase.COMPLETED

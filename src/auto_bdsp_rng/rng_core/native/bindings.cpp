@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include "generator.hpp"
+#include "reidentify.hpp"
 
 namespace py = pybind11;
 
@@ -215,6 +216,26 @@ static py::list compute_iv_ranges_py(py::list bases_py, py::list stats_py, int n
     return out;
 }
 
+static py::object reidentify_by_intervals_py(
+    u64 seed0, u64 seed1, std::vector<u32> intervals, int npc, u32 search_min, u32 search_max)
+{
+    auto result = reidentify_by_intervals_native(seed0, seed1, intervals, npc, search_min, search_max);
+    if (!result.has_value()) {
+        return py::none();
+    }
+    return py::make_tuple(result->seed0, result->seed1, result->advances);
+}
+
+static py::object reidentify_by_intervals_noisy_py(
+    u64 seed0, u64 seed1, std::vector<u32> intervals, u32 search_min, u32 search_max)
+{
+    auto result = reidentify_by_intervals_noisy_native(seed0, seed1, intervals, search_min, search_max);
+    if (!result.has_value()) {
+        return py::none();
+    }
+    return py::make_tuple(result->seed0, result->seed1, result->advances);
+}
+
 PYBIND11_MODULE(_native, m) {
     m.doc() = "BDSP RNG static generator (C++ native extension)";
     m.def("generate_static", &generate_static_py,
@@ -245,4 +266,12 @@ PYBIND11_MODULE(_native, m) {
           py::arg("tid"), py::arg("sid"), py::arg("level"),
           py::arg("filters"),
           "Generate BDSP static encounter states matching any filter (C++ native).");
+    m.def("reidentify_by_intervals", &reidentify_by_intervals_py,
+          py::arg("seed0"), py::arg("seed1"), py::arg("intervals"),
+          py::arg("npc"), py::arg("search_min"), py::arg("search_max"),
+          "Reidentify Project_Xs Xorshift state from blink intervals (C++ native).");
+    m.def("reidentify_by_intervals_noisy", &reidentify_by_intervals_noisy_py,
+          py::arg("seed0"), py::arg("seed1"), py::arg("intervals"),
+          py::arg("search_min"), py::arg("search_max"),
+          "Reidentify Project_Xs Xorshift state from noisy blink intervals (C++ native).");
 }

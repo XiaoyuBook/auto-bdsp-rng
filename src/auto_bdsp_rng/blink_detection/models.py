@@ -149,6 +149,7 @@ class ProjectXsReidentifyResult:
     state: SeedState32
     observation: BlinkObservation
     advances: int
+    backend: str = "python"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -160,6 +161,7 @@ class ProjectXsReidentifyResult:
             "intervals": list(self.observation.intervals),
             "offset_time": self.observation.offset_time,
             "advances": self.advances,
+            "backend": self.backend,
         }
 
 

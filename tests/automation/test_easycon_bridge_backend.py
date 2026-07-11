@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -77,7 +78,13 @@ def test_bridge_backend_runs_script_file_as_text(tmp_path):
     result = backend.run_script(EasyConRunTask(script_path=script, port="COM9"))
 
     assert result.stdout == "ran sample.ecs"
-    assert transport.commands[-1] == ("run_script", {"script_text": "A 100\n", "name": "sample.ecs"})
+    command, payload = transport.commands[-1]
+    assert command == "run_script"
+    assert payload["script_text"] == "A 100\n"
+    assert payload["name"] == "sample.ecs"
+    assert payload["high_resolution"] is False
+    assert isinstance(payload["requested_at"], str)
+    datetime.fromisoformat(payload["requested_at"])
 
 
 def test_bridge_backend_disconnect_releases_only_on_explicit_request():

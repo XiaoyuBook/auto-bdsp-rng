@@ -80,6 +80,8 @@ rngtool.tracking_blink(...)
 .\.venv\Scripts\python.exe -m auto_bdsp_rng reidentify --project-xs-config config_cave.json --seed 12345678 9ABCDEF0 11111111 22222222 --blink-count 7 --search-min 0 --search-max 1000000
 ```
 
+重新识别会优先调用本项目的 C++ 原生后端：普通模式按 Project_Xs 的 NPC 分相和 interval 位模式搜索，`Reidentify 1 PK NPC` noisy 模式按相同候选评分和 tie-break 规则搜索。原生扩展不可用、输入超出原生支持范围或原生未找到结果时，会自动回退到 Project_Xs Python 实现，因此接口语义保持兼容。
+
 也可以手动推进已有 Seed：
 
 ```powershell
