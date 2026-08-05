@@ -11,10 +11,16 @@ from auto_bdsp_rng.automation.auto_rng.zoom_recovery import (
 )
 
 
-def test_contains_zoom_overlay_text_accepts_simplified_and_traditional_text():
-    assert contains_zoom_overlay_text("缩 放\n退出")
-    assert contains_zoom_overlay_text("縮放")
-    assert not contains_zoom_overlay_text("重新调整")
+@pytest.mark.parametrize(
+    "text",
+    ("缩 放\n退出", "縮放", "锁定", "鎖定", "重新调整", "重新調整"),
+)
+def test_contains_zoom_overlay_text_accepts_every_zoom_overlay_label(text):
+    assert contains_zoom_overlay_text(text)
+
+
+def test_contains_zoom_overlay_text_ignores_normal_game_text():
+    assert not contains_zoom_overlay_text("背包をとじます")
 
 
 def test_detect_zoom_overlay_reads_the_full_frame():

@@ -19,7 +19,7 @@ WAIT 100
 HOME UP
 WAIT 1000
 """
-ZOOM_OVERLAY_KEYWORDS = ("缩放", "縮放")
+ZOOM_OVERLAY_KEYWORDS = ("缩放", "縮放", "锁定", "鎖定", "重新调整", "重新調整")
 ZOOM_CONFIRMATION_DELAY_SECONDS = 0.1
 
 
