@@ -304,18 +304,18 @@ def test_capture_keep_awake_cli_slot_does_not_run_delayed_discovery(app, monkeyp
         source="test",
     )
     discovery_called = threading.Event()
-    starts: list[tuple[str, str, str]] = []
+    starts: list[tuple[str, int]] = []
 
     def delayed_discovery() -> None:
         discovery_called.set()
         time.sleep(0.5)
 
-    def capture_start(task_name: str, script_text: str, task_type: str) -> bool:
-        starts.append((task_name, script_text, task_type))
+    def capture_start(log_label: str, duration_ms: int) -> bool:
+        starts.append((log_label, duration_ms))
         return True
 
     monkeypatch.setattr(window.easycon_tab, "detect_easycon", delayed_discovery)
-    monkeypatch.setattr(window.easycon_tab, "_start_inline_cli_script", capture_start)
+    monkeypatch.setattr(window.easycon_tab, "_start_capture_keep_awake_cli", capture_start)
 
     started_at = time.monotonic()
     window._handle_capture_keep_awake_requested(10, 40)
@@ -323,18 +323,25 @@ def test_capture_keep_awake_cli_slot_does_not_run_delayed_discovery(app, monkeyp
 
     assert elapsed < 0.1
     assert not discovery_called.is_set()
-    assert starts == [("capture_keep_awake_zr", "ZR 100\n", "controller")]
+    assert starts == [("捕捉亮屏保活 10/40", 100)]
 
 
 def test_capture_keep_awake_bridge_does_not_block_gui_or_create_unbounded_tasks(app):
     window = MainWindow()
     backend_started = threading.Event()
     backend_release = threading.Event()
-    calls: list[tuple[str, int, float | None]] = []
+    calls: list[tuple[str, int, float | None, bool]] = []
 
     class BlockingBridgeBackend:
-        def press(self, button: str, duration_ms: int, *, timeout_seconds: float | None = None) -> None:
-            calls.append((button, duration_ms, timeout_seconds))
+        def press(
+            self,
+            button: str,
+            duration_ms: int,
+            *,
+            timeout_seconds: float | None = None,
+            terminate_on_timeout: bool = False,
+        ) -> None:
+            calls.append((button, duration_ms, timeout_seconds, terminate_on_timeout))
             backend_started.set()
             backend_release.wait(timeout=1)
             raise RuntimeError("Bridge request timed out")
@@ -352,7 +359,7 @@ def test_capture_keep_awake_bridge_does_not_block_gui_or_create_unbounded_tasks(
     assert backend_started.wait(timeout=0.5)
     for milestone in (20, 30, 30, 30):
         window._handle_capture_keep_awake_requested(milestone, 40)
-    assert calls == [("ZR", 100, 2.0)]
+    assert calls == [("ZR", 100, 2.0, True)]
 
     class AliveCaptureThread:
         @staticmethod
@@ -2176,6 +2183,31 @@ def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monk
 
     assert services.run_script_text("A 100", "hit.txt") == "ok"
     assert calls == [("A 100", "hit.txt")]
+
+
+def test_main_window_auto_rng_cli_settles_keep_awake_before_script(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    events: list[str] = []
+
+    class FakeCliBackend:
+        def run_script_text(self, script_text: str, name: str, *, port: str) -> str:
+            events.append(f"run:{port}:{name}:{script_text}")
+            return "ok"
+
+    cli_index = window.easycon_tab.backend_mode.findData("cli")
+    window.easycon_tab.backend_mode.setCurrentIndex(cli_index)
+    window.easycon_tab.port_combo.addItem("COM7")
+    window.easycon_tab.port_combo.setCurrentText("COM7")
+    monkeypatch.setattr(
+        window.easycon_tab,
+        "prepare_for_external_cli_script",
+        lambda: events.append("settled") or True,
+    )
+    monkeypatch.setattr(main_window_module, "CliEasyConBackend", FakeCliBackend)
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    assert services.run_script_text("A 100", "hit.txt") == "ok"
+    assert events == ["settled", "run:COM7:hit.txt:A 100"]
 
 
 def test_main_window_auto_rng_run_script_syncs_easycon_status_and_output(app, tmp_path, monkeypatch):

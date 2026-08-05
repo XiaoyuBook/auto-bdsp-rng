@@ -27,6 +27,10 @@ class BridgeProtocolError(RuntimeError):
     pass
 
 
+class BridgeTransportTerminatedError(BridgeProtocolError):
+    """A bounded request failed and the transport was intentionally terminated."""
+
+
 @dataclass
 class _QueuedBridgeWrite:
     request_id: int
@@ -41,6 +45,7 @@ class BridgeTransport(Protocol):
         payload: Mapping[str, object] | None = None,
         *,
         timeout_seconds: float | None = None,
+        terminate_on_timeout: bool = False,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -86,6 +91,7 @@ class JsonLineBridgeTransport:
         payload: Mapping[str, object] | None = None,
         *,
         timeout_seconds: float | None = None,
+        terminate_on_timeout: bool = False,
     ) -> dict[str, object]:
         if self._process.stdin is None or self._process.stdout is None:
             raise BridgeProtocolError("Bridge process is not connected")
@@ -112,14 +118,26 @@ class JsonLineBridgeTransport:
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            error = BridgeProtocolError(f"Bridge request timed out after {timeout:g}s: {command}")
-            self._handle_request_timeout(request_id, response_queue, queued_write, error)
+            error = _request_timeout_error(command, timeout, terminate_on_timeout)
+            self._handle_request_timeout(
+                request_id,
+                response_queue,
+                queued_write,
+                error,
+                terminate_on_timeout=terminate_on_timeout,
+            )
             raise error
         try:
             response = response_queue.get(timeout=remaining)
         except queue.Empty as exc:
-            error = BridgeProtocolError(f"Bridge request timed out after {timeout:g}s: {command}")
-            self._handle_request_timeout(request_id, response_queue, queued_write, error)
+            error = _request_timeout_error(command, timeout, terminate_on_timeout)
+            self._handle_request_timeout(
+                request_id,
+                response_queue,
+                queued_write,
+                error,
+                terminate_on_timeout=terminate_on_timeout,
+            )
             raise error from exc
         self._remove_pending(request_id, response_queue)
         if isinstance(response, BaseException):
@@ -192,8 +210,10 @@ class JsonLineBridgeTransport:
         response_queue: queue.Queue[dict[str, object] | BaseException],
         queued_write: _QueuedBridgeWrite,
         error: BridgeProtocolError,
+        *,
+        terminate_on_timeout: bool,
     ) -> None:
-        if queued_write.completed.is_set():
+        if queued_write.completed.is_set() and not terminate_on_timeout:
             self._remove_pending(request_id, response_queue)
             return
         self._break_transport(error)
@@ -334,11 +354,19 @@ class BridgeEasyConBackend(EasyConBackend):
     def stop(self) -> None:
         self.stop_current_script()
 
-    def press(self, button: str, duration_ms: int, *, timeout_seconds: float | None = None) -> None:
+    def press(
+        self,
+        button: str,
+        duration_ms: int,
+        *,
+        timeout_seconds: float | None = None,
+        terminate_on_timeout: bool = False,
+    ) -> None:
         self._request(
             "press",
             {"button": button, "duration_ms": duration_ms},
             timeout_seconds=timeout_seconds,
+            terminate_on_timeout=terminate_on_timeout,
         )
 
     def stick(self, side: str, direction: str | int, duration_ms: int | None) -> None:
@@ -363,11 +391,17 @@ class BridgeEasyConBackend(EasyConBackend):
         payload: Mapping[str, object] | None = None,
         *,
         timeout_seconds: float | None = None,
+        terminate_on_timeout: bool = False,
     ) -> dict[str, object]:
         transport = self._ensure_transport()
-        if timeout_seconds is None:
+        if timeout_seconds is None and not terminate_on_timeout:
             return transport.request(command, payload)
-        return transport.request(command, payload, timeout_seconds=timeout_seconds)
+        return transport.request(
+            command,
+            payload,
+            timeout_seconds=timeout_seconds,
+            terminate_on_timeout=terminate_on_timeout,
+        )
 
     def _ensure_transport(self) -> BridgeTransport:
         if self._transport is None:
@@ -392,3 +426,14 @@ def _validate_timeout(value: float) -> float:
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Bridge request timeout must be finite and greater than zero")
     return timeout
+
+
+def _request_timeout_error(
+    command: str,
+    timeout: float,
+    terminate_on_timeout: bool,
+) -> BridgeProtocolError:
+    message = f"Bridge request timed out after {timeout:g}s: {command}"
+    if terminate_on_timeout:
+        return BridgeTransportTerminatedError(message)
+    return BridgeProtocolError(message)

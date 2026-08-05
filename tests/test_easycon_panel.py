@@ -15,7 +15,12 @@ from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QSpinBox
 from PySide6.QtGui import QKeyEvent, QTextCursor
 
 import auto_bdsp_rng.ui.easycon_panel as panel_module
-from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConInstallation, EasyConStatus
+from auto_bdsp_rng.automation.easycon import (
+    BridgeTransportTerminatedError,
+    EasyConConfig,
+    EasyConInstallation,
+    EasyConStatus,
+)
 from auto_bdsp_rng.ui.easycon_panel import DEFAULT_KEY_MAPPING, EasyConPanel, KeyMappingDialog
 
 
@@ -172,6 +177,7 @@ class FakeBridgeBackend:
         self.stick_events: list[tuple[str, str, bool]] = []
         self.stopped = False
         self.disconnected = False
+        self.closed = False
         FakeBridgeBackend.instances.append(self)
 
     def connect(self, port):
@@ -202,7 +208,7 @@ class FakeBridgeBackend:
     def stop_current_script(self):
         self.stopped = True
 
-    def press(self, button, duration_ms):
+    def press(self, button, duration_ms, **_kwargs):
         self.presses.append((button, duration_ms))
 
     def stick(self, side, direction, duration_ms):
@@ -216,6 +222,9 @@ class FakeBridgeBackend:
 
     def stick_direction(self, side, direction, down):
         self.stick_events.append((side, direction, down))
+
+    def close(self):
+        self.closed = True
 
 
 def test_easycon_panel_lists_builtin_scripts(easycon_panel):
@@ -509,18 +518,18 @@ def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_pa
 
 def test_capture_keep_awake_cli_uses_cached_installation_without_blocking_discovery(monkeypatch, easycon_panel):
     discovery_called = threading.Event()
-    starts: list[tuple[str, str, str]] = []
+    starts: list[tuple[str, int]] = []
 
     def delayed_discovery() -> None:
         discovery_called.set()
         time.sleep(0.5)
 
-    def capture_start(task_name: str, script_text: str, task_type: str) -> bool:
-        starts.append((task_name, script_text, task_type))
+    def capture_start(log_label: str, duration_ms: int) -> bool:
+        starts.append((log_label, duration_ms))
         return True
 
     monkeypatch.setattr(easycon_panel, "detect_easycon", delayed_discovery)
-    monkeypatch.setattr(easycon_panel, "_start_inline_cli_script", capture_start)
+    monkeypatch.setattr(easycon_panel, "_start_capture_keep_awake_cli", capture_start)
 
     started_at = time.monotonic()
     accepted = easycon_panel.request_capture_keep_awake(10, 40, duration_ms=100)
@@ -529,7 +538,7 @@ def test_capture_keep_awake_cli_uses_cached_installation_without_blocking_discov
     assert accepted is True
     assert elapsed < 0.1
     assert not discovery_called.is_set()
-    assert starts == [("capture_keep_awake_zr", "ZR 100\n", "controller")]
+    assert starts == [("捕捉亮屏保活 10/40", 100)]
 
 
 def test_stale_keep_awake_completion_does_not_override_current_or_running_task(easycon_panel):
@@ -540,17 +549,180 @@ def test_stale_keep_awake_completion_does_not_override_current_or_running_task(e
     easycon_panel.task_state_text = "执行中"
     original_log = easycon_panel.log_view.toPlainText()
 
-    easycon_panel._handle_capture_keep_awake_finished(1, "捕捉亮屏保活 10/40", "ZR", 100, "")
+    easycon_panel._handle_capture_keep_awake_finished(1, "捕捉亮屏保活 10/40", "ZR", 100, "", False)
 
     assert easycon_panel._capture_keep_awake_future is current_future
     assert easycon_panel.task_state_text == "执行中"
     assert easycon_panel.log_view.toPlainText() == original_log
 
-    easycon_panel._handle_capture_keep_awake_finished(2, "捕捉亮屏保活 20/40", "ZR", 100, "")
+    easycon_panel._handle_capture_keep_awake_finished(2, "捕捉亮屏保活 20/40", "ZR", 100, "", False)
 
     assert easycon_panel._capture_keep_awake_future is None
     assert easycon_panel.task_state_text == "执行中"
     assert "捕捉亮屏保活 20/40: ZR 100ms" in easycon_panel.log_view.toPlainText()
+
+
+def test_keep_awake_terminal_bridge_failure_clears_backend_and_allows_reconnect(
+    monkeypatch,
+    tmp_path,
+    easycon_panel,
+):
+    instances = []
+
+    class ReconnectableBridgeBackend(FakeBridgeBackend):
+        def __init__(self, bridge_path=None, log_callback=None):
+            super().__init__(bridge_path=bridge_path, log_callback=log_callback)
+            self.fail_keep_awake = False
+            instances.append(self)
+
+        def press(
+            self,
+            button,
+            duration_ms,
+            *,
+            timeout_seconds=None,
+            terminate_on_timeout=False,
+        ):
+            if self.fail_keep_awake:
+                raise BridgeTransportTerminatedError("Bridge request timed out after 2s: press")
+            super().press(button, duration_ms)
+
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", ReconnectableBridgeBackend)
+    monkeypatch.setattr(easycon_panel, "_show_connection_toast", lambda _port: None)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    select_bridge_mode(easycon_panel)
+    easycon_panel.bridge_path.setText(str(bridge))
+    easycon_panel.connect_bridge()
+    first_backend = instances[-1]
+    first_backend.fail_keep_awake = True
+
+    assert easycon_panel.request_capture_keep_awake(10, 40, duration_ms=100) is True
+    process_events_until(lambda: easycon_panel._capture_keep_awake_future is None)
+
+    assert first_backend.closed is True
+    assert easycon_panel.bridge_backend is None
+    assert easycon_panel.bridge_status == EasyConStatus.FAILED
+    assert easycon_panel.connection_state_label.text() == "连接: 连接失败"
+    assert easycon_panel.connect_button.text() == "连接伊机控"
+
+    easycon_panel.connect_bridge()
+
+    assert len(instances) == 2
+    assert easycon_panel.bridge_backend is instances[-1]
+    assert easycon_panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+
+
+def test_capture_keep_awake_cli_timeout_preserves_normal_task_state(monkeypatch, tmp_path, easycon_panel):
+    ezcon = tmp_path / "slow_keep_awake.cmd"
+    ezcon.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                'if "%1"=="run" (ping -n 6 127.0.0.1 >nul& exit /b 0)',
+                "exit /b 0",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    easycon_panel.backend_mode.setCurrentIndex(easycon_panel.backend_mode.findData("cli"))
+    easycon_panel.installation = EasyConInstallation(path=ezcon, version="test", source="test")
+    easycon_panel.task_state_text = "执行中"
+    easycon_panel.run_seconds = 37
+    easycon_panel.current_run_stdout = ["normal stdout"]
+    easycon_panel.current_run_stderr = ["normal stderr"]
+    normal_started_at = datetime.now()
+    normal_script_path = tmp_path / "normal.ecs"
+    easycon_panel.current_run_started_at = normal_started_at
+    easycon_panel.current_run_script_path = normal_script_path
+    easycon_panel.current_run_port = "mock"
+    easycon_panel.run_timer.start()
+    toast_calls: list[str] = []
+    monkeypatch.setattr(easycon_panel, "_show_failure_toast", toast_calls.append)
+
+    assert easycon_panel.request_capture_keep_awake(10, 40, duration_ms=100) is True
+    keep_awake_process = easycon_panel._capture_keep_awake_cli_process
+    assert keep_awake_process is not None
+    assert keep_awake_process.objectName() == "capture_keep_awake_cli"
+    assert keep_awake_process.waitForStarted(1000)
+
+    easycon_panel._capture_keep_awake_cli_timeout()
+    process_events_until(lambda: easycon_panel._capture_keep_awake_cli_process is None, timeout_ms=2000)
+
+    assert easycon_panel.process is None
+    assert easycon_panel.task_state_text == "执行中"
+    assert easycon_panel.run_timer.isActive() is True
+    assert easycon_panel.run_seconds == 37
+    assert easycon_panel.current_run_stdout == ["normal stdout"]
+    assert easycon_panel.current_run_stderr == ["normal stderr"]
+    assert easycon_panel.current_run_started_at is normal_started_at
+    assert easycon_panel.current_run_script_path == normal_script_path
+    assert easycon_panel.current_run_port == "mock"
+    assert toast_calls == []
+    assert "捕捉亮屏保活 CLI 超时" in easycon_panel.log_view.toPlainText()
+    easycon_panel.run_timer.stop()
+
+
+def test_capture_keep_awake_cli_failure_only_logs_keep_awake_error(monkeypatch, tmp_path, easycon_panel):
+    ezcon = tmp_path / "failed_keep_awake.cmd"
+    ezcon.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                'if "%1"=="run" (exit /b 7)',
+                "exit /b 0",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    easycon_panel.backend_mode.setCurrentIndex(easycon_panel.backend_mode.findData("cli"))
+    easycon_panel.installation = EasyConInstallation(path=ezcon, version="test", source="test")
+    easycon_panel.task_state_text = "待命"
+    toast_calls: list[str] = []
+    monkeypatch.setattr(easycon_panel, "_show_failure_toast", toast_calls.append)
+
+    assert easycon_panel.request_capture_keep_awake(10, 20, duration_ms=100) is True
+    process_events_until(lambda: easycon_panel._capture_keep_awake_cli_process is None, timeout_ms=2000)
+
+    assert easycon_panel.task_state_text == "待命"
+    assert toast_calls == []
+    assert "捕捉亮屏保活 CLI 失败，继续捕捉: exit code 7" in easycon_panel.log_view.toPlainText()
+
+
+def test_normal_cli_script_stops_residual_keep_awake_before_start(monkeypatch, tmp_path, easycon_panel):
+    ezcon = tmp_path / "slow_cli.cmd"
+    ezcon.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                'if "%1"=="run" (ping -n 6 127.0.0.1 >nul& exit /b 0)',
+                "exit /b 0",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    easycon_panel.backend_mode.setCurrentIndex(easycon_panel.backend_mode.findData("cli"))
+    easycon_panel.installation = EasyConInstallation(path=ezcon, version="test", source="test")
+    easycon_panel.editor.setPlainText("WAIT 5000\n")
+    monkeypatch.setattr(easycon_panel, "detect_easycon", lambda: None)
+
+    assert easycon_panel.request_capture_keep_awake(10, 40, duration_ms=100) is True
+    keep_awake_process = easycon_panel._capture_keep_awake_cli_process
+    assert keep_awake_process is not None
+    assert keep_awake_process.waitForStarted(1000)
+
+    easycon_panel.run_script()
+
+    assert easycon_panel._capture_keep_awake_cli_process is None
+    assert easycon_panel.process is not None
+    assert easycon_panel.process is not keep_awake_process
+    assert easycon_panel.process.waitForStarted(1000)
+    easycon_panel.toggle_run()
+    assert easycon_panel.process.waitForFinished(2000)
 
 
 def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch, tmp_path, easycon_panel):

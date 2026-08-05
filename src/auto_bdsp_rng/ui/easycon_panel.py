@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.automation.easycon import (
     BridgeEasyConBackend,
+    BridgeTransportTerminatedError,
     EasyConConfig,
     EasyConInstallation,
     EasyConStatus,
@@ -62,6 +63,8 @@ from auto_bdsp_rng.resources import bundled_easycon_bridge_path, resource_path
 SCRIPT_DIR = resource_path("script")
 GENERATED_DIR = SCRIPT_DIR / ".generated"
 CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS = 2.0
+CAPTURE_KEEP_AWAKE_CLI_TIMEOUT_MS = 5_000
+CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS = 500
 
 # ── 可配置按键映射 ──────────────────────────────────
 
@@ -389,7 +392,7 @@ class KeyMappingDialog(QDialog):
 
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
-    capture_keep_awake_finished = Signal(int, str, str, int, str)
+    capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -403,6 +406,11 @@ class EasyConPanel(QWidget):
         self._capture_keep_awake_future: Future[None] | None = None
         self._capture_keep_awake_task_id = 0
         self._capture_keep_awake_shutting_down = False
+        self._capture_keep_awake_cli_process: QProcess | None = None
+        self._capture_keep_awake_cli_label = ""
+        self._capture_keep_awake_cli_duration_ms = 0
+        self._capture_keep_awake_cli_timed_out = False
+        self._capture_keep_awake_cli_cancelled = False
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self.bridge_connecting = False
         self.current_script_path: Path | None = None
@@ -431,6 +439,9 @@ class EasyConPanel(QWidget):
         self.run_timer = QTimer(self)
         self.run_timer.setInterval(1000)
         self.run_timer.timeout.connect(self._tick_run_timer)
+        self._capture_keep_awake_cli_timer = QTimer(self)
+        self._capture_keep_awake_cli_timer.setSingleShot(True)
+        self._capture_keep_awake_cli_timer.timeout.connect(self._capture_keep_awake_cli_timeout)
         self.bridge_log.connect(self._append_log)
         self.capture_keep_awake_finished.connect(self._handle_capture_keep_awake_finished)
 
@@ -1255,6 +1266,8 @@ class EasyConPanel(QWidget):
         if self._is_bridge_mode():
             self.run_script_via_bridge()
             return
+        if not self.prepare_for_external_cli_script():
+            return
         self.detect_easycon()
         if not self._can_run():
             self._append_log("warn", "配置未完成，无法运行脚本")
@@ -1854,10 +1867,7 @@ class EasyConPanel(QWidget):
         if self._capture_keep_awake_shutting_down:
             return False
         if not self._is_bridge_mode():
-            return self._run_cached_inline_cli_script(
-                "capture_keep_awake_zr",
-                f"ZR {duration}\n",
-            )
+            return self._start_capture_keep_awake_cli(log_label, duration)
         if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
             self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
             return False
@@ -1874,6 +1884,7 @@ class EasyConPanel(QWidget):
                 "ZR",
                 duration,
                 timeout_seconds=CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS,
+                terminate_on_timeout=True,
             )
         except Exception as exc:
             self._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {exc}")
@@ -1909,12 +1920,21 @@ class EasyConPanel(QWidget):
             future.result()
         except BaseException as exc:
             error = str(exc) or type(exc).__name__
+            terminal_failure = isinstance(exc, BridgeTransportTerminatedError)
         else:
             error = ""
+            terminal_failure = False
         if self._capture_keep_awake_shutting_down:
             return
         try:
-            self.capture_keep_awake_finished.emit(task_id, log_label, button, duration_ms, error)
+            self.capture_keep_awake_finished.emit(
+                task_id,
+                log_label,
+                button,
+                duration_ms,
+                error,
+                terminal_failure,
+            )
         except RuntimeError:
             pass
 
@@ -1925,22 +1945,157 @@ class EasyConPanel(QWidget):
         button: str,
         duration_ms: int,
         error: str,
+        terminal_failure: bool,
     ) -> None:
         if task_id != self._capture_keep_awake_task_id:
             return
         self._capture_keep_awake_future = None
         if error:
             self._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {error}")
+            if terminal_failure:
+                self._reset_failed_keep_awake_bridge()
             return
         self._append_log("info", f"{log_label}: {button} {duration_ms}ms")
 
+    def _reset_failed_keep_awake_bridge(self) -> None:
+        backend = self.bridge_backend
+        self.bridge_backend = None
+        if backend is not None:
+            try:
+                backend.close()
+            except Exception as exc:
+                self._append_log("warn", f"清理失效 Bridge 连接失败: {exc}")
+        self.bridge_connecting = False
+        self.bridge_status = EasyConStatus.FAILED
+        self.easycon_status.showMessage("连接已失效，请重新连接")
+        self._update_bridge_controls()
+        self._update_run_enabled()
+
     def shutdown_capture_keep_awake(self) -> None:
         self._capture_keep_awake_shutting_down = True
+        self._settle_capture_keep_awake_cli(wait_ms=CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS)
         executor = self._capture_keep_awake_executor
         self._capture_keep_awake_executor = None
         self._capture_keep_awake_future = None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
+
+    def _start_capture_keep_awake_cli(self, log_label: str, duration_ms: int) -> bool:
+        if self.bridge_status == EasyConStatus.RUNNING:
+            return False
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            return False
+        active_process = self._capture_keep_awake_cli_process
+        if active_process is not None and active_process.state() != QProcess.ProcessState.NotRunning:
+            return False
+        if active_process is not None:
+            self._clear_capture_keep_awake_cli(active_process)
+        if not self.installation.is_available:
+            self._append_log("warn", f"CLI 不可用，无法执行{log_label}")
+            return False
+        if not self.mock_check.isChecked() and not self.port_combo.currentText():
+            self._append_log("warn", f"请先选择串口，无法执行{log_label}")
+            return False
+        try:
+            script_path = generate_script_file(
+                f"ZR {duration_ms}\n",
+                "capture_keep_awake_zr.ecs",
+                GENERATED_DIR,
+                task_type="controller",
+            )
+        except OSError as exc:
+            self._append_log("warn", f"捕捉亮屏保活生成 CLI 脚本失败，继续捕捉: {exc}")
+            return False
+        port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
+        process = QProcess(self)
+        process.setObjectName("capture_keep_awake_cli")
+        process.setProgram(str(self.installation.path))
+        process.setArguments(["run", str(script_path), "-p", port])
+        process.finished.connect(
+            lambda exit_code, status, owned_process=process: self._capture_keep_awake_cli_finished(
+                owned_process,
+                exit_code,
+                status,
+            )
+        )
+        process.errorOccurred.connect(
+            lambda error, owned_process=process: self._capture_keep_awake_cli_error(owned_process, error)
+        )
+        self._capture_keep_awake_cli_process = process
+        self._capture_keep_awake_cli_label = log_label
+        self._capture_keep_awake_cli_duration_ms = duration_ms
+        self._capture_keep_awake_cli_timed_out = False
+        self._capture_keep_awake_cli_cancelled = False
+        self._capture_keep_awake_cli_timer.start(CAPTURE_KEEP_AWAKE_CLI_TIMEOUT_MS)
+        process.start()
+        return True
+
+    def _capture_keep_awake_cli_finished(
+        self,
+        process: QProcess,
+        exit_code: int,
+        _status: object,
+    ) -> None:
+        if process is not self._capture_keep_awake_cli_process:
+            process.deleteLater()
+            return
+        log_label = self._capture_keep_awake_cli_label
+        duration_ms = self._capture_keep_awake_cli_duration_ms
+        timed_out = self._capture_keep_awake_cli_timed_out
+        cancelled = self._capture_keep_awake_cli_cancelled
+        self._clear_capture_keep_awake_cli(process)
+        if timed_out or cancelled:
+            return
+        if exit_code == 0:
+            self._append_log("info", f"{log_label}: ZR {duration_ms}ms")
+            return
+        self._append_log("warn", f"捕捉亮屏保活 CLI 失败，继续捕捉: exit code {exit_code}")
+
+    def _capture_keep_awake_cli_error(self, process: QProcess, error: object) -> None:
+        if process is not self._capture_keep_awake_cli_process:
+            return
+        timed_out = self._capture_keep_awake_cli_timed_out
+        cancelled = self._capture_keep_awake_cli_cancelled
+        self._clear_capture_keep_awake_cli(process)
+        if timed_out or cancelled:
+            return
+        self._append_log("warn", f"捕捉亮屏保活 CLI 启动失败，继续捕捉: {error}")
+
+    def _capture_keep_awake_cli_timeout(self) -> None:
+        process = self._capture_keep_awake_cli_process
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return
+        self._capture_keep_awake_cli_timed_out = True
+        self._append_log("warn", "捕捉亮屏保活 CLI 超时，已终止且继续捕捉")
+        process.kill()
+
+    def _clear_capture_keep_awake_cli(self, process: QProcess) -> None:
+        if process is not self._capture_keep_awake_cli_process:
+            return
+        self._capture_keep_awake_cli_timer.stop()
+        self._capture_keep_awake_cli_process = None
+        self._capture_keep_awake_cli_label = ""
+        self._capture_keep_awake_cli_duration_ms = 0
+        self._capture_keep_awake_cli_timed_out = False
+        self._capture_keep_awake_cli_cancelled = False
+        process.deleteLater()
+
+    def _settle_capture_keep_awake_cli(self, *, wait_ms: int) -> bool:
+        process = self._capture_keep_awake_cli_process
+        if process is None:
+            return True
+        if process.state() != QProcess.ProcessState.NotRunning:
+            self._capture_keep_awake_cli_cancelled = True
+            process.kill()
+            if not process.waitForFinished(max(0, int(wait_ms))):
+                self._append_log("warn", "捕捉亮屏保活 CLI 未能及时停止，已取消后续脚本启动")
+                return False
+        if process is self._capture_keep_awake_cli_process:
+            self._clear_capture_keep_awake_cli(process)
+        return True
+
+    def prepare_for_external_cli_script(self) -> bool:
+        return self._settle_capture_keep_awake_cli(wait_ms=CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS)
 
     def send_controller_stick(self, side: str, direction: str) -> None:
         duration = self.controller_duration.value()
@@ -2148,21 +2303,13 @@ class EasyConPanel(QWidget):
         self._run_inline_cli_script("cli_smoke", "WAIT 50\n", task_type="cli_smoke")
 
     def _run_inline_cli_script(self, task_name: str, script_text: str, task_type: str = "controller") -> None:
+        if not self.prepare_for_external_cli_script():
+            return
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             self._append_log("warn", "已有 CLI 任务执行中，暂不能启动手柄测试")
             return
         self.detect_easycon()
         self._start_inline_cli_script(task_name, script_text, task_type)
-
-    def _run_cached_inline_cli_script(
-        self,
-        task_name: str,
-        script_text: str,
-        task_type: str = "controller",
-    ) -> bool:
-        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
-            return False
-        return self._start_inline_cli_script(task_name, script_text, task_type)
 
     def _start_inline_cli_script(self, task_name: str, script_text: str, task_type: str) -> bool:
         if not self.installation.is_available:

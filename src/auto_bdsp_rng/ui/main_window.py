@@ -3388,6 +3388,8 @@ class MainWindow(QMainWindow):
                 return result
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
+            if not self._call_on_ui_thread(self.easycon_tab.prepare_for_external_cli_script):
+                raise RuntimeError("捕捉亮屏保活 CLI 未能及时停止，已取消自动脚本启动")
             self.autoScriptStarted.emit(name)
             try:
                 result = _get_cli_backend().run_script_text(script_text, name, port=port)
@@ -4018,6 +4020,8 @@ class MainWindow(QMainWindow):
             # CLI 模式：通过 ezcon.exe 执行脚本
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
+            if not self._call_on_ui_thread(self.easycon_tab.prepare_for_external_cli_script):
+                raise RuntimeError("捕捉亮屏保活 CLI 未能及时停止，已取消自动脚本启动")
             self.autoScriptStarted.emit(name)
             try:
                 result = _get_cli_backend().run_script_text(script_text, name, port=port)

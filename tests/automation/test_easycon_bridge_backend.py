@@ -11,7 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from auto_bdsp_rng.automation.easycon import BridgeEasyConBackend, BridgeProtocolError
+from auto_bdsp_rng.automation.easycon import (
+    BridgeEasyConBackend,
+    BridgeProtocolError,
+    BridgeTransportTerminatedError,
+)
 from auto_bdsp_rng.automation.easycon.bridge_backend import JsonLineBridgeTransport
 from auto_bdsp_rng.automation.easycon.models import EasyConRunTask, EasyConStatus
 
@@ -19,7 +23,7 @@ from auto_bdsp_rng.automation.easycon.models import EasyConRunTask, EasyConStatu
 class FakeBridgeTransport:
     def __init__(self) -> None:
         self.commands: list[tuple[str, dict[str, object]]] = []
-        self.timeouts: list[tuple[str, float | None]] = []
+        self.timeouts: list[tuple[str, float | None, bool]] = []
         self.closed = False
         self.connected_port: str | None = None
 
@@ -29,10 +33,11 @@ class FakeBridgeTransport:
         payload: Mapping[str, object] | None = None,
         *,
         timeout_seconds: float | None = None,
+        terminate_on_timeout: bool = False,
     ) -> dict[str, object]:
         data = dict(payload or {})
         self.commands.append((command, data))
-        self.timeouts.append((command, timeout_seconds))
+        self.timeouts.append((command, timeout_seconds, terminate_on_timeout))
         if command == "version":
             return {"version": "bridge-test"}
         if command == "list_ports":
@@ -177,6 +182,48 @@ def test_bridge_write_timeout_breaks_transport_without_holding_lock_or_blocking_
     assert not transport._writer.is_alive()
 
 
+def test_keep_awake_press_response_timeout_terminates_transport_and_wakes_waiters():
+    transport = _transport_without_reader(1.0)
+    waiter_errors: list[BaseException] = []
+
+    def request_status() -> None:
+        try:
+            transport.request("status")
+        except BaseException as exc:
+            waiter_errors.append(exc)
+
+    waiter = threading.Thread(target=request_status)
+    waiter.start()
+    deadline = time.monotonic() + 0.5
+    while not transport._process.stdin.writes and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert transport._process.stdin.writes
+
+    started_at = time.monotonic()
+    with pytest.raises(BridgeTransportTerminatedError, match="timed out.*press"):
+        transport.request(
+            "press",
+            {"button": "ZR", "duration_ms": 100},
+            timeout_seconds=0.1,
+            terminate_on_timeout=True,
+        )
+    elapsed = time.monotonic() - started_at
+    waiter.join(timeout=0.5)
+
+    assert elapsed < 0.5
+    assert not waiter.is_alive()
+    assert len(waiter_errors) == 1
+    assert isinstance(waiter_errors[0], BridgeTransportTerminatedError)
+    assert transport._pending == {}
+    assert isinstance(transport._closed_error, BridgeTransportTerminatedError)
+    assert transport._process.terminated.wait(timeout=0.5)
+
+    retry_started_at = time.monotonic()
+    with pytest.raises(BridgeTransportTerminatedError, match="timed out.*press"):
+        transport.request("status")
+    assert time.monotonic() - retry_started_at < 0.1
+
+
 def test_bridge_backend_reuses_connection_until_explicit_disconnect():
     transport = FakeBridgeTransport()
     backend = BridgeEasyConBackend(transport=transport)
@@ -266,10 +313,10 @@ def test_bridge_backend_press_forwards_keep_awake_timeout():
     transport = FakeBridgeTransport()
     backend = BridgeEasyConBackend(transport=transport)
 
-    backend.press("ZR", 100, timeout_seconds=2.0)
+    backend.press("ZR", 100, timeout_seconds=2.0, terminate_on_timeout=True)
 
     assert transport.commands == [("press", {"button": "ZR", "duration_ms": 100})]
-    assert transport.timeouts == [("press", 2.0)]
+    assert transport.timeouts == [("press", 2.0, True)]
 
 
 def test_bridge_backend_virtual_controller_uses_down_up_commands():

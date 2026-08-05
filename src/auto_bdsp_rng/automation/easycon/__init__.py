@@ -1,7 +1,11 @@
 """EasyCon / ezcon integration boundaries."""
 
 from auto_bdsp_rng.automation.easycon.backend import EasyConBackend
-from auto_bdsp_rng.automation.easycon.bridge_backend import BridgeEasyConBackend, BridgeProtocolError
+from auto_bdsp_rng.automation.easycon.bridge_backend import (
+    BridgeEasyConBackend,
+    BridgeProtocolError,
+    BridgeTransportTerminatedError,
+)
 from auto_bdsp_rng.automation.easycon.cli_backend import (
     CLI_NOT_FINAL_NOTICE,
     CLI_RESET_NOTICE,
@@ -34,6 +38,7 @@ __all__ = [
     "CliEasyConBackend",
     "BridgeEasyConBackend",
     "BridgeProtocolError",
+    "BridgeTransportTerminatedError",
     "CLI_NOT_FINAL_NOTICE",
     "CLI_RESET_NOTICE",
     "CLI_TRANSITION_NOTICE",
