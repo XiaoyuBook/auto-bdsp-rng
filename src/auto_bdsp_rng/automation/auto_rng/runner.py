@@ -713,12 +713,17 @@ class AutoRngRunner:
         if path is None:
             raise RuntimeError("测种脚本未配置")
         if self._completed_loops > 0 and self.services.recover_zoom_mode is not None:
-            if self.services.recover_zoom_mode():
+            recovered = self.services.recover_zoom_mode()
+            if self.should_stop():
+                return
+            if recovered:
                 self._set_progress(
                     AutoRngPhase.RUN_SEED_SCRIPT,
                     "检测到缩放模式，已执行双 HOME 恢复",
                     loop_index=self._completed_loops,
                 )
+        if self.should_stop():
+            return
         self._missed_target_advance = None
         self._completed_loops += 1
         self._cycle_started = True
@@ -728,7 +733,11 @@ class AutoRngRunner:
         self._exit_reseed_done = False
         self._history("cycle_start", self._completed_loops)
         text = path.read_text(encoding="utf-8")
+        if self.should_stop():
+            return
         self.services.run_script_text(text, path.name)
+        if self.should_stop():
+            return
         self._set_progress(AutoRngPhase.CAPTURE_SEED, f"测种脚本完成——{path.name}",
                           loop_index=self._completed_loops,
                           last_script_path=path)
@@ -1239,6 +1248,8 @@ class AutoRngRunner:
         )
 
     def _set_progress(self, phase: AutoRngPhase, message: str = "", **updates: object) -> None:
+        if self._stop_requested and phase != AutoRngPhase.IDLE:
+            return
         values = {
             "phase": phase,
             "loop_index": updates.get("loop_index", self.progress.loop_index),

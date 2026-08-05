@@ -43,19 +43,41 @@ def recover_zoom_overlay(
     *,
     detect_overlay: Callable[[object], bool] = detect_zoom_overlay,
     sleep: Callable[[float], None] = time.sleep,
+    should_stop: Callable[[], bool] | None = None,
 ) -> bool:
-    """Exit Zoom only after two positive checks and verify it has disappeared."""
-    if not detect_overlay(capture_frame()):
+    """Exit Zoom only while the enclosing automation remains active.
+
+    Stop checks bracket every capture, confirmation wait, and HOME dispatch so
+    a late stop cannot start a recovery script or overwrite the stopped state.
+    """
+    is_stopped = should_stop or (lambda: False)
+    if is_stopped():
+        return False
+    first_frame = capture_frame()
+    if is_stopped() or not detect_overlay(first_frame):
         return False
     sleep(ZOOM_CONFIRMATION_DELAY_SECONDS)
-    if not detect_overlay(capture_frame()):
+    if is_stopped():
         return False
-
+    second_frame = capture_frame()
+    if is_stopped() or not detect_overlay(second_frame):
+        return False
+    if is_stopped():
+        return False
     run_script_text(ZOOM_EXIT_SCRIPT, ZOOM_EXIT_SCRIPT_NAME)
-
-    if detect_overlay(capture_frame()):
+    if is_stopped():
+        return False
+    clear_frame = capture_frame()
+    if is_stopped():
+        return False
+    if detect_overlay(clear_frame):
         raise RuntimeError("双 HOME 后仍检测到缩放模式")
     sleep(ZOOM_CONFIRMATION_DELAY_SECONDS)
-    if detect_overlay(capture_frame()):
+    if is_stopped():
+        return False
+    final_frame = capture_frame()
+    if is_stopped():
+        return False
+    if detect_overlay(final_frame):
         raise RuntimeError("双 HOME 后仍检测到缩放模式")
     return True

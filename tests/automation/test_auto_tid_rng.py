@@ -87,6 +87,34 @@ def test_auto_tid_runner_checks_zoom_before_second_seed_script(tmp_path: Path) -
     assert zoom_checks == [True]
 
 
+def test_auto_tid_runner_does_not_run_second_seed_script_when_stopped_during_zoom_recovery(tmp_path: Path) -> None:
+    seed_script = tmp_path / "id测种.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    scripts: list[str] = []
+    holder = {}
+
+    def stop_during_recovery() -> bool:
+        holder["runner"].stop()
+        return True
+
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(script_dir=tmp_path, seed_script_path=seed_script, target_display_tids=(123456,)),
+        services=AutoTidRngServices(
+            capture_seed=lambda: AutoTidSeedResult(seed=SeedPair64(1, 2), measured_at=10.0),
+            search_id_states=lambda _seed, _threshold, _targets: [],
+            run_script_text=lambda _text, name: scripts.append(name),
+            recover_zoom_mode=stop_during_recovery,
+        ),
+    )
+    holder["runner"] = runner
+
+    runner.run(max_steps=4)
+
+    assert scripts == ["id测种.txt"]
+    assert runner.progress.phase == AutoTidRngPhase.IDLE
+    assert runner.progress.log_message == "已请求停止自动 TID 乱数"
+
+
 def test_reverse_lookup_span_is_symmetric_and_inclusive() -> None:
     assert reverse_lookup_span(255, 20) == (235, 275, 41)
     assert reverse_lookup_span(10, 20) == (0, 30, 31)

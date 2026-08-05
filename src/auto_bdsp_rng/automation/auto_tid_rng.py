@@ -366,15 +366,22 @@ class AutoTidRngRunner:
         try:
             text, path = self._read_script(self.config.seed_script_path, "测种脚本")
             if self._completed_loops > 1 and self.services.recover_zoom_mode is not None:
-                if self.services.recover_zoom_mode():
+                recovered = self.services.recover_zoom_mode()
+                if self.should_stop():
+                    return
+                if recovered:
                     self._set_progress(
                         AutoTidRngPhase.RUN_SEED_SCRIPT,
                         "检测到缩放模式，已执行双 HOME 恢复",
                         loop_index=self._completed_loops,
                     )
+            if self.should_stop():
+                return
             self.services.run_script_text(text, path.name)
         except Exception as exc:
             self._fail(str(exc))
+            return
+        if self.should_stop():
             return
         self._set_progress(AutoTidRngPhase.CAPTURE_TIDSID, f"测种脚本完成——{path.name}", last_script_path=path)
 
@@ -578,6 +585,8 @@ class AutoTidRngRunner:
         return tuple(int(value) for value in self.config.target_tids)
 
     def _set_progress(self, phase: AutoTidRngPhase, message: str = "", **updates: object) -> None:
+        if self._stop_requested and phase != AutoTidRngPhase.IDLE:
+            return
         values = {
             "phase": phase,
             "loop_index": updates.get("loop_index", self.progress.loop_index),

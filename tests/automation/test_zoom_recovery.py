@@ -59,6 +59,26 @@ def test_recover_zoom_overlay_does_not_send_home_without_the_overlay():
     assert scripts == []
 
 
+def test_recover_zoom_overlay_does_not_send_home_when_stopped_during_confirmation_wait():
+    stopped = False
+    scripts = []
+
+    def stop_during_wait(_seconds: float) -> None:
+        nonlocal stopped
+        stopped = True
+
+    recovered = recover_zoom_overlay(
+        lambda: "zoom",
+        lambda text, name: scripts.append((text, name)),
+        detect_overlay=lambda _frame: True,
+        sleep=stop_during_wait,
+        should_stop=lambda: stopped,
+    )
+
+    assert recovered is False
+    assert scripts == []
+
+
 def test_recover_zoom_overlay_fails_closed_when_overlay_remains():
     with pytest.raises(RuntimeError, match="仍检测到缩放模式"):
         recover_zoom_overlay(

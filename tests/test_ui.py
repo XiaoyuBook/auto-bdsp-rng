@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication,
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
-from auto_bdsp_rng.automation.auto_tid_rng import ProjectXsMunchlaxAdvanceCounter
+from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, ProjectXsMunchlaxAdvanceCounter
 from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.gen8_static import State8, StateFilter
 from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64
@@ -1507,6 +1507,65 @@ def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
 
     assert [state.advances for state in candidates] == [0, 1, 2]
     assert "搜索目标" in window.auto_rng_tab.log_view.toPlainText()
+
+
+def test_zoom_recovery_pauses_preview_and_waits_before_capturing(app, monkeypatch):
+    window = MainWindow()
+    capture_config = BlinkCaptureConfig(Path("eye.png"), (0, 0, 1, 1), monitor_window=False)
+    events = []
+    window._preview_timer.start()
+
+    monkeypatch.setattr(main_window_module.time, "sleep", lambda seconds: events.append(("wait", seconds)))
+    monkeypatch.setattr(main_window_module, "capture_preview_frame", lambda _config: events.append(("capture",)) or object())
+
+    def fake_recover(capture_frame, _run_script_text, *, should_stop):
+        assert not window._preview_timer.isActive()
+        assert should_stop() is False
+        capture_frame()
+        events.append(("recover",))
+        return True
+
+    monkeypatch.setattr(main_window_module, "recover_zoom_overlay", fake_recover)
+
+    assert window._recover_zoom_mode_with_preview_paused(capture_config, lambda _text, _name: None) is True
+    assert events == [("wait", 0.3), ("capture",), ("recover",)]
+    assert window._preview_timer.isActive()
+
+
+def test_auto_rng_zoom_recovery_service_uses_preview_safe_recovery(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    capture_config = BlinkCaptureConfig(Path("eye.png"), (0, 0, 1, 1), monitor_window=False)
+    tracking_config = ProjectXsTrackingConfig(Path("seed.json"), capture_config)
+    calls = []
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", lambda *_args, **_kwargs: tracking_config)
+    monkeypatch.setattr(
+        window,
+        "_recover_zoom_mode_with_preview_paused",
+        lambda actual_capture, _run_script: calls.append(actual_capture) or True,
+    )
+
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+
+    assert services.recover_zoom_mode() is True
+    assert calls == [capture_config]
+
+
+def test_auto_tid_zoom_recovery_service_uses_preview_safe_recovery(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    capture_config = BlinkCaptureConfig(Path("eye.png"), (0, 0, 1, 1), monitor_window=False)
+    tracking_config = ProjectXsTrackingConfig(Path("seed.json"), capture_config)
+    calls = []
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", lambda *_args, **_kwargs: tracking_config)
+    monkeypatch.setattr(
+        window,
+        "_recover_zoom_mode_with_preview_paused",
+        lambda actual_capture, _run_script: calls.append(actual_capture) or True,
+    )
+
+    services = window._build_auto_tid_rng_services(AutoTidRngConfig(script_dir=tmp_path))
+
+    assert services.recover_zoom_mode() is True
+    assert calls == [capture_config]
 
 
 def test_main_window_auto_rng_services_search_uses_multi_targets(app, tmp_path, monkeypatch):

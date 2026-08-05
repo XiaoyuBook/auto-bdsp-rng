@@ -3175,6 +3175,24 @@ class MainWindow(QMainWindow):
             self._preview_timer.start()
             self.preview_button.setText(self._text("stop_preview"))
 
+    def _recover_zoom_mode_with_preview_paused(
+        self,
+        capture_config: BlinkCaptureConfig,
+        run_script_text: Callable[[str, str], object],
+    ) -> bool:
+        """Recover the Switch zoom overlay without sharing VideoCapture with preview."""
+        preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
+        if preview_was_running:
+            time.sleep(0.3)  # 与测种捕获使用相同的摄像头释放等待
+        try:
+            return recover_zoom_overlay(
+                lambda: capture_preview_frame(capture_config),
+                run_script_text,
+                should_stop=self._capture_cancel.is_set,
+            )
+        finally:
+            self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+
     def _start_auto_rng(self, config: AutoRngConfig) -> None:
         if config.start_phase == AutoRngPhase.REIDENTIFY:
             try:
@@ -3368,8 +3386,8 @@ class MainWindow(QMainWindow):
                     pass
 
         def recover_zoom_mode_service() -> bool:
-            return recover_zoom_overlay(
-                lambda: capture_preview_frame(tracking_config.capture),
+            return self._recover_zoom_mode_with_preview_paused(
+                tracking_config.capture,
                 run_script_text_service,
             )
 
@@ -4227,8 +4245,8 @@ class MainWindow(QMainWindow):
                     log(f"[自动反查] {species_tag}advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
 
         def recover_zoom_mode_service() -> bool:
-            return recover_zoom_overlay(
-                lambda: capture_preview_frame(tracking_config.capture),
+            return self._recover_zoom_mode_with_preview_paused(
+                tracking_config.capture,
                 run_script_text_service,
             )
 
