@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import queue
 import subprocess
 import threading
@@ -16,12 +17,22 @@ from auto_bdsp_rng.automation.easycon.models import EasyConInstallation, EasyCon
 from auto_bdsp_rng.automation.easycon.process import no_window_subprocess_kwargs
 
 
+DEFAULT_BRIDGE_REQUEST_TIMEOUT_SECONDS = 10.0
+BRIDGE_SCRIPT_REQUEST_TIMEOUT_SECONDS = 24 * 60 * 60.0
+
+
 class BridgeProtocolError(RuntimeError):
     pass
 
 
 class BridgeTransport(Protocol):
-    def request(self, command: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
+    def request(
+        self,
+        command: str,
+        payload: Mapping[str, object] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, object]:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -31,9 +42,16 @@ class BridgeTransport(Protocol):
 class JsonLineBridgeTransport:
     """JSON Lines transport for EasyConBridge.exe stdin/stdout IPC."""
 
-    def __init__(self, bridge_path: Path, log_callback: Callable[[str, str], None] | None = None) -> None:
+    def __init__(
+        self,
+        bridge_path: Path,
+        log_callback: Callable[[str, str], None] | None = None,
+        *,
+        request_timeout_seconds: float = DEFAULT_BRIDGE_REQUEST_TIMEOUT_SECONDS,
+    ) -> None:
         self._ids = count(1)
         self._log_callback = log_callback
+        self._request_timeout_seconds = _validate_timeout(request_timeout_seconds)
         self._process = subprocess.Popen(
             [str(bridge_path)],
             stdin=subprocess.PIPE,
@@ -50,9 +68,22 @@ class JsonLineBridgeTransport:
         self._reader = threading.Thread(target=self._read_loop, name="EasyConBridgeReader", daemon=True)
         self._reader.start()
 
-    def request(self, command: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
+    def request(
+        self,
+        command: str,
+        payload: Mapping[str, object] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, object]:
         if self._process.stdin is None or self._process.stdout is None:
             raise BridgeProtocolError("Bridge process is not connected")
+        timeout = _validate_timeout(
+            timeout_seconds
+            if timeout_seconds is not None
+            else BRIDGE_SCRIPT_REQUEST_TIMEOUT_SECONDS
+            if command == "run_script"
+            else self._request_timeout_seconds
+        )
         request_id = next(self._ids)
         request = {"id": request_id, "command": command, "payload": dict(payload or {})}
         response_queue: queue.Queue[dict[str, object] | BaseException] = queue.Queue(maxsize=1)
@@ -67,9 +98,18 @@ class JsonLineBridgeTransport:
                 self._pending.pop(request_id, None)
                 raise
 
-        response = response_queue.get()
+        try:
+            response = response_queue.get(timeout=timeout)
+        except queue.Empty as exc:
+            with self._lock:
+                if self._pending.get(request_id) is response_queue:
+                    self._pending.pop(request_id, None)
+            raise BridgeProtocolError(
+                f"Bridge request timed out after {timeout:g}s: {command}"
+            ) from exc
         with self._lock:
-            self._pending.pop(request_id, None)
+            if self._pending.get(request_id) is response_queue:
+                self._pending.pop(request_id, None)
         if isinstance(response, BaseException):
             raise response
         if response.get("ok") is not True:
@@ -96,15 +136,22 @@ class JsonLineBridgeTransport:
                     if self._log_callback is not None:
                         self._log_callback(str(response.get("level") or "info"), str(response.get("message") or ""))
                     continue
-                response_id = response.get("id")
-                if not isinstance(response_id, int):
-                    continue
-                with self._lock:
-                    response_queue = self._pending.get(response_id)
-                if response_queue is not None:
-                    response_queue.put(response)
+                self._dispatch_response(response)
         except BaseException as exc:
             self._fail_pending(exc if isinstance(exc, BridgeProtocolError) else BridgeProtocolError(str(exc)))
+
+    def _dispatch_response(self, response: dict[str, object]) -> None:
+        response_id = response.get("id")
+        if not isinstance(response_id, int):
+            return
+        with self._lock:
+            response_queue = self._pending.get(response_id)
+        if response_queue is None:
+            return
+        try:
+            response_queue.put_nowait(response)
+        except queue.Full:
+            pass
 
     def _fail_pending(self, error: BaseException) -> None:
         with self._lock:
@@ -112,7 +159,10 @@ class JsonLineBridgeTransport:
             pending = list(self._pending.values())
             self._pending.clear()
         for response_queue in pending:
-            response_queue.put(error)
+            try:
+                response_queue.put_nowait(error)
+            except queue.Full:
+                pass
 
 
 class BridgeEasyConBackend(EasyConBackend):
@@ -215,8 +265,12 @@ class BridgeEasyConBackend(EasyConBackend):
     def stop(self) -> None:
         self.stop_current_script()
 
-    def press(self, button: str, duration_ms: int) -> None:
-        self._request("press", {"button": button, "duration_ms": duration_ms})
+    def press(self, button: str, duration_ms: int, *, timeout_seconds: float | None = None) -> None:
+        self._request(
+            "press",
+            {"button": button, "duration_ms": duration_ms},
+            timeout_seconds=timeout_seconds,
+        )
 
     def stick(self, side: str, direction: str | int, duration_ms: int | None) -> None:
         self._request("stick", {"side": side, "direction": direction, "duration_ms": duration_ms})
@@ -234,9 +288,17 @@ class BridgeEasyConBackend(EasyConBackend):
         if self._transport is not None:
             self._transport.close()
 
-    def _request(self, command: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
+    def _request(
+        self,
+        command: str,
+        payload: Mapping[str, object] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, object]:
         transport = self._ensure_transport()
-        return transport.request(command, payload)
+        if timeout_seconds is None:
+            return transport.request(command, payload)
+        return transport.request(command, payload, timeout_seconds=timeout_seconds)
 
     def _ensure_transport(self) -> BridgeTransport:
         if self._transport is None:
@@ -254,3 +316,10 @@ def _status_from_bridge(value: object) -> EasyConStatus:
     if value == "disconnected":
         return EasyConStatus.BRIDGE_DISCONNECTED
     return EasyConStatus.FAILED
+
+
+def _validate_timeout(value: float) -> float:
+    timeout = float(value)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Bridge request timeout must be finite and greater than zero")
+    return timeout

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -60,6 +61,7 @@ from auto_bdsp_rng.resources import bundled_easycon_bridge_path, resource_path
 
 SCRIPT_DIR = resource_path("script")
 GENERATED_DIR = SCRIPT_DIR / ".generated"
+CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS = 2.0
 
 # ── 可配置按键映射 ──────────────────────────────────
 
@@ -387,6 +389,7 @@ class KeyMappingDialog(QDialog):
 
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
+    capture_keep_awake_finished = Signal(int, str, str, int, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -396,6 +399,10 @@ class EasyConPanel(QWidget):
         self.bridge_backend: BridgeEasyConBackend | None = None
         self.bridge_run_thread: QThread | None = None
         self.bridge_run_worker: BridgeScriptWorker | None = None
+        self._capture_keep_awake_executor: ThreadPoolExecutor | None = None
+        self._capture_keep_awake_future: Future[None] | None = None
+        self._capture_keep_awake_task_id = 0
+        self._capture_keep_awake_shutting_down = False
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self.bridge_connecting = False
         self.current_script_path: Path | None = None
@@ -425,6 +432,7 @@ class EasyConPanel(QWidget):
         self.run_timer.setInterval(1000)
         self.run_timer.timeout.connect(self._tick_run_timer)
         self.bridge_log.connect(self._append_log)
+        self.capture_keep_awake_finished.connect(self._handle_capture_keep_awake_finished)
 
         self._build_ui()
         # Ctrl+S 快捷键
@@ -1839,6 +1847,104 @@ class EasyConPanel(QWidget):
             self._update_status_labels()
             return
         self._run_inline_cli_script(task_name or f"test_{button.lower()}", f"{button} {duration}\n")
+
+    def request_capture_keep_awake(self, done: int, total: int, *, duration_ms: int = 100) -> bool:
+        duration = max(20, min(5000, int(duration_ms)))
+        log_label = f"捕捉亮屏保活 {done}/{total}"
+        if self._capture_keep_awake_shutting_down:
+            return False
+        if not self._is_bridge_mode():
+            self.send_controller_press(
+                "ZR",
+                duration_ms=duration,
+                task_name="capture_keep_awake_zr",
+                log_label=log_label,
+            )
+            return True
+        if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+            self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
+            return False
+        active_future = self._capture_keep_awake_future
+        if active_future is not None and not active_future.done():
+            return False
+        try:
+            backend = self._ensure_bridge_backend()
+            executor = self._ensure_capture_keep_awake_executor()
+            self._capture_keep_awake_task_id += 1
+            task_id = self._capture_keep_awake_task_id
+            future = executor.submit(
+                backend.press,
+                "ZR",
+                duration,
+                timeout_seconds=CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            self._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {exc}")
+            return False
+        self._capture_keep_awake_future = future
+        future.add_done_callback(
+            lambda completed: self._capture_keep_awake_done_callback(
+                task_id,
+                log_label,
+                "ZR",
+                duration,
+                completed,
+            )
+        )
+        return True
+
+    def _ensure_capture_keep_awake_executor(self) -> ThreadPoolExecutor:
+        executor = self._capture_keep_awake_executor
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="EasyConKeepAwake")
+            self._capture_keep_awake_executor = executor
+        return executor
+
+    def _capture_keep_awake_done_callback(
+        self,
+        task_id: int,
+        log_label: str,
+        button: str,
+        duration_ms: int,
+        future: Future[None],
+    ) -> None:
+        try:
+            future.result()
+        except BaseException as exc:
+            error = str(exc) or type(exc).__name__
+        else:
+            error = ""
+        if self._capture_keep_awake_shutting_down:
+            return
+        try:
+            self.capture_keep_awake_finished.emit(task_id, log_label, button, duration_ms, error)
+        except RuntimeError:
+            pass
+
+    def _handle_capture_keep_awake_finished(
+        self,
+        task_id: int,
+        log_label: str,
+        button: str,
+        duration_ms: int,
+        error: str,
+    ) -> None:
+        if task_id == self._capture_keep_awake_task_id:
+            self._capture_keep_awake_future = None
+        if error:
+            self._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {error}")
+            return
+        self.task_state_text = "已完成"
+        self._append_log("info", f"{log_label}: {button} {duration_ms}ms")
+        self._update_status_labels()
+
+    def shutdown_capture_keep_awake(self) -> None:
+        self._capture_keep_awake_shutting_down = True
+        executor = self._capture_keep_awake_executor
+        self._capture_keep_awake_executor = None
+        self._capture_keep_awake_future = None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def send_controller_stick(self, side: str, direction: str) -> None:
         duration = self.controller_duration.value()

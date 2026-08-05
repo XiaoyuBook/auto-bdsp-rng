@@ -2244,6 +2244,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._is_closing = True
+        self.easycon_tab.shutdown_capture_keep_awake()
         warmup_thread = self._ocr_warmup_thread
         if warmup_thread is not None:
             warmup_thread.requestInterruption()
@@ -3528,11 +3529,10 @@ class MainWindow(QMainWindow):
 
     def _handle_capture_keep_awake_requested(self, done: int, total: int) -> None:
         try:
-            self.easycon_tab.send_controller_press(
-                "ZR",
+            self.easycon_tab.request_capture_keep_awake(
+                done,
+                total,
                 duration_ms=CAPTURE_KEEP_AWAKE_PRESS_MS,
-                task_name="capture_keep_awake_zr",
-                log_label=f"捕捉亮屏保活 {done}/{total}",
             )
         except Exception as exc:
             self.easycon_tab._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {exc}")

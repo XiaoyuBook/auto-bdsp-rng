@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -248,7 +249,7 @@ def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
 def test_capture_progress_keep_awake_milestones(app, monkeypatch, total, expected_milestones):
     window = MainWindow()
     emitted: list[tuple[int, int]] = []
-    monkeypatch.setattr(window.easycon_tab, "send_controller_press", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(window.easycon_tab, "request_capture_keep_awake", lambda *_args, **_kwargs: None)
     window.captureKeepAwakeRequested.connect(lambda done, count: emitted.append((done, count)))
     progress_callback = window._wrap_capture_progress_with_keep_awake(lambda _done, _total: None)
 
@@ -262,29 +263,28 @@ def test_capture_progress_keep_awake_milestones(app, monkeypatch, total, expecte
 
 def test_capture_keep_awake_sends_short_zr_and_ignores_failure(app, monkeypatch):
     window = MainWindow()
-    calls: list[tuple[str, dict[str, object]]] = []
+    calls: list[tuple[int, int, dict[str, object]]] = []
     logs: list[tuple[str, str]] = []
 
-    def capture_press(button: str, **kwargs) -> None:
-        calls.append((button, kwargs))
+    def capture_press(done: int, total: int, **kwargs) -> None:
+        calls.append((done, total, kwargs))
 
-    monkeypatch.setattr(window.easycon_tab, "send_controller_press", capture_press)
+    monkeypatch.setattr(window.easycon_tab, "request_capture_keep_awake", capture_press)
     window._handle_capture_keep_awake_requested(10, 40)
 
     assert calls == [
         (
-            "ZR",
+            10,
+            40,
             {
                 "duration_ms": 100,
-                "task_name": "capture_keep_awake_zr",
-                "log_label": "捕捉亮屏保活 10/40",
             },
         )
     ]
 
     monkeypatch.setattr(
         window.easycon_tab,
-        "send_controller_press",
+        "request_capture_keep_awake",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
     )
     monkeypatch.setattr(window.easycon_tab, "_append_log", lambda level, message: logs.append((level, message)))
@@ -292,6 +292,56 @@ def test_capture_keep_awake_sends_short_zr_and_ignores_failure(app, monkeypatch)
     window._handle_capture_keep_awake_requested(20, 40)
 
     assert logs == [("warn", "捕捉亮屏保活发送 ZR 失败，继续捕捉: offline")]
+
+
+def test_capture_keep_awake_bridge_does_not_block_gui_or_create_unbounded_tasks(app):
+    window = MainWindow()
+    backend_started = threading.Event()
+    backend_release = threading.Event()
+    calls: list[tuple[str, int, float | None]] = []
+
+    class BlockingBridgeBackend:
+        def press(self, button: str, duration_ms: int, *, timeout_seconds: float | None = None) -> None:
+            calls.append((button, duration_ms, timeout_seconds))
+            backend_started.set()
+            backend_release.wait(timeout=1)
+            raise RuntimeError("Bridge request timed out")
+
+    bridge_index = window.easycon_tab.backend_mode.findData("bridge")
+    window.easycon_tab.backend_mode.setCurrentIndex(bridge_index)
+    window.easycon_tab.bridge_backend = BlockingBridgeBackend()
+    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+
+    started_at = time.monotonic()
+    window._handle_capture_keep_awake_requested(10, 40)
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.1
+    assert backend_started.wait(timeout=0.5)
+    for milestone in (20, 30, 30, 30):
+        window._handle_capture_keep_awake_requested(milestone, 40)
+    assert calls == [("ZR", 100, 2.0)]
+
+    class AliveCaptureThread:
+        @staticmethod
+        def is_alive() -> bool:
+            return True
+
+    window._capture_thread = AliveCaptureThread()
+    window._capture_cancel.clear()
+    window.capture_button.click()
+    assert window._capture_cancel.is_set()
+    window._capture_thread = None
+
+    backend_release.set()
+    deadline = time.monotonic() + 1
+    while window.easycon_tab._capture_keep_awake_future is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+
+    assert window.easycon_tab._capture_keep_awake_future is None
+    assert "捕捉亮屏保活发送 ZR 失败，继续捕捉: Bridge request timed out" in window.easycon_tab.log_view.toPlainText()
 
 
 def test_tidsid_capture_starts_project_xs_munchlax_tracking(app, monkeypatch):

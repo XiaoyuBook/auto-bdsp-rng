@@ -1,24 +1,37 @@
 from __future__ import annotations
 
+import json
+import threading
+import time
 from collections.abc import Mapping
 from datetime import datetime
+from itertools import count
 from pathlib import Path
 
 import pytest
 
-from auto_bdsp_rng.automation.easycon import BridgeEasyConBackend
+from auto_bdsp_rng.automation.easycon import BridgeEasyConBackend, BridgeProtocolError
+from auto_bdsp_rng.automation.easycon.bridge_backend import JsonLineBridgeTransport
 from auto_bdsp_rng.automation.easycon.models import EasyConRunTask, EasyConStatus
 
 
 class FakeBridgeTransport:
     def __init__(self) -> None:
         self.commands: list[tuple[str, dict[str, object]]] = []
+        self.timeouts: list[tuple[str, float | None]] = []
         self.closed = False
         self.connected_port: str | None = None
 
-    def request(self, command: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
+    def request(
+        self,
+        command: str,
+        payload: Mapping[str, object] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, object]:
         data = dict(payload or {})
         self.commands.append((command, data))
+        self.timeouts.append((command, timeout_seconds))
         if command == "version":
             return {"version": "bridge-test"}
         if command == "list_ports":
@@ -42,6 +55,72 @@ class FakeBridgeTransport:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _RecordingStdin:
+    def __init__(self) -> None:
+        self.writes: list[str] = []
+
+    def write(self, value: str) -> None:
+        self.writes.append(value)
+
+    def flush(self) -> None:
+        pass
+
+
+class _AliveProcessWithoutResponses:
+    def __init__(self) -> None:
+        self.stdin = _RecordingStdin()
+        self.stdout = object()
+
+
+def _transport_without_reader(timeout_seconds: float) -> JsonLineBridgeTransport:
+    transport = JsonLineBridgeTransport.__new__(JsonLineBridgeTransport)
+    transport._ids = count(1)
+    transport._log_callback = None
+    transport._request_timeout_seconds = timeout_seconds
+    transport._process = _AliveProcessWithoutResponses()
+    transport._lock = threading.Lock()
+    transport._pending = {}
+    transport._closed_error = None
+    return transport
+
+
+def test_bridge_request_timeout_cleans_pending_and_later_request_still_works():
+    transport = _transport_without_reader(0.02)
+
+    with pytest.raises(BridgeProtocolError, match="timed out.*status"):
+        transport.request("status")
+
+    first_request = json.loads(transport._process.stdin.writes[0])
+    assert transport._pending == {}
+    transport._dispatch_response({"id": first_request["id"], "ok": True, "payload": {"stale": True}})
+    assert transport._pending == {}
+
+    result: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+
+    def request_version() -> None:
+        try:
+            result.append(transport.request("version", timeout_seconds=0.5))
+        except BaseException as exc:
+            errors.append(exc)
+
+    request_thread = threading.Thread(target=request_version)
+    request_thread.start()
+    deadline = time.monotonic() + 0.5
+    while len(transport._process.stdin.writes) < 2 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    second_request = json.loads(transport._process.stdin.writes[1])
+    transport._dispatch_response(
+        {"id": second_request["id"], "ok": True, "payload": {"version": "recovered"}}
+    )
+    request_thread.join(timeout=1)
+
+    assert not request_thread.is_alive()
+    assert errors == []
+    assert result == [{"version": "recovered"}]
+    assert transport._pending == {}
 
 
 def test_bridge_backend_reuses_connection_until_explicit_disconnect():
@@ -127,6 +206,16 @@ def test_bridge_backend_press_stick_and_stop_use_bridge_session():
         "stop",
         "status",
     ]
+
+
+def test_bridge_backend_press_forwards_keep_awake_timeout():
+    transport = FakeBridgeTransport()
+    backend = BridgeEasyConBackend(transport=transport)
+
+    backend.press("ZR", 100, timeout_seconds=2.0)
+
+    assert transport.commands == [("press", {"button": "ZR", "duration_ms": 100})]
+    assert transport.timeouts == [("press", 2.0)]
 
 
 def test_bridge_backend_virtual_controller_uses_down_up_commands():
