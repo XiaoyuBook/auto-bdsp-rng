@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import time
 from collections.abc import Mapping
@@ -72,6 +73,14 @@ class _AliveProcessWithoutResponses:
     def __init__(self) -> None:
         self.stdin = _RecordingStdin()
         self.stdout = object()
+        self.stderr = None
+        self.terminated = threading.Event()
+
+    def poll(self):
+        return 0 if self.terminated.is_set() else None
+
+    def terminate(self) -> None:
+        self.terminated.set()
 
 
 def _transport_without_reader(timeout_seconds: float) -> JsonLineBridgeTransport:
@@ -83,11 +92,14 @@ def _transport_without_reader(timeout_seconds: float) -> JsonLineBridgeTransport
     transport._lock = threading.Lock()
     transport._pending = {}
     transport._closed_error = None
+    transport._write_queue = queue.Queue()
+    transport._writer = threading.Thread(target=transport._write_loop, daemon=True)
+    transport._writer.start()
     return transport
 
 
 def test_bridge_request_timeout_cleans_pending_and_later_request_still_works():
-    transport = _transport_without_reader(0.02)
+    transport = _transport_without_reader(0.1)
 
     with pytest.raises(BridgeProtocolError, match="timed out.*status"):
         transport.request("status")
@@ -121,6 +133,48 @@ def test_bridge_request_timeout_cleans_pending_and_later_request_still_works():
     assert errors == []
     assert result == [{"version": "recovered"}]
     assert transport._pending == {}
+    transport.close()
+
+
+def test_bridge_write_timeout_breaks_transport_without_holding_lock_or_blocking_close():
+    write_started = threading.Event()
+    release_flush = threading.Event()
+
+    class BlockingFlushStdin(_RecordingStdin):
+        def write(self, value: str) -> None:
+            super().write(value)
+            write_started.set()
+
+        def flush(self) -> None:
+            release_flush.wait()
+
+    transport = _transport_without_reader(0.1)
+    transport._process.stdin = BlockingFlushStdin()
+
+    started_at = time.monotonic()
+    with pytest.raises(BridgeProtocolError, match="timed out.*press"):
+        transport.request("press", {"button": "ZR", "duration_ms": 100})
+    elapsed = time.monotonic() - started_at
+
+    assert write_started.is_set()
+    assert elapsed < 0.5
+    assert transport._writer.daemon is True
+    assert transport._pending == {}
+    assert transport._lock.acquire(timeout=0.1)
+    transport._lock.release()
+
+    retry_started_at = time.monotonic()
+    with pytest.raises(BridgeProtocolError, match="timed out.*press"):
+        transport.request("status")
+    assert time.monotonic() - retry_started_at < 0.1
+
+    close_started_at = time.monotonic()
+    transport.close()
+    assert time.monotonic() - close_started_at < 0.1
+
+    release_flush.set()
+    transport._writer.join(timeout=1)
+    assert not transport._writer.is_alive()
 
 
 def test_bridge_backend_reuses_connection_until_explicit_disconnect():

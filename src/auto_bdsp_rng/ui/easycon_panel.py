@@ -1854,13 +1854,10 @@ class EasyConPanel(QWidget):
         if self._capture_keep_awake_shutting_down:
             return False
         if not self._is_bridge_mode():
-            self.send_controller_press(
-                "ZR",
-                duration_ms=duration,
-                task_name="capture_keep_awake_zr",
-                log_label=log_label,
+            return self._run_cached_inline_cli_script(
+                "capture_keep_awake_zr",
+                f"ZR {duration}\n",
             )
-            return True
         if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
             self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
             return False
@@ -1929,14 +1926,13 @@ class EasyConPanel(QWidget):
         duration_ms: int,
         error: str,
     ) -> None:
-        if task_id == self._capture_keep_awake_task_id:
-            self._capture_keep_awake_future = None
+        if task_id != self._capture_keep_awake_task_id:
+            return
+        self._capture_keep_awake_future = None
         if error:
             self._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {error}")
             return
-        self.task_state_text = "已完成"
         self._append_log("info", f"{log_label}: {button} {duration_ms}ms")
-        self._update_status_labels()
 
     def shutdown_capture_keep_awake(self) -> None:
         self._capture_keep_awake_shutting_down = True
@@ -2156,12 +2152,25 @@ class EasyConPanel(QWidget):
             self._append_log("warn", "已有 CLI 任务执行中，暂不能启动手柄测试")
             return
         self.detect_easycon()
+        self._start_inline_cli_script(task_name, script_text, task_type)
+
+    def _run_cached_inline_cli_script(
+        self,
+        task_name: str,
+        script_text: str,
+        task_type: str = "controller",
+    ) -> bool:
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            return False
+        return self._start_inline_cli_script(task_name, script_text, task_type)
+
+    def _start_inline_cli_script(self, task_name: str, script_text: str, task_type: str) -> bool:
         if not self.installation.is_available:
             self._append_log("warn", "CLI 不可用，无法执行手柄测试脚本")
-            return
+            return False
         if not self.mock_check.isChecked() and not self.port_combo.currentText():
             self._append_log("warn", "请先选择串口；CLI 手柄测试会触发一次连接")
-            return
+            return False
         script_path = generate_script_file(script_text, f"{task_name}.ecs", GENERATED_DIR, task_type=task_type)
         port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
         self.process = QProcess(self)
@@ -2185,6 +2194,7 @@ class EasyConPanel(QWidget):
         self._append_log("warn", cli_connection_notice())
         self._update_status_labels()
         self.process.start()
+        return True
 
     def _ensure_bridge_backend(self) -> BridgeEasyConBackend:
         bridge_path = self._bridge_path_from_ui()

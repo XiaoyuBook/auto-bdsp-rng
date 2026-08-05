@@ -12,6 +12,8 @@ from auto_bdsp_rng.automation.easycon.process import no_window_subprocess_kwargs
 
 CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "auto_bdsp_rng" / "easycon"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+EZCON_DISCOVERY_TIMEOUT_SECONDS = 3.0
+EZCON_PORT_LIST_TIMEOUT_SECONDS = 3.0
 
 
 def load_config(path: Path = CONFIG_PATH) -> EasyConConfig:
@@ -73,7 +75,11 @@ def discover_ezcon(config: EasyConConfig | None = None) -> EasyConInstallation:
         if not candidate.exists():
             first_error = f"{candidate} does not exist"
             continue
-        version = _read_version(candidate)
+        try:
+            version = _read_version(candidate)
+        except subprocess.TimeoutExpired:
+            first_error = f"{candidate} --version timed out after {EZCON_DISCOVERY_TIMEOUT_SECONDS:g}s"
+            continue
         if version.returncode == 0:
             return EasyConInstallation(path=candidate, version=version.stdout.strip(), source=source)
         first_error = version.stderr.strip() or version.stdout.strip() or f"{candidate} --version failed"
@@ -83,15 +89,19 @@ def discover_ezcon(config: EasyConConfig | None = None) -> EasyConInstallation:
 def list_ports(installation: EasyConInstallation) -> list[str]:
     if installation.path is None:
         return []
-    result = subprocess.run(
-        [str(installation.path), "port", "-l"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        **no_window_subprocess_kwargs(),
-    )
+    try:
+        result = subprocess.run(
+            [str(installation.path), "port", "-l"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=EZCON_PORT_LIST_TIMEOUT_SECONDS,
+            **no_window_subprocess_kwargs(),
+        )
+    except subprocess.TimeoutExpired:
+        return []
     if result.returncode != 0:
         return []
     return parse_port_list(result.stdout)
@@ -117,5 +127,6 @@ def _read_version(path: Path) -> subprocess.CompletedProcess[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=EZCON_DISCOVERY_TIMEOUT_SECONDS,
         **no_window_subprocess_kwargs(),
     )

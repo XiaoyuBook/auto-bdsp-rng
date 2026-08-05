@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import Future
 from datetime import datetime
 from pathlib import Path
 
@@ -503,6 +505,52 @@ def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_pa
     assert backend.presses == [("A", 100), ("ZR", 120)]
     assert backend.sticks == [("left", "RESET", 100)]
     assert easycon_panel.task_state_label.text() == "任务: 已完成"
+
+
+def test_capture_keep_awake_cli_uses_cached_installation_without_blocking_discovery(monkeypatch, easycon_panel):
+    discovery_called = threading.Event()
+    starts: list[tuple[str, str, str]] = []
+
+    def delayed_discovery() -> None:
+        discovery_called.set()
+        time.sleep(0.5)
+
+    def capture_start(task_name: str, script_text: str, task_type: str) -> bool:
+        starts.append((task_name, script_text, task_type))
+        return True
+
+    monkeypatch.setattr(easycon_panel, "detect_easycon", delayed_discovery)
+    monkeypatch.setattr(easycon_panel, "_start_inline_cli_script", capture_start)
+
+    started_at = time.monotonic()
+    accepted = easycon_panel.request_capture_keep_awake(10, 40, duration_ms=100)
+    elapsed = time.monotonic() - started_at
+
+    assert accepted is True
+    assert elapsed < 0.1
+    assert not discovery_called.is_set()
+    assert starts == [("capture_keep_awake_zr", "ZR 100\n", "controller")]
+
+
+def test_stale_keep_awake_completion_does_not_override_current_or_running_task(easycon_panel):
+    current_future: Future[None] = Future()
+    easycon_panel._capture_keep_awake_task_id = 2
+    easycon_panel._capture_keep_awake_future = current_future
+    easycon_panel.bridge_status = EasyConStatus.RUNNING
+    easycon_panel.task_state_text = "执行中"
+    original_log = easycon_panel.log_view.toPlainText()
+
+    easycon_panel._handle_capture_keep_awake_finished(1, "捕捉亮屏保活 10/40", "ZR", 100, "")
+
+    assert easycon_panel._capture_keep_awake_future is current_future
+    assert easycon_panel.task_state_text == "执行中"
+    assert easycon_panel.log_view.toPlainText() == original_log
+
+    easycon_panel._handle_capture_keep_awake_finished(2, "捕捉亮屏保活 20/40", "ZR", 100, "")
+
+    assert easycon_panel._capture_keep_awake_future is None
+    assert easycon_panel.task_state_text == "执行中"
+    assert "捕捉亮屏保活 20/40: ZR 100ms" in easycon_panel.log_view.toPlainText()
 
 
 def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch, tmp_path, easycon_panel):

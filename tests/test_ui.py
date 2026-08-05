@@ -27,7 +27,7 @@ from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoR
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, ProjectXsMunchlaxAdvanceCounter
-from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
+from auto_bdsp_rng.automation.easycon import EasyConInstallation, EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.gen8_static import State8, StateFilter
 from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64
 from auto_bdsp_rng.ui import MainWindow
@@ -292,6 +292,38 @@ def test_capture_keep_awake_sends_short_zr_and_ignores_failure(app, monkeypatch)
     window._handle_capture_keep_awake_requested(20, 40)
 
     assert logs == [("warn", "捕捉亮屏保活发送 ZR 失败，继续捕捉: offline")]
+
+
+def test_capture_keep_awake_cli_slot_does_not_run_delayed_discovery(app, monkeypatch, tmp_path):
+    window = MainWindow()
+    cli_index = window.easycon_tab.backend_mode.findData("cli")
+    window.easycon_tab.backend_mode.setCurrentIndex(cli_index)
+    window.easycon_tab.installation = EasyConInstallation(
+        path=tmp_path / "ezcon.exe",
+        version="test",
+        source="test",
+    )
+    discovery_called = threading.Event()
+    starts: list[tuple[str, str, str]] = []
+
+    def delayed_discovery() -> None:
+        discovery_called.set()
+        time.sleep(0.5)
+
+    def capture_start(task_name: str, script_text: str, task_type: str) -> bool:
+        starts.append((task_name, script_text, task_type))
+        return True
+
+    monkeypatch.setattr(window.easycon_tab, "detect_easycon", delayed_discovery)
+    monkeypatch.setattr(window.easycon_tab, "_start_inline_cli_script", capture_start)
+
+    started_at = time.monotonic()
+    window._handle_capture_keep_awake_requested(10, 40)
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.1
+    assert not discovery_called.is_set()
+    assert starts == [("capture_keep_awake_zr", "ZR 100\n", "controller")]
 
 
 def test_capture_keep_awake_bridge_does_not_block_gui_or_create_unbounded_tasks(app):

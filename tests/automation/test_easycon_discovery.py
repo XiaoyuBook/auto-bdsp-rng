@@ -3,7 +3,15 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from auto_bdsp_rng.automation.easycon.discovery import discover_ezcon, list_ports, load_config, parse_port_list, save_config
+from auto_bdsp_rng.automation.easycon.discovery import (
+    EZCON_DISCOVERY_TIMEOUT_SECONDS,
+    EZCON_PORT_LIST_TIMEOUT_SECONDS,
+    discover_ezcon,
+    list_ports,
+    load_config,
+    parse_port_list,
+    save_config,
+)
 from auto_bdsp_rng.automation.easycon.models import EasyConConfig, EasyConInstallation
 
 
@@ -14,6 +22,7 @@ def test_discover_ezcon_uses_saved_path(monkeypatch, tmp_path):
     def fake_run(args, **kwargs):
         assert args == [str(ezcon), "--version"]
         assert kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+        assert kwargs["timeout"] == EZCON_DISCOVERY_TIMEOUT_SECONDS
         return subprocess.CompletedProcess(args, 0, stdout="1.6.1+test\n", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -52,11 +61,41 @@ def test_list_ports_calls_ezcon_port_list(monkeypatch, tmp_path):
     def fake_run(args, **kwargs):
         assert args == [str(ezcon), "port", "-l"]
         assert kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+        assert kwargs["timeout"] == EZCON_PORT_LIST_TIMEOUT_SECONDS
         return subprocess.CompletedProcess(args, 0, stdout="COM7\n", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert list_ports(EasyConInstallation(path=ezcon)) == ["COM7"]
+
+
+def test_discover_ezcon_reports_version_probe_timeout(monkeypatch, tmp_path):
+    ezcon = tmp_path / "ezcon.exe"
+    ezcon.write_text("", encoding="utf-8")
+    monkeypatch.delenv("EASYCON_ROOT", raising=False)
+    monkeypatch.setattr("auto_bdsp_rng.automation.easycon.discovery.shutil.which", lambda _name: None)
+
+    def timeout_run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout_run)
+
+    installation = discover_ezcon(EasyConConfig(ezcon_path=ezcon))
+
+    assert installation.path is None
+    assert "timed out" in str(installation.error)
+
+
+def test_list_ports_returns_empty_after_probe_timeout(monkeypatch, tmp_path):
+    ezcon = tmp_path / "ezcon.exe"
+    ezcon.write_text("", encoding="utf-8")
+
+    def timeout_run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout_run)
+
+    assert list_ports(EasyConInstallation(path=ezcon)) == []
 
 
 def test_config_round_trip(tmp_path):

@@ -5,7 +5,9 @@ import math
 import queue
 import subprocess
 import threading
+import time
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import count
 from pathlib import Path
@@ -23,6 +25,13 @@ BRIDGE_SCRIPT_REQUEST_TIMEOUT_SECONDS = 24 * 60 * 60.0
 
 class BridgeProtocolError(RuntimeError):
     pass
+
+
+@dataclass
+class _QueuedBridgeWrite:
+    request_id: int
+    line: str
+    completed: threading.Event = field(default_factory=threading.Event)
 
 
 class BridgeTransport(Protocol):
@@ -65,7 +74,10 @@ class JsonLineBridgeTransport:
         self._lock = threading.Lock()
         self._pending: dict[int, queue.Queue[dict[str, object] | BaseException]] = {}
         self._closed_error: BaseException | None = None
+        self._write_queue: queue.Queue[_QueuedBridgeWrite | None] = queue.Queue()
+        self._writer = threading.Thread(target=self._write_loop, name="EasyConBridgeWriter", daemon=True)
         self._reader = threading.Thread(target=self._read_loop, name="EasyConBridgeReader", daemon=True)
+        self._writer.start()
         self._reader.start()
 
     def request(
@@ -84,32 +96,32 @@ class JsonLineBridgeTransport:
             if command == "run_script"
             else self._request_timeout_seconds
         )
+        deadline = time.monotonic() + timeout
         request_id = next(self._ids)
         request = {"id": request_id, "command": command, "payload": dict(payload or {})}
         response_queue: queue.Queue[dict[str, object] | BaseException] = queue.Queue(maxsize=1)
+        queued_write = _QueuedBridgeWrite(
+            request_id=request_id,
+            line=json.dumps(request, ensure_ascii=False) + "\n",
+        )
         with self._lock:
             if self._closed_error is not None:
                 raise self._closed_error
             self._pending[request_id] = response_queue
-            try:
-                self._process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-                self._process.stdin.flush()
-            except BaseException:
-                self._pending.pop(request_id, None)
-                raise
+        self._write_queue.put_nowait(queued_write)
 
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            error = BridgeProtocolError(f"Bridge request timed out after {timeout:g}s: {command}")
+            self._handle_request_timeout(request_id, response_queue, queued_write, error)
+            raise error
         try:
-            response = response_queue.get(timeout=timeout)
+            response = response_queue.get(timeout=remaining)
         except queue.Empty as exc:
-            with self._lock:
-                if self._pending.get(request_id) is response_queue:
-                    self._pending.pop(request_id, None)
-            raise BridgeProtocolError(
-                f"Bridge request timed out after {timeout:g}s: {command}"
-            ) from exc
-        with self._lock:
-            if self._pending.get(request_id) is response_queue:
-                self._pending.pop(request_id, None)
+            error = BridgeProtocolError(f"Bridge request timed out after {timeout:g}s: {command}")
+            self._handle_request_timeout(request_id, response_queue, queued_write, error)
+            raise error from exc
+        self._remove_pending(request_id, response_queue)
         if isinstance(response, BaseException):
             raise response
         if response.get("ok") is not True:
@@ -118,9 +130,27 @@ class JsonLineBridgeTransport:
         return payload_value if isinstance(payload_value, dict) else {}
 
     def close(self) -> None:
-        if self._process.poll() is None:
-            self._process.terminate()
-        self._fail_pending(BridgeProtocolError("Bridge transport closed"))
+        self._break_transport(BridgeProtocolError("Bridge transport closed"))
+
+    def _write_loop(self) -> None:
+        while True:
+            queued_write = self._write_queue.get()
+            if queued_write is None:
+                return
+            with self._lock:
+                if self._closed_error is not None:
+                    return
+            try:
+                stdin = self._process.stdin
+                if stdin is None:
+                    raise BridgeProtocolError("Bridge process is not connected")
+                stdin.write(queued_write.line)
+                stdin.flush()
+                queued_write.completed.set()
+            except BaseException as exc:
+                error = exc if isinstance(exc, BridgeProtocolError) else BridgeProtocolError(str(exc))
+                self._break_transport(error)
+                return
 
     def _read_loop(self) -> None:
         try:
@@ -129,7 +159,9 @@ class JsonLineBridgeTransport:
             while True:
                 line = self._process.stdout.readline()
                 if not line:
-                    stderr = self._process.stderr.read() if self._process.stderr is not None else ""
+                    stderr = ""
+                    if self._process.poll() is not None and self._process.stderr is not None:
+                        stderr = self._process.stderr.read()
                     raise BridgeProtocolError(stderr.strip() or "Bridge closed stdout")
                 response = json.loads(line)
                 if response.get("type") == "log":
@@ -138,7 +170,8 @@ class JsonLineBridgeTransport:
                     continue
                 self._dispatch_response(response)
         except BaseException as exc:
-            self._fail_pending(exc if isinstance(exc, BridgeProtocolError) else BridgeProtocolError(str(exc)))
+            error = exc if isinstance(exc, BridgeProtocolError) else BridgeProtocolError(str(exc))
+            self._break_transport(error)
 
     def _dispatch_response(self, response: dict[str, object]) -> None:
         response_id = response.get("id")
@@ -153,16 +186,52 @@ class JsonLineBridgeTransport:
         except queue.Full:
             pass
 
-    def _fail_pending(self, error: BaseException) -> None:
+    def _handle_request_timeout(
+        self,
+        request_id: int,
+        response_queue: queue.Queue[dict[str, object] | BaseException],
+        queued_write: _QueuedBridgeWrite,
+        error: BridgeProtocolError,
+    ) -> None:
+        if queued_write.completed.is_set():
+            self._remove_pending(request_id, response_queue)
+            return
+        self._break_transport(error)
+
+    def _remove_pending(
+        self,
+        request_id: int,
+        response_queue: queue.Queue[dict[str, object] | BaseException],
+    ) -> None:
         with self._lock:
+            if self._pending.get(request_id) is response_queue:
+                self._pending.pop(request_id, None)
+
+    def _break_transport(self, error: BaseException) -> None:
+        with self._lock:
+            if self._closed_error is not None:
+                return
             self._closed_error = error
             pending = list(self._pending.values())
             self._pending.clear()
+        self._write_queue.put_nowait(None)
         for response_queue in pending:
             try:
                 response_queue.put_nowait(error)
             except queue.Full:
                 pass
+        threading.Thread(
+            target=self._terminate_process,
+            name="EasyConBridgeTerminator",
+            daemon=True,
+        ).start()
+
+    def _terminate_process(self) -> None:
+        try:
+            if self._process.poll() is None:
+                self._process.terminate()
+        except BaseException:
+            pass
 
 
 class BridgeEasyConBackend(EasyConBackend):
