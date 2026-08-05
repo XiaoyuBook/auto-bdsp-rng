@@ -276,6 +276,7 @@ class AutoTidRngServices:
     lookup_tid_state: Callable[[AutoTidSeedResult, int, int, int], IDState8 | None] = _default_lookup_tid_state
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
     recognize_tid: Callable[[], str] = _missing_service  # type: ignore[assignment]
+    recover_zoom_mode: Callable[[], bool] | None = None
     stop_current_script: Callable[[], None] | None = None
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
@@ -364,6 +365,13 @@ class AutoTidRngRunner:
     def _run_seed_script(self) -> None:
         try:
             text, path = self._read_script(self.config.seed_script_path, "测种脚本")
+            if self._completed_loops > 1 and self.services.recover_zoom_mode is not None:
+                if self.services.recover_zoom_mode():
+                    self._set_progress(
+                        AutoTidRngPhase.RUN_SEED_SCRIPT,
+                        "检测到缩放模式，已执行双 HOME 恢复",
+                        loop_index=self._completed_loops,
+                    )
             self.services.run_script_text(text, path.name)
         except Exception as exc:
             self._fail(str(exc))

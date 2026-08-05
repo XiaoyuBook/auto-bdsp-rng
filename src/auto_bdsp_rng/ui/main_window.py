@@ -91,6 +91,7 @@ from auto_bdsp_rng.automation.auto_rng.search import (
     generate_static_candidates,
     generate_static_candidates_multi,
 )
+from auto_bdsp_rng.automation.auto_rng.zoom_recovery import recover_zoom_overlay
 from auto_bdsp_rng.app_settings import set_startup_notice_acknowledged, should_show_startup_notice
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
@@ -3366,12 +3367,19 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
+        def recover_zoom_mode_service() -> bool:
+            return recover_zoom_overlay(
+                lambda: capture_preview_frame(tracking_config.capture),
+                run_script_text_service,
+            )
+
         return AutoTidRngServices(
             capture_seed=capture_tidsid_seed_service,
             search_id_states=search_id_states_service,
             lookup_tid_state=lookup_tid_state_service,
             run_script_text=run_script_text_service,
             recognize_tid=recognize_tid_service,
+            recover_zoom_mode=recover_zoom_mode_service,
             stop_current_script=stop_current_script_service,
         )
 
@@ -4218,6 +4226,12 @@ class MainWindow(QMainWindow):
                     species_tag = f"[{_reverse_species_label(species)}] " if species else ""
                     log(f"[自动反查] {species_tag}advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
 
+        def recover_zoom_mode_service() -> bool:
+            return recover_zoom_overlay(
+                lambda: capture_preview_frame(tracking_config.capture),
+                run_script_text_service,
+            )
+
         return AutoRngServices(
             current_seed=current_seed_service,
             capture_seed=capture_seed_service,
@@ -4228,6 +4242,7 @@ class MainWindow(QMainWindow):
             run_script_text=run_script_text_service,
             run_hit_script_with_shiny_check=run_hit_script_with_shiny_check,
             run_reverse_lookup=reverse_lookup_service,
+            recover_zoom_mode=recover_zoom_mode_service,
             stop_current_script=stop_current_script_service,
         )
 

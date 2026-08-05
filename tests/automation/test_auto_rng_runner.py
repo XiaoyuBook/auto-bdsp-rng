@@ -188,6 +188,33 @@ def test_no_candidates_decides_to_run_seed_script():
     assert decision.phase == AutoRngPhase.RUN_SEED_SCRIPT
 
 
+def test_runner_checks_zoom_before_the_second_seed_script(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    scripts = []
+    zoom_checks = []
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            loop_mode="count",
+            loop_count=2,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed", current_advances=0),
+            search_candidates=lambda _seed: [],
+            run_script_text=lambda _text, name: scripts.append(name),
+            recover_zoom_mode=lambda: zoom_checks.append(True) or True,
+        ),
+    )
+
+    runner.run(max_steps=5)
+
+    assert scripts == ["BDSP测种.txt", "BDSP测种.txt"]
+    assert zoom_checks == [True]
+
+
 def test_advance_request_above_threshold_recaptures_seed():
     decision = decide_after_advance_script(990_001, reseed_threshold_frames=990_000)
 
