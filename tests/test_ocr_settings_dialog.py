@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -157,14 +159,9 @@ def test_main_window_warms_up_ocr_in_background(app, monkeypatch):
     window = MainWindow()
     calls = []
 
-    def fake_read_paddle_ocr_text(_frame):
-        calls.append(True)
-        return ""
-
     def fake_warm_up_pokemon_info_ocr():
         calls.append(True)
 
-    monkeypatch.setattr(main_window_module, "read_paddle_ocr_text", fake_read_paddle_ocr_text)
     monkeypatch.setattr(main_window_module, "warm_up_pokemon_info_ocr", fake_warm_up_pokemon_info_ocr)
     monkeypatch.setattr(
         window,
@@ -181,9 +178,71 @@ def test_main_window_warms_up_ocr_in_background(app, monkeypatch):
         QTest.qWait(10)
         deadline -= 1
 
-    assert calls == [True, True]
+    assert calls == [True]
     assert dialog.warmup_button.isEnabled()
     assert "完成" in dialog.warmup_status.text()
+
+
+def test_main_window_does_not_emit_ocr_warmup_result_after_closing(app, monkeypatch):
+    import auto_bdsp_rng.ui.main_window as main_window_module
+
+    window = MainWindow()
+    started = threading.Event()
+    release = threading.Event()
+    results = []
+
+    def slow_warm_up() -> None:
+        started.set()
+        release.wait(timeout=1.0)
+
+    monkeypatch.setattr(main_window_module, "warm_up_pokemon_info_ocr", slow_warm_up)
+    monkeypatch.setattr(
+        window,
+        "_start_ocr_warmup",
+        _ORIGINAL_START_OCR_WARMUP.__get__(window, MainWindow),
+    )
+    window.ocrWarmupFinished.connect(lambda success, message: results.append((success, message)))
+    window._start_ocr_warmup()
+
+    deadline = 100
+    while not started.is_set() and deadline > 0:
+        QTest.qWait(10)
+        deadline -= 1
+    assert started.is_set()
+
+    release_timer = threading.Timer(0.05, release.set)
+    release_timer.start()
+    window.close()
+    release_timer.join(timeout=1.0)
+    app.processEvents()
+
+    assert window._ocr_warmup_thread is not None
+    assert not window._ocr_warmup_thread.isRunning()
+    assert results == []
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_button", "expected_status"),
+    [
+        ((True, "OCR预热完成"), "重新预热", "OCR预热完成"),
+        ((False, "OCR预热失败: 模型不可用"), "预热OCR", "OCR预热失败: 模型不可用"),
+    ],
+)
+def test_main_window_replays_completed_ocr_warmup_result_when_settings_open_late(
+    app,
+    result,
+    expected_button,
+    expected_status,
+):
+    window = MainWindow()
+    window._ocr_warmup_result = result
+
+    window.open_ocr_settings()
+
+    dialog = window._ocr_settings_dialog
+    assert dialog is not None
+    assert dialog.warmup_button.text() == expected_button
+    assert dialog.warmup_status.text() == expected_status
 
 
 def test_main_window_full_ocr_test_uses_right_between_notes_and_stats(app, monkeypatch):

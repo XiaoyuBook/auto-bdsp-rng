@@ -74,7 +74,6 @@ from auto_bdsp_rng.automation.auto_tid_rng import (
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
     measure_keyword_interval,
     read_ocr_text,
-    read_paddle_ocr_text,
     suggested_shiny_threshold,
 )
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
@@ -748,6 +747,30 @@ class ShinyThresholdCalibrationWorker(QObject):
         self._cancel.set()
 
 
+class OcrWarmupThread(QThread):
+    """Own the non-blocking OCR warm-up lifecycle for one main window."""
+
+    completed = Signal(bool, str)
+
+    def __init__(self, warm_up: Callable[[], None], parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._warm_up = warm_up
+
+    def run(self) -> None:
+        if self.isInterruptionRequested():
+            return
+        try:
+            self._warm_up()
+        except Exception as exc:
+            success = False
+            message = f"OCR预热失败: {exc}"
+        else:
+            success = True
+            message = "OCR预热完成"
+        if not self.isInterruptionRequested():
+            self.completed.emit(success, message)
+
+
 class MainWindow(QMainWindow):
     autoCaptureFrameChanged = Signal(object)
     autoCaptureProgressChanged = Signal(int, int)
@@ -783,6 +806,9 @@ class MainWindow(QMainWindow):
         self._ocr_settings_dialog: OcrSettingsDialog | None = None
         self._tid_ocr_dialog: TidOcrDialog | None = None
         self._ocr_warmup_running = False
+        self._ocr_warmup_thread: OcrWarmupThread | None = None
+        self._ocr_warmup_result: tuple[bool, str] | None = None
+        self._is_closing = False
         self._ocr_full_test_running = False
         self._selection_mode: str | None = None
         self._resume_preview_after_selection = False
@@ -2217,6 +2243,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("存档信息已应用" if self.lang == "zh" else "Profile applied")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._is_closing = True
+        warmup_thread = self._ocr_warmup_thread
+        if warmup_thread is not None:
+            warmup_thread.requestInterruption()
+            if warmup_thread.isRunning():
+                warmup_thread.wait()
+            try:
+                warmup_thread.completed.disconnect(self._handle_ocr_warmup_completed)
+            except (RuntimeError, TypeError):
+                pass
+        self._ocr_warmup_running = False
         self._save_profile_settings()
         super().closeEvent(event)
 
@@ -2706,6 +2743,8 @@ class MainWindow(QMainWindow):
             self.ocrWarmupFinished.connect(dialog.finish_warmup)
             self.ocrFullTestFinished.connect(dialog.finish_full_test)
             self._ocr_settings_dialog = dialog
+            if self._ocr_warmup_result is not None:
+                dialog.finish_warmup(*self._ocr_warmup_result)
         self._ocr_settings_dialog.show()
         self._ocr_settings_dialog.raise_()
         self._ocr_settings_dialog.activateWindow()
@@ -2767,24 +2806,25 @@ class MainWindow(QMainWindow):
         return load_ocr_region_config()
 
     def _start_ocr_warmup(self) -> None:
-        if self._ocr_warmup_running:
+        if self._is_closing or self._ocr_warmup_running:
             return
         self._ocr_warmup_running = True
+        thread = OcrWarmupThread(warm_up_pokemon_info_ocr, self)
+        thread.completed.connect(self._handle_ocr_warmup_completed)
+        thread.finished.connect(self._handle_ocr_warmup_thread_finished)
+        self._ocr_warmup_thread = thread
+        thread.start()
 
-        def worker() -> None:
-            try:
-                import numpy as np
+    def _handle_ocr_warmup_completed(self, success: bool, message: str) -> None:
+        if self._is_closing:
+            return
+        self._ocr_warmup_running = False
+        self._ocr_warmup_result = (success, message)
+        self.ocrWarmupFinished.emit(success, message)
 
-                read_paddle_ocr_text(np.zeros((32, 96, 3), dtype=np.uint8))
-                warm_up_pokemon_info_ocr()
-            except Exception as exc:
-                self.ocrWarmupFinished.emit(False, f"OCR预热失败: {exc}")
-            else:
-                self.ocrWarmupFinished.emit(True, "OCR预热完成")
-            finally:
-                self._ocr_warmup_running = False
-
-        threading.Thread(target=worker, daemon=True).start()
+    def _handle_ocr_warmup_thread_finished(self) -> None:
+        if self.sender() is self._ocr_warmup_thread:
+            self._ocr_warmup_running = False
 
     def _set_ocr_test_result_on_ui(self, field: str, text: str) -> None:
         dialog = self._ocr_settings_dialog
