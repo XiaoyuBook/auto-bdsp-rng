@@ -79,7 +79,11 @@ from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
 )
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import NOTE_REGION_FIELDS, OCR_REGION_LABELS, STAT_REGION_FIELDS, OcrRegion
-from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info, recognize_ocr_field
+from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
+    extract_pokemon_info,
+    recognize_ocr_field,
+    warm_up_pokemon_info_ocr,
+)
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices, ProjectXsAdvanceCounter
 from auto_bdsp_rng.automation.auto_rng.search import (
     StaticSearchCriteria,
@@ -821,6 +825,7 @@ class MainWindow(QMainWindow):
         self._sync_seed64_from_state32()
         self._apply_language()
         self.statusBar().showMessage(self._text("ready"))
+        QTimer.singleShot(0, self._start_ocr_warmup)
         QTimer.singleShot(0, self._maybe_show_startup_notice)
 
     def _connect_auto_rng_sync_signals(self) -> None:
@@ -2770,6 +2775,7 @@ class MainWindow(QMainWindow):
                 import numpy as np
 
                 read_paddle_ocr_text(np.zeros((32, 96, 3), dtype=np.uint8))
+                warm_up_pokemon_info_ocr()
             except Exception as exc:
                 self.ocrWarmupFinished.emit(False, f"OCR预热失败: {exc}")
             else:

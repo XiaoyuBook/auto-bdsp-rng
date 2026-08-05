@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,19 +23,52 @@ from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime,
 
 # ── 全局 PaddleOCR 单例 ────────────────────────────────────────────
 _PADDLE_OCR: object | None = None
+_PADDLE_OCR_LOCK = threading.Lock()
+_PADDLE_OCR_INFERENCE_LOCK = threading.Lock()
 
 
-def _get_paddle_ocr() -> object:
+def get_paddle_ocr() -> object:
+    """Return the shared PaddleOCR instance used by every OCR workflow."""
     global _PADDLE_OCR
     if _PADDLE_OCR is not None:
         return _PADDLE_OCR
-    configure_ocr_runtime()
-    try:
-        from paddleocr import PaddleOCR
-    except ImportError as exc:
-        raise RuntimeError("PaddleOCR is not installed") from exc
-    _PADDLE_OCR = _create_paddle_ocr(PaddleOCR)
-    return _PADDLE_OCR
+    with _PADDLE_OCR_LOCK:
+        if _PADDLE_OCR is not None:
+            return _PADDLE_OCR
+        configure_ocr_runtime()
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError as exc:
+            raise RuntimeError("PaddleOCR is not installed") from exc
+        _PADDLE_OCR = _create_paddle_ocr(PaddleOCR)
+        return _PADDLE_OCR
+
+
+def _get_paddle_ocr() -> object:
+    """Compatibility alias for existing internal callers."""
+    return get_paddle_ocr()
+
+
+def warm_up_pokemon_info_ocr() -> None:
+    """Load and prime the shared OCR model without capturing a game frame."""
+    image = np.zeros((32, 96, 3), dtype=np.uint8)
+    _ocr_rows(image, (0.0, 1.0, 0.0, 1.0))
+
+
+def run_paddle_ocr(image: object) -> object:
+    """Run one OCR inference at a time; PaddleOCR is not thread-safe."""
+    ocr = get_paddle_ocr()
+    with _PADDLE_OCR_INFERENCE_LOCK:
+        predict = getattr(ocr, "predict", None)
+        if callable(predict):
+            return predict(image)
+        legacy = getattr(ocr, "ocr", None)
+        if not callable(legacy):
+            raise RuntimeError("PaddleOCR does not expose a supported OCR method")
+        try:
+            return legacy(image, cls=False)
+        except TypeError:
+            return legacy(image)
 
 
 def _create_paddle_ocr(factory: Any) -> object:
@@ -76,18 +110,7 @@ def _ocr_rows(
     if roi.size == 0:
         return []
 
-    ocr = _get_paddle_ocr()
-    predict = getattr(ocr, "predict", None)
-    if callable(predict):
-        raw = predict(roi)
-    else:
-        legacy = getattr(ocr, "ocr", None)
-        if not callable(legacy):
-            raise RuntimeError("PaddleOCR does not expose a supported OCR method")
-        try:
-            raw = legacy(roi, cls=False)
-        except TypeError:
-            raw = legacy(roi)
+    raw = run_paddle_ocr(roi)
 
     if debug_raw is not None:
         debug_raw.append(raw)

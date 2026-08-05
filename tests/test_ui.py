@@ -40,6 +40,7 @@ from auto_bdsp_rng.ui.history_panel import HistoryPanel
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(MainWindow, "_start_ocr_warmup", lambda self: None)
     application = QApplication.instance() or QApplication([])
     yield application
     for widget in application.topLevelWidgets():
@@ -96,6 +97,17 @@ def test_main_window_generates_static_results(app):
     assert window.result_count.text() == "3 条结果"
     assert window.table.item(0, 0).text() == "0"
     assert window.table.item(0, 1).text()
+
+
+def test_main_window_starts_ocr_warmup_after_ui_is_ready(app, monkeypatch):
+    started = []
+
+    monkeypatch.setattr(MainWindow, "_start_ocr_warmup", lambda self: started.append(self))
+
+    window = MainWindow()
+    app.processEvents()
+
+    assert started == [window]
 
 
 def test_static_generation_runs_in_background(app, monkeypatch):

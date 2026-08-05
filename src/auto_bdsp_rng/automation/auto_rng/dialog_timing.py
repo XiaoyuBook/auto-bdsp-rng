@@ -7,9 +7,7 @@ from dataclasses import dataclass
 import re
 
 from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
-
-
-_PADDLE_OCR: object | None = None
+from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import run_paddle_ocr
 
 
 @dataclass(frozen=True)
@@ -113,28 +111,13 @@ def read_ocr_text(frame: object) -> str:
 
 
 def read_paddle_ocr_text(frame: object) -> str:
-    configure_ocr_runtime()
-    global _PADDLE_OCR
     try:
-        from paddleocr import PaddleOCR
         import numpy as np
     except ImportError as exc:
-        raise RuntimeError("PaddleOCR is not installed") from exc
+        raise RuntimeError("NumPy is not installed") from exc
 
     image = np.asarray(frame)
-    if _PADDLE_OCR is None:
-        _PADDLE_OCR = _create_paddle_ocr(PaddleOCR)
-    ocr = _PADDLE_OCR
-    predict = getattr(ocr, "predict", None)
-    if callable(predict):
-        return _extract_paddle_text(predict(image))
-    legacy_ocr = getattr(ocr, "ocr", None)
-    if callable(legacy_ocr):
-        try:
-            return _extract_paddle_text(legacy_ocr(image, cls=False))
-        except TypeError:
-            return _extract_paddle_text(legacy_ocr(image))
-    raise RuntimeError("PaddleOCR object does not expose a supported OCR method")
+    return _extract_paddle_text(run_paddle_ocr(image))
 
 
 def _create_paddle_ocr(factory: Callable[..., object]) -> object:

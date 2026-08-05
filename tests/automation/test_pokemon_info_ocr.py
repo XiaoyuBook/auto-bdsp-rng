@@ -14,6 +14,7 @@ from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     compute_characteristic,
     extract_pokemon_info,
     _norm,
+    warm_up_pokemon_info_ocr,
 )
 
 
@@ -23,6 +24,23 @@ def test_norm_removes_whitespace_and_punctuation():
     assert _norm("攻击 67") == "攻击67"
     assert _norm("HP 109 / 109") == "HP109109"
     assert _norm("自 大 的 性 格。") == "自大的性格"
+
+
+def test_warm_up_pokemon_info_ocr_primes_full_frame(monkeypatch):
+    calls = []
+
+    def fake_ocr_rows(image, bounds):
+        calls.append((image.shape, bounds))
+        return []
+
+    monkeypatch.setattr(
+        "auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr._ocr_rows",
+        fake_ocr_rows,
+    )
+
+    warm_up_pokemon_info_ocr()
+
+    assert calls == [((32, 96, 3), (0.0, 1.0, 0.0, 1.0))]
 
 
 # ── _clean_nature ─────────────────────────────────────────────────
