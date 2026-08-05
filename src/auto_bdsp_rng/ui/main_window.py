@@ -4,7 +4,7 @@ import csv
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -112,6 +112,13 @@ DEFAULT_BLINK_COUNT = 40
 TIDSID_BLINK_COUNT = 64
 REIDENTIFY_BLINK_COUNT = 7
 NOISY_REIDENTIFY_BLINK_COUNT = 20
+CAPTURE_KEEP_AWAKE_BLINK_COUNTS = frozenset((
+    DEFAULT_BLINK_COUNT,
+    TIDSID_BLINK_COUNT,
+    NOISY_REIDENTIFY_BLINK_COUNT,
+))
+CAPTURE_KEEP_AWAKE_INTERVAL = 10
+CAPTURE_KEEP_AWAKE_PRESS_MS = 100
 AUTO_CAPTURE_WARMUP_DISCARD_SECONDS = 1.0
 REIDENTIFY_HINT_BEFORE_FRAMES = 10_000
 REIDENTIFY_HINT_AFTER_FRAMES = 20_000
@@ -739,6 +746,7 @@ class ShinyThresholdCalibrationWorker(QObject):
 class MainWindow(QMainWindow):
     autoCaptureFrameChanged = Signal(object)
     autoCaptureProgressChanged = Signal(int, int)
+    captureKeepAwakeRequested = Signal(int, int)
     autoSeedCaptured = Signal(object)
     autoScriptStarted = Signal(str)
     autoScriptFinished = Signal(object)
@@ -818,6 +826,7 @@ class MainWindow(QMainWindow):
     def _connect_auto_rng_sync_signals(self) -> None:
         self.autoCaptureFrameChanged.connect(self._handle_auto_capture_frame)
         self.autoCaptureProgressChanged.connect(self._handle_auto_capture_progress)
+        self.captureKeepAwakeRequested.connect(self._handle_capture_keep_awake_requested)
         self.autoSeedCaptured.connect(self._handle_auto_seed_captured)
         self.autoScriptStarted.connect(self.easycon_tab.begin_external_bridge_script)
         self.autoScriptFinished.connect(self.easycon_tab.finish_external_bridge_script)
@@ -3230,6 +3239,8 @@ class MainWindow(QMainWindow):
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
 
+            store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
+
             preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
             if preview_was_running:
                 time.sleep(0.3)
@@ -3424,6 +3435,35 @@ class MainWindow(QMainWindow):
 
     def _handle_auto_capture_progress(self, done: int, total: int) -> None:
         self.progress_value.setText(f"{done}/{total}")
+
+    def _wrap_capture_progress_with_keep_awake(
+        self,
+        progress_callback: Callable[[int, int], None],
+    ) -> Callable[[int, int], None]:
+        triggered_milestones: set[int] = set()
+
+        def wrapped(done: int, total: int) -> None:
+            progress_callback(done, total)
+            if total not in CAPTURE_KEEP_AWAKE_BLINK_COUNTS or done <= 0 or done >= total:
+                return
+            milestone = (done // CAPTURE_KEEP_AWAKE_INTERVAL) * CAPTURE_KEEP_AWAKE_INTERVAL
+            if milestone < CAPTURE_KEEP_AWAKE_INTERVAL or milestone in triggered_milestones:
+                return
+            triggered_milestones.add(milestone)
+            self.captureKeepAwakeRequested.emit(milestone, total)
+
+        return wrapped
+
+    def _handle_capture_keep_awake_requested(self, done: int, total: int) -> None:
+        try:
+            self.easycon_tab.send_controller_press(
+                "ZR",
+                duration_ms=CAPTURE_KEEP_AWAKE_PRESS_MS,
+                task_name="capture_keep_awake_zr",
+                log_label=f"捕捉亮屏保活 {done}/{total}",
+            )
+        except Exception as exc:
+            self.easycon_tab._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {exc}")
 
     def _handle_auto_seed_captured(self, seed_result: AutoRngSeedResult) -> None:
         state = self._state32_from_auto_seed_result(seed_result)
@@ -3652,6 +3692,8 @@ class MainWindow(QMainWindow):
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
 
+            store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
+
             # 测种前先暂停预览，避免抢摄像头；测完后恢复
             preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
             if preview_was_running:
@@ -3705,6 +3747,8 @@ class MainWindow(QMainWindow):
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
+
+            store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
 
             # 测种前暂停预览，避免抢摄像头
             preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
@@ -3781,6 +3825,8 @@ class MainWindow(QMainWindow):
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
+
+            store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
 
             preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
             if preview_was_running:
@@ -4421,6 +4467,8 @@ class MainWindow(QMainWindow):
             with self._capture_lock:
                 self._capture_progress = (done, total)
 
+        store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
+
         def run_capture() -> None:
             try:
                 observation = capture_player_blinks(
@@ -4494,6 +4542,8 @@ class MainWindow(QMainWindow):
             with self._capture_lock:
                 self._capture_progress = (done, total)
 
+        store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
+
         def run_reidentify() -> None:
             try:
                 observation = capture_player_blinks(
@@ -4564,6 +4614,8 @@ class MainWindow(QMainWindow):
         def store_progress(done: int, total: int) -> None:
             with self._capture_lock:
                 self._capture_progress = (done, total)
+
+        store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
 
         def run_tidsid() -> None:
             try:

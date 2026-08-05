@@ -1809,11 +1809,22 @@ class EasyConPanel(QWidget):
         toast.show()
         QTimer.singleShot(3000, toast.deleteLater)
 
-    def send_controller_press(self, button: str) -> None:
-        duration = self.controller_duration.value()
+    def send_controller_press(
+        self,
+        button: str,
+        duration_ms: int | None = None,
+        *,
+        task_name: str | None = None,
+        log_label: str = "手柄测试",
+    ) -> None:
+        duration = (
+            self.controller_duration.value()
+            if duration_ms is None
+            else max(20, min(5000, int(duration_ms)))
+        )
         if self._is_bridge_mode():
             if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
-                self._append_log("warn", "请先连接伊机控，再测试手柄按钮")
+                self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
                 return
             try:
                 self._ensure_bridge_backend().press(button, duration)
@@ -1824,10 +1835,10 @@ class EasyConPanel(QWidget):
                 self._update_bridge_controls()
                 return
             self.task_state_text = "已完成"
-            self._append_log("info", f"手柄测试: {button} {duration}ms")
+            self._append_log("info", f"{log_label}: {button} {duration}ms")
             self._update_status_labels()
             return
-        self._run_inline_cli_script(f"test_{button.lower()}", f"{button} {duration}\n")
+        self._run_inline_cli_script(task_name or f"test_{button.lower()}", f"{button} {duration}\n")
 
     def send_controller_stick(self, side: str, direction: str) -> None:
         duration = self.controller_duration.value()

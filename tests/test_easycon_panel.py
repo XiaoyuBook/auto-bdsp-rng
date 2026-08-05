@@ -496,10 +496,11 @@ def test_easycon_panel_sends_controller_tests_through_bridge(monkeypatch, tmp_pa
 
     easycon_panel.connect_bridge()
     easycon_panel.send_controller_press("A")
+    easycon_panel.send_controller_press("ZR", duration_ms=120, log_label="捕捉亮屏保活")
     easycon_panel.send_controller_stick("left", "RESET")
 
     backend = FakeBridgeBackend.instances[-1]
-    assert backend.presses == [("A", 100)]
+    assert backend.presses == [("A", 100), ("ZR", 120)]
     assert backend.sticks == [("left", "RESET", 100)]
     assert easycon_panel.task_state_label.text() == "任务: 已完成"
 

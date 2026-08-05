@@ -224,6 +224,64 @@ def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     assert window.tidsid_button.isEnabled()
 
 
+@pytest.mark.parametrize(
+    ("total", "expected_milestones"),
+    [
+        (7, []),
+        (20, [10]),
+        (40, [10, 20, 30]),
+        (64, [10, 20, 30, 40, 50, 60]),
+    ],
+)
+def test_capture_progress_keep_awake_milestones(app, monkeypatch, total, expected_milestones):
+    window = MainWindow()
+    emitted: list[tuple[int, int]] = []
+    monkeypatch.setattr(window.easycon_tab, "send_controller_press", lambda *_args, **_kwargs: None)
+    window.captureKeepAwakeRequested.connect(lambda done, count: emitted.append((done, count)))
+    progress_callback = window._wrap_capture_progress_with_keep_awake(lambda _done, _total: None)
+
+    for done in range(1, total + 1):
+        progress_callback(done, total)
+        if done == 10:
+            progress_callback(done, total)
+
+    assert emitted == [(milestone, total) for milestone in expected_milestones]
+
+
+def test_capture_keep_awake_sends_short_zr_and_ignores_failure(app, monkeypatch):
+    window = MainWindow()
+    calls: list[tuple[str, dict[str, object]]] = []
+    logs: list[tuple[str, str]] = []
+
+    def capture_press(button: str, **kwargs) -> None:
+        calls.append((button, kwargs))
+
+    monkeypatch.setattr(window.easycon_tab, "send_controller_press", capture_press)
+    window._handle_capture_keep_awake_requested(10, 40)
+
+    assert calls == [
+        (
+            "ZR",
+            {
+                "duration_ms": 100,
+                "task_name": "capture_keep_awake_zr",
+                "log_label": "捕捉亮屏保活 10/40",
+            },
+        )
+    ]
+
+    monkeypatch.setattr(
+        window.easycon_tab,
+        "send_controller_press",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    monkeypatch.setattr(window.easycon_tab, "_append_log", lambda level, message: logs.append((level, message)))
+
+    window._handle_capture_keep_awake_requested(20, 40)
+
+    assert logs == [("warn", "捕捉亮屏保活发送 ZR 失败，继续捕捉: offline")]
+
+
 def test_tidsid_capture_starts_project_xs_munchlax_tracking(app, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0x01020304, 0x11121314, 0x21222324, 0x31323334)
