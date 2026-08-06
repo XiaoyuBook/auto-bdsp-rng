@@ -62,6 +62,7 @@ from auto_bdsp_rng.resources import bundled_easycon_bridge_path, resource_path
 
 SCRIPT_DIR = resource_path("script")
 GENERATED_DIR = SCRIPT_DIR / ".generated"
+CAPTURE_KEEP_AWAKE_BUTTON = "L"
 CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS = 2.0
 CAPTURE_KEEP_AWAKE_CLI_TIMEOUT_MS = 5_000
 CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS = 500
@@ -1881,20 +1882,23 @@ class EasyConPanel(QWidget):
             task_id = self._capture_keep_awake_task_id
             future = executor.submit(
                 backend.press,
-                "ZR",
+                CAPTURE_KEEP_AWAKE_BUTTON,
                 duration,
                 timeout_seconds=CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS,
                 terminate_on_timeout=True,
             )
         except Exception as exc:
-            self._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {exc}")
+            self._append_log(
+                "warn",
+                f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {exc}",
+            )
             return False
         self._capture_keep_awake_future = future
         future.add_done_callback(
             lambda completed: self._capture_keep_awake_done_callback(
                 task_id,
                 log_label,
-                "ZR",
+                CAPTURE_KEEP_AWAKE_BUTTON,
                 duration,
                 completed,
             )
@@ -1951,7 +1955,10 @@ class EasyConPanel(QWidget):
             return
         self._capture_keep_awake_future = None
         if error:
-            self._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {error}")
+            self._append_log(
+                "warn",
+                f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {error}",
+            )
             if terminal_failure:
                 self._reset_failed_keep_awake_bridge()
             return
@@ -1998,8 +2005,8 @@ class EasyConPanel(QWidget):
             return False
         try:
             script_path = generate_script_file(
-                f"ZR {duration_ms}\n",
-                "capture_keep_awake_zr.ecs",
+                f"{CAPTURE_KEEP_AWAKE_BUTTON} {duration_ms}\n",
+                "capture_keep_awake_l.ecs",
                 GENERATED_DIR,
                 task_type="controller",
             )
@@ -2047,7 +2054,7 @@ class EasyConPanel(QWidget):
         if timed_out or cancelled:
             return
         if exit_code == 0:
-            self._append_log("info", f"{log_label}: ZR {duration_ms}ms")
+            self._append_log("info", f"{log_label}: {CAPTURE_KEEP_AWAKE_BUTTON} {duration_ms}ms")
             return
         self._append_log("warn", f"捕捉亮屏保活 CLI 失败，继续捕捉: exit code {exit_code}")
 

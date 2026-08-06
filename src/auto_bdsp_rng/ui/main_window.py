@@ -101,7 +101,7 @@ from auto_bdsp_rng.resources import app_icon_path, resource_path
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
-from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
+from auto_bdsp_rng.ui.easycon_panel import CAPTURE_KEEP_AWAKE_BUTTON, EasyConPanel
 from auto_bdsp_rng.ui.help_menu import HelpMenuController
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
@@ -3537,7 +3537,10 @@ class MainWindow(QMainWindow):
                 duration_ms=CAPTURE_KEEP_AWAKE_PRESS_MS,
             )
         except Exception as exc:
-            self.easycon_tab._append_log("warn", f"捕捉亮屏保活发送 ZR 失败，继续捕捉: {exc}")
+            self.easycon_tab._append_log(
+                "warn",
+                f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {exc}",
+            )
 
     def _handle_auto_seed_captured(self, seed_result: AutoRngSeedResult) -> None:
         state = self._state32_from_auto_seed_result(seed_result)

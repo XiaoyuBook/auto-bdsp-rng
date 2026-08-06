@@ -261,7 +261,7 @@ def test_capture_progress_keep_awake_milestones(app, monkeypatch, total, expecte
     assert emitted == [(milestone, total) for milestone in expected_milestones]
 
 
-def test_capture_keep_awake_sends_short_zr_and_ignores_failure(app, monkeypatch):
+def test_capture_keep_awake_sends_short_l_and_ignores_failure(app, monkeypatch):
     window = MainWindow()
     calls: list[tuple[int, int, dict[str, object]]] = []
     logs: list[tuple[str, str]] = []
@@ -291,7 +291,7 @@ def test_capture_keep_awake_sends_short_zr_and_ignores_failure(app, monkeypatch)
 
     window._handle_capture_keep_awake_requested(20, 40)
 
-    assert logs == [("warn", "捕捉亮屏保活发送 ZR 失败，继续捕捉: offline")]
+    assert logs == [("warn", "捕捉亮屏保活发送 L 失败，继续捕捉: offline")]
 
 
 def test_capture_keep_awake_cli_slot_does_not_run_delayed_discovery(app, monkeypatch, tmp_path):
@@ -359,7 +359,7 @@ def test_capture_keep_awake_bridge_does_not_block_gui_or_create_unbounded_tasks(
     assert backend_started.wait(timeout=0.5)
     for milestone in (20, 30, 30, 30):
         window._handle_capture_keep_awake_requested(milestone, 40)
-    assert calls == [("ZR", 100, 2.0, True)]
+    assert calls == [("L", 100, 2.0, True)]
 
     class AliveCaptureThread:
         @staticmethod
@@ -380,7 +380,7 @@ def test_capture_keep_awake_bridge_does_not_block_gui_or_create_unbounded_tasks(
     app.processEvents()
 
     assert window.easycon_tab._capture_keep_awake_future is None
-    assert "捕捉亮屏保活发送 ZR 失败，继续捕捉: Bridge request timed out" in window.easycon_tab.log_view.toPlainText()
+    assert "捕捉亮屏保活发送 L 失败，继续捕捉: Bridge request timed out" in window.easycon_tab.log_view.toPlainText()
 
 
 def test_tidsid_capture_starts_project_xs_munchlax_tracking(app, monkeypatch):

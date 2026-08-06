@@ -549,17 +549,17 @@ def test_stale_keep_awake_completion_does_not_override_current_or_running_task(e
     easycon_panel.task_state_text = "执行中"
     original_log = easycon_panel.log_view.toPlainText()
 
-    easycon_panel._handle_capture_keep_awake_finished(1, "捕捉亮屏保活 10/40", "ZR", 100, "", False)
+    easycon_panel._handle_capture_keep_awake_finished(1, "捕捉亮屏保活 10/40", "L", 100, "", False)
 
     assert easycon_panel._capture_keep_awake_future is current_future
     assert easycon_panel.task_state_text == "执行中"
     assert easycon_panel.log_view.toPlainText() == original_log
 
-    easycon_panel._handle_capture_keep_awake_finished(2, "捕捉亮屏保活 20/40", "ZR", 100, "", False)
+    easycon_panel._handle_capture_keep_awake_finished(2, "捕捉亮屏保活 20/40", "L", 100, "", False)
 
     assert easycon_panel._capture_keep_awake_future is None
     assert easycon_panel.task_state_text == "执行中"
-    assert "捕捉亮屏保活 20/40: ZR 100ms" in easycon_panel.log_view.toPlainText()
+    assert "捕捉亮屏保活 20/40: L 100ms" in easycon_panel.log_view.toPlainText()
 
 
 def test_keep_awake_terminal_bridge_failure_clears_backend_and_allows_reconnect(
@@ -646,6 +646,10 @@ def test_capture_keep_awake_cli_timeout_preserves_normal_task_state(monkeypatch,
     keep_awake_process = easycon_panel._capture_keep_awake_cli_process
     assert keep_awake_process is not None
     assert keep_awake_process.objectName() == "capture_keep_awake_cli"
+    generated_script_path = Path(keep_awake_process.arguments()[1])
+    assert generated_script_path.name.startswith("capture_keep_awake_l_")
+    assert generated_script_path.name.endswith("_controller.ecs")
+    assert generated_script_path.read_text(encoding="utf-8") == "L 100\n"
     assert keep_awake_process.waitForStarted(1000)
 
     easycon_panel._capture_keep_awake_cli_timeout()
