@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from auto_bdsp_rng.automation.auto_rng.ocr_runtime import (
     DEFAULT_OCR_CPU_THREADS,
     configure_ocr_runtime,
     optimized_paddle_ocr_kwargs,
+    resolve_local_ocr_model_dirs,
 )
-from auto_bdsp_rng.automation.auto_rng import dialog_timing, pokemon_info_ocr
+from auto_bdsp_rng.automation.auto_rng import dialog_timing, ocr_runtime, pokemon_info_ocr
+
+
+def _create_bundled_model_files(root: Path) -> tuple[Path, Path]:
+    model_root = root / "paddlex_cache" / "official_models"
+    detection_dir = model_root / "PP-OCRv5_mobile_det"
+    recognition_dir = model_root / "PP-OCRv5_mobile_rec"
+    for model_dir in (detection_dir, recognition_dir):
+        model_dir.mkdir(parents=True)
+        (model_dir / "inference.json").write_text("{}", encoding="utf-8")
+        (model_dir / "inference.pdiparams").write_bytes(b"model")
+    return detection_dir, recognition_dir
 
 
 def test_configure_ocr_runtime_limits_thread_env(monkeypatch):
@@ -33,6 +49,28 @@ def test_optimized_paddle_ocr_kwargs_use_mobile_models_and_limited_threads():
     assert kwargs["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
     assert kwargs["cpu_threads"] == DEFAULT_OCR_CPU_THREADS
     assert "lang" not in kwargs
+
+
+def test_frozen_runtime_binds_validated_bundled_model_dirs(monkeypatch, tmp_path):
+    detection_dir, recognition_dir = _create_bundled_model_files(tmp_path)
+    monkeypatch.setattr(ocr_runtime.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(ocr_runtime.sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setenv("PADDLE_PDX_CACHE_HOME", str(tmp_path / "untrusted-user-cache"))
+
+    resolved = resolve_local_ocr_model_dirs()
+    kwargs = optimized_paddle_ocr_kwargs()
+
+    assert resolved == (detection_dir, recognition_dir)
+    assert kwargs["text_detection_model_dir"] == str(detection_dir)
+    assert kwargs["text_recognition_model_dir"] == str(recognition_dir)
+
+
+def test_frozen_runtime_fails_fast_when_bundled_model_is_incomplete(monkeypatch, tmp_path):
+    monkeypatch.setattr(ocr_runtime.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(ocr_runtime.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    with pytest.raises(RuntimeError, match="安装包内置 OCR 模型不完整"):
+        optimized_paddle_ocr_kwargs()
 
 
 def test_dialog_timing_paddle_ocr_prefers_optimized_runtime_kwargs():

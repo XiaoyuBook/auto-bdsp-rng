@@ -55,6 +55,8 @@ class OcrSettingsDialog(QDialog):
         self.resize(900, 620)
         self._settings = settings or QSettings("auto-bdsp-rng", "OcrSettings")
         self._recognizer = recognizer
+        self._warmup_active = False
+        self._recognition_buttons: list[QPushButton] = []
         self.region_config = load_ocr_region_config(self._settings)
         self._field_rows = {field: index for index, field in enumerate(OCR_REGION_FIELDS)}
         self._build_ui()
@@ -97,15 +99,15 @@ class OcrSettingsDialog(QDialog):
         actions.addWidget(self.warmup_button)
         actions.addWidget(self.warmup_status)
         actions.addStretch(1)
-        test_current = QPushButton("测试当前项")
-        test_current.clicked.connect(self._test_first_configured)
+        self.test_current_button = QPushButton("测试当前项")
+        self.test_current_button.clicked.connect(self._test_first_configured)
         self.test_all_button = QPushButton("测试全部")
         self.test_all_button.clicked.connect(self.test_all)
         defaults = QPushButton("导入默认区域")
         defaults.clicked.connect(self.import_default_regions)
         close_button = QPushButton("关闭")
         close_button.clicked.connect(self.close)
-        for button in (test_current, self.test_all_button, defaults, close_button):
+        for button in (self.test_current_button, self.test_all_button, defaults, close_button):
             actions.addWidget(button)
         layout.addLayout(actions)
 
@@ -125,6 +127,8 @@ class OcrSettingsDialog(QDialog):
             button.setFixedHeight(34)
             button.setMinimumWidth(72)
             button.clicked.connect(callback)
+            if text == "识别":
+                self._recognition_buttons.append(button)
             layout.addWidget(button)
         layout.addStretch(1)
         return widget
@@ -176,6 +180,9 @@ class OcrSettingsDialog(QDialog):
         self.regionDisplayRequested.emit(field, region)
 
     def recognize_field(self, field: str) -> None:
+        if self._warmup_active:
+            self.table.item(self._field_rows[field], 4).setText("等待预热完成")
+            return
         region = self.region_config.get(field)
         if region is None:
             self.table.item(self._field_rows[field], 4).setText("未设置")
@@ -193,17 +200,34 @@ class OcrSettingsDialog(QDialog):
         self.table.item(self._field_rows[field], 4).setText(text or "空")
 
     def start_warmup(self) -> None:
+        if self._warmup_active:
+            return
+        self.show_warmup_running()
+        self.warmupRequested.emit()
+
+    def show_warmup_running(self) -> None:
+        self._warmup_active = True
         self.warmup_button.setEnabled(False)
         self.warmup_button.setText("预热中…")
         self.warmup_status.setText("正在初始化 OCR")
-        self.warmupRequested.emit()
+        self.test_current_button.setEnabled(False)
+        self.test_all_button.setEnabled(False)
+        for button in self._recognition_buttons:
+            button.setEnabled(False)
 
     def finish_warmup(self, success: bool, message: str) -> None:
+        self._warmup_active = False
         self.warmup_button.setEnabled(True)
         self.warmup_button.setText("重新预热" if success else "预热OCR")
         self.warmup_status.setText(message)
+        self.test_current_button.setEnabled(True)
+        self.test_all_button.setEnabled(True)
+        for button in self._recognition_buttons:
+            button.setEnabled(True)
 
     def test_all(self) -> None:
+        if self._warmup_active:
+            return
         self.test_all_button.setEnabled(False)
         self.test_all_button.setText("测试中…")
         for field in NOTE_REGION_FIELDS + STAT_REGION_FIELDS:

@@ -121,12 +121,14 @@ def read_paddle_ocr_text(frame: object) -> str:
 
 
 def _create_paddle_ocr(factory: Callable[..., object]) -> object:
-    attempts = (
-        optimized_paddle_ocr_kwargs(),
-        {"lang": "ch", "use_doc_orientation_classify": False, "use_doc_unwarping": False, "use_textline_orientation": False},
-        {"lang": "ch", "use_angle_cls": False},
-        {"lang": "ch"},
-    )
+    preferred = optimized_paddle_ocr_kwargs()
+    attempts = (preferred,)
+    if "text_detection_model_dir" not in preferred:
+        attempts += (
+            {"lang": "ch", "use_doc_orientation_classify": False, "use_doc_unwarping": False, "use_textline_orientation": False},
+            {"lang": "ch", "use_angle_cls": False},
+            {"lang": "ch"},
+        )
     last_error: Exception | None = None
     for kwargs in attempts:
         try:

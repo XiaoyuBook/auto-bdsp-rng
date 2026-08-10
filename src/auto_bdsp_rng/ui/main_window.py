@@ -2746,6 +2746,8 @@ class MainWindow(QMainWindow):
             self._ocr_settings_dialog = dialog
             if self._ocr_warmup_result is not None:
                 dialog.finish_warmup(*self._ocr_warmup_result)
+            elif self._ocr_warmup_running:
+                dialog.show_warmup_running()
         self._ocr_settings_dialog.show()
         self._ocr_settings_dialog.raise_()
         self._ocr_settings_dialog.activateWindow()
@@ -2810,6 +2812,9 @@ class MainWindow(QMainWindow):
         if self._is_closing or self._ocr_warmup_running:
             return
         self._ocr_warmup_running = True
+        self._ocr_warmup_result = None
+        if self._ocr_settings_dialog is not None:
+            self._ocr_settings_dialog.show_warmup_running()
         thread = OcrWarmupThread(warm_up_pokemon_info_ocr, self)
         thread.completed.connect(self._handle_ocr_warmup_completed)
         thread.finished.connect(self._handle_ocr_warmup_thread_finished)

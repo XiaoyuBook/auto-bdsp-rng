@@ -111,6 +111,32 @@ def test_ocr_settings_dialog_warmup_button_is_on_demand(app, tmp_path):
     assert dialog.warmup_status.text() == "OCR预热完成"
 
 
+def test_ocr_settings_dialog_blocks_synchronous_recognition_while_warming(app, tmp_path):
+    recognized = []
+    dialog = OcrSettingsDialog(
+        settings=_settings(tmp_path),
+        recognizer=lambda field, region: recognized.append((field, region)) or "胆小",
+    )
+    dialog.set_region("nature", OcrRegion(1, 2, 30, 40))
+
+    dialog.show_warmup_running()
+    dialog.recognize_field("nature")
+    dialog.test_all()
+
+    assert not dialog.warmup_button.isEnabled()
+    assert not dialog.test_current_button.isEnabled()
+    assert not dialog.test_all_button.isEnabled()
+    assert all(not button.isEnabled() for button in dialog._recognition_buttons)
+    assert recognized == []
+    assert dialog.table.item(0, 4).text() == "等待预热完成"
+
+    dialog.finish_warmup(True, "OCR预热完成")
+
+    assert dialog.test_current_button.isEnabled()
+    assert dialog.test_all_button.isEnabled()
+    assert all(button.isEnabled() for button in dialog._recognition_buttons)
+
+
 def test_ocr_settings_dialog_test_all_requests_full_controller_flow(app, tmp_path):
     dialog = OcrSettingsDialog(settings=_settings(tmp_path))
     emitted = []
@@ -151,6 +177,20 @@ def test_main_window_opens_ocr_settings_and_saves_selected_region(app):
     assert dialog is not None
     assert dialog.isVisible()
     assert dialog.region_config.get("nature") == OcrRegion(10, 20, 30, 40)
+
+
+def test_main_window_opening_ocr_settings_replays_running_warmup_state(app):
+    window = MainWindow()
+    window._ocr_warmup_running = True
+
+    window.open_ocr_settings()
+
+    dialog = window._ocr_settings_dialog
+    assert dialog is not None
+    assert dialog.warmup_button.text() == "预热中…"
+    assert dialog.warmup_status.text() == "正在初始化 OCR"
+    assert not dialog.test_current_button.isEnabled()
+    assert not dialog.test_all_button.isEnabled()
 
 
 def test_main_window_warms_up_ocr_in_background(app, monkeypatch):

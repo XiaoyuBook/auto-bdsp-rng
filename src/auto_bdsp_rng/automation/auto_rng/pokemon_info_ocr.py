@@ -36,11 +36,12 @@ def get_paddle_ocr() -> object:
         if _PADDLE_OCR is not None:
             return _PADDLE_OCR
         configure_ocr_runtime()
+        preferred_kwargs = optimized_paddle_ocr_kwargs()
         try:
             from paddleocr import PaddleOCR
         except ImportError as exc:
             raise RuntimeError("PaddleOCR is not installed") from exc
-        _PADDLE_OCR = _create_paddle_ocr(PaddleOCR)
+        _PADDLE_OCR = _create_paddle_ocr(PaddleOCR, preferred_kwargs=preferred_kwargs)
         return _PADDLE_OCR
 
 
@@ -71,13 +72,19 @@ def run_paddle_ocr(image: object) -> object:
             return legacy(image)
 
 
-def _create_paddle_ocr(factory: Any) -> object:
-    attempts = (
-        optimized_paddle_ocr_kwargs(),
-        {"lang": "ch", "use_doc_orientation_classify": False, "use_doc_unwarping": False, "use_textline_orientation": False},
-        {"lang": "ch", "use_angle_cls": False},
-        {"lang": "ch"},
-    )
+def _create_paddle_ocr(
+    factory: Any,
+    *,
+    preferred_kwargs: dict[str, object] | None = None,
+) -> object:
+    preferred = preferred_kwargs or optimized_paddle_ocr_kwargs()
+    attempts = (preferred,)
+    if "text_detection_model_dir" not in preferred:
+        attempts += (
+            {"lang": "ch", "use_doc_orientation_classify": False, "use_doc_unwarping": False, "use_textline_orientation": False},
+            {"lang": "ch", "use_angle_cls": False},
+            {"lang": "ch"},
+        )
     last_error: Exception | None = None
     for kwargs in attempts:
         try:
