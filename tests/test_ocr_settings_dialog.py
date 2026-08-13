@@ -10,10 +10,14 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 
-from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import OCR_REGION_FIELDS, OcrRegion
 from auto_bdsp_rng.ui import MainWindow
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
-from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog
+from auto_bdsp_rng.ui.ocr_settings_dialog import (
+    DEFAULT_OCR_REGIONS,
+    OcrSettingsDialog,
+    load_ocr_region_config,
+)
 
 
 _ORIGINAL_START_OCR_WARMUP = MainWindow._start_ocr_warmup
@@ -55,6 +59,27 @@ def test_ocr_settings_dialog_is_non_modal_and_lists_eight_fields(app, tmp_path):
     ]
     assert dialog.table.verticalHeader().defaultSectionSize() >= 52
     assert dialog.table.minimumHeight() >= 470
+
+
+def test_ocr_settings_dialog_uses_default_regions_on_first_load(app, tmp_path):
+    settings = _settings(tmp_path)
+
+    config = load_ocr_region_config(settings)
+
+    assert dict(config.items()) == DEFAULT_OCR_REGIONS
+    assert not any(settings.contains(f"regions/{field}") for field in DEFAULT_OCR_REGIONS)
+
+
+def test_ocr_settings_dialog_preserves_legacy_partial_regions(app, tmp_path):
+    settings = _settings(tmp_path)
+    custom_region = OcrRegion(1, 2, 30, 40)
+    settings.setValue("regions/nature", custom_region.to_settings_value())
+    settings.sync()
+
+    config = load_ocr_region_config(settings)
+
+    assert config.get("nature") == custom_region
+    assert config.get("speed") == DEFAULT_OCR_REGIONS["speed"]
 
 
 def test_ocr_settings_dialog_saves_region_immediately(app, tmp_path):
@@ -156,7 +181,7 @@ def test_ocr_settings_dialog_test_all_requests_full_controller_flow(app, tmp_pat
     assert dialog.test_all_button.text() == "测试全部"
 
 
-def test_ocr_settings_dialog_reset_removes_region(app, tmp_path):
+def test_ocr_settings_dialog_reset_marks_region_unset(app, tmp_path):
     settings = _settings(tmp_path)
     dialog = OcrSettingsDialog(settings=settings)
     dialog.set_region("speed", OcrRegion(10, 20, 30, 40))
@@ -165,6 +190,38 @@ def test_ocr_settings_dialog_reset_removes_region(app, tmp_path):
 
     assert dialog.region_config.get("speed") is None
     assert dialog.table.item(7, 1).text() == "未设置"
+    assert settings.contains("regions/speed")
+    assert settings.value("regions/speed") == ""
+
+
+def test_ocr_settings_dialog_reset_regions_stay_unset_after_reopen(app, tmp_path):
+    settings = _settings(tmp_path)
+    dialog = OcrSettingsDialog(settings=settings)
+    dialog.reset_region("speed")
+
+    restored = OcrSettingsDialog(settings=settings)
+
+    assert restored.region_config.get("speed") is None
+    assert restored.region_config.get("nature") == DEFAULT_OCR_REGIONS["nature"]
+
+    for field in OCR_REGION_FIELDS:
+        restored.reset_region(field)
+
+    empty_restored = OcrSettingsDialog(settings=settings)
+    assert empty_restored.region_config.is_empty()
+
+
+def test_ocr_settings_dialog_can_reimport_default_regions(app, tmp_path):
+    settings = _settings(tmp_path)
+    dialog = OcrSettingsDialog(settings=settings)
+    dialog.set_region("nature", OcrRegion(1, 2, 30, 40))
+    dialog.reset_region("speed")
+
+    dialog.import_default_regions()
+
+    assert dict(dialog.region_config.items()) == DEFAULT_OCR_REGIONS
+    restored = OcrSettingsDialog(settings=settings)
+    assert dict(restored.region_config.items()) == DEFAULT_OCR_REGIONS
 
 
 def test_main_window_opens_ocr_settings_and_saves_selected_region(app):

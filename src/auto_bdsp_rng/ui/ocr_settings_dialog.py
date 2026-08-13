@@ -28,10 +28,26 @@ from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
 
 Recognizer = Callable[[str, OcrRegion], str]
 
+DEFAULT_OCR_REGIONS = {
+    "nature": OcrRegion(40, 110, 260, 38),
+    "characteristic": OcrRegion(40, 300, 320, 38),
+    "hp": OcrRegion(145, 155, 92, 34),
+    "attack": OcrRegion(335, 250, 92, 34),
+    "defense": OcrRegion(335, 365, 92, 34),
+    "sp_attack": OcrRegion(145, 250, 92, 34),
+    "sp_defense": OcrRegion(145, 365, 92, 34),
+    "speed": OcrRegion(240, 470, 92, 34),
+}
+
 
 def load_ocr_region_config(settings: QSettings | None = None) -> OcrRegionConfig:
     settings = settings or QSettings("auto-bdsp-rng", "OcrSettings")
-    values = {field: settings.value(f"regions/{field}", "") for field in OCR_REGION_FIELDS}
+    values = {
+        field: settings.value(f"regions/{field}", "")
+        if settings.contains(f"regions/{field}")
+        else DEFAULT_OCR_REGIONS[field].as_tuple()
+        for field in OCR_REGION_FIELDS
+    }
     return OcrRegionConfig.from_settings_dict(values)
 
 
@@ -137,7 +153,7 @@ class OcrSettingsDialog(QDialog):
         region = self.region_config.get(field)
         key = f"regions/{field}"
         if region is None:
-            self._settings.remove(key)
+            self._settings.setValue(key, "")
         else:
             self._settings.setValue(key, region.to_settings_value())
         self._settings.sync()
@@ -250,15 +266,5 @@ class OcrSettingsDialog(QDialog):
                 return
 
     def import_default_regions(self) -> None:
-        defaults = {
-            "nature": OcrRegion(40, 110, 260, 38),
-            "characteristic": OcrRegion(40, 300, 320, 38),
-            "hp": OcrRegion(145, 155, 92, 34),
-            "attack": OcrRegion(335, 250, 92, 34),
-            "defense": OcrRegion(335, 365, 92, 34),
-            "sp_attack": OcrRegion(145, 250, 92, 34),
-            "sp_defense": OcrRegion(145, 365, 92, 34),
-            "speed": OcrRegion(240, 470, 92, 34),
-        }
-        for field, region in defaults.items():
+        for field, region in DEFAULT_OCR_REGIONS.items():
             self.set_region(field, region)
