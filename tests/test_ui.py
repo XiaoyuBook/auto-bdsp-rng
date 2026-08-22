@@ -1494,6 +1494,29 @@ def test_auto_rng_log_adds_timestamp(app, monkeypatch):
     assert lines[1] == "[01:02:03] 已有时间"
 
 
+def test_auto_rng_log_sink_receives_levels_and_cannot_break_ui(app):
+    events: list[tuple[str, str]] = []
+    panel = AutoRngPanel(run_log_sink=lambda level, message: events.append((level, message)))
+
+    panel.add_log("普通事件")
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FAILED, log_message="流程失败"))
+    panel._runner_failed("worker 失败")
+
+    assert events == [
+        ("INFO", "普通事件"),
+        ("ERROR", "流程失败"),
+        ("ERROR", "worker 失败"),
+    ]
+
+    def broken_sink(_level: str, _message: str) -> None:
+        raise OSError("disk full")
+
+    panel._run_log_sink = broken_sink
+    panel.add_log("仍写入界面")
+
+    assert "仍写入界面" in panel.log_view.toPlainText()
+
+
 
 
 def test_auto_rng_worker_emits_progress_and_finished(app):
@@ -2245,6 +2268,10 @@ def test_main_window_auto_rng_run_script_raises_on_easycon_failure(app, tmp_path
     window = MainWindow()
     started = datetime(2026, 5, 24, 12, 0, 0)
     ended = datetime(2026, 5, 24, 12, 0, 1)
+    finished_results: list[object] = []
+    failed_messages: list[str] = []
+    window.autoScriptFinished.connect(finished_results.append)
+    window.autoScriptFailed.connect(failed_messages.append)
 
     class FakeBackend:
         def run_script_text(self, script_text: str, name: str) -> EasyConRunResult:
@@ -2269,6 +2296,8 @@ def test_main_window_auto_rng_run_script_raises_on_easycon_failure(app, tmp_path
     QApplication.processEvents()
 
     assert "串口连接失败" in window.easycon_tab.log_view.toPlainText()
+    assert len(finished_results) == 1
+    assert failed_messages == []
 
 
 def test_main_window_applies_selected_roi(app, monkeypatch):

@@ -4,6 +4,7 @@ import json
 import re
 import csv
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -151,9 +152,15 @@ class AutoTidRngPanel(QWidget):
     progressChanged = Signal(object)
     ocrSettingsRequested = Signal()
 
-    def __init__(self, parent: QWidget | None = None, script_dir: Path = SCRIPT_DIR) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        script_dir: Path = SCRIPT_DIR,
+        run_log_sink: Callable[[str, str], None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.script_dir = script_dir
+        self._run_log_sink = run_log_sink
         self._scripts: list[Path] = []
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoTidRngWorker | None = None
@@ -626,7 +633,7 @@ class AutoTidRngPanel(QWidget):
 
     def run_with_runner(self, runner: object) -> None:
         if self._runner_thread is not None:
-            self.add_log("自动 TID 乱数已在运行")
+            self.add_log("自动 TID 乱数已在运行", level="WARNING")
             return
         thread = QThread(self)
         worker = AutoTidRngWorker(runner)
@@ -666,11 +673,18 @@ class AutoTidRngPanel(QWidget):
         if progress.actual_delay is not None:
             self.actual_delay_result.setText(str(progress.actual_delay))
         if progress.log_message:
-            self.add_log(progress.log_message)
+            level = "ERROR" if progress.phase == AutoTidRngPhase.FAILED else "INFO"
+            self.add_log(progress.log_message, level=level)
 
-    def add_log(self, message: str) -> None:
+    def add_log(self, message: str, *, level: str = "INFO") -> None:
+        text = str(message)
+        if self._run_log_sink is not None:
+            try:
+                self._run_log_sink(level, text)
+            except Exception:
+                pass
         timestamp = datetime.now().strftime("%H:%M:%S")
-        lines = str(message).splitlines() or [""]
+        lines = text.splitlines() or [""]
         stamped = [line if _TIMESTAMP_RE.match(line) else f"[{timestamp}] {line}" for line in lines]
         self.log_view.appendPlainText("\n".join(stamped))
 
@@ -739,12 +753,13 @@ class AutoTidRngPanel(QWidget):
 
     def _runner_finished(self, progress: object) -> None:
         if isinstance(progress, AutoTidRngProgress):
-            self.apply_progress(progress)
+            phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
+            self.status_badge.setText(f"状态：{phase_text}")
         self._clear_runner_thread()
 
     def _runner_failed(self, message: str) -> None:
         self.status_badge.setText("状态：失败")
-        self.add_log(message)
+        self.add_log(message, level="ERROR")
         self._clear_runner_thread()
 
     def _clear_runner_thread(self) -> None:
@@ -765,7 +780,7 @@ class AutoTidRngPanel(QWidget):
             self._validate_config(config)
         except Exception as exc:
             self.status_badge.setText("状态：配置错误")
-            self.add_log(str(exc))
+            self.add_log(str(exc), level="WARNING")
             return
         self.startRequested.emit(config)
 
@@ -811,7 +826,7 @@ class AutoTidRngPanel(QWidget):
     def _add_target_from_input(self) -> None:
         values = self._parse_tid_list(self.target_input.text())
         if not values:
-            self.add_log("目标 Display TID 必须是 0-999999 的数字")
+            self.add_log("目标 Display TID 必须是 0-999999 的数字", level="WARNING")
             return
         for value in values:
             self.add_target_display_tid(value)
@@ -821,7 +836,7 @@ class AutoTidRngPanel(QWidget):
         item = self.target_list.currentItem()
         value = self._parse_tid(self.target_input.text())
         if item is None or value is None:
-            self.add_log("请选择目标并输入 0-999999 的 Display TID")
+            self.add_log("请选择目标并输入 0-999999 的 Display TID", level="WARNING")
             return
         item.setData(Qt.ItemDataRole.UserRole, value)
         item.setText(self._target_item_text(value))

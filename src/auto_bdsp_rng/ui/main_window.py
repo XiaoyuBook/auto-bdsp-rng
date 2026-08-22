@@ -8,8 +8,19 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QImage, QIntValidator, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDesktopServices,
+    QGuiApplication,
+    QIcon,
+    QImage,
+    QIntValidator,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -91,13 +102,19 @@ from auto_bdsp_rng.automation.auto_rng.search import (
     generate_static_candidates_multi,
 )
 from auto_bdsp_rng.automation.auto_rng.zoom_recovery import recover_zoom_overlay
-from auto_bdsp_rng.app_settings import set_startup_notice_acknowledged, should_show_startup_notice
+from auto_bdsp_rng.app_settings import (
+    is_run_log_enabled,
+    set_run_log_enabled,
+    set_startup_notice_acknowledged,
+    should_show_startup_notice,
+)
 from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_id import IDFilter, generate_ids
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_icon_path, resource_path
+from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
@@ -784,9 +801,14 @@ class MainWindow(QMainWindow):
     tidOcrRegionSelected = Signal(object)
     ocrWarmupFinished = Signal(bool, str)
     ocrFullTestFinished = Signal(bool, str)
+    runLogFailed = Signal(str)
     uiCallRequested = Signal(object, object, object, object)
 
-    def __init__(self, profile_settings: QSettings | None = None) -> None:
+    def __init__(
+        self,
+        profile_settings: QSettings | None = None,
+        run_log_manager: RunLogManager | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle(APP_DISPLAY_TITLE)
         if app_icon_path().exists():
@@ -794,6 +816,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1150, 900)
         self.resize(1150, 900)
         self.lang = "zh"
+        self._run_log_manager = run_log_manager or RunLogManager()
+        self._run_log_manager.set_error_callback(self._queue_run_log_failure)
+        self.runLogFailed.connect(self._handle_run_log_failure, Qt.ConnectionType.QueuedConnection)
         self._profile_settings = profile_settings or QSettings("auto-bdsp-rng", "MainWindowProfile")
         self._profile_version = GameVersion.BD
         self._active_record: StaticEncounterRecord | None = None
@@ -878,6 +903,13 @@ class MainWindow(QMainWindow):
             raise errors[0]
         return result[0] if result else None
 
+    def _finalize_auto_script_result(self, result: object, name: str) -> object:
+        self.autoScriptFinished.emit(result)
+        failure_message = _auto_script_failure_message(result, name)
+        if failure_message is not None:
+            raise RuntimeError(failure_message)
+        return result
+
     def _handle_ui_call_requested(
         self,
         callback: object,
@@ -940,9 +972,9 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
-        self.easycon_tab = EasyConPanel()
-        self.auto_rng_tab = AutoRngPanel()
-        self.auto_tid_rng_tab = AutoTidRngPanel()
+        self.easycon_tab = EasyConPanel(run_log_sink=self._run_log_sink("伊机控"))
+        self.auto_rng_tab = AutoRngPanel(run_log_sink=self._run_log_sink("自动定点"))
+        self.auto_tid_rng_tab = AutoTidRngPanel(run_log_sink=self._run_log_sink("自动 TID"))
         self.history_tab = HistoryPanel()
         self.id_tab = IdPanel(status_callback=lambda text: self.statusBar().showMessage(text))
         self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
@@ -951,6 +983,9 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self.open_ocr_settings)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
+        self.auto_rng_tab.captureError.connect(
+            lambda message: self.auto_rng_tab.add_log(message, level="ERROR")
+        )
         self.auto_rng_tab.requestStatsCapture.connect(self._on_request_stats_capture)
         self.auto_tid_rng_tab.startRequested.connect(self._start_auto_tid_rng)
         self.auto_tid_rng_tab.progressChanged.connect(self._apply_auto_rng_header_progress)
@@ -967,8 +1002,92 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
-        self.help_menu_controller = HelpMenuController(self)
+        self.help_menu_controller = HelpMenuController(
+            self,
+            run_log_enabled=self._run_log_manager.enabled,
+            set_run_log_enabled=self._set_run_log_enabled,
+            open_run_log_dir=self._open_run_log_dir,
+        )
         self.help_menu_controller.install(self.help_button)
+
+    def _run_log_sink(self, source: str) -> Callable[[str, str], None]:
+        def write(level: str, message: str) -> None:
+            self._write_run_log(source, message, level=level)
+
+        return write
+
+    def _write_run_log(self, source: str, message: object, *, level: str = "INFO") -> None:
+        self._run_log_manager.write(source, str(message), level=level)
+
+    def _queue_run_log_failure(self, message: str) -> None:
+        # The callback may run on a worker thread or after Qt starts shutting down.
+        # Persist the safe state before relying on the queued UI notification.
+        try:
+            set_run_log_enabled(False)
+        except OSError:
+            pass
+        self.runLogFailed.emit(message)
+
+    def _set_run_log_enabled(self, enabled: bool) -> bool:
+        if enabled:
+            try:
+                path = self._run_log_manager.enable()
+                set_run_log_enabled(True)
+            except (OSError, RunLogError) as exc:
+                self._run_log_manager.disable()
+                try:
+                    set_run_log_enabled(False)
+                except OSError:
+                    pass
+                QMessageBox.warning(self, "运行日志", f"无法开启运行日志：\n{exc}")
+                self.statusBar().showMessage("运行日志开启失败", 5000)
+                return False
+            self._write_run_log(
+                "应用",
+                f"自动保存运行日志已开启；版本 {__version__}；模式 "
+                f"{'打包版' if getattr(sys, 'frozen', False) else '源码版'}",
+            )
+            self.statusBar().showMessage(f"运行日志已开启：{path}", 5000)
+            return True
+
+        self._write_run_log("应用", "自动保存运行日志已关闭")
+        self._run_log_manager.disable()
+        try:
+            set_run_log_enabled(False)
+        except OSError as exc:
+            QMessageBox.warning(self, "运行日志", f"运行日志已关闭，但无法保存开关状态：\n{exc}")
+        self.statusBar().showMessage("运行日志已关闭", 3000)
+        return False
+
+    def _open_run_log_dir(self) -> None:
+        path = self._run_log_manager.directory
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(self, "运行日志", f"无法创建日志目录：\n{exc}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))):
+            QMessageBox.warning(self, "运行日志", f"无法打开日志目录：\n{path}")
+
+    def _handle_run_log_failure(self, message: str) -> None:
+        self._run_log_manager.disable()
+        settings_error: OSError | None = None
+        try:
+            set_run_log_enabled(False)
+        except OSError as exc:
+            settings_error = exc
+        controller = getattr(self, "help_menu_controller", None)
+        if controller is not None:
+            controller.set_run_log_state(False)
+        detail = f"运行日志写入失败，已停止保存：\n{message}"
+        if settings_error is not None:
+            detail += f"\n\n同时无法保存关闭状态，下次启动可能再次尝试：\n{settings_error}"
+        QMessageBox.warning(self, "运行日志", detail)
+        self.statusBar().showMessage("运行日志写入失败，已停止保存", 5000)
+
+    def show_run_log_startup_error(self, message: str) -> None:
+        QMessageBox.warning(self, "运行日志", f"上次启用了运行日志，但本次无法创建日志文件：\n{message}")
+        self.statusBar().showMessage("运行日志启动失败", 5000)
 
     def _maybe_show_startup_notice(self) -> None:
         if not should_show_startup_notice():
@@ -2796,12 +2915,25 @@ class MainWindow(QMainWindow):
         return self._latest_preview_frame
 
     def _recognize_ocr_region(self, field: str, region: OcrRegion) -> str:
-        frame = self._current_preview_frame_for_ocr()
-        return recognize_ocr_field(frame, field, region)
+        label = OCR_REGION_LABELS.get(field, field)
+        try:
+            frame = self._current_preview_frame_for_ocr()
+            text = recognize_ocr_field(frame, field, region)
+        except Exception as exc:
+            self._write_run_log("OCR", f"{label}识别失败: {exc}", level="ERROR")
+            raise
+        self._write_run_log("OCR", f"{label}识别结果: {text or '空'}")
+        return text
 
     def _recognize_tid_ocr_region(self, region: OcrRegion) -> str:
-        frame = self._current_preview_frame_for_ocr()
-        return recognize_ocr_field(frame, "tid", region)
+        try:
+            frame = self._current_preview_frame_for_ocr()
+            text = recognize_ocr_field(frame, "tid", region)
+        except Exception as exc:
+            self._write_run_log("OCR", f"TID识别失败: {exc}", level="ERROR")
+            raise
+        self._write_run_log("OCR", f"TID识别结果: {text or '空'}")
+        return text
 
     def _ocr_region_config(self):
         if self._ocr_settings_dialog is not None:
@@ -2826,6 +2958,7 @@ class MainWindow(QMainWindow):
             return
         self._ocr_warmup_running = False
         self._ocr_warmup_result = (success, message)
+        self._write_run_log("OCR", message, level="INFO" if success else "ERROR")
         self.ocrWarmupFinished.emit(success, message)
 
     def _handle_ocr_warmup_thread_finished(self) -> None:
@@ -2841,6 +2974,7 @@ class MainWindow(QMainWindow):
         if self._ocr_full_test_running:
             return
         self._ocr_full_test_running = True
+        self._write_run_log("OCR", "测试全部开始")
 
         def worker() -> None:
             try:
@@ -2853,6 +2987,8 @@ class MainWindow(QMainWindow):
                     if region is None:
                         continue
                     text = recognize_ocr_field(notes_frame, field, region)
+                    label = OCR_REGION_LABELS.get(field, field)
+                    self._write_run_log("OCR", f"测试全部/{label}识别结果: {text or '空'}")
                     self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
 
                 self._send_easycon_right()
@@ -2864,11 +3000,17 @@ class MainWindow(QMainWindow):
                     if region is None:
                         continue
                     text = recognize_ocr_field(stats_frame, field, region)
+                    label = OCR_REGION_LABELS.get(field, field)
+                    self._write_run_log("OCR", f"测试全部/{label}识别结果: {text or '空'}")
                     self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
             except Exception as exc:
-                self.ocrFullTestFinished.emit(False, f"测试全部失败: {exc}")
+                message = f"测试全部失败: {exc}"
+                self._write_run_log("OCR", message, level="ERROR")
+                self.ocrFullTestFinished.emit(False, message)
             else:
-                self.ocrFullTestFinished.emit(True, "测试全部完成")
+                message = "测试全部完成"
+                self._write_run_log("OCR", message)
+                self.ocrFullTestFinished.emit(True, message)
             finally:
                 self._ocr_full_test_running = False
 
@@ -3069,8 +3211,10 @@ class MainWindow(QMainWindow):
 
     def _shiny_threshold_calibration_failed(self, message: str) -> None:
         self._reset_shiny_threshold_calibration()
-        self.auto_rng_tab.captureLog.emit(f"[闪光判定校准] 失败: {message}")
-        self._show_error("闪光判定校准失败", RuntimeError(message))
+        log_message = f"[闪光判定校准] 失败: {message}"
+        self.auto_rng_tab.add_log(log_message, level="ERROR")
+        QMessageBox.critical(self, "闪光判定校准失败", message)
+        self.statusBar().showMessage(message)
 
     def _shiny_threshold_calibration_cancelled(self) -> None:
         self._reset_shiny_threshold_calibration()
@@ -3385,12 +3529,7 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     self.autoScriptFailed.emit(str(exc))
                     raise
-                self.autoScriptFinished.emit(result)
-                failure_message = _auto_script_failure_message(result, name)
-                if failure_message is not None:
-                    self.autoScriptFailed.emit(failure_message)
-                    raise RuntimeError(failure_message)
-                return result
+                return self._finalize_auto_script_result(result, name)
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             if not self._call_on_ui_thread(self.easycon_tab.prepare_for_external_cli_script):
@@ -3405,12 +3544,7 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self.autoScriptFailed.emit(str(exc))
                 raise
-            self.autoScriptFinished.emit(result)
-            failure_message = _auto_script_failure_message(result, name)
-            if failure_message is not None:
-                self.autoScriptFailed.emit(failure_message)
-                raise RuntimeError(failure_message)
-            return result
+            return self._finalize_auto_script_result(result, name)
 
         def recognize_tid_service() -> str:
             if config.ocr_region is None:
@@ -3454,30 +3588,66 @@ class MainWindow(QMainWindow):
         h = self.history_tab
         if event == "cycle_start" and len(values) >= 1:
             h.cycle_start(int(values[0]))
+            self._write_run_log("历史记录", f"自动定点第 {int(values[0])} 轮开始")
         elif event == "seed_captured" and len(values) >= 4:
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
+            self._write_run_log(
+                "历史记录",
+                f"捕获 Seed {values[0]}；初始 Adv {int(values[1])}；NPC {int(values[2])}；最大搜索 {int(values[3])}",
+            )
         elif event == "auto_tid_log" and len(values) >= 1:
             h.auto_tid_log(str(values[0]))
         elif event == "candidates_found" and len(values) >= 2:
             flags = list(values[2]) if len(values) >= 3 else None
             delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
-            h.candidates_found(list(values[0]), int(values[1]), flags, delay)  # type: ignore[arg-type]
+            candidates = list(values[0])
+            locked_index = int(values[1])
+            h.candidates_found(candidates, locked_index, flags, delay)  # type: ignore[arg-type]
+            locked_adv = (
+                getattr(candidates[locked_index], "advances", "-")
+                if 0 <= locked_index < len(candidates)
+                else "-"
+            )
+            self._write_run_log("历史记录", f"搜索到 {len(candidates)} 个候选；锁定 Adv {locked_adv}")
         elif event == "candidates_refiltered" and len(values) >= 2:
             flags = list(values[2]) if len(values) >= 3 else None
             delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
-            h.candidates_refiltered(list(values[0]), int(values[1]), flags, delay)  # type: ignore[arg-type]
+            candidates = list(values[0])
+            locked_index = int(values[1])
+            h.candidates_refiltered(candidates, locked_index, flags, delay)  # type: ignore[arg-type]
+            locked_adv = (
+                getattr(candidates[locked_index], "advances", "-")
+                if 0 <= locked_index < len(candidates)
+                else "-"
+            )
+            self._write_run_log("历史记录", f"重新筛选后剩余 {len(candidates)} 个候选；锁定 Adv {locked_adv}")
         elif event == "target_missed" and len(values) >= 2:
-            h.target_missed(int(values[0]) if values[0] is not None else 0, int(values[1]) if values[1] is not None else 0)
+            target_adv = int(values[0]) if values[0] is not None else 0
+            current_adv = int(values[1]) if values[1] is not None else 0
+            h.target_missed(target_adv, current_adv)
+            self._write_run_log(
+                "历史记录",
+                f"错过目标；目标 Adv {target_adv}；当前 Adv {current_adv}",
+                level="WARNING",
+            )
         elif event == "cycle_result" and len(values) >= 3:
             is_shiny = bool(values[0])
             interval = float(values[1]) if values[1] is not None else None
             used_delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
             h.cycle_result(is_shiny, interval, used_delay)
+            interval_text = interval if interval is not None else "-"
+            delay_text = used_delay if used_delay is not None else "-"
+            self._write_run_log(
+                "历史记录",
+                f"本轮结果：{'出闪' if is_shiny else '未出闪'}；间隔 {interval_text}；delay {delay_text}",
+            )
         elif event == "reverse_lookup_results" and len(values) >= 1:
             chara = str(values[1]) if len(values) >= 2 and values[1] is not None else None
             delays = list(values[2]) if len(values) >= 3 and values[2] is not None else None
             ocr = dict(values[3]) if len(values) >= 4 and values[3] is not None else None
-            h.reverse_lookup_results(list(values[0]), chara, delays, ocr)  # type: ignore[arg-type]
+            results = list(values[0])
+            h.reverse_lookup_results(results, chara, delays, ocr)  # type: ignore[arg-type]
+            self._write_run_log("历史记录", f"反查完成；候选 {len(results)} 个；个性 {chara or '-'}")
 
     def _ensure_bridge_connected(self) -> bool:
         """确保伊机控连接就绪；CLI 模式只需串口可用，Bridge 模式需要连接。"""
@@ -4019,12 +4189,7 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     self.autoScriptFailed.emit(str(exc))
                     raise
-                self.autoScriptFinished.emit(result)
-                failure_message = _auto_script_failure_message(result, name)
-                if failure_message is not None:
-                    self.autoScriptFailed.emit(failure_message)
-                    raise RuntimeError(failure_message)
-                return result
+                return self._finalize_auto_script_result(result, name)
             # CLI 模式：通过 ezcon.exe 执行脚本
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
@@ -4041,12 +4206,7 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self.autoScriptFailed.emit(str(exc))
                 raise
-            self.autoScriptFinished.emit(result)
-            failure_message = _auto_script_failure_message(result, name)
-            if failure_message is not None:
-                self.autoScriptFailed.emit(failure_message)
-                raise RuntimeError(failure_message)
-            return result
+            return self._finalize_auto_script_result(result, name)
 
         def stop_current_script_service() -> None:
             self._capture_cancel.set()
@@ -4361,14 +4521,14 @@ class MainWindow(QMainWindow):
         try:
             capture_config = self._config_from_form().capture
         except Exception as exc:
-            self.auto_rng_tab.add_log(f"[捕获精灵信息] 获取截图配置失败: {exc}")
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] 获取截图配置失败: {exc}", level="ERROR")
             return
 
         # 主线程截图笔记页
         try:
             notes_frame = capture_preview_frame(capture_config)
         except Exception as exc:
-            self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图笔记页失败: {exc}")
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图笔记页失败: {exc}", level="ERROR")
             return
 
         self._capture_config = capture_config  # 暂存供后续用
@@ -4378,11 +4538,15 @@ class MainWindow(QMainWindow):
     def _do_capture_pokemon_info(self, notes_frame: object) -> None:
         import time
 
-        log = self.auto_rng_tab.captureLog.emit
+        log_error = self.auto_rng_tab.captureError.emit
 
         # 1) OCR 笔记页
-        ocr_regions = self._ocr_region_config()
-        notes_result = extract_pokemon_info(notes_image=notes_frame, ocr_regions=ocr_regions)
+        try:
+            ocr_regions = self._ocr_region_config()
+            notes_result = extract_pokemon_info(notes_image=notes_frame, ocr_regions=ocr_regions)
+        except Exception as exc:
+            log_error(f"[捕获精灵信息] OCR 笔记页失败: {exc}")
+            return
         nature = notes_result.get("nature")
         characteristic = notes_result.get("characteristic")
 
@@ -4390,7 +4554,7 @@ class MainWindow(QMainWindow):
         try:
             self._pause_ocr_and_turn_to_stats_page()
         except Exception as exc:
-            log(f"[捕获精灵信息] 发送 RIGHT 指令失败: {exc}")
+            log_error(f"[捕获精灵信息] 发送 RIGHT 指令失败: {exc}")
             return
         time.sleep(2.0)
 
@@ -4403,9 +4567,13 @@ class MainWindow(QMainWindow):
         try:
             stats_frame = capture_preview_frame(self._capture_config)
         except Exception as exc:
-            log(f"[捕获精灵信息] 截图能力页失败: {exc}")
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图能力页失败: {exc}", level="ERROR")
             return
-        stats_result = extract_pokemon_info(stats_image=stats_frame, ocr_regions=self._ocr_region_config())
+        try:
+            stats_result = extract_pokemon_info(stats_image=stats_frame, ocr_regions=self._ocr_region_config())
+        except Exception as exc:
+            self.auto_rng_tab.add_log(f"[捕获精灵信息] OCR 能力页失败: {exc}", level="ERROR")
+            return
         stats = stats_result.get("stats")
 
         stat_order = ["性格", "个性", "HP", "攻击", "防御", "特攻", "特防", "速度"]
@@ -4516,6 +4684,7 @@ class MainWindow(QMainWindow):
             self._capture_cancel.set()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
+            self._write_run_log("Seed 捕捉", f"已请求停止 {self._capture_mode} 捕捉", level="WARNING")
             return
         try:
             config = self._config_from_form()
@@ -4541,6 +4710,10 @@ class MainWindow(QMainWindow):
         self.reidentify_button.setEnabled(False)
         self.tidsid_button.setEnabled(False)
         self.statusBar().showMessage(self._text("capturing"))
+        self._write_run_log(
+            "Seed 捕捉",
+            f"开始普通 Seed 捕捉；眨眼数 {config.capture.blink_count}；NPC {config.npc}",
+        )
 
         last_display_frame_at = 0.0
 
@@ -4587,6 +4760,7 @@ class MainWindow(QMainWindow):
             self._capture_cancel.set()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
+            self._write_run_log("Seed 捕捉", f"已请求停止 {self._capture_mode} 捕捉", level="WARNING")
             return
         try:
             config = self._config_from_form()
@@ -4616,6 +4790,10 @@ class MainWindow(QMainWindow):
         self.capture_button.setText(self._text("stop_capture"))
         self.tidsid_button.setEnabled(False)
         self.statusBar().showMessage(f"Capturing {reidentify_blink_count} blinks...")
+        self._write_run_log(
+            "Seed 捕捉",
+            f"开始 Reidentify；眨眼数 {reidentify_blink_count}；NPC {config.npc}；当前 Adv {tracked_advances}",
+        )
 
         last_display_frame_at = 0.0
 
@@ -4663,6 +4841,7 @@ class MainWindow(QMainWindow):
             self._capture_cancel.set()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
+            self._write_run_log("Seed 捕捉", f"已请求停止 {self._capture_mode} 捕捉", level="WARNING")
             return
         try:
             config = self._config_from_form()
@@ -4689,6 +4868,10 @@ class MainWindow(QMainWindow):
         self.progress_value.setText(f"0/{config.capture.blink_count}")
         self.capture_button.setText(self._text("stop_capture"))
         self.statusBar().showMessage(f"Capturing {config.capture.blink_count} Pokemon blinks...")
+        self._write_run_log(
+            "Seed 捕捉",
+            f"开始 TID/SID Seed 捕捉；眨眼数 {config.capture.blink_count}",
+        )
 
         last_display_frame_at = 0.0
 
@@ -4751,6 +4934,7 @@ class MainWindow(QMainWindow):
         if self._capture_error is not None:
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))
+                self._write_run_log("Seed 捕捉", f"{self._capture_mode} 捕捉已停止", level="WARNING")
             else:
                 title = (
                     "Reidentify failed"
@@ -4759,12 +4943,13 @@ class MainWindow(QMainWindow):
                     if self._capture_mode == "tidsid"
                     else "Blink capture failed"
                 )
-                self._show_error(title, self._capture_error)
+                self._show_error(title, self._capture_error, source="Seed 捕捉")
             return
 
         result = self._capture_result
         if result is None:
             self.statusBar().showMessage(self._text("capture_stopped"))
+            self._write_run_log("Seed 捕捉", f"{self._capture_mode} 捕捉未返回结果", level="WARNING")
             return
         # reidentify 不修改 seed，只更新 current_advances
         if self._capture_mode != "reidentify":
@@ -4793,10 +4978,19 @@ class MainWindow(QMainWindow):
         if self._capture_mode == "reidentify":
             self.advances_value.setText(str(self._tracked_advances))
             self.statusBar().showMessage(self._text("seed_reidentified"))
+            self._write_run_log("Seed 捕捉", f"Reidentify 完成；当前 Adv {self._tracked_advances}")
         elif self._capture_mode == "tidsid":
             self.statusBar().showMessage("TID/SID 测种完成")
+            self._write_run_log(
+                "Seed 捕捉",
+                f"TID/SID Seed 捕捉完成；Seed {' '.join(result.state.format_words())}",
+            )
         else:
             self.statusBar().showMessage(self._text("seed_captured"))
+            self._write_run_log(
+                "Seed 捕捉",
+                f"普通 Seed 捕捉完成；Seed {' '.join(result.state.format_words())}",
+            )
 
     def generate_results(self) -> None:
         try:
@@ -4967,7 +5161,8 @@ class MainWindow(QMainWindow):
         output.write_text(self._table_text(), encoding="utf-8")
         self.statusBar().showMessage(f"Exported {output}")
 
-    def _show_error(self, title: str, error: Exception) -> None:
+    def _show_error(self, title: str, error: object, *, source: str = "应用") -> None:
+        self._write_run_log(source, f"{title}: {error}", level="ERROR")
         QMessageBox.critical(self, title, str(error))
         self.statusBar().showMessage(str(error))
 
@@ -5437,13 +5632,66 @@ class _IVCalculatorDialog(QDialog):
         next_levels = _compute_next_level(base_stats, ivs, levels[-1], nature)
         self._next_level_label.setText(", ".join(str(l) for l in next_levels))
 
-def create_window() -> MainWindow:
-    return MainWindow()
+
+def create_window(run_log_manager: RunLogManager | None = None) -> MainWindow:
+    return MainWindow(run_log_manager=run_log_manager)
 
 
 def run() -> int:
     app = QApplication.instance() or QApplication([])
     configure_application_identity(app)
-    window = create_window()
-    window.show()
-    return app.exec()
+    run_log_manager = RunLogManager()
+    run_log_errors: list[str] = []
+    run_log_manager.set_error_callback(run_log_errors.append)
+    run_log_manager.cleanup()
+    run_log_startup_error: str | None = None
+    run_log_requested = is_run_log_enabled()
+    if run_log_requested:
+        try:
+            run_log_manager.enable()
+        except RunLogError as exc:
+            run_log_startup_error = str(exc)
+
+    exception_hooks = ExceptionHookGuard(run_log_manager).install()
+    if run_log_manager.enabled:
+        run_log_manager.write(
+            "应用",
+            f"应用启动；版本 {__version__}；模式 "
+            f"{'打包版' if getattr(sys, 'frozen', False) else '源码版'}",
+        )
+    if run_log_requested and not run_log_manager.enabled:
+        if run_log_startup_error is None:
+            run_log_startup_error = run_log_errors[-1] if run_log_errors else "运行日志已意外停用"
+        try:
+            set_run_log_enabled(False)
+        except OSError as exc:
+            run_log_startup_error += f"\n同时无法保存关闭状态，下次启动可能再次尝试：{exc}"
+
+    shutdown_run_log_errors: list[str] = []
+    try:
+        window = create_window(run_log_manager=run_log_manager)
+        if run_log_startup_error is not None:
+            QTimer.singleShot(
+                0,
+                lambda message=run_log_startup_error: window.show_run_log_startup_error(message),
+            )
+        window.show()
+        exit_code = app.exec()
+        run_log_manager.set_error_callback(shutdown_run_log_errors.append)
+        run_log_manager.write("应用", f"应用正常退出；退出码 {exit_code}")
+        return exit_code
+    except BaseException:
+        run_log_manager.set_error_callback(shutdown_run_log_errors.append)
+        exc_type, exc_value, tb = sys.exc_info()
+        if exc_type is not None and exc_value is not None:
+            run_log_manager.write_exception("应用启动或事件循环异常", exc_type, exc_value, tb)
+        raise
+    finally:
+        run_log_manager.set_error_callback(shutdown_run_log_errors.append)
+        run_log_manager.close()
+        if shutdown_run_log_errors:
+            try:
+                set_run_log_enabled(False)
+            except OSError:
+                pass
+        exception_hooks.restore()

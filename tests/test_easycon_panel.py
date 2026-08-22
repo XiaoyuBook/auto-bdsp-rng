@@ -366,6 +366,43 @@ def test_easycon_panel_restores_template_defaults_and_locates_invalid_line(easyc
     assert "第 1 行" in easycon_panel.log_view.toPlainText()
 
 
+def test_easycon_run_log_sink_maps_levels_and_cannot_break_ui(easycon_panel):
+    events: list[tuple[str, str]] = []
+    panel = EasyConPanel(run_log_sink=lambda level, message: events.append((level, message)))
+    events.clear()
+
+    panel._append_log("info", "普通")
+    panel._append_log("warn", "警告")
+    panel._append_log("error", "错误")
+    panel._append_log("stdout", "标准输出")
+    panel._append_log("stderr", "标准错误")
+
+    assert events == [
+        ("INFO", "普通"),
+        ("WARNING", "警告"),
+        ("ERROR", "错误"),
+        ("INFO", "标准输出"),
+        ("ERROR", "标准错误"),
+    ]
+
+    def broken_sink(_level: str, _message: str) -> None:
+        raise OSError("disk full")
+
+    panel._run_log_sink = broken_sink
+    panel._append_log("info", "仍写入界面")
+
+    assert "仍写入界面" in panel.log_view.toPlainText()
+
+
+def test_easycon_nonzero_cli_exit_logs_failure_as_error(easycon_panel):
+    events: list[tuple[str, str]] = []
+    easycon_panel._run_log_sink = lambda level, message: events.append((level, message))
+
+    easycon_panel._process_finished(7, None)
+
+    assert ("ERROR", "失败，exit code: 7") in events
+
+
 def select_bridge_mode(panel: EasyConPanel) -> None:
     index = panel.backend_mode.findData("bridge")
     assert index >= 0

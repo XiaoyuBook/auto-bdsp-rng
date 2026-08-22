@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -107,6 +108,7 @@ class AutoRngPanel(QWidget):
     ivCalculatorRequested = Signal()
     captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
     captureLog = Signal(str)  # 临时：后台线程日志输出
+    captureError = Signal(str)  # 临时：后台线程错误日志输出
     requestStatsCapture = Signal(object, object)  # 临时：后台请求主线程截图能力页(nature, characteristic)
 
     def __init__(
@@ -114,9 +116,11 @@ class AutoRngPanel(QWidget):
         parent: QWidget | None = None,
         script_dir: Path = SCRIPT_DIR,
         settings: QSettings | None = None,
+        run_log_sink: Callable[[str, str], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.script_dir = script_dir
+        self._run_log_sink = run_log_sink
         self._scripts: list[Path] = []
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoRngWorker | None = None
@@ -425,11 +429,18 @@ class AutoRngPanel(QWidget):
         self.status_badge.setText(phase_text)
         self.autoProgressChanged.emit(progress)
         if progress.log_message:
-            self.add_log(progress.log_message)
+            level = "ERROR" if progress.phase == AutoRngPhase.FAILED else "INFO"
+            self.add_log(progress.log_message, level=level)
 
-    def add_log(self, message: str) -> None:
+    def add_log(self, message: str, *, level: str = "INFO") -> None:
+        text = str(message)
+        if self._run_log_sink is not None:
+            try:
+                self._run_log_sink(level, text)
+            except Exception:
+                pass
         timestamp = datetime.now().strftime("%H:%M:%S")
-        lines = str(message).splitlines() or [""]
+        lines = text.splitlines() or [""]
         stamped = [
             line if _TIMESTAMP_RE.match(line) else f"[{timestamp}] {line}"
             for line in lines
@@ -529,7 +540,7 @@ class AutoRngPanel(QWidget):
             )
         except AutoScriptError as exc:
             self.set_phase_text("配置错误")
-            self.add_log(str(exc))
+            self.add_log(str(exc), level="WARNING")
             return
         self.startRequested.emit(config)
 
@@ -569,7 +580,7 @@ class AutoRngPanel(QWidget):
 
     def run_with_runner(self, runner: object) -> None:
         if self._runner_thread is not None:
-            self.add_log("自动流程已在运行")
+            self.add_log("自动流程已在运行", level="WARNING")
             return
         thread = QThread(self)
         worker = AutoRngWorker(runner)
@@ -597,7 +608,7 @@ class AutoRngPanel(QWidget):
 
     def _runner_failed(self, message: str) -> None:
         self.set_phase_text("失败")
-        self.add_log(message)
+        self.add_log(message, level="ERROR")
         self._clear_runner_thread()
 
     def _clear_runner_thread(self) -> None:

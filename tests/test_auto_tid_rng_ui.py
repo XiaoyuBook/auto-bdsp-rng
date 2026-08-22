@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QListView, QToolButton, QWidget
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
-from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase
+from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase, AutoTidRngProgress
 from auto_bdsp_rng.gen8_id import IDState8
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.ui import MainWindow
@@ -95,6 +95,32 @@ def test_auto_tid_panel_replaces_log_with_operable_id_table(app, tmp_path: Path)
     assert panel.log_view.isVisible() is False
     assert panel.copy_button.isEnabled()
     assert panel.export_button.isEnabled()
+
+
+def test_auto_tid_log_sink_receives_failure_once_and_cannot_break_ui(app, tmp_path: Path) -> None:
+    events: list[tuple[str, str]] = []
+    panel = AutoTidRngPanel(
+        script_dir=tmp_path,
+        run_log_sink=lambda level, message: events.append((level, message)),
+    )
+    progress = AutoTidRngProgress(phase=AutoTidRngPhase.FAILED, log_message="TID 流程失败")
+
+    panel.add_log("普通事件")
+    panel.apply_progress(progress)
+    panel._runner_finished(progress)
+
+    assert events == [
+        ("INFO", "普通事件"),
+        ("ERROR", "TID 流程失败"),
+    ]
+
+    def broken_sink(_level: str, _message: str) -> None:
+        raise OSError("disk full")
+
+    panel._run_log_sink = broken_sink
+    panel.add_log("仍写入界面")
+
+    assert "仍写入界面" in panel.log_view.toPlainText()
 
 
 def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_path: Path) -> None:

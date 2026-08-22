@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -8,24 +11,50 @@ from auto_bdsp_rng.resources import writable_app_data_dir
 
 
 SETTINGS_PATH = writable_app_data_dir("settings") / "config.json"
+_SETTINGS_LOCK = threading.RLock()
 
 
 def load_settings(path: Path | None = None) -> dict[str, Any]:
-    path = path or SETTINGS_PATH
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    with _SETTINGS_LOCK:
+        path = path or SETTINGS_PATH
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
 
 def save_settings(settings: dict[str, Any], path: Path | None = None) -> Path:
-    path = path or SETTINGS_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    with _SETTINGS_LOCK:
+        path = path or SETTINGS_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = json.dumps(settings, ensure_ascii=False, indent=2)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                dir=path.parent,
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    pass
+        return path
 
 
 def should_show_startup_notice(path: Path | None = None) -> bool:
@@ -33,6 +62,20 @@ def should_show_startup_notice(path: Path | None = None) -> bool:
 
 
 def set_startup_notice_acknowledged(acknowledged: bool, path: Path | None = None) -> Path:
-    settings = load_settings(path)
-    settings["startup_notice_acknowledged"] = bool(acknowledged)
-    return save_settings(settings, path)
+    with _SETTINGS_LOCK:
+        settings = load_settings(path)
+        settings["startup_notice_acknowledged"] = bool(acknowledged)
+        return save_settings(settings, path)
+
+
+def is_run_log_enabled(path: Path | None = None) -> bool:
+    return bool(load_settings(path).get("run_log_enabled", False))
+
+
+def set_run_log_enabled(enabled: bool, path: Path | None = None) -> bool:
+    with _SETTINGS_LOCK:
+        settings = load_settings(path)
+        actual = bool(enabled)
+        settings["run_log_enabled"] = actual
+        save_settings(settings, path)
+        return actual

@@ -270,6 +270,7 @@ def test_auto_tid_runner_retries_seed_script_when_display_tid_not_in_threshold(t
     for path in (seed_script, name_script):
         path.write_text("A 100\n", encoding="utf-8")
     scripts: list[str] = []
+    progress_messages: list[str] = []
     searches = [[], [IDState8(advances=42, tid=1, sid=100, tsv=0, display_tid=123456)]]
     clock = [10.0]
 
@@ -292,12 +293,14 @@ def test_auto_tid_runner_retries_seed_script_when_display_tid_not_in_threshold(t
             monotonic=lambda: clock[0],
             sleep=sleep,
         ),
+        progress_callback=lambda progress: progress_messages.append(progress.log_message),
     )
 
     runner.run(max_steps=10)
 
     assert runner.progress.phase == AutoTidRngPhase.COMPLETED
     assert scripts == ["BDSP测种.txt", "BDSP测种.txt", "取名.txt"]
+    assert progress_messages.count("阈值 300 帧内未命中目标 Display TID，重新运行测种脚本") == 1
 
 
 def test_auto_tid_runner_capture_start_only_skips_seed_script_for_first_cycle(tmp_path: Path) -> None:

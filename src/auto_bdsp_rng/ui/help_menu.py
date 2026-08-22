@@ -29,11 +29,17 @@ class HelpMenuController:
         open_url: Callable[[str], object] | None = None,
         copy_text: Callable[[str], object] | None = None,
         project_root: Path | None = None,
+        run_log_enabled: bool = False,
+        set_run_log_enabled: Callable[[bool], bool] | None = None,
+        open_run_log_dir: Callable[[], object] | None = None,
     ) -> None:
         self.window = window
         self.open_url = open_url or self._open_url
         self.copy_text = copy_text or self._copy_text
         self.project_root = project_root or app_base_dir()
+        self._run_log_enabled = bool(run_log_enabled)
+        self.set_run_log_enabled = set_run_log_enabled
+        self.open_run_log_dir = open_run_log_dir
 
     def install(self, button: QToolButton | QPushButton | None = None) -> QMenu:
         self.help_menu = self._build_menu(parent=button or self.window)
@@ -64,6 +70,20 @@ class HelpMenuController:
         self.changelog_action.triggered.connect(self.show_changelog)
         menu.addAction(self.changelog_action)
 
+        menu.addSeparator()
+        self.run_log_menu = QMenu("运行日志", self.window)
+        self.run_log_save_action = QAction("自动保存运行日志（保留 7 天）", self.window)
+        self.run_log_save_action.setCheckable(True)
+        self.run_log_save_action.setChecked(self._run_log_enabled)
+        self.run_log_save_action.triggered.connect(self._set_run_log_save_enabled)
+        self.run_log_menu.addAction(self.run_log_save_action)
+
+        self.open_run_log_dir_action = QAction("打开日志目录", self.window)
+        self.open_run_log_dir_action.triggered.connect(self._open_run_log_dir)
+        self.run_log_menu.addAction(self.open_run_log_dir_action)
+        menu.addMenu(self.run_log_menu)
+
+        menu.addSeparator()
         self.contact_menu = QMenu("作者联系", self.window)
         self.email_action = QAction(f"邮箱：{AUTHOR_EMAIL}", self.window)
         self.email_action.triggered.connect(self.copy_author_email)
@@ -80,7 +100,30 @@ class HelpMenuController:
         self.support_action = QAction("支持项目", self.window)
         self.support_action.triggered.connect(self.show_sponsor)
         self.contact_menu.addAction(self.support_action)
+        menu.addMenu(self.contact_menu)
         return menu
+
+    def _set_run_log_save_enabled(self, enabled: bool) -> None:
+        previous = self._run_log_enabled
+        try:
+            actual = (
+                bool(enabled)
+                if self.set_run_log_enabled is None
+                else bool(self.set_run_log_enabled(bool(enabled)))
+            )
+        except Exception:
+            actual = previous
+        self.set_run_log_state(actual)
+
+    def set_run_log_state(self, enabled: bool) -> None:
+        self._run_log_enabled = bool(enabled)
+        self.run_log_save_action.blockSignals(True)
+        self.run_log_save_action.setChecked(self._run_log_enabled)
+        self.run_log_save_action.blockSignals(False)
+
+    def _open_run_log_dir(self) -> None:
+        if self.open_run_log_dir is not None:
+            self.open_run_log_dir()
 
     def copy_author_email(self) -> None:
         self.copy_text(AUTHOR_EMAIL)

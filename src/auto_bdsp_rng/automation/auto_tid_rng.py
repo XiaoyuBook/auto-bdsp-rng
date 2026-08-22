@@ -414,7 +414,7 @@ class AutoTidRngRunner:
                 current_advances=seed.current_advances,
                 id_states=tuple(states),
             )
-            self._loop_or_complete(message)
+            self._loop_or_complete("")
             return
         trigger = target.advances - int(self.config.delay)
         self._target = target

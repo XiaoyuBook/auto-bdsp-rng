@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
@@ -395,8 +396,13 @@ class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
     capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        run_log_sink: Callable[[str, str], None] | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._run_log_sink = run_log_sink
         self.config = load_config()
         self._preferred_last_port = self.config.last_port
         self.installation = EasyConInstallation(path=None, error="未检测")
@@ -1538,7 +1544,8 @@ class EasyConPanel(QWidget):
         self.run_button.setText("运行脚本")
         self.easycon_status.showMessage(status)
         self.task_state_text = "已完成" if status.startswith("已完成") else status
-        self._append_log("info", status)
+        log_level = "error" if status.startswith("失败") else "warn" if status.startswith("已中止") else "info"
+        self._append_log(log_level, status)
         self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
         if exit_code == 0 and status.startswith("已完成"):
             self._prune_successful_generated_scripts()
@@ -1660,6 +1667,17 @@ class EasyConPanel(QWidget):
         self._save_config_from_ui()
 
     def _append_log(self, level: str, message: str) -> None:
+        text = str(message)
+        sink_level = {
+            "warn": "WARNING",
+            "error": "ERROR",
+            "stderr": "ERROR",
+        }.get(level, "INFO")
+        if self._run_log_sink is not None:
+            try:
+                self._run_log_sink(sink_level, text)
+            except Exception:
+                pass
         color = {
             "info": "#E7ECE9",
             "warn": "#E6D79B",
@@ -1668,7 +1686,7 @@ class EasyConPanel(QWidget):
             "stderr": "#FFB1A8",
         }.get(level, "#E7ECE9")
         ts = datetime.now().strftime("%H:%M:%S")
-        for line in message.splitlines() or [""]:
+        for line in text.splitlines() or [""]:
             self.log_view.append(f'<span style="color:{color}">[{ts}] {line}</span>')
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
 
