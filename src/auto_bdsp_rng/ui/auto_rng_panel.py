@@ -403,7 +403,12 @@ class AutoRngPanel(QWidget):
         layout.addWidget(self.advance_script_combo, 0, 3)
         layout.addWidget(QLabel("撞闪脚本"), 1, 0)
         layout.addWidget(self.hit_script_combo, 1, 1)
-        layout.addWidget(self.escape_continue_check, 1, 2)
+        layout.addWidget(
+            self.escape_continue_check,
+            1,
+            2,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
         layout.addWidget(self.escape_script_combo, 1, 3)
         layout.addWidget(QLabel("过场脚本"), 2, 0)
         layout.addWidget(self.exit_script_combo, 2, 1)
