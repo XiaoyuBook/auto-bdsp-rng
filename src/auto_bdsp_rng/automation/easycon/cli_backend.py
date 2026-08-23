@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -28,11 +29,15 @@ class CliEasyConBackend(EasyConBackend):
     def __init__(self, installation: EasyConInstallation | None = None) -> None:
         self._installation = installation
         self._status = EasyConStatus.UNCONFIGURED
+        self._process_lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
+        self._cancelled_process: subprocess.Popen[str] | None = None
 
     def discover(self) -> EasyConInstallation:
         self._installation = self._installation or discover_ezcon()
-        self._status = EasyConStatus.READY if self._installation.is_available else EasyConStatus.MISSING_EZCON
+        with self._process_lock:
+            if self._process is None:
+                self._status = EasyConStatus.READY if self._installation.is_available else EasyConStatus.MISSING_EZCON
         return self._installation
 
     def version(self) -> str | None:
@@ -42,7 +47,8 @@ class CliEasyConBackend(EasyConBackend):
         return list_ports(self.discover())
 
     def status(self) -> EasyConStatus:
-        return self._status
+        with self._process_lock:
+            return self._status
 
     def run_script(self, task: EasyConRunTask) -> EasyConRunResult:
         installation = self.discover()
@@ -51,31 +57,60 @@ class CliEasyConBackend(EasyConBackend):
             raise RuntimeError("ezcon.exe is not configured")
         port = "mock" if task.mock else task.port
         started_at = datetime.now()
-        self._status = EasyConStatus.RUNNING
-        completed = subprocess.run(
-            [str(ezcon_path), "run", str(task.script_path), "-p", port],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            **no_window_subprocess_kwargs(),
-        )
+        with self._process_lock:
+            if self._process is not None:
+                raise RuntimeError("已有 CLI 脚本正在运行")
+            try:
+                process = subprocess.Popen(
+                    [str(ezcon_path), "run", str(task.script_path), "-p", port],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    **no_window_subprocess_kwargs(),
+                )
+            except Exception:
+                self._status = EasyConStatus.FAILED
+                raise
+            self._process = process
+            self._cancelled_process = None
+            self._status = EasyConStatus.RUNNING
+        try:
+            stdout, stderr = process.communicate()
+        except BaseException:
+            with self._process_lock:
+                cancelled = self._cancelled_process is process
+                if self._process is process:
+                    self._process = None
+                if cancelled:
+                    self._cancelled_process = None
+                self._status = EasyConStatus.CANCELLED if cancelled else EasyConStatus.FAILED
+            raise
         ended_at = datetime.now()
-        failure_type = classify_cli_failure(completed.stdout, completed.stderr, completed.returncode)
-        exit_code = completed.returncode
-        if completed.returncode == 0 and failure_type != "completed":
+        failure_type = classify_cli_failure(stdout, stderr, process.returncode)
+        exit_code = process.returncode
+        if process.returncode == 0 and failure_type != "completed":
             exit_code = 2 if failure_type == "script_compile_failed" else 1
-        self._status = EasyConStatus.COMPLETED if failure_type == "completed" else EasyConStatus.FAILED
+        result_status = EasyConStatus.COMPLETED if failure_type == "completed" else EasyConStatus.FAILED
+        with self._process_lock:
+            cancelled = self._cancelled_process is process
+            if self._process is process:
+                self._process = None
+            if cancelled:
+                self._cancelled_process = None
+                result_status = EasyConStatus.CANCELLED
+                exit_code = 130
+            self._status = result_status
         return EasyConRunResult(
-            status=self._status,
+            status=result_status,
             exit_code=exit_code,
             started_at=started_at,
             ended_at=ended_at,
             script_path=task.script_path,
             port=port,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            stdout=stdout,
+            stderr=stderr,
         )
 
     def run_script_text(self, script_text: str, name: str | None = None, *, port: str = "", high_resolution: bool = False) -> EasyConRunResult:
@@ -117,8 +152,12 @@ class CliEasyConBackend(EasyConBackend):
 
     def stop_current_script(self) -> None:
         """终止正在运行的 ezcon.exe 子进程。"""
-        if self._process is not None and self._process.poll() is None:
-            self._process.terminate()
+        with self._process_lock:
+            process = self._process
+            if process is None or process.poll() is not None:
+                return
+            process.terminate()
+            self._cancelled_process = process
             self._status = EasyConStatus.CANCELLED
 
     def stop(self) -> None:

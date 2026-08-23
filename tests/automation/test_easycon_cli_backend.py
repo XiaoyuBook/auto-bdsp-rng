@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+import threading
+import time
 from pathlib import Path
 
 from auto_bdsp_rng.automation.easycon import (
@@ -58,6 +61,65 @@ def test_cli_backend_classifies_compile_failure_and_line(tmp_path):
     assert result.exit_code == 2
     assert classify_cli_failure(result.stdout, result.stderr, result.exit_code) == "script_compile_failed"
     assert extract_compile_error_line(result.stdout, result.stderr) == 2
+
+
+def test_cli_backend_stop_current_script_terminates_running_process(tmp_path, monkeypatch):
+    driver = tmp_path / "run"
+    driver.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                "import time",
+                "Path(sys.argv[1] + '.started').write_text('ready', encoding='utf-8')",
+                "print('fake ezcon started', flush=True)",
+                "time.sleep(30)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    script = tmp_path / "long-running.ecs"
+    script.write_text("WAIT 30000\n", encoding="utf-8")
+    started_marker = Path(f"{script}.started")
+    monkeypatch.chdir(tmp_path)
+    backend = CliEasyConBackend(
+        EasyConInstallation(path=Path(sys.executable), version="fake", source="test")
+    )
+    results = []
+    errors = []
+
+    def run_script() -> None:
+        try:
+            results.append(backend.run_script(EasyConRunTask(script_path=script, port="", mock=True)))
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run_script, daemon=True)
+    worker.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while not started_marker.exists() and time.monotonic() < deadline:
+            if not worker.is_alive():
+                break
+            time.sleep(0.01)
+        assert started_marker.exists()
+        assert backend.status() == EasyConStatus.RUNNING
+
+        backend.stop_current_script()
+        worker.join(timeout=5.0)
+
+        assert not worker.is_alive()
+        assert errors == []
+        assert len(results) == 1
+        assert results[0].status == EasyConStatus.CANCELLED
+        assert results[0].exit_code == 130
+        assert "fake ezcon started" in results[0].stdout
+        assert backend.status() == EasyConStatus.CANCELLED
+    finally:
+        process = backend._process
+        if process is not None and process.poll() is None:
+            process.kill()
+        worker.join(timeout=5.0)
 
 
 def test_cli_notice_never_claims_long_lived_connection():
