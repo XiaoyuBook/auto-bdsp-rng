@@ -386,6 +386,7 @@ class AutoRngPanel(QWidget):
         self.escape_continue_check = QCheckBox("逃跑续搜")
         self.escape_continue_check.setFixedHeight(34)
         self.escape_continue_check.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.escape_continue_check.setStyleSheet("background: transparent;")
         self.escape_continue_check.setToolTip(
             "OCR 明确判定未出闪，且当前搜索范围内仍有后续候选时，运行所选逃跑脚本；\n"
             "脚本完成后校正当前位置，并继续选择最近的可达目标。\n"

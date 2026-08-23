@@ -605,6 +605,7 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     assert layout.itemAtPosition(2, 3).widget() is panel.reverse_script_combo
     assert panel.escape_continue_check.text() == "逃跑续搜"
     assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.RightToLeft
+    assert "background: transparent" in panel.escape_continue_check.styleSheet()
     assert layout.itemAtPosition(1, 2).alignment() == (
         Qt.AlignmentFlag.AlignLeft
         | Qt.AlignmentFlag.AlignVCenter
