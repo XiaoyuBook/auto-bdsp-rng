@@ -269,6 +269,20 @@ class HistoryPanel(QWidget):
             self._ts(f"本轮结果: 未出闪  间隔: {interval_text}{delay_text}")
         self._sep_thin()
 
+    def attempt_result(
+        self,
+        loop_index: int,
+        attempt_index: int,
+        interval: float | None,
+        used_delay: int | None = None,
+    ) -> None:
+        interval_text = f"{interval:.3f}s" if interval is not None else "-"
+        delay_text = f"  使用 delay: {used_delay}" if used_delay is not None else ""
+        self._sep_thin()
+        self._ts(f"第 {loop_index} 轮 / 第 {attempt_index} 次撞闪: 未出闪  间隔: {interval_text}{delay_text}")
+        self._ts("准备运行逃跑脚本，完成后继续搜索本轮后续候选")
+        self._sep_thin()
+
     def reverse_lookup_results(
         self, candidates: list[object], characteristic: str | None = None,
         delays: list[int] | None = None, ocr_stats: dict | None = None,

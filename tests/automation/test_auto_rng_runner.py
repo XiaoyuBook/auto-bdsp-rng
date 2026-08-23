@@ -1458,6 +1458,642 @@ def test_runner_uses_hit_monitor_and_restarts_seed_script_when_not_shiny(tmp_pat
     assert runner.progress.loop_index == 2
 
 
+def _write_escape_runner_scripts(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    hit_script = tmp_path / "hit.txt"
+    escape_script = tmp_path / "escape.txt"
+    reverse_script = tmp_path / "reverse.txt"
+    exit_script = tmp_path / "exit.txt"
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    escape_script.write_text("ESCAPE\n", encoding="utf-8")
+    reverse_script.write_text("REVERSE\n", encoding="utf-8")
+    exit_script.write_text("EXIT\n", encoding="utf-8")
+    return hit_script, escape_script, reverse_script, exit_script
+
+
+def test_runner_escape_continue_can_escape_twice_and_target_third_candidate_in_same_loop(tmp_path):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    first = FakeState(1300, ec=0x1001, pid=0x2001)
+    second = FakeState(1400, ec=0x1002, pid=0x2002)
+    third = FakeState(1500, ec=0x1003, pid=0x2003)
+    events: list[str] = []
+    hit_checks: list[str] = []
+    logs: list[str] = []
+    reidentified_advances = iter((100, 200))
+
+    def search_candidates(seed: AutoRngSeedResult) -> list[FakeState]:
+        events.append(f"search:{seed.current_advances}")
+        return [first, second, third]
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: events.append("capture")
+            or AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=search_candidates,
+            reidentify=lambda _seed: events.append("reidentify")
+            or AutoRngSeedResult(seed="seed-1", current_advances=next(reidentified_advances), npc=0),
+            run_script_text=lambda _text, name: events.append(f"script:{name}"),
+            run_hit_script_with_shiny_check=lambda _text, name, _threshold: hit_checks.append(name)
+            or events.append("hit")
+            or ShinyCheckResult(is_shiny=False, interval_seconds=2.3),
+            monotonic=lambda: 10.0,
+        ),
+        log_callback=logs.append,
+    )
+
+    runner.run(max_steps=7)
+
+    assert events == [
+        "capture",
+        "search:0",
+        "hit",
+        f"script:{escape_script.name}",
+        "reidentify",
+        "search:100",
+    ]
+    assert hit_checks == [hit_script.name]
+    assert runner.progress.phase == AutoRngPhase.DECIDE_ADVANCE
+    assert runner.progress.loop_index == 1
+    assert runner.progress.locked_target is not None
+    assert runner.progress.locked_target.raw_target_advances == second.advances
+    assert any("第 1 轮 / 第 1 次" in message for message in logs)
+
+    runner.run(max_steps=5)
+
+    assert hit_checks == [hit_script.name, hit_script.name]
+    assert events.count(f"script:{escape_script.name}") == 2
+    assert events[-2:] == ["reidentify", "search:200"]
+    assert runner.progress.phase == AutoRngPhase.DECIDE_ADVANCE
+    assert runner.progress.loop_index == 1
+    assert runner.progress.locked_target is not None
+    assert runner.progress.locked_target.raw_target_advances == third.advances
+    assert any("第 1 轮 / 第 2 次" in message for message in logs)
+    assert any("当前搜索仍有 1 个更晚候选" in message for message in logs)
+
+
+@pytest.mark.parametrize(
+    ("escape_continue", "candidates"),
+    [
+        (
+            False,
+            [FakeState(1300, ec=0x1101, pid=0x2101), FakeState(1500, ec=0x1102, pid=0x2102)],
+        ),
+        (True, [FakeState(1300, ec=0x1201, pid=0x2201)]),
+    ],
+    ids=["feature-disabled", "no-later-candidate"],
+)
+def test_runner_keeps_old_non_shiny_behavior_without_escape_candidate(
+    tmp_path,
+    escape_continue,
+    candidates,
+):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    scripts: list[str] = []
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=escape_continue,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: candidates,
+            run_script_text=lambda _text, name: scripts.append(name),
+            run_hit_script_with_shiny_check=lambda _text, _name, _threshold: ShinyCheckResult(
+                is_shiny=False,
+                interval_seconds=2.3,
+            ),
+            monotonic=lambda: 10.0,
+        ),
+    )
+
+    runner.run(max_steps=5)
+
+    assert scripts == []
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+    assert "未出闪" in runner.progress.log_message
+
+
+def test_runner_escape_continue_stops_when_shiny_interval_is_unknown(tmp_path):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    scripts: list[str] = []
+    candidates = [
+        FakeState(1300, ec=0x1301, pid=0x2301),
+        FakeState(1500, ec=0x1302, pid=0x2302),
+    ]
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: candidates,
+            run_script_text=lambda _text, name: scripts.append(name),
+            run_hit_script_with_shiny_check=lambda _text, _name, _threshold: ShinyCheckResult(
+                is_shiny=False,
+                interval_seconds=None,
+            ),
+            monotonic=lambda: 10.0,
+        ),
+    )
+
+    runner.run(max_steps=5)
+
+    assert scripts == []
+    assert runner.progress.phase == AutoRngPhase.FAILED
+    assert "人工确认" in runner.progress.log_message
+
+
+def test_runner_escape_continue_takes_priority_over_auto_reverse_with_later_candidate(tmp_path):
+    hit_script, escape_script, reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    scripts: list[str] = []
+    reverse_calls: list[int] = []
+    candidates = [
+        FakeState(1300, ec=0x1401, pid=0x2401),
+        FakeState(1500, ec=0x1402, pid=0x2402),
+    ]
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            reverse_script_path=reverse_script,
+            escape_continue=True,
+            auto_reverse=True,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: candidates,
+            reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=150, npc=0),
+            run_script_text=lambda _text, name: scripts.append(name),
+            run_hit_script_with_shiny_check=lambda _text, _name, _threshold: ShinyCheckResult(
+                is_shiny=False,
+                interval_seconds=2.3,
+            ),
+            run_reverse_lookup=lambda _seed, target: reverse_calls.append(target.raw_target_advances),
+            monotonic=lambda: 10.0,
+        ),
+    )
+
+    runner.run(max_steps=5)
+
+    assert scripts == [escape_script.name]
+    assert reverse_calls == []
+    assert runner.progress.phase == AutoRngPhase.REIDENTIFY
+    assert runner.progress.loop_index == 1
+
+
+def test_runner_escape_continue_falls_back_to_reverse_lookup_without_later_candidate(tmp_path):
+    hit_script, escape_script, reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    scripts: list[str] = []
+    reverse_calls: list[int] = []
+    only_target = FakeState(1300, ec=0x1501, pid=0x2501)
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            reverse_script_path=reverse_script,
+            escape_continue=True,
+            auto_reverse=True,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: [only_target],
+            run_script_text=lambda _text, name: scripts.append(name),
+            run_hit_script_with_shiny_check=lambda _text, _name, _threshold: ShinyCheckResult(
+                is_shiny=False,
+                interval_seconds=2.3,
+            ),
+            run_reverse_lookup=lambda _seed, target: reverse_calls.append(target.raw_target_advances),
+            monotonic=lambda: 10.0,
+        ),
+    )
+
+    runner.run(max_steps=5)
+
+    assert scripts == []
+    assert reverse_calls == [only_target.advances]
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+
+
+def test_runner_escape_clears_old_advance_and_exit_state_before_reidentify(tmp_path):
+    hit_script, escape_script, _reverse_script, exit_script = _write_escape_runner_scripts(tmp_path)
+    first = AutoRngTarget(raw_target_advances=1200, state=FakeState(1200, ec=0x1601, pid=0x2601))
+    second = FakeState(1500, ec=0x1602, pid=0x2602)
+    reidentify_inputs: list[AutoRngSeedResult] = []
+    scripts: list[str] = []
+
+    def reidentify(seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        reidentify_inputs.append(seed)
+        return AutoRngSeedResult(seed=seed.seed, current_advances=1000, npc=0)
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            exit_script_path=exit_script,
+            escape_continue=True,
+            fixed_delay=0,
+            max_wait_frames=300,
+            reseeding_threshold=1000,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            search_candidates=lambda _seed: [second],
+            reidentify=reidentify,
+            run_script_text=lambda _text, name: scripts.append(name),
+            monotonic=lambda: 10.0,
+        ),
+    )
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.RUN_ESCAPE_SCRIPT,
+        loop_index=1,
+        locked_target=first,
+        raw_target_advances=first.raw_target_advances,
+        trigger_advances=1111,
+        remaining_to_trigger=89,
+        final_flash_frames=60,
+    )
+    runner._completed_loops = 1
+    runner._cycle_started = True
+    runner._seed_result = AutoRngSeedResult(
+        seed="seed-1",
+        current_advances=1000,
+        npc=0,
+        expected_advances_hint=1321,
+        after_exit_reseed=True,
+    )
+    runner._locked_target = first
+    runner._requested_advances = 321
+    runner._reserved_exit_reseed_pending = True
+    runner._exit_reseed_done = True
+
+    runner.run(max_steps=1)
+
+    assert scripts == [escape_script.name]
+    assert runner.progress.phase == AutoRngPhase.REIDENTIFY
+    assert runner.progress.locked_target is None
+    assert runner.progress.raw_target_advances is None
+    assert runner.progress.trigger_advances is None
+    assert runner.progress.remaining_to_trigger is None
+    assert runner.progress.final_flash_frames is None
+    assert runner.progress.current_advances == 1000
+    assert runner.progress.last_script_path == escape_script
+    assert runner._requested_advances == 0
+    assert runner._reserved_exit_reseed_pending is False
+    assert runner._exit_reseed_done is False
+
+    runner.run(max_steps=3)
+
+    assert len(reidentify_inputs) == 1
+    assert reidentify_inputs[0].expected_advances_hint is None
+    assert reidentify_inputs[0].after_exit_reseed is False
+    assert runner._requested_advances == 0
+    assert runner._reserved_exit_reseed_pending is False
+    assert runner._exit_reseed_done is False
+    assert runner._seed_result is not None
+    assert runner._seed_result.after_exit_reseed is False
+    assert runner.progress.phase == AutoRngPhase.EXIT_RESEED
+    assert runner.progress.locked_target is not None
+    assert runner.progress.locked_target.raw_target_advances == second.advances
+
+
+def test_runner_escape_script_error_stops_before_reidentify(tmp_path):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    target = AutoRngTarget(raw_target_advances=1300, state=FakeState(1300))
+    reidentify_calls: list[AutoRngSeedResult] = []
+
+    def fail_escape(_text: str, _name: str) -> None:
+        raise RuntimeError("escape failed")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+        ),
+        services=AutoRngServices(
+            reidentify=lambda seed: reidentify_calls.append(seed) or seed,
+            run_script_text=fail_escape,
+        ),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.RUN_ESCAPE_SCRIPT, loop_index=1, locked_target=target)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+    runner._locked_target = target
+    runner._completed_loops = 1
+
+    with pytest.raises(RuntimeError, match="escape failed"):
+        runner.run(max_steps=1)
+
+    assert reidentify_calls == []
+    assert runner.progress.phase == AutoRngPhase.RUN_ESCAPE_SCRIPT
+
+
+def test_runner_treats_escape_script_error_after_stop_as_cancelled(tmp_path):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    target = AutoRngTarget(raw_target_advances=1300, state=FakeState(1300))
+    reidentify_calls: list[AutoRngSeedResult] = []
+    runner: AutoRngRunner | None = None
+
+    def cancel_escape(_text: str, _name: str) -> None:
+        assert runner is not None
+        runner.stop()
+        raise RuntimeError("script cancelled")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+        ),
+        services=AutoRngServices(
+            reidentify=lambda seed: reidentify_calls.append(seed) or seed,
+            run_script_text=cancel_escape,
+        ),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.RUN_ESCAPE_SCRIPT, loop_index=1, locked_target=target)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+    runner._locked_target = target
+    runner._completed_loops = 1
+
+    progress = runner.run(max_steps=1)
+
+    assert progress.phase == AutoRngPhase.IDLE
+    assert progress.log_message == "已请求停止自动流程"
+    assert reidentify_calls == []
+
+
+def test_runner_escape_reidentify_retries_once_then_continues(tmp_path):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    target = AutoRngTarget(raw_target_advances=1300, state=FakeState(1300))
+    attempts = 0
+    logs: list[str] = []
+
+    def reidentify(seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary failure")
+        return AutoRngSeedResult(seed=seed.seed, current_advances=200)
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+        ),
+        services=AutoRngServices(
+            reidentify=reidentify,
+            run_script_text=lambda _text, _name: None,
+        ),
+        log_callback=logs.append,
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.RUN_ESCAPE_SCRIPT, loop_index=1, locked_target=target)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+    runner._locked_target = target
+    runner._completed_loops = 1
+
+    runner.run(max_steps=2)
+
+    assert attempts == 2
+    assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
+    assert runner.progress.current_advances == 200
+    assert any("校正 第 1 次失败" in message for message in logs)
+
+
+def test_runner_stop_during_escape_reidentify_does_not_retry_or_reseed(tmp_path):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    seed_script = tmp_path / "seed.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    target = AutoRngTarget(raw_target_advances=1300, state=FakeState(1300))
+    scripts: list[str] = []
+    attempts = 0
+    runner: AutoRngRunner | None = None
+
+    def reidentify(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
+        assert runner is not None
+        runner.stop()
+        raise RuntimeError("Blink capture stopped")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+        ),
+        services=AutoRngServices(
+            reidentify=reidentify,
+            run_script_text=lambda _text, name: scripts.append(name),
+        ),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.RUN_ESCAPE_SCRIPT, loop_index=1, locked_target=target)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+    runner._locked_target = target
+    runner._completed_loops = 1
+
+    progress = runner.run(max_steps=3)
+
+    assert attempts == 1
+    assert scripts == [escape_script.name]
+    assert progress.phase == AutoRngPhase.IDLE
+    assert progress.log_message == "已请求停止自动流程"
+
+
+def test_runner_escape_preserves_active_sync_lead_and_clears_pending_switch(tmp_path):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    target = AutoRngTarget(raw_target_advances=1300, state=FakeState(1300))
+    sync_searches: list[tuple[int, int | None]] = []
+
+    def search_sync(_seed: AutoRngSeedResult, lead: int, nature: int | None) -> list[FakeState]:
+        sync_searches.append((lead, nature))
+        return [FakeState(1500, ec=0x1801, pid=0x2801)]
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+            sync_mode=2,
+            sync_nature="勤奋",
+            fixed_delay=100,
+        ),
+        services=AutoRngServices(
+            reidentify=lambda seed: AutoRngSeedResult(seed=seed.seed, current_advances=200),
+            search_sync=search_sync,
+            run_script_text=lambda _text, _name: None,
+        ),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.RUN_ESCAPE_SCRIPT, loop_index=1, locked_target=target)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+    runner._locked_target = target
+    runner._completed_loops = 1
+    runner._is_sync_active = True
+    runner._sync_initial = True
+    runner._need_sync_switch = True
+
+    runner.run(max_steps=3)
+
+    assert sync_searches == [(0, 0)]
+    assert runner._is_sync_active is True
+    assert runner._sync_initial is True
+    assert runner._need_sync_switch is False
+    assert runner.progress.locked_target is not None
+    assert runner.progress.locked_target.sync_source == "sync"
+
+
+def test_runner_escape_resets_exit_state_and_runs_exit_script_then_exit_reidentify(tmp_path):
+    hit_script, escape_script, _reverse_script, exit_script = _write_escape_runner_scripts(tmp_path)
+    previous_target = AutoRngTarget(raw_target_advances=1300, state=FakeState(1300))
+    next_target = FakeState(200, ec=0x1901, pid=0x2901)
+    events: list[str] = []
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            exit_script_path=exit_script,
+            escape_continue=True,
+            fixed_delay=0,
+            max_wait_frames=300,
+            reseeding_threshold=100,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: events.append("capture_seed")
+            or AutoRngSeedResult(seed="new-seed", current_advances=0),
+            reidentify=lambda seed: events.append("reidentify")
+            or AutoRngSeedResult(seed=seed.seed, current_advances=100),
+            reidentify_exit=lambda seed: events.append("reidentify_exit")
+            or AutoRngSeedResult(seed=seed.seed, current_advances=120),
+            search_candidates=lambda _seed: [next_target],
+            run_script_text=lambda _text, name: events.append(f"script:{name}"),
+        ),
+    )
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.RUN_ESCAPE_SCRIPT,
+        loop_index=1,
+        locked_target=previous_target,
+    )
+    runner._seed_result = AutoRngSeedResult(
+        seed="seed-1",
+        current_advances=50,
+        after_exit_reseed=True,
+        advance_mode="timeline",
+        timing_seed=SeedState32(1, 2, 3, 4),
+    )
+    runner._locked_target = previous_target
+    runner._completed_loops = 1
+    runner._exit_reseed_done = True
+
+    runner.run(max_steps=5)
+
+    assert events == [
+        f"script:{escape_script.name}",
+        "reidentify",
+        f"script:{exit_script.name}",
+        "reidentify_exit",
+    ]
+    assert "capture_seed" not in events
+    assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
+    assert runner._seed_result is not None
+    assert runner._seed_result.after_exit_reseed is True
+    assert runner._exit_reseed_done is True
+    assert AutoRngPhase.EXIT_RESEED.value == "运行过场脚本"
+    assert "过场校正完成" in runner.progress.log_message
+
+
+@pytest.mark.parametrize(
+    ("loop_mode", "loop_count", "expected_phase"),
+    [
+        ("single", 1, AutoRngPhase.COMPLETED),
+        ("count", 2, AutoRngPhase.RUN_SEED_SCRIPT),
+        ("infinite", 1, AutoRngPhase.RUN_SEED_SCRIPT),
+    ],
+)
+def test_runner_escape_reidentify_with_no_reachable_candidate_ends_current_loop(
+    tmp_path,
+    loop_mode,
+    loop_count,
+    expected_phase,
+):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    scripts: list[str] = []
+    candidates = [
+        FakeState(1300, ec=0x1701, pid=0x2701),
+        FakeState(1500, ec=0x1702, pid=0x2702),
+    ]
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            loop_mode=loop_mode,
+            loop_count=loop_count,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: candidates,
+            reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=5000, npc=0),
+            run_script_text=lambda _text, name: scripts.append(name),
+            run_hit_script_with_shiny_check=lambda _text, _name, _threshold: ShinyCheckResult(
+                is_shiny=False,
+                interval_seconds=2.3,
+            ),
+            monotonic=lambda: 10.0,
+        ),
+    )
+
+    runner.run(max_steps=7)
+
+    assert scripts == [escape_script.name]
+    assert runner.progress.phase == expected_phase
+    assert runner.progress.loop_index == 1
+
+
 def test_runner_stops_after_hit_monitor_reports_shiny(tmp_path):
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"

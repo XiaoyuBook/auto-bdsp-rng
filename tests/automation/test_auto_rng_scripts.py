@@ -11,6 +11,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     prepare_advance_script_text,
     prepare_hit_script_text,
+    validate_auto_scripts,
 )
 
 
@@ -49,6 +50,61 @@ def test_prepare_advance_script_fails_when_target_parameter_missing():
 def test_prepare_hit_script_fails_when_flash_parameter_missing():
     with pytest.raises(AutoScriptError, match=AUTO_HIT_PARAMETER):
         prepare_hit_script_text("_目标帧数 = 900\n", 100)
+
+
+def test_validate_auto_scripts_requires_escape_script_when_escape_continue_is_enabled(tmp_path):
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 100\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+
+    with pytest.raises(AutoScriptError, match="逃跑脚本"):
+        validate_auto_scripts(
+            None,
+            advance_script,
+            hit_script,
+            escape_continue=True,
+            shiny_threshold_seconds=2.8,
+        )
+
+
+@pytest.mark.parametrize("threshold", [None, 0.0, -1.0, float("nan")])
+def test_validate_auto_scripts_requires_positive_shiny_threshold_for_escape_continue(tmp_path, threshold):
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    escape_script = tmp_path / "escape.txt"
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 100\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    escape_script.write_text("B 100\n", encoding="utf-8")
+
+    with pytest.raises(AutoScriptError, match="闪光阈值"):
+        validate_auto_scripts(
+            None,
+            advance_script,
+            hit_script,
+            escape_continue=True,
+            escape_script_path=escape_script,
+            shiny_threshold_seconds=threshold,
+        )
+
+
+def test_validate_auto_scripts_reads_enabled_escape_script_as_utf8(tmp_path):
+    advance_script = tmp_path / "advance.txt"
+    hit_script = tmp_path / "hit.txt"
+    escape_script = tmp_path / "escape.txt"
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 100\n", encoding="utf-8")
+    hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
+    escape_script.write_bytes(b"\xff")
+
+    with pytest.raises(AutoScriptError, match="UTF-8"):
+        validate_auto_scripts(
+            None,
+            advance_script,
+            hit_script,
+            escape_continue=True,
+            escape_script_path=escape_script,
+            shiny_threshold_seconds=2.8,
+        )
 
 
 def test_bundled_shaymin_script_does_not_repeat_flash_frame_wait():

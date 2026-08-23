@@ -3786,6 +3786,20 @@ class MainWindow(QMainWindow):
                 "历史记录",
                 f"本轮结果：{'出闪' if is_shiny else '未出闪'}；间隔 {interval_text}；delay {delay_text}",
             )
+        elif event == "attempt_result" and len(values) >= 6:
+            loop_index = int(values[0])
+            attempt_index = int(values[1])
+            interval = float(values[3]) if values[3] is not None else None
+            trigger = int(values[4]) if values[4] is not None else None
+            used_delay = int(values[5]) if values[5] is not None else None
+            h.attempt_result(loop_index, attempt_index, interval, used_delay)
+            self._write_run_log(
+                "历史记录",
+                f"第 {loop_index} 轮 / 第 {attempt_index} 次撞闪未出闪；"
+                f"间隔 {interval if interval is not None else '-'}；"
+                f"启动 Adv {trigger if trigger is not None else '-'}；"
+                f"delay {used_delay if used_delay is not None else '-'}",
+            )
         elif event == "reverse_lookup_results" and len(values) >= 1:
             chara = str(values[1]) if len(values) >= 2 and values[1] is not None else None
             delays = list(values[2]) if len(values) >= 3 and values[2] is not None else None
@@ -4415,7 +4429,7 @@ class MainWindow(QMainWindow):
             except TimeoutError:
                 stop_current_script_service()
                 script_thread.join(timeout=5.0)
-                self.auto_rng_tab.captureLog.emit("OCR 闪符检测超时，本轮判定为未出闪")
+                self.auto_rng_tab.captureLog.emit("OCR 闪符检测超时，判定结果未知")
                 return ShinyCheckResult(is_shiny=False)
             except Exception:
                 stop_current_script_service()
@@ -4425,6 +4439,8 @@ class MainWindow(QMainWindow):
             if not is_shiny:
                 stop_current_script_service()
             script_thread.join(timeout=5.0)
+            if not is_shiny and config.escape_continue and script_thread.is_alive():
+                raise RuntimeError("撞闪脚本停止超时，未启动逃跑脚本")
             if errors and is_shiny:
                 raise errors[0]
             return ShinyCheckResult(is_shiny=is_shiny, interval_seconds=timing.interval_seconds)

@@ -74,6 +74,10 @@ def validate_auto_scripts(
     seed_script_path: Path | None,
     advance_script_path: Path | None,
     hit_script_path: Path | None,
+    *,
+    escape_continue: bool = False,
+    escape_script_path: Path | None = None,
+    shiny_threshold_seconds: float | None = None,
 ) -> None:
     if seed_script_path is not None:
         _read_utf8(seed_script_path)
@@ -83,6 +87,12 @@ def validate_auto_scripts(
         raise AutoScriptError("请选择撞闪脚本")
     require_parameter(advance_script_path, AUTO_ADVANCE_PARAMETER)
     require_integer_parameter(hit_script_path, AUTO_HIT_PARAMETER)
+    if escape_continue:
+        if shiny_threshold_seconds is None or not (shiny_threshold_seconds > 0):
+            raise AutoScriptError("启用逃跑续搜后必须将闪光阈值设置为大于 0")
+        if escape_script_path is None:
+            raise AutoScriptError("启用逃跑续搜后必须选择逃跑脚本")
+        _read_utf8(escape_script_path)
 
 
 def read_advance_script_offset(path: Path) -> int:

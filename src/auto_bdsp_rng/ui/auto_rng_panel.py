@@ -68,6 +68,16 @@ class _CopyableTextEdit(QPlainTextEdit):
         menu.exec(event.globalPos())
 
 
+class _RefreshingScriptComboBox(QComboBox):
+    def __init__(self, before_popup: Callable[[], None], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._before_popup = before_popup
+
+    def showPopup(self) -> None:  # noqa: N802
+        self._before_popup()
+        super().showPopup()
+
+
 SCRIPT_DIR = resource_path("script")
 DEFAULT_SHINY_THRESHOLD_SECONDS = 4.0
 DEFAULT_RESEEDING_THRESHOLD_FRAMES = 500_000
@@ -91,6 +101,9 @@ class AutoRngWorker(QObject):
             result = self.runner.run()
         except Exception as exc:
             self.failed.emit(str(exc))
+            return
+        if isinstance(result, AutoRngProgress) and result.phase == AutoRngPhase.FAILED:
+            self.failed.emit(result.log_message)
             return
         self.finished.emit(result)
 
@@ -122,8 +135,10 @@ class AutoRngPanel(QWidget):
         self.script_dir = script_dir
         self._run_log_sink = run_log_sink
         self._scripts: list[Path] = []
+        self._scripts_initialized = False
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoRngWorker | None = None
+        self._last_failed_progress_message: str | None = None
         self._target_version = GameVersion.BD
         self._targets: list[tuple[StaticEncounterRecord, StateFilter, str]] = []
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
@@ -356,29 +371,43 @@ class AutoRngPanel(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
-        self.seed_script_combo = QComboBox()
-        self.advance_script_combo = QComboBox()
-        self.hit_script_combo = QComboBox()
-        self.exit_script_combo = QComboBox()
-        self.reverse_script_combo = QComboBox()
-        self.refresh_scripts_button = QPushButton("刷新脚本列表")
-        self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.exit_script_combo, self.reverse_script_combo):
+        def combo_factory() -> _RefreshingScriptComboBox:
+            return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
+
+        self.seed_script_combo = combo_factory()
+        self.advance_script_combo = combo_factory()
+        self.hit_script_combo = combo_factory()
+        self.escape_script_combo = combo_factory()
+        self.exit_script_combo = combo_factory()
+        self.reverse_script_combo = combo_factory()
+        for combo in self._script_combos():
             combo.setFixedHeight(34)
             combo.setFixedWidth(160)
-        self.refresh_scripts_button.setFixedHeight(34)
-        self.refresh_scripts_button.setMaximumWidth(250)
+        self.escape_continue_check = QCheckBox("逃跑续搜")
+        self.escape_continue_check.setFixedHeight(34)
+        self.escape_continue_check.setToolTip(
+            "OCR 明确判定未出闪，且当前搜索范围内仍有后续候选时，运行所选逃跑脚本；\n"
+            "脚本完成后校正当前位置，并继续选择最近的可达目标。\n"
+            "之后每次未出闪都会重复该流程，直到出闪或搜索范围内没有可达目标。"
+        )
+        self.escape_script_combo.setToolTip(
+            "脚本从未出闪后的战斗画面开始执行，结束时必须回到能够捕捉玩家眨眼并进行校正的位置。\n"
+            "逃跑阶段不会再次执行 OCR 判闪。"
+        )
+        self.escape_script_combo.setEnabled(False)
+        self.escape_continue_check.toggled.connect(self.escape_script_combo.setEnabled)
         layout.addWidget(QLabel("测种脚本"), 0, 0)
         layout.addWidget(self.seed_script_combo, 0, 1)
         layout.addWidget(QLabel("过帧脚本"), 0, 2)
         layout.addWidget(self.advance_script_combo, 0, 3)
         layout.addWidget(QLabel("撞闪脚本"), 1, 0)
         layout.addWidget(self.hit_script_combo, 1, 1)
-        layout.addWidget(QLabel("过场脚本"), 1, 2)
-        layout.addWidget(self.exit_script_combo, 1, 3)
-        layout.addWidget(QLabel("反查脚本"), 2, 0)
-        layout.addWidget(self.reverse_script_combo, 2, 1)
-        layout.addWidget(self.refresh_scripts_button, 2, 2, 1, 2)
+        layout.addWidget(self.escape_continue_check, 1, 2)
+        layout.addWidget(self.escape_script_combo, 1, 3)
+        layout.addWidget(QLabel("过场脚本"), 2, 0)
+        layout.addWidget(self.exit_script_combo, 2, 1)
+        layout.addWidget(QLabel("反查脚本"), 2, 2)
+        layout.addWidget(self.reverse_script_combo, 2, 3)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
@@ -448,16 +477,25 @@ class AutoRngPanel(QWidget):
         return group
 
     def refresh_scripts(self) -> None:
+        selected_paths = {
+            combo: self._selected_path(combo)
+            for combo in self._script_combos()
+        }
         self._scripts = list_auto_scripts(self.script_dir)
-        for combo in (self.seed_script_combo, self.advance_script_combo, self.hit_script_combo, self.exit_script_combo, self.reverse_script_combo):
+        for combo in self._script_combos():
             combo.blockSignals(True)
             combo.clear()
             combo.addItem("请选择", None)
             for path in self._scripts:
                 combo.addItem(path.name, str(path))
             combo.blockSignals(False)
-        self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
-        self._select_script(self.advance_script_combo, choose_default_script(self._scripts, DEFAULT_ADVANCE_SCRIPT_NAME))
+        if self._scripts_initialized:
+            for combo, path in selected_paths.items():
+                self._select_script(combo, path)
+        else:
+            self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
+            self._select_script(self.advance_script_combo, choose_default_script(self._scripts, DEFAULT_ADVANCE_SCRIPT_NAME))
+            self._scripts_initialized = True
 
     def set_phase_text(self, text: str) -> None:
         self.status_badge.setText(text)
@@ -469,6 +507,9 @@ class AutoRngPanel(QWidget):
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         self.status_badge.setText(phase_text)
         self.autoProgressChanged.emit(progress)
+        self._last_failed_progress_message = (
+            progress.log_message if progress.phase == AutoRngPhase.FAILED else None
+        )
         if progress.log_message:
             level = "ERROR" if progress.phase == AutoRngPhase.FAILED else "INFO"
             self.add_log(progress.log_message, level=level)
@@ -578,6 +619,9 @@ class AutoRngPanel(QWidget):
                 config.seed_script_path,
                 config.advance_script_path,
                 config.hit_script_path,
+                escape_continue=config.escape_continue,
+                escape_script_path=config.escape_script_path,
+                shiny_threshold_seconds=config.shiny_threshold_seconds,
             )
         except AutoScriptError as exc:
             self.set_phase_text("配置错误")
@@ -596,10 +640,12 @@ class AutoRngPanel(QWidget):
             seed_script_path=self._selected_path(self.seed_script_combo),
             advance_script_path=self._selected_path(self.advance_script_combo),
             hit_script_path=self._selected_path(self.hit_script_combo),
+            escape_script_path=self._selected_path(self.escape_script_combo),
             exit_script_path=self._selected_path(self.exit_script_combo),
             reverse_script_path=self._selected_path(self.reverse_script_combo),
             record_script_path=choose_default_script(self._scripts, DEFAULT_RECORD_SCRIPT_NAME),
             auto_reverse=self.auto_reverse_combo.currentIndex() == 1,
+            escape_continue=self.escape_continue_check.isChecked(),
             reverse_lookup_window=self.reverse_lookup_window.value(),
             sync_mode=self.sync_combo.currentIndex(),
             sync_nature=self.sync_nature_input.text().strip(),
@@ -623,6 +669,7 @@ class AutoRngPanel(QWidget):
         if self._runner_thread is not None:
             self.add_log("自动流程已在运行", level="WARNING")
             return
+        self._last_failed_progress_message = None
         thread = QThread(self)
         worker = AutoRngWorker(runner)
         worker.moveToThread(thread)
@@ -649,7 +696,9 @@ class AutoRngPanel(QWidget):
 
     def _runner_failed(self, message: str) -> None:
         self.set_phase_text("失败")
-        self.add_log(message, level="ERROR")
+        if message != self._last_failed_progress_message:
+            self.add_log(message, level="ERROR")
+        self._last_failed_progress_message = None
         self._clear_runner_thread()
 
     def _clear_runner_thread(self) -> None:
@@ -660,6 +709,16 @@ class AutoRngPanel(QWidget):
     def _selected_path(self, combo: QComboBox) -> Path | None:
         value = combo.currentData()
         return Path(value) if value else None
+
+    def _script_combos(self) -> tuple[QComboBox, ...]:
+        return (
+            self.seed_script_combo,
+            self.advance_script_combo,
+            self.hit_script_combo,
+            self.escape_script_combo,
+            self.exit_script_combo,
+            self.reverse_script_combo,
+        )
 
     def _select_script(self, combo: QComboBox, path: Path | None) -> None:
         if path is None:
@@ -761,6 +820,7 @@ class AutoRngPanel(QWidget):
         seed_path = self._selected_path(self.seed_script_combo)
         advance_path = self._selected_path(self.advance_script_combo)
         hit_path = self._selected_path(self.hit_script_combo)
+        escape_path = self._selected_path(self.escape_script_combo)
         exit_path = self._selected_path(self.exit_script_combo)
         if seed_path is not None:
             s.setValue("seed_script", str(seed_path))
@@ -768,6 +828,10 @@ class AutoRngPanel(QWidget):
             s.setValue("advance_script", str(advance_path))
         if hit_path is not None:
             s.setValue("hit_script", str(hit_path))
+        if escape_path is not None:
+            s.setValue("escape_script", str(escape_path))
+        else:
+            s.remove("escape_script")
         if exit_path is not None:
             s.setValue("exit_script", str(exit_path))
         else:
@@ -778,6 +842,7 @@ class AutoRngPanel(QWidget):
         s.setValue("sync_state", self.sync_combo.currentIndex())
         s.setValue("sync_nature", self.sync_nature_input.text())
         s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
+        s.setValue("escape_continue", self.escape_continue_check.isChecked())
         s.setValue("reverse_lookup_window", self.reverse_lookup_window.value())
         s.setValue("target_list_json", self._serialize_targets())
         # 目标精灵设置
@@ -816,6 +881,8 @@ class AutoRngPanel(QWidget):
             self._select_script_by_path(self.advance_script_combo, str(s.value("advance_script", "")))
         if s.contains("hit_script"):
             self._select_script_by_path(self.hit_script_combo, str(s.value("hit_script", "")))
+        if s.contains("escape_script"):
+            self._select_script_by_path(self.escape_script_combo, str(s.value("escape_script", "")))
         if s.contains("exit_script"):
             self._select_script_by_path(self.exit_script_combo, str(s.value("exit_script", "")))
         if s.contains("reverse_script"):
@@ -830,6 +897,7 @@ class AutoRngPanel(QWidget):
             idx = int(s.value("auto_reverse", 0))
             if 0 <= idx < self.auto_reverse_combo.count():
                 self.auto_reverse_combo.setCurrentIndex(idx)
+        self.escape_continue_check.setChecked(s.value("escape_continue", False, type=bool))
         if s.contains("reverse_lookup_window"):
             self.reverse_lookup_window.setValue(int(s.value("reverse_lookup_window", 500)))
         if s.contains("target_list_json"):

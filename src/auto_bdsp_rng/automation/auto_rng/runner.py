@@ -464,6 +464,8 @@ class AutoRngRunner:
         self._completed_loops = 0
         self._cycle_started = False
         self._all_candidates: list[object] = []  # 本轮所有候选
+        self._attempt_index = 0
+        self._later_candidate_count = 0
         self._last_shiny_interval: float | None = None
         self._last_used_delay: int | None = None
         self._is_sync_active: bool = False  # 当前队首是否为同步精灵
@@ -502,6 +504,8 @@ class AutoRngRunner:
                 self._is_sync_active = self._sync_initial
                 self._reserved_exit_reseed_pending = False
                 self._exit_reseed_done = False
+                self._attempt_index = 0
+                self._later_candidate_count = 0
                 self._history("cycle_start", self._completed_loops)
                 self._set_progress(
                     AutoRngPhase.CAPTURE_SEED,
@@ -517,6 +521,8 @@ class AutoRngRunner:
                 self._is_sync_active = self._sync_initial
                 self._reserved_exit_reseed_pending = False
                 self._exit_reseed_done = False
+                self._attempt_index = 0
+                self._later_candidate_count = 0
                 self._seed_result = self._with_measurement_time(self.services.current_seed())
                 self._history("cycle_start", self._completed_loops)
                 self._set_progress(
@@ -555,6 +561,8 @@ class AutoRngRunner:
                 self._final_adjust()
             elif phase == AutoRngPhase.RUN_HIT_SCRIPT:
                 self._run_hit_script()
+            elif phase == AutoRngPhase.RUN_ESCAPE_SCRIPT:
+                self._run_escape_script()
             elif phase == AutoRngPhase.REVERSE_LOOKUP:
                 self._reverse_lookup()
             elif phase == AutoRngPhase.LOOP_CHECK:
@@ -664,12 +672,21 @@ class AutoRngRunner:
             self._last_search_was_missed = was_missed
             self._history("cycle_result", False, None, None, None)
             self._cycle_started = False
+            exhausted_message = decision.message
+            if self._attempt_index > 0:
+                exhausted_message = (
+                    f"第 {self._completed_loops} 轮共尝试 {self._attempt_index} 个目标，"
+                    "校正后搜索范围内已无可达候选"
+                )
             if self.config.loop_mode == "infinite":
-                self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
+                self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, exhausted_message)
             elif self.config.loop_mode == "count" and self._completed_loops < self.config.loop_count:
-                self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, decision.message)
+                self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, exhausted_message)
             else:
-                self._set_progress(AutoRngPhase.COMPLETED, "无候选，自动流程已完成", loop_index=self._completed_loops)
+                completed_message = "无候选，自动流程已完成"
+                if self._attempt_index > 0:
+                    completed_message = f"{exhausted_message}，自动流程已完成"
+                self._set_progress(AutoRngPhase.COMPLETED, completed_message, loop_index=self._completed_loops)
             return
         self._clear_no_candidate_seed_guard()
         self._locked_target = decision.target
@@ -678,6 +695,9 @@ class AutoRngRunner:
         # 判断目标是否需要切换同步状态
         locked_adv = decision.target.raw_target_advances if decision.target else 0
         locked_idx = next((i for i, c in enumerate(reachable) if getattr(c, "advances", 0) == locked_adv), 0)
+        self._later_candidate_count = sum(
+            1 for candidate in reachable if int(getattr(candidate, "advances", 0)) > locked_adv
+        )
         if sync_enabled and self.services.search_sync is not None:
             selected_source = reachable_flags[locked_idx] if locked_idx < len(reachable_flags) else primary_source
             current_source = "sync" if self._is_sync_active and nature_idx is not None else "no_sync"
@@ -697,9 +717,10 @@ class AutoRngRunner:
             self._history("candidates_found", reachable, locked_idx, reachable_flags, self.config.fixed_delay)
         flash = self._fixed_flash_frames()
         trigger = decision.raw_target_advances - self.config.fixed_delay - flash
+        next_attempt_label = self._next_attempt_label()
         self._set_progress(
             AutoRngPhase.DECIDE_ADVANCE,
-            f"原始目标帧 {decision.raw_target_advances}，delay {self.config.fixed_delay}，"
+            f"{next_attempt_label} 锁定原始目标帧 {decision.raw_target_advances}，delay {self.config.fixed_delay}，"
             f"撞闪_闪帧 {flash}，脚本启动帧 {trigger}",
             locked_target=self._locked_target,
             raw_target_advances=decision.raw_target_advances,
@@ -731,6 +752,8 @@ class AutoRngRunner:
         self._is_sync_active = self._sync_initial
         self._reserved_exit_reseed_pending = False
         self._exit_reseed_done = False
+        self._attempt_index = 0
+        self._later_candidate_count = 0
         self._history("cycle_start", self._completed_loops)
         text = path.read_text(encoding="utf-8")
         if self.should_stop():
@@ -792,7 +815,7 @@ class AutoRngRunner:
                 kind=AutoRngDecisionKind.REIDENTIFY,
                 phase=AutoRngPhase.EXIT_RESEED,
                 requested_advances=0,
-                message=f"剩余 {remaining} 帧不超过预留帧数 {reserve}，进入过场重测流程",
+                message=f"剩余 {remaining} 帧不超过预留帧数 {reserve}，进入过场校正流程",
             )
         if self._exit_reseed_done:
             return decision
@@ -862,7 +885,11 @@ class AutoRngRunner:
                 )
             )
         except Exception as exc:
+            if self.should_stop():
+                return
             self._restart_from_seed_script(f"校正连续 2 次失败: {exc}，进入下一轮测种")
+            return
+        if self.should_stop():
             return
         self._reset_advance_counter(self._seed_result)
         new_advances = self._seed_result.current_advances
@@ -878,13 +905,20 @@ class AutoRngRunner:
         path = self.config.exit_script_path
         if path is None:
             self._reserved_exit_reseed_pending = False
-            self._set_progress(AutoRngPhase.SEARCH_TARGET, "未配置过场脚本，跳过过场重测流程")
+            self._set_progress(AutoRngPhase.SEARCH_TARGET, "未配置过场脚本，跳过过场校正流程")
             return
         service = self.services.reidentify_exit
         if service is None:
             raise RuntimeError("过场校正服务未配置")
         seed = self._require_seed()
-        self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
+        try:
+            self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
+        except Exception:
+            if self.should_stop():
+                return
+            raise
+        if self.should_stop():
+            return
         try:
             self._seed_result = replace(
                 self._with_measurement_time(
@@ -897,14 +931,18 @@ class AutoRngRunner:
                 after_exit_reseed=True,
             )
         except Exception as exc:
+            if self.should_stop():
+                return
             self._restart_from_seed_script(f"过场校正连续 2 次失败: {exc}，进入下一轮测种")
+            return
+        if self.should_stop():
             return
         self._reset_advance_counter(self._seed_result)
         self._reserved_exit_reseed_pending = False
         self._exit_reseed_done = True
         self._set_progress(
             AutoRngPhase.SEARCH_TARGET,
-            f"过场重测完成——{path.name}，目前帧数 {self._seed_result.current_advances} 帧",
+            f"过场校正完成——{path.name}，目前帧数 {self._seed_result.current_advances} 帧",
             current_advances=self._seed_result.current_advances,
             seed_text=self._seed_result.seed_text,
             last_script_path=path,
@@ -1012,9 +1050,21 @@ class AutoRngRunner:
             remaining_to_trigger=remaining,
         )
 
+        self._attempt_index += 1
+        attempt_label = self._attempt_label()
+        self._set_progress(
+            AutoRngPhase.RUN_HIT_SCRIPT,
+            f"{attempt_label} 启动撞闪脚本——{path.name}（动态闪帧 {new_flash}）",
+            final_flash_frames=new_flash,
+            current_advances=new_current,
+            remaining_to_trigger=remaining,
+        )
         shiny_result = self._run_hit_script_text(text, path.name)
         if shiny_result is not None:
             self._handle_shiny_check_result(shiny_result, path)
+            return
+        if self.config.escape_continue:
+            self._stop_for_unknown_shiny_result(path)
             return
         # 无闪符检测结果时，若开启了自动反查仍然执行
         if self.config.auto_reverse and self.config.reverse_script_path is not None:
@@ -1068,8 +1118,10 @@ class AutoRngRunner:
         elapsed_from_ref_to_service = max(0.0, t_before_service - ref_time)
         diag_frames_to_service = int(elapsed_from_ref_to_service / 1.018) * (seed.npc + 1)
         # 记录提交撞闪脚本时的时序诊断
+        self._attempt_index += 1
+        attempt_label = self._attempt_label()
         commit_log = (
-            f"启动撞闪脚本——估算帧数 {decision.current_advances + diag_frames_since_ref} 帧"
+            f"{attempt_label} 启动撞闪脚本——估算帧数 {decision.current_advances + diag_frames_since_ref} 帧"
             f"（基准 {decision.current_advances} + 已过 {diag_frames_since_ref} 帧），"
             f"撞闪_闪帧 {decision.flash_frames}"
         )
@@ -1088,6 +1140,9 @@ class AutoRngRunner:
         total_diag_frames = int(total_elapsed / 1.018) * (seed.npc + 1)
         if shiny_result is not None:
             self._handle_shiny_check_result(shiny_result, path)
+            return
+        if self.config.escape_continue:
+            self._stop_for_unknown_shiny_result(path)
             return
         # 无闪符检测结果时，若开启了自动反查仍然执行
         if self.config.auto_reverse and self.config.reverse_script_path is not None:
@@ -1123,6 +1178,7 @@ class AutoRngRunner:
         interval_text = "-" if result.interval_seconds is None else f"{result.interval_seconds:.3f}s"
         trigger = self.progress.trigger_advances
         used_delay = self.config.fixed_delay
+        attempt_label = self._attempt_label()
         if result.is_shiny:
             self._locked_target = None
             self._history("cycle_result", True, result.interval_seconds, trigger, used_delay)
@@ -1138,7 +1194,30 @@ class AutoRngRunner:
                 pass
             self._set_progress(
                 AutoRngPhase.COMPLETED,
-                f"疑似出闪，间隔 {interval_text}，已录像并停止自动流程",
+                f"{attempt_label} 疑似出闪，间隔 {interval_text}，已录像并停止自动流程",
+                loop_index=self._completed_loops,
+                last_script_path=path,
+            )
+            return
+        if self.config.escape_continue and result.interval_seconds is None:
+            self._stop_for_unknown_shiny_result(path)
+            return
+        if self.config.escape_continue and self._later_candidate_count > 0:
+            target = self._require_target()
+            self._missed_target_advance = target.raw_target_advances
+            self._history(
+                "attempt_result",
+                self._completed_loops,
+                self._attempt_index,
+                False,
+                result.interval_seconds,
+                trigger,
+                used_delay,
+            )
+            self._set_progress(
+                AutoRngPhase.RUN_ESCAPE_SCRIPT,
+                f"{attempt_label} 未出闪，间隔 {interval_text}；"
+                f"当前搜索仍有 {self._later_candidate_count} 个更晚候选，准备逃跑续搜",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1149,7 +1228,7 @@ class AutoRngRunner:
             self._last_used_delay = used_delay
             self._set_progress(
                 AutoRngPhase.REVERSE_LOOKUP,
-                f"未出闪，间隔 {interval_text}，启动自动反查",
+                f"{attempt_label} 未出闪，间隔 {interval_text}，启动自动反查",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1160,7 +1239,7 @@ class AutoRngRunner:
         if self.config.loop_mode == "infinite":
             self._set_progress(
                 AutoRngPhase.RUN_SEED_SCRIPT,
-                f"未出闪，间隔 {interval_text}，进入下一轮测种",
+                f"{attempt_label} 未出闪，间隔 {interval_text}，进入下一轮测种",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1168,15 +1247,67 @@ class AutoRngRunner:
         if self.config.loop_mode == "count" and self._completed_loops < self.config.loop_count:
             self._set_progress(
                 AutoRngPhase.RUN_SEED_SCRIPT,
-                f"未出闪，间隔 {interval_text}，进入下一轮测种",
+                f"{attempt_label} 未出闪，间隔 {interval_text}，进入下一轮测种",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
             return
         self._set_progress(
             AutoRngPhase.COMPLETED,
-            f"未出闪，间隔 {interval_text}，自动流程完成",
+            f"{attempt_label} 未出闪，间隔 {interval_text}，自动流程完成",
             loop_index=self._completed_loops,
+            last_script_path=path,
+        )
+
+    def _run_escape_script(self) -> None:
+        path = self.config.escape_script_path
+        if path is None:
+            raise RuntimeError("逃跑续搜已启用，但未配置逃跑脚本")
+        attempt_label = self._attempt_label()
+        self._set_progress(
+            AutoRngPhase.RUN_ESCAPE_SCRIPT,
+            f"{attempt_label} 启动逃跑脚本——{path.name}",
+            last_script_path=path,
+        )
+        if self.should_stop():
+            return
+        try:
+            self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
+        except Exception:
+            if self.should_stop():
+                return
+            raise
+        if self.should_stop():
+            return
+
+        seed = self._require_seed()
+        self._seed_result = replace(
+            seed,
+            expected_advances_hint=None,
+            after_exit_reseed=False,
+            advance_mode="linear",
+            timing_seed=None,
+            timeline_npc=0,
+            pokemon_npc=0,
+            white_delay=0.0,
+            advance_delay=0,
+            advance_delay_2=0,
+        )
+        self._locked_target = None
+        self._requested_advances = 0
+        self._reserved_exit_reseed_pending = False
+        self._exit_reseed_done = False
+        self._need_sync_switch = False
+        self._later_candidate_count = 0
+        self._set_progress(
+            AutoRngPhase.REIDENTIFY,
+            f"{attempt_label} 逃跑脚本完成——{path.name}，开始普通校正",
+            locked_target=None,
+            raw_target_advances=None,
+            trigger_advances=None,
+            remaining_to_trigger=None,
+            final_flash_frames=None,
+            current_advances=seed.current_advances,
             last_script_path=path,
         )
 
@@ -1223,6 +1354,21 @@ class AutoRngRunner:
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "进入下一轮循环，运行测种脚本", loop_index=self._completed_loops)
             return
         self._set_progress(AutoRngPhase.COMPLETED, "自动流程完成", loop_index=self._completed_loops)
+
+    def _attempt_label(self) -> str:
+        return f"[第 {self._completed_loops} 轮 / 第 {self._attempt_index} 次]"
+
+    def _next_attempt_label(self) -> str:
+        return f"[第 {self._completed_loops} 轮 / 第 {self._attempt_index + 1} 次]"
+
+    def _stop_for_unknown_shiny_result(self, path: object) -> None:
+        self._cycle_started = False
+        self._set_progress(
+            AutoRngPhase.FAILED,
+            f"{self._attempt_label()} OCR 判闪结果未知，已停止自动流程，请人工确认当前战斗",
+            loop_index=self._completed_loops,
+            last_script_path=path,
+        )
 
     def _set_progress_from_decision(self, decision: AutoRngDecision, *, last_script_path: object | None = None) -> None:
         if decision.kind in (AutoRngDecisionKind.TARGET_MISSED, AutoRngDecisionKind.TARGET_TOO_CLOSE):
@@ -1303,10 +1449,14 @@ class AutoRngRunner:
     ) -> AutoRngSeedResult:
         last_error: Exception | None = None
         for attempt in range(1, 3):
+            if self.should_stop():
+                raise RuntimeError(f"{label}已取消")
             try:
                 return service(seed)
             except Exception as exc:
                 last_error = exc
+                if self.should_stop():
+                    raise
                 if attempt == 1:
                     self._emit(
                         AutoRngProgress(
@@ -1328,11 +1478,14 @@ class AutoRngRunner:
         raise last_error
 
     def _restart_from_seed_script(self, message: str) -> None:
+        if self.should_stop():
+            return
         self._seed_result = None
         self._locked_target = None
         self._missed_target_advance = None
         self._last_search_was_missed = False
         self._requested_advances = 0
+        self._later_candidate_count = 0
         self._reserved_exit_reseed_pending = False
         self._exit_reseed_done = False
         self._need_sync_switch = False

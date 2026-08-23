@@ -583,7 +583,133 @@ def test_auto_rng_panel_persists_exit_script_and_reseeding_threshold(app, tmp_pa
 
     assert config.exit_script_path == tmp_path / "离开地下.txt"
     assert config.reseeding_threshold == 12345
-    assert panel.refresh_scripts_button.parent() is panel.script_group
+    assert not hasattr(panel, "refresh_scripts_button")
+
+
+def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
+    (tmp_path / "逃跑.txt").write_text("B 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    layout = panel.script_group.layout()
+
+    assert layout.itemAtPosition(0, 0).widget().text() == "测种脚本"
+    assert layout.itemAtPosition(0, 1).widget() is panel.seed_script_combo
+    assert layout.itemAtPosition(0, 2).widget().text() == "过帧脚本"
+    assert layout.itemAtPosition(0, 3).widget() is panel.advance_script_combo
+    assert layout.itemAtPosition(1, 0).widget().text() == "撞闪脚本"
+    assert layout.itemAtPosition(1, 1).widget() is panel.hit_script_combo
+    assert layout.itemAtPosition(1, 2).widget() is panel.escape_continue_check
+    assert layout.itemAtPosition(1, 3).widget() is panel.escape_script_combo
+    assert layout.itemAtPosition(2, 0).widget().text() == "过场脚本"
+    assert layout.itemAtPosition(2, 1).widget() is panel.exit_script_combo
+    assert layout.itemAtPosition(2, 2).widget().text() == "反查脚本"
+    assert layout.itemAtPosition(2, 3).widget() is panel.reverse_script_combo
+    assert panel.escape_continue_check.text() == "逃跑续搜"
+    assert not panel.escape_continue_check.isChecked()
+    assert not panel.escape_script_combo.isEnabled()
+    assert "每次未出闪都会重复" in panel.escape_continue_check.toolTip()
+    assert "回到能够捕捉玩家眨眼" in panel.escape_script_combo.toolTip()
+    assert not panel.build_config().escape_continue
+    assert panel.build_config().escape_script_path is None
+
+    panel.escape_continue_check.setChecked(True)
+    panel.escape_script_combo.setCurrentIndex(panel.escape_script_combo.findText("逃跑.txt"))
+    panel.escape_continue_check.setChecked(False)
+
+    assert not panel.escape_script_combo.isEnabled()
+    assert panel.escape_script_combo.currentText() == "逃跑.txt"
+
+
+def test_auto_rng_script_combos_refresh_on_popup_and_preserve_each_selection(app, tmp_path, monkeypatch):
+    selected_names = (
+        "测种-A.txt",
+        "过帧-A.txt",
+        "撞闪-A.txt",
+        "逃跑-A.txt",
+        "过场-A.txt",
+        "反查-A.txt",
+    )
+    for name in selected_names:
+        (tmp_path / name).write_text("A 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    combos = (
+        panel.seed_script_combo,
+        panel.advance_script_combo,
+        panel.hit_script_combo,
+        panel.escape_script_combo,
+        panel.exit_script_combo,
+        panel.reverse_script_combo,
+    )
+    for combo, name in zip(combos, selected_names, strict=True):
+        combo.setCurrentIndex(combo.findText(name))
+
+    (tmp_path / "新增脚本.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / selected_names[3]).unlink()
+    refresh_calls = []
+    original_refresh = panel.refresh_scripts
+
+    def track_refresh() -> None:
+        refresh_calls.append(True)
+        original_refresh()
+
+    monkeypatch.setattr(panel, "refresh_scripts", track_refresh)
+    for combo in combos:
+        combo.showPopup()
+        combo.hidePopup()
+
+    assert len(refresh_calls) == len(combos)
+    assert all(combo.findText("新增脚本.txt") >= 0 for combo in combos)
+    assert [combo.currentText() for combo in combos] == [
+        selected_names[0],
+        selected_names[1],
+        selected_names[2],
+        "请选择",
+        selected_names[4],
+        selected_names[5],
+    ]
+
+
+def test_auto_rng_panel_persists_escape_continue_and_script(app, tmp_path):
+    escape_script = tmp_path / "逃跑.txt"
+    escape_script.write_text("B 100\n", encoding="utf-8")
+    settings = _auto_rng_settings(tmp_path)
+    panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
+    panel.escape_continue_check.setChecked(True)
+    panel.escape_script_combo.setCurrentIndex(panel.escape_script_combo.findText(escape_script.name))
+
+    panel._save_panel_state()
+    settings.sync()
+    restored = AutoRngPanel(script_dir=tmp_path, settings=settings)
+
+    assert restored.escape_continue_check.isChecked()
+    assert restored.escape_script_combo.isEnabled()
+    assert restored.build_config().escape_continue
+    assert restored.build_config().escape_script_path == escape_script
+
+
+def test_auto_rng_panel_blocks_invalid_escape_continue_settings(app, tmp_path):
+    (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
+    (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    (tmp_path / "逃跑.txt").write_text("B 100\n", encoding="utf-8")
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    emitted = []
+    panel.startRequested.connect(emitted.append)
+    panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
+    panel.escape_continue_check.setChecked(True)
+
+    panel.start_button.click()
+
+    assert emitted == []
+    assert panel.status_badge.text() == "配置错误"
+    assert "逃跑脚本" in panel.log_view.toPlainText()
+
+    panel.log_view.clear()
+    panel.escape_script_combo.setCurrentIndex(panel.escape_script_combo.findText("逃跑.txt"))
+    panel.shiny_threshold_seconds.setValue(0)
+    panel.start_button.click()
+
+    assert emitted == []
+    assert "闪光阈值" in panel.log_view.toPlainText()
 
 
 def test_auto_rng_panel_defaults_reseeding_threshold_to_500000_without_saved_setting(app, tmp_path):
@@ -1329,7 +1455,8 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.max_advances.width() >= 200
     assert panel.seed_script_combo.width() <= 170
-    assert panel.refresh_scripts_button.width() <= 250
+    assert not hasattr(panel, "refresh_scripts_button")
+    assert not any(button.text() == "刷新脚本列表" for button in panel.findChildren(QPushButton))
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
@@ -1561,6 +1688,29 @@ def test_history_panel_candidates_use_configured_delay(app):
     assert "delay=1234" not in text
 
 
+def test_auto_rng_escape_attempt_history_includes_loop_and_attempt(app, monkeypatch):
+    window = MainWindow()
+    run_logs: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda _source, message, **_kwargs: run_logs.append(str(message)),
+    )
+
+    window._handle_auto_history_event(
+        "attempt_result",
+        (2, 3, False, 2.3456, 1234, 100),
+    )
+
+    history_text = window.history_tab.text_view.toPlainText()
+    assert "第 2 轮 / 第 3 次撞闪" in history_text
+    assert "准备运行逃跑脚本，完成后继续搜索" in history_text
+    assert "逃跑后继续" not in history_text
+    assert run_logs == [
+        "第 2 轮 / 第 3 次撞闪未出闪；间隔 2.3456；启动 Adv 1234；delay 100"
+    ]
+
+
 def test_auto_rng_log_adds_timestamp(app, monkeypatch):
     panel = AutoRngPanel()
 
@@ -1603,6 +1753,33 @@ def test_auto_rng_log_sink_receives_levels_and_cannot_break_ui(app):
 
 
 
+def test_auto_rng_panel_logs_same_failed_progress_message_once(app, tmp_path):
+    events: list[tuple[str, str]] = []
+    panel = AutoRngPanel(
+        script_dir=tmp_path,
+        settings=_auto_rng_settings(tmp_path),
+        run_log_sink=lambda level, message: events.append((level, message)),
+    )
+    progress = AutoRngProgress(
+        phase=AutoRngPhase.FAILED,
+        log_message="OCR 结果未知，请人工确认",
+    )
+
+    class FailedRunner:
+        def run(self) -> AutoRngProgress:
+            self.progress_callback(progress)
+            return progress
+
+    worker = AutoRngWorker(FailedRunner())
+    worker.progressChanged.connect(panel.apply_progress)
+    worker.failed.connect(panel._runner_failed)
+    worker.run()
+
+    assert panel.status_badge.text() == "失败"
+    assert panel.log_view.toPlainText().count(progress.log_message) == 1
+    assert events == [("ERROR", progress.log_message)]
+
+
 def test_auto_rng_worker_emits_progress_and_finished(app):
     progress = AutoRngProgress(phase=AutoRngPhase.COMPLETED, log_message="完成")
 
@@ -1637,6 +1814,25 @@ def test_auto_rng_worker_emits_progress_and_finished(app):
     assert logs == []
     assert finished == [progress]
     assert runner.stopped is True
+
+
+def test_auto_rng_worker_emits_failed_for_failed_result(app):
+    progress = AutoRngProgress(phase=AutoRngPhase.FAILED, log_message="OCR 结果未知，请人工确认")
+
+    class FakeRunner:
+        def run(self) -> AutoRngProgress:
+            return progress
+
+    worker = AutoRngWorker(FakeRunner())
+    finished = []
+    failed = []
+    worker.finished.connect(finished.append)
+    worker.failed.connect(failed.append)
+
+    worker.run()
+
+    assert finished == []
+    assert failed == ["OCR 结果未知，请人工确认"]
 
 
 def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, monkeypatch):
@@ -2424,6 +2620,41 @@ def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monk
 
     assert services.run_script_text("A 100", "hit.txt") == "ok"
     assert calls == [("A 100", "hit.txt")]
+
+
+def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    stops: list[bool] = []
+    logs: list[str] = []
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str) -> str:
+            return "ok"
+
+        def stop_current_script(self) -> None:
+            stops.append(True)
+
+    backend = FakeBackend()
+    window.easycon_tab.backend_mode.setCurrentIndex(0)
+    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+    window.auto_rng_tab.captureLog.connect(logs.append)
+    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: backend)
+    monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
+
+    def raise_timeout(*_args, **_kwargs):
+        raise TimeoutError("OCR timeout")
+
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", raise_timeout)
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, escape_continue=True, shiny_threshold_seconds=2.8)
+    )
+
+    result = services.run_hit_script_with_shiny_check("A 100", "hit.txt", 2.8)
+
+    assert result.is_shiny is False
+    assert result.interval_seconds is None
+    assert stops == [True]
+    assert "OCR 闪符检测超时，判定结果未知" in logs
 
 
 def test_main_window_auto_rng_cli_settles_keep_awake_before_script(app, tmp_path, monkeypatch):
