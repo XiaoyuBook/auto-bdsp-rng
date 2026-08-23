@@ -75,6 +75,18 @@ def test_pyinstaller_spec_names_chinese_executable():
     assert 'name="珍钻复刻自动乱数"' in spec
 
 
+def test_windows_build_bundles_standalone_updater_next_to_main_executable():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "build_exe.py").read_text(encoding="utf-8")
+    updater_spec = (root / "packaging" / "auto-bdsp-rng-updater.spec").read_text(encoding="utf-8")
+
+    assert "build_updater(python)" in script
+    assert 'UPDATER_EXE_NAME = "auto-bdsp-rng-updater.exe"' in script
+    assert "shutil.copy2(source, DIST_DIR / UPDATER_EXE_NAME)" in script
+    assert 'name="auto-bdsp-rng-updater"' in updater_spec
+    assert "console=False" in updater_spec
+
+
 def test_qt_application_and_window_use_project_identity(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     app = QApplication.instance() or QApplication([])

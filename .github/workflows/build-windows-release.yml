@@ -47,41 +47,108 @@ jobs:
           AUTO_BDSP_RNG_ZIP_COMPRESSLEVEL: 1
         run: build_exe.bat
 
+      - name: Smoke test frozen updater
+        shell: pwsh
+        run: |
+          $updater = '.\dist\auto-bdsp-rng\auto-bdsp-rng-updater.exe'
+          $process = Start-Process -FilePath $updater -ArgumentList '--help' -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Frozen updater smoke test failed with exit code $($process.ExitCode)."
+          }
+
+      - name: Find previous release manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $currentVersion = python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          "CURRENT_VERSION=$currentVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $releaseJson = gh release list --limit 100 --json tagName,isDraft,isPrerelease 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not list previous releases from GitHub."
+          }
+          $current = [version]$currentVersion
+          $candidates = foreach ($release in ($releaseJson | ConvertFrom-Json)) {
+            if ($release.isDraft -or $release.isPrerelease -or $release.tagName -notmatch '^v(\d+\.\d+\.\d+)$') {
+              continue
+            }
+            $version = [version]$Matches[1]
+            if ($version -lt $current) {
+              [pscustomobject]@{ Tag = $release.tagName; Version = $version }
+            }
+          }
+          $orderedCandidates = @($candidates | Sort-Object Version -Descending)
+          if ($orderedCandidates.Count -eq 0) {
+            Write-Host "No older release found; this is a bootstrap update release."
+            exit 0
+          }
+          $downloadDir = Join-Path $env:RUNNER_TEMP 'previous-update-manifest'
+          New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+          $manifestPath = $null
+          foreach ($candidate in $orderedCandidates) {
+            $assetName = "auto-bdsp-rng-$($candidate.Tag)-windows-x64.manifest.json"
+            $assetJson = gh release view $candidate.Tag --json assets 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not inspect assets for release $($candidate.Tag)."
+            }
+            $assetNames = @($assetJson | ConvertFrom-Json | Select-Object -ExpandProperty assets | Select-Object -ExpandProperty name)
+            if ($assetName -notin $assetNames) {
+              Write-Warning "Release $($candidate.Tag) has no update manifest; trying the next older release."
+              continue
+            }
+            gh release download $candidate.Tag --pattern $assetName --dir $downloadDir --clobber
+            $candidatePath = Join-Path $downloadDir $assetName
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $candidatePath)) {
+              throw "Failed to download update manifest from $($candidate.Tag)."
+            }
+            $manifestPath = $candidatePath
+            Write-Host "Using update manifest from $($candidate.Tag)."
+            break
+          }
+          if ($null -eq $manifestPath) {
+            Write-Warning "No older update manifest was found; this build will be a bootstrap release."
+            exit 0
+          }
+          "PREVIOUS_UPDATE_MANIFEST=$manifestPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build update artifacts
+        shell: pwsh
+        run: |
+          $arguments = @(
+            '.\scripts\build_update_package.py',
+            '--dist-dir', '.\dist\auto-bdsp-rng',
+            '--output-dir', '.\release',
+            '--version', $env:CURRENT_VERSION
+          )
+          if ($env:PREVIOUS_UPDATE_MANIFEST) {
+            $arguments += @('--previous-manifest', $env:PREVIOUS_UPDATE_MANIFEST)
+          }
+          python @arguments
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: auto-bdsp-rng-windows-x64
-          path: release/auto-bdsp-rng-v*-windows-x64.zip
+          path: |
+            release/*.zip
+            release/*.manifest.json
+
+      - name: Generate release notes
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python .\scripts\generate_release_notes.py --tag $env:RELEASE_TAG --output .\release\release-notes.md
 
       - name: Upload release asset
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
         with:
           name: 珍钻复刻自动乱数 ${{ github.ref_name }}
-          body: |
-            ## 珍钻复刻自动乱数 ${{ github.ref_name }}
-
-            这是正式发布版。普通用户请下载下面的 Windows x64 绿色版压缩包：
-
-            `auto-bdsp-rng-${{ github.ref_name }}-windows-x64.zip`
-
-            请不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`，那些是源码包，不能直接双击运行。
-
-            ### 使用方式
-
-            1. 下载 `auto-bdsp-rng-${{ github.ref_name }}-windows-x64.zip`
-            2. 解压 zip
-            3. 进入 `auto-bdsp-rng` 文件夹
-            4. 双击 `珍钻复刻自动乱数.exe`
-
-            ### 说明
-
-            - Windows x64 onedir 绿色版，不需要安装 Python。
-            - 请保留 exe 旁边的 `_internal`、`script`、`bridge` 等目录，不要只复制 exe。
-            - 首次启动或首次 OCR 初始化可能较慢。
-            - 自动乱数流程仍需要游戏窗口、采集环境、串口/驱动、EasyCon 或兼容后端等实际运行环境。
-            - 本软件永久免费且开源，请勿购买倒卖版本。
+          body_path: release/release-notes.md
           draft: false
           prerelease: false
           make_latest: true
-          files: release/auto-bdsp-rng-v*-windows-x64.zip
+          files: |
+            release/*.zip
+            release/*.manifest.json

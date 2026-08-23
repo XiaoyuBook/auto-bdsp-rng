@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QProcess, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QSpinBox
 from PySide6.QtGui import QKeyEvent, QTextCursor
 
@@ -1053,3 +1053,88 @@ def test_easycon_panel_reports_empty_ports_when_mock_disabled(monkeypatch, tmp_p
 
     assert "未发现串口；请选择串口或启用 mock 模式，运行按钮已禁用" in panel.log_view.toPlainText()
     assert panel.run_button.isEnabled() is False
+
+
+def test_easycon_panel_shutdown_closes_persistent_bridge(easycon_panel):
+    backend = FakeBridgeBackend()
+    easycon_panel.bridge_backend = backend
+
+    assert easycon_panel.shutdown() is True
+
+    assert backend.closed is True
+    assert easycon_panel.bridge_backend is None
+    with pytest.raises(RuntimeError, match="正在关闭"):
+        easycon_panel._ensure_bridge_backend()
+
+    assert easycon_panel.shutdown() is True
+
+
+def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel):
+    events: list[object] = []
+
+    class StuckProcess:
+        def state(self):
+            return QProcess.ProcessState.Running
+
+        def kill(self) -> None:
+            events.append("process-kill")
+
+        def waitForFinished(self, wait_ms: int) -> bool:
+            events.append(("process-wait", wait_ms))
+            return False
+
+    class StuckThread:
+        def isRunning(self) -> bool:
+            return True
+
+        def requestInterruption(self) -> None:
+            events.append("thread-interrupt")
+
+        def quit(self) -> None:
+            events.append("thread-quit")
+
+        def wait(self, wait_ms: int) -> bool:
+            events.append(("thread-wait", wait_ms))
+            return False
+
+    easycon_panel.process = StuckProcess()  # type: ignore[assignment]
+    easycon_panel.bridge_run_thread = StuckThread()  # type: ignore[assignment]
+
+    assert easycon_panel.shutdown(wait_ms=25) is False
+    assert events == [
+        "process-kill",
+        ("process-wait", 25),
+        "thread-interrupt",
+        "thread-quit",
+        ("thread-wait", 25),
+    ]
+
+
+def test_easycon_panel_shutdown_retries_failed_bridge_close(easycon_panel):
+    class RetryBackend(FakeBridgeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise OSError("bridge still running")
+            self.closed = True
+
+    backend = RetryBackend()
+    easycon_panel.bridge_backend = backend
+
+    assert easycon_panel.shutdown(wait_ms=25) is False
+    assert easycon_panel.bridge_backend is backend
+    assert easycon_panel.shutdown(wait_ms=25) is True
+    assert easycon_panel.bridge_backend is None
+    assert backend.closed is True
+
+
+def test_easycon_panel_reports_unsaved_script_changes(easycon_panel):
+    assert easycon_panel.has_unsaved_script_changes() is False
+
+    easycon_panel.editor.setPlainText(easycon_panel.editor.toPlainText() + "\nA 100")
+
+    assert easycon_panel.has_unsaved_script_changes() is True

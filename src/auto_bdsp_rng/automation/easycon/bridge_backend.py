@@ -148,7 +148,11 @@ class JsonLineBridgeTransport:
         return payload_value if isinstance(payload_value, dict) else {}
 
     def close(self) -> None:
-        self._break_transport(BridgeProtocolError("Bridge transport closed"))
+        self._break_transport(
+            BridgeProtocolError("Bridge transport closed"),
+            terminate_async=False,
+        )
+        self._terminate_process()
 
     def _write_loop(self) -> None:
         while True:
@@ -227,7 +231,7 @@ class JsonLineBridgeTransport:
             if self._pending.get(request_id) is response_queue:
                 self._pending.pop(request_id, None)
 
-    def _break_transport(self, error: BaseException) -> None:
+    def _break_transport(self, error: BaseException, *, terminate_async: bool = True) -> None:
         with self._lock:
             if self._closed_error is not None:
                 return
@@ -240,18 +244,46 @@ class JsonLineBridgeTransport:
                 response_queue.put_nowait(error)
             except queue.Full:
                 pass
-        threading.Thread(
-            target=self._terminate_process,
-            name="EasyConBridgeTerminator",
-            daemon=True,
-        ).start()
+        if terminate_async:
+            threading.Thread(
+                target=self._terminate_process_best_effort,
+                name="EasyConBridgeTerminator",
+                daemon=True,
+            ).start()
 
-    def _terminate_process(self) -> None:
+    def _terminate_process_best_effort(self) -> None:
         try:
-            if self._process.poll() is None:
-                self._process.terminate()
+            self._terminate_process()
         except BaseException:
             pass
+
+    def _terminate_process(self, *, wait_timeout_seconds: float = 2.0) -> None:
+        try:
+            if self._process.poll() is not None:
+                return
+            self._process.terminate()
+            if self._process.poll() is not None:
+                return
+        except BaseException as exc:
+            raise BridgeProtocolError(f"无法终止 Bridge 进程：{exc}") from exc
+        wait = getattr(self._process, "wait", None)
+        if not callable(wait):
+            raise BridgeProtocolError("无法等待 Bridge 进程退出")
+        try:
+            wait(timeout=wait_timeout_seconds)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        except BaseException as exc:
+            raise BridgeProtocolError(f"等待 Bridge 进程退出失败：{exc}") from exc
+        try:
+            if self._process.poll() is None:
+                self._process.kill()
+            wait(timeout=wait_timeout_seconds)
+        except BaseException as exc:
+            raise BridgeProtocolError(f"强制结束 Bridge 进程失败：{exc}") from exc
+        if self._process.poll() is None:
+            raise BridgeProtocolError("强制结束后 Bridge 进程仍在运行")
 
 
 class BridgeEasyConBackend(EasyConBackend):

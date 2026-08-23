@@ -1,6 +1,6 @@
 # Windows Release Build
 
-This document is for maintainers who need to build the Windows x64 green package for `auto-bdsp-rng v1.0.0`.
+This document is for maintainers who need to build the Windows x64 green package. The package version is read from `pyproject.toml`.
 
 ## Requirements
 
@@ -41,9 +41,24 @@ The script will:
 6. run a lightweight version check,
 7. generate `docs/assets/app-icon.ico` from `docs/assets/app-icon.png`,
 8. run PyInstaller with `packaging/auto-bdsp-rng.spec`,
-9. try to publish EasyConBridge for `win-x64`,
-10. write `dist/auto-bdsp-rng/README.txt`,
-11. create `release/auto-bdsp-rng-v1.0.0-windows-x64.zip`.
+9. build the small onefile updater with `packaging/auto-bdsp-rng-updater.spec`,
+10. verify packaged OCR imports and bundled Project_Xs assets,
+11. try to publish EasyConBridge for `win-x64`,
+12. write `dist/auto-bdsp-rng/README.txt`,
+13. create `release/auto-bdsp-rng-v<version>-windows-x64.zip`.
+
+The executable build remains responsible for the complete green package. Generate update metadata after it finishes:
+
+```powershell
+python .\scripts\build_update_package.py
+```
+
+This writes the SHA-256 manifest for the current `dist/auto-bdsp-rng/` tree. To also create an incremental package, provide a manifest downloaded from an older Release; the old full zip is not needed:
+
+```powershell
+python .\scripts\build_update_package.py `
+  --previous-manifest .\build\previous\auto-bdsp-rng-v2.2.0-windows-x64.manifest.json
+```
 
 ## Clean Build Outputs
 
@@ -63,9 +78,18 @@ This removes only `build/`, `dist/`, and `release/`.
 
 - onedir app: `dist/auto-bdsp-rng/`
 - executable: `dist/auto-bdsp-rng/珍钻复刻自动乱数.exe`
-- release zip: `release/auto-bdsp-rng-v1.0.0-windows-x64.zip`
+- updater helper: `dist/auto-bdsp-rng/auto-bdsp-rng-updater.exe`
+- release zip: `release/auto-bdsp-rng-v<version>-windows-x64.zip`
+- release manifest: `release/auto-bdsp-rng-v<version>-windows-x64.manifest.json`
+- optional incremental update: `release/auto-bdsp-rng-v<from>-to-v<version>-windows-x64.update.zip`
 
 The package is intentionally onedir, not onefile. Users must keep `_internal`, `script`, `bridge`, `docs`, and other sibling directories beside the exe.
+
+The manifest records every packaged file's relative path, byte size, SHA-256, and whether a locally modified copy must be preserved. Incremental packages contain `update.json` at the zip root and only added or changed files below `payload/`; removed files are metadata entries rather than empty payloads. Paths below `script/`, `logs/`, `third_party/Project_Xs_CHN/configs/`, and `third_party/Project_Xs_CHN/images/custom/` are marked as user-editable. Case-only path changes and cross-version file-to-directory or directory-to-file changes are rejected because the file-level installer cannot apply those topologies safely.
+
+GitHub Actions searches older Releases from newest to oldest for the nearest usable manifest and builds a direct file-level patch. If no older manifest exists, it deliberately publishes only the full zip and current manifest as the one-time bootstrap release. GitHub API or asset download failures fail the build; only a confirmed missing manifest may fall back to an older Release or bootstrap mode. CI also starts the frozen updater with `--help` as a packaging smoke test.
+
+At runtime, the GUI passes each GitHub Release asset SHA-256 to a onefile helper copied under `install_dir/.auto-bdsp-rng-updater/`. The approval file starts in a `pending` state and is atomically changed to `approved` only after the main window has successfully closed; a refused shutdown records `cancelled` and stops the helper. The helper atomically claims that one-time approval, verifies the archives before taking the installation mutex and again inside it, and the core copies each patch into the transaction directory while verifying the official digest a third time. Existing files are backed up with hard links when possible and otherwise copied; replacements use atomic `os.replace()`. Modified user files are preserved, and a new default is written to an unused `.new-v<version>[.<number>]` sidecar. Disk-space checks include full-copy backup, sidecar copy, and rollback requirements. A durable `transaction.json` under `.auto-bdsp-update-*` keeps the rollback map across process termination or power loss; all compensation stays inside the mutex, and a completed rollback is marked before its directory is atomically quarantined as `.auto-bdsp-cleanup-*`. Failed cleanup is retried before a later update without repeating rollback. If recovery actually rolls files back, the current patch chain is stopped and the restored old version is restarted so a new plan can be built from its real version. Backups are committed only after the updated GUI remains running for the startup confirmation window.
 
 ## EasyConBridge
 

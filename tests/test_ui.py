@@ -21,7 +21,7 @@ from auto_bdsp_rng.blink_detection import (
 from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, QThread, QTimer, Qt
 from PySide6.QtGui import QPaintEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
@@ -358,6 +358,9 @@ def test_capture_keep_awake_bridge_does_not_block_gui_or_create_unbounded_tasks(
     calls: list[tuple[str, int, float | None, bool]] = []
 
     class BlockingBridgeBackend:
+        def close(self) -> None:
+            backend_release.set()
+
         def press(
             self,
             button: str,
@@ -2005,6 +2008,66 @@ def test_main_window_close_stops_manual_capture_thread(app):
     assert not thread.is_alive()
 
 
+def test_main_window_cancelled_close_keeps_update_task_running(app, monkeypatch):
+    window = MainWindow()
+    window.show()
+    shutdown_calls: list[bool] = []
+    monkeypatch.setattr(window.easycon_tab, "has_unsaved_script_changes", lambda: True)
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Cancel,
+    )
+    monkeypatch.setattr(
+        window.update_controller,
+        "shutdown",
+        lambda: shutdown_calls.append(True) or True,
+    )
+
+    assert window.close() is False
+    assert window.isVisible()
+    assert shutdown_calls == []
+
+    monkeypatch.setattr(window.easycon_tab, "has_unsaved_script_changes", lambda: False)
+    assert window.close() is True
+
+
+def test_main_window_refuses_close_while_easycon_thread_is_still_running(app, monkeypatch):
+    window = MainWindow()
+    window.show()
+    warnings: list[tuple[str, str]] = []
+    shutdown_order: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_request_automation_runner_stop",
+        lambda _panel, label: shutdown_order.append(label),
+    )
+    monkeypatch.setattr(
+        window,
+        "_shutdown_automation_runner",
+        lambda _panel, _label, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        window.easycon_tab,
+        "shutdown",
+        lambda: shutdown_order.append("伊机控") or False,
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    assert window.close() is False
+    assert window.isVisible()
+    assert window._is_closing is False
+    assert warnings and warnings[-1][0] == "正在停止伊机控任务"
+    assert shutdown_order == ["自动定点", "自动 TID", "伊机控"]
+
+    monkeypatch.setattr(window.easycon_tab, "shutdown", lambda: True)
+    assert window.close() is True
+
+
 def test_shutdown_automation_runner_stops_and_waits(app):
     window = MainWindow()
     calls = []
@@ -2029,9 +2092,163 @@ def test_shutdown_automation_runner_stops_and_waits(app):
         _runner_thread=FakeThread(),
     )
 
-    window._shutdown_automation_runner(panel, "测试流程")
+    assert window._shutdown_automation_runner(panel, "测试流程") is True
 
     assert calls == ["stop", "quit", ("wait", 50)]
+
+
+def test_shutdown_worker_thread_reports_timeout(app):
+    window = MainWindow()
+    calls = []
+
+    class FakeThread:
+        def quit(self):
+            calls.append("quit")
+
+        def isRunning(self):
+            return True
+
+        def wait(self, milliseconds):
+            calls.append(("wait", milliseconds))
+            return False
+
+    worker = SimpleNamespace(stop=lambda: calls.append("stop"))
+
+    assert window._shutdown_worker_thread(worker, FakeThread(), "测试流程", wait_ms=0) is False
+    assert calls == ["stop", "quit"]
+
+
+def test_shutdown_capture_thread_reports_timeout(app):
+    window = MainWindow()
+
+    class FakeCaptureThread:
+        def is_alive(self):
+            return True
+
+        def join(self, *, timeout):
+            pytest.fail(f"zero wait must not call join: {timeout}")
+
+    window._capture_thread = FakeCaptureThread()  # type: ignore[assignment]
+    assert window._shutdown_capture_thread(wait_ms=0) is False
+    window._capture_thread = None
+
+
+def test_shutdown_ocr_warmup_is_bounded_and_never_terminates_thread(app):
+    window = MainWindow()
+    calls = []
+
+    class FakeSignal:
+        def disconnect(self, _slot):
+            calls.append("disconnect")
+
+    class FakeWarmupThread:
+        completed = FakeSignal()
+
+        def __init__(self):
+            self.running = True
+
+        def requestInterruption(self):
+            calls.append("interrupt")
+
+        def isRunning(self):
+            return self.running
+
+        def wait(self, milliseconds):
+            calls.append(("wait", milliseconds))
+            self.running = False
+            return True
+
+    window._ocr_warmup_running = True
+    window._ocr_warmup_thread = FakeWarmupThread()  # type: ignore[assignment]
+
+    assert window._shutdown_ocr_warmup_thread() is True
+    assert calls == ["interrupt", ("wait", 50), "disconnect"]
+    assert window._ocr_warmup_running is False
+    window._ocr_warmup_thread = None
+
+
+def test_main_window_notifies_automation_before_easycon_and_refuses_live_runner(app, monkeypatch):
+    window = MainWindow()
+    window.show()
+    shutdown_order: list[str] = []
+    warnings: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        window,
+        "_request_automation_runner_stop",
+        lambda _panel, label: shutdown_order.append(f"notify:{label}"),
+    )
+    monkeypatch.setattr(
+        window.easycon_tab,
+        "shutdown",
+        lambda: shutdown_order.append("easycon") or True,
+    )
+
+    def shutdown_runner(_panel, label, **_kwargs):
+        shutdown_order.append(f"wait:{label}")
+        return label != "自动定点"
+
+    monkeypatch.setattr(window, "_shutdown_automation_runner", shutdown_runner)
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    assert window.close() is False
+    assert window.isVisible()
+    assert window._is_closing is False
+    assert shutdown_order == [
+        "notify:自动定点",
+        "notify:自动 TID",
+        "easycon",
+        "wait:自动定点",
+        "wait:自动 TID",
+    ]
+    assert warnings == [("正在停止后台任务", "自动定点尚未退出，请稍后再关闭程序。")]
+
+    monkeypatch.setattr(
+        window,
+        "_shutdown_automation_runner",
+        lambda _panel, _label, **_kwargs: True,
+    )
+    assert window.close() is True
+
+
+def test_main_window_refuses_close_while_local_background_threads_are_running(app, monkeypatch):
+    window = MainWindow()
+    window.show()
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(window, "_request_automation_runner_stop", lambda *_args: None)
+    monkeypatch.setattr(
+        window,
+        "_shutdown_automation_runner",
+        lambda _panel, _label, **_kwargs: True,
+    )
+    monkeypatch.setattr(window.easycon_tab, "shutdown", lambda: True)
+    monkeypatch.setattr(window, "_shutdown_worker_thread", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(window, "_shutdown_capture_thread", lambda: False)
+    monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: False)
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    assert window.close() is False
+    assert window.isVisible()
+    assert window._is_closing is False
+    assert warnings == [
+        (
+            "正在停止后台任务",
+            "闪光判定校准、Seed 捕捉、OCR 预热尚未退出，请稍后再关闭程序。",
+        )
+    ]
+
+    monkeypatch.setattr(window, "_shutdown_worker_thread", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(window, "_shutdown_capture_thread", lambda: True)
+    monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: True)
+    assert window.close() is True
 
 
 def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):

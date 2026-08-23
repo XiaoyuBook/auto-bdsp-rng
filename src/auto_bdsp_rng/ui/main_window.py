@@ -124,6 +124,7 @@ from auto_bdsp_rng.ui.help_menu import HelpMenuController
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
+from auto_bdsp_rng.ui.update_dialog import UpdateController
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
@@ -1032,13 +1033,18 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
+        self.update_controller = UpdateController(self)
         self.help_menu_controller = HelpMenuController(
             self,
             run_log_enabled=self._run_log_manager.enabled,
             set_run_log_enabled=self._set_run_log_enabled,
             open_run_log_dir=self._open_run_log_dir,
+            check_updates=self.update_controller.check_for_updates,
         )
         self.help_menu_controller.install(self.help_button)
+        self.update_controller.busyChanged.connect(
+            lambda busy: self.help_menu_controller.check_updates_action.setEnabled(not busy)
+        )
 
     def _run_log_sink(self, source: str) -> Callable[[str, str], None]:
         def write(level: str, message: str) -> None:
@@ -2392,64 +2398,191 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("存档信息已应用" if self.lang == "zh" else "Profile applied")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if not self._confirm_unsaved_easycon_script():
+            event.ignore()
+            return
         self._is_closing = True
+        if not self.update_controller.shutdown():
+            self._is_closing = False
+            QMessageBox.warning(
+                self,
+                "正在停止更新任务",
+                "更新网络任务尚未退出，请稍后再关闭程序。",
+            )
+            event.ignore()
+            return
         self._capture_timer.stop()
         self._capture_cancel.set()
-        self._shutdown_automation_runner(self.auto_rng_tab, "自动定点")
-        self._shutdown_automation_runner(self.auto_tid_rng_tab, "自动 TID")
-        self._shutdown_worker_thread(
+        self._request_automation_runner_stop(self.auto_rng_tab, "自动定点")
+        self._request_automation_runner_stop(self.auto_tid_rng_tab, "自动 TID")
+        easycon_stopped = self.easycon_tab.shutdown()
+
+        pending_tasks: list[str] = []
+        if not self._shutdown_automation_runner(
+            self.auto_rng_tab,
+            "自动定点",
+            request_stop=False,
+        ):
+            pending_tasks.append("自动定点")
+        if not self._shutdown_automation_runner(
+            self.auto_tid_rng_tab,
+            "自动 TID",
+            request_stop=False,
+        ):
+            pending_tasks.append("自动 TID")
+        if not easycon_stopped:
+            pending_tasks.append("伊机控或 CLI")
+        if not self._shutdown_worker_thread(
             self._shiny_calibration_worker,
             self._shiny_calibration_thread,
             "闪光判定校准",
-        )
-        capture_thread = self._capture_thread
-        if capture_thread is not None:
-            deadline = time.monotonic() + 2.0
-            while capture_thread.is_alive() and time.monotonic() < deadline:
-                QApplication.processEvents()
-                capture_thread.join(timeout=0.05)
-            if capture_thread.is_alive():
-                self._write_run_log("Seed 捕捉", "关闭时捕捉线程未能在 2 秒内退出", level="WARNING")
+        ):
+            pending_tasks.append("闪光判定校准")
+        if not self._shutdown_capture_thread():
+            pending_tasks.append("Seed 捕捉")
         self._release_preview_capture()
-        self.easycon_tab.shutdown_capture_keep_awake()
-        warmup_thread = self._ocr_warmup_thread
-        if warmup_thread is not None:
-            warmup_thread.requestInterruption()
-            if warmup_thread.isRunning():
-                warmup_thread.wait()
-            try:
-                warmup_thread.completed.disconnect(self._handle_ocr_warmup_completed)
-            except (RuntimeError, TypeError):
-                pass
-        self._ocr_warmup_running = False
+        if not self._shutdown_ocr_warmup_thread():
+            pending_tasks.append("OCR 预热")
+
+        if pending_tasks:
+            self._is_closing = False
+            if self._capture_thread is not None:
+                self._capture_timer.start()
+            if pending_tasks == ["伊机控或 CLI"]:
+                title = "正在停止伊机控任务"
+                message = "伊机控或 CLI 任务尚未退出，请稍后再关闭程序。"
+            else:
+                title = "正在停止后台任务"
+                message = f"{'、'.join(pending_tasks)}尚未退出，请稍后再关闭程序。"
+            QMessageBox.warning(self, title, message)
+            event.ignore()
+            return
         self._save_profile_settings()
         super().closeEvent(event)
 
-    def _shutdown_automation_runner(self, panel: object, label: str) -> None:
-        self._shutdown_worker_thread(
+    def _confirm_unsaved_easycon_script(self) -> bool:
+        if not self.easycon_tab.has_unsaved_script_changes():
+            return True
+        choice = QMessageBox.question(
+            self,
+            "未保存的伊机控脚本",
+            "伊机控脚本有未保存的修改。关闭程序前是否保存？",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if choice == QMessageBox.StandardButton.Cancel:
+            return False
+        if choice == QMessageBox.StandardButton.Save:
+            return self.easycon_tab.save_script() is not None
+        return choice == QMessageBox.StandardButton.Discard
+
+    def _request_automation_runner_stop(self, panel: object, label: str) -> None:
+        self._request_worker_stop(getattr(panel, "_runner_worker", None), label)
+
+    def _shutdown_automation_runner(
+        self,
+        panel: object,
+        label: str,
+        *,
+        request_stop: bool = True,
+        wait_ms: int = 2000,
+    ) -> bool:
+        return self._shutdown_worker_thread(
             getattr(panel, "_runner_worker", None),
             getattr(panel, "_runner_thread", None),
             label,
+            request_stop=request_stop,
+            wait_ms=wait_ms,
         )
 
-    def _shutdown_worker_thread(self, worker: object, thread: object, label: str) -> None:
+    def _request_worker_stop(self, worker: object, label: str) -> None:
         if worker is not None:
             try:
                 worker.stop()  # type: ignore[attr-defined]
             except Exception as exc:
                 self._write_run_log(label, f"关闭时停止流程失败: {exc}", level="WARNING")
+
+    def _shutdown_worker_thread(
+        self,
+        worker: object,
+        thread: object,
+        label: str,
+        *,
+        request_stop: bool = True,
+        wait_ms: int = 2000,
+    ) -> bool:
+        if request_stop:
+            self._request_worker_stop(worker, label)
         if thread is None:
-            return
+            return True
         try:
             thread.quit()  # type: ignore[attr-defined]
-            deadline = time.monotonic() + 2.0
+            deadline = time.monotonic() + max(0, wait_ms) / 1000.0
             while thread.isRunning() and time.monotonic() < deadline:  # type: ignore[attr-defined]
                 QApplication.processEvents()
-                thread.wait(50)  # type: ignore[attr-defined]
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                thread.wait(min(50, remaining_ms))  # type: ignore[attr-defined]
             if thread.isRunning():  # type: ignore[attr-defined]
-                self._write_run_log(label, "关闭时流程未能在 2 秒内退出", level="WARNING")
+                timeout_seconds = max(0, wait_ms) / 1000.0
+                self._write_run_log(
+                    label,
+                    f"关闭时流程未能在 {timeout_seconds:g} 秒内退出",
+                    level="WARNING",
+                )
+                return False
+        except RuntimeError:
+            return True
+        return True
+
+    def _shutdown_capture_thread(self, *, wait_ms: int = 2000) -> bool:
+        capture_thread = self._capture_thread
+        if capture_thread is None:
+            return True
+        deadline = time.monotonic() + max(0, wait_ms) / 1000.0
+        while capture_thread.is_alive() and time.monotonic() < deadline:
+            QApplication.processEvents()
+            remaining_seconds = max(0.001, deadline - time.monotonic())
+            capture_thread.join(timeout=min(0.05, remaining_seconds))
+        if capture_thread.is_alive():
+            timeout_seconds = max(0, wait_ms) / 1000.0
+            self._write_run_log(
+                "Seed 捕捉",
+                f"关闭时捕捉线程未能在 {timeout_seconds:g} 秒内退出",
+                level="WARNING",
+            )
+            return False
+        return True
+
+    def _shutdown_ocr_warmup_thread(self, *, wait_ms: int = 2000) -> bool:
+        warmup_thread = self._ocr_warmup_thread
+        if warmup_thread is None:
+            self._ocr_warmup_running = False
+            return True
+        try:
+            warmup_thread.requestInterruption()
+            deadline = time.monotonic() + max(0, wait_ms) / 1000.0
+            while warmup_thread.isRunning() and time.monotonic() < deadline:
+                QApplication.processEvents()
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                warmup_thread.wait(min(50, remaining_ms))
+            if warmup_thread.isRunning():
+                timeout_seconds = max(0, wait_ms) / 1000.0
+                self._write_run_log(
+                    "OCR",
+                    f"关闭时预热线程未能在 {timeout_seconds:g} 秒内退出",
+                    level="WARNING",
+                )
+                return False
+            try:
+                warmup_thread.completed.disconnect(self._handle_ocr_warmup_completed)
+            except (RuntimeError, TypeError):
+                pass
         except RuntimeError:
             pass
+        self._ocr_warmup_running = False
+        return True
 
     def _change_language(self) -> None:
         self.lang = "zh"

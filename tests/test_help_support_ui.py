@@ -93,6 +93,11 @@ def test_help_menu_exposes_expected_actions(app):
     assert controller.email_action.text() == "邮箱：kesong2003@qq.com"
     assert controller.support_action.text() == "支持项目"
     assert controller.changelog_action.text() == "更新日志"
+    assert controller.check_updates_action.text() == "检查更新…"
+    assert controller.check_updates_action.isEnabled() is False
+    assert controller.help_menu.actions().index(controller.check_updates_action) == (
+        controller.help_menu.actions().index(controller.changelog_action) + 1
+    )
     assert controller.run_log_menu.menuAction() in controller.help_menu.actions()
     assert controller.contact_menu.menuAction() in controller.help_menu.actions()
 
@@ -107,6 +112,19 @@ def test_help_menu_exposes_expected_actions(app):
         "https://github.com/XiaoyuBook",
     ]
     assert copied == ["kesong2003@qq.com"]
+
+
+def test_help_menu_check_updates_action_uses_injected_callback(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    checked: list[bool] = []
+    controller = HelpMenuController(QMainWindow(), check_updates=lambda: checked.append(True))
+    controller.install()
+
+    controller.check_updates_action.trigger()
+
+    assert controller.check_updates_action.isEnabled() is True
+    assert checked == [True]
 
 
 def test_help_menu_run_log_actions_apply_actual_state_and_open_directory(app):

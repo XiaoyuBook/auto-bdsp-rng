@@ -418,6 +418,7 @@ class EasyConPanel(QWidget):
         self._capture_keep_awake_cli_duration_ms = 0
         self._capture_keep_awake_cli_timed_out = False
         self._capture_keep_awake_cli_cancelled = False
+        self._shutting_down = False
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self.bridge_connecting = False
         self.current_script_path: Path | None = None
@@ -1351,6 +1352,9 @@ class EasyConPanel(QWidget):
         thread.start()
 
     def _bridge_run_finished(self, result: object) -> None:
+        if self._shutting_down:
+            self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
+            return
         if result.stdout:
             self._append_log("stdout", result.stdout.rstrip())
         if result.stderr:
@@ -1379,6 +1383,9 @@ class EasyConPanel(QWidget):
         self._update_bridge_controls()
 
     def _bridge_run_failed(self, error: str) -> None:
+        if self._shutting_down:
+            self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
+            return
         self.stop_requested = False
         self._append_log("error", f"Bridge 运行失败: {error}")
         self.bridge_status = EasyConStatus.FAILED
@@ -1606,11 +1613,13 @@ class EasyConPanel(QWidget):
         self._update_run_enabled()
         self._update_dirty_indicator()
 
+    def has_unsaved_script_changes(self) -> bool:
+        return self.editor.toPlainText() != self._saved_editor_text
+
     def _update_dirty_indicator(self) -> None:
         if not hasattr(self, "script_name_label"):
             return
-        current = self.editor.toPlainText()
-        dirty = current != self._saved_editor_text
+        dirty = self.has_unsaved_script_changes()
         name = self.current_script_name
         if dirty and not name.startswith("*"):
             name = "*" + name
@@ -1996,14 +2005,48 @@ class EasyConPanel(QWidget):
         self._update_bridge_controls()
         self._update_run_enabled()
 
-    def shutdown_capture_keep_awake(self) -> None:
+    def shutdown_capture_keep_awake(self) -> bool:
         self._capture_keep_awake_shutting_down = True
-        self._settle_capture_keep_awake_cli(wait_ms=CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS)
+        cli_stopped = self._settle_capture_keep_awake_cli(
+            wait_ms=CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS
+        )
         executor = self._capture_keep_awake_executor
         self._capture_keep_awake_executor = None
         self._capture_keep_awake_future = None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
+        return cli_stopped
+
+    def shutdown(self, *, wait_ms: int = 2000) -> bool:
+        if not self._shutting_down:
+            self._shutting_down = True
+            self.run_timer.stop()
+            self._release_virtual_controller_keys()
+        stopped = self.shutdown_capture_keep_awake()
+
+        process = self.process
+        if process is not None and process.state() != QProcess.ProcessState.NotRunning:
+            process.kill()
+            if not process.waitForFinished(wait_ms):
+                stopped = False
+
+        backend = self.bridge_backend
+        if backend is not None:
+            try:
+                backend.close()
+            except Exception as exc:
+                stopped = False
+                self._append_log("warn", f"关闭 Bridge 进程失败: {exc}")
+            else:
+                self.bridge_backend = None
+
+        thread = self.bridge_run_thread
+        if thread is not None and thread.isRunning():
+            thread.requestInterruption()
+            thread.quit()
+            if not thread.wait(wait_ms):
+                stopped = False
+        return stopped
 
     def _start_capture_keep_awake_cli(self, log_label: str, duration_ms: int) -> bool:
         if self.bridge_status == EasyConStatus.RUNNING:
@@ -2369,6 +2412,8 @@ class EasyConPanel(QWidget):
         return True
 
     def _ensure_bridge_backend(self) -> BridgeEasyConBackend:
+        if self._shutting_down:
+            raise RuntimeError("伊机控页面正在关闭")
         bridge_path = self._bridge_path_from_ui()
         if self.bridge_backend is None:
             self.bridge_backend = BridgeEasyConBackend(bridge_path=bridge_path, log_callback=self.bridge_log.emit)

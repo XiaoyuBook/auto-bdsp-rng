@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import subprocess
 import threading
 import time
 from collections.abc import Mapping
@@ -180,6 +181,39 @@ def test_bridge_write_timeout_breaks_transport_without_holding_lock_or_blocking_
     release_flush.set()
     transport._writer.join(timeout=1)
     assert not transport._writer.is_alive()
+
+
+def test_bridge_close_reports_process_that_cannot_be_killed():
+    class StubbornProcess:
+        stdin = None
+        stdout = None
+        stderr = None
+
+        @staticmethod
+        def poll():
+            return None
+
+        @staticmethod
+        def terminate() -> None:
+            pass
+
+        @staticmethod
+        def kill() -> None:
+            pass
+
+        @staticmethod
+        def wait(*, timeout: float) -> int:
+            raise subprocess.TimeoutExpired("bridge", timeout)
+
+    transport = JsonLineBridgeTransport.__new__(JsonLineBridgeTransport)
+    transport._process = StubbornProcess()
+    transport._lock = threading.Lock()
+    transport._pending = {}
+    transport._closed_error = None
+    transport._write_queue = queue.Queue()
+
+    with pytest.raises(BridgeProtocolError, match="强制结束 Bridge 进程失败"):
+        transport.close()
 
 
 def test_keep_awake_press_response_timeout_terminates_transport_and_wakes_waiters():

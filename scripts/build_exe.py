@@ -14,6 +14,7 @@ from pathlib import Path
 
 APP_NAME = "auto-bdsp-rng"
 EXE_NAME = "珍钻复刻自动乱数"
+UPDATER_EXE_NAME = "auto-bdsp-rng-updater.exe"
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 VERSION = f"v{PROJECT_VERSION}"
@@ -24,6 +25,7 @@ DIST_DIR = ROOT / "dist" / APP_NAME
 RELEASE_DIR = ROOT / "release"
 ZIP_PATH = RELEASE_DIR / ZIP_NAME
 SPEC_PATH = ROOT / "packaging" / f"{APP_NAME}.spec"
+UPDATER_SPEC_PATH = ROOT / "packaging" / f"{APP_NAME}-updater.spec"
 ICON_PNG = ROOT / "docs" / "assets" / "app-icon.png"
 ICON_ICO = ROOT / "docs" / "assets" / "app-icon.ico"
 BRIDGE_PROJECT = ROOT / "bridge" / "EasyConBridge" / "EasyConBridge.csproj"
@@ -56,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     report_private_sponsor_assets()
     stage("Run PyInstaller")
     build_pyinstaller(python)
+    stage("Build updater")
+    build_updater(python)
     stage("Verify packaged OCR")
     verify_packaged_ocr()
     stage("Copy release files")
@@ -170,6 +174,15 @@ def build_pyinstaller(python: Path) -> None:
         raise SystemExit(f"PyInstaller did not create {exe}")
 
 
+def build_updater(python: Path) -> None:
+    run([str(python), "-m", "PyInstaller", "--noconfirm", "--clean", str(UPDATER_SPEC_PATH)], cwd=ROOT)
+    source = ROOT / "dist" / UPDATER_EXE_NAME
+    if not source.exists():
+        raise SystemExit(f"PyInstaller did not create {source}")
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, DIST_DIR / UPDATER_EXE_NAME)
+
+
 def verify_packaged_ocr() -> None:
     exe = DIST_DIR / f"{EXE_NAME}.exe"
     output = BUILD_DIR / "ocr-smoke.txt"
@@ -262,6 +275,7 @@ def write_user_readme(path: Path) -> None:
                 f"auto-bdsp-rng {VERSION}",
                 "",
                 f"启动方式：双击 {EXE_NAME}.exe。",
+                "后续版本可在软件的“帮助 -> 检查更新…”中下载增量升级包并自动重启完成升级。",
                 "",
                 f"请不要只复制 exe。必须保留 {EXE_NAME}.exe 旁边的 _internal、script、bridge、docs 等目录。",
                 f"普通用户不要下载 GitHub 绿色 Code 按钮里的 Source code zip，请下载 Release 里的 {ZIP_NAME}。",

@@ -32,6 +32,7 @@ class HelpMenuController:
         run_log_enabled: bool = False,
         set_run_log_enabled: Callable[[bool], bool] | None = None,
         open_run_log_dir: Callable[[], object] | None = None,
+        check_updates: Callable[[], object] | None = None,
     ) -> None:
         self.window = window
         self.open_url = open_url or self._open_url
@@ -40,6 +41,7 @@ class HelpMenuController:
         self._run_log_enabled = bool(run_log_enabled)
         self.set_run_log_enabled = set_run_log_enabled
         self.open_run_log_dir = open_run_log_dir
+        self.check_updates = check_updates
 
     def install(self, button: QToolButton | QPushButton | None = None) -> QMenu:
         self.help_menu = self._build_menu(parent=button or self.window)
@@ -69,6 +71,11 @@ class HelpMenuController:
         self.changelog_action = QAction("更新日志", self.window)
         self.changelog_action.triggered.connect(self.show_changelog)
         menu.addAction(self.changelog_action)
+
+        self.check_updates_action = QAction("检查更新…", self.window)
+        self.check_updates_action.setEnabled(self.check_updates is not None)
+        self.check_updates_action.triggered.connect(self._check_updates)
+        menu.addAction(self.check_updates_action)
 
         menu.addSeparator()
         self.run_log_menu = QMenu("运行日志", self.window)
@@ -124,6 +131,10 @@ class HelpMenuController:
     def _open_run_log_dir(self) -> None:
         if self.open_run_log_dir is not None:
             self.open_run_log_dir()
+
+    def _check_updates(self) -> None:
+        if self.check_updates is not None:
+            self.check_updates()
 
     def copy_author_email(self) -> None:
         self.copy_text(AUTHOR_EMAIL)
