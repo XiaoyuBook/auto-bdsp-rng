@@ -221,6 +221,20 @@ def test_reidentify_seed_from_observation_falls_back_to_project_xs_rngtool(monke
     assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
 
 
+def test_reidentify_seed_from_observation_uses_chinese_failure_message(monkeypatch):
+    def fail_reidentify(*_args, **_kwargs):
+        raise RuntimeError("failed")
+
+    monkeypatch.setattr(project_xs_module, "_try_native_reidentify_by_intervals", lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
+    monkeypatch.setitem(sys.modules, "rngtool", types.SimpleNamespace(reidentiy_by_intervals=fail_reidentify))
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    observation = BlinkObservation.from_sequences([], [0, 12, 24])
+
+    with pytest.raises(ProjectXsIntegrationError, match="Project_Xs 校正失败"):
+        reidentify_seed_from_observation(state, observation)
+
+
 def test_noisy_reidentify_seed_from_observation_prefers_native(monkeypatch):
     native_calls: list[tuple[SeedState32, tuple[int, ...], int, int]] = []
 
@@ -265,6 +279,24 @@ def test_noisy_reidentify_seed_from_observation_falls_back_to_project_xs_rngtool
 
     assert result.advances == 43
     assert result.state.format_seed64_pair() == ("123456789ABCDEF0", "1111111122222222")
+
+
+def test_noisy_reidentify_seed_from_observation_uses_chinese_failure_message(monkeypatch):
+    def fail_reidentify(*_args, **_kwargs):
+        raise RuntimeError("failed")
+
+    monkeypatch.setattr(project_xs_module, "_try_native_reidentify_by_intervals_noisy", lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(sys.modules, "xorshift", types.SimpleNamespace(Xorshift=FakeRng))
+    monkeypatch.setitem(
+        sys.modules,
+        "rngtool",
+        types.SimpleNamespace(reidentiy_by_intervals_noisy=fail_reidentify),
+    )
+    state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    observation = BlinkObservation.from_sequences([], [0, 12, 24])
+
+    with pytest.raises(ProjectXsIntegrationError, match="Project_Xs 抗干扰校正失败"):
+        reidentify_seed_from_observation_noisy(state, observation)
 
 
 def test_advance_seed_state_uses_project_xs_xorshift(monkeypatch):

@@ -694,7 +694,7 @@ def _try_native_reidentify_by_intervals(
         native_seed0, native_seed1, advances = result
         return _state_from_seed_pair(int(native_seed0), int(native_seed1)), int(advances)
     except (TypeError, ValueError) as exc:
-        raise ProjectXsIntegrationError("Native reidentify returned an invalid result") from exc
+        raise ProjectXsIntegrationError("原生校正返回了无效结果") from exc
 
 
 def _try_native_reidentify_by_intervals_noisy(
@@ -722,7 +722,7 @@ def _try_native_reidentify_by_intervals_noisy(
         native_seed0, native_seed1, advances = result
         return _state_from_seed_pair(int(native_seed0), int(native_seed1)), int(advances)
     except (TypeError, ValueError) as exc:
-        raise ProjectXsIntegrationError("Native noisy reidentify returned an invalid result") from exc
+        raise ProjectXsIntegrationError("原生抗干扰校正返回了无效结果") from exc
 
 
 def reidentify_seed_from_observation(
@@ -764,15 +764,15 @@ def reidentify_seed_from_observation(
             return_advance=True,
         )
     except Exception as exc:
-        raise ProjectXsIntegrationError("Project_Xs reidentify failed") from exc
+        raise ProjectXsIntegrationError("Project_Xs 校正失败") from exc
 
     if reidentified_rng is None:
-        raise ProjectXsIntegrationError("Project_Xs reidentify did not find a matching state")
+        raise ProjectXsIntegrationError("Project_Xs 校正未找到匹配状态")
 
     try:
         reidentified_state = SeedState32.from_words(reidentified_rng.get_state())
     except (AttributeError, TypeError, ValueError) as exc:
-        raise ProjectXsIntegrationError("Project_Xs reidentify returned an invalid seed state") from exc
+        raise ProjectXsIntegrationError("Project_Xs 校正返回了无效 Seed 状态") from exc
 
     return ProjectXsReidentifyResult(
         state=reidentified_state,
@@ -817,15 +817,15 @@ def reidentify_seed_from_observation_noisy(
             search_max=search_max,
         )
     except Exception as exc:
-        raise ProjectXsIntegrationError("Project_Xs noisy reidentify failed") from exc
+        raise ProjectXsIntegrationError("Project_Xs 抗干扰校正失败") from exc
 
     if reidentified_rng is None:
-        raise ProjectXsIntegrationError("Project_Xs noisy reidentify did not find a matching state")
+        raise ProjectXsIntegrationError("Project_Xs 抗干扰校正未找到匹配状态")
 
     try:
         reidentified_state = SeedState32.from_words(reidentified_rng.get_state())
     except (AttributeError, TypeError, ValueError) as exc:
-        raise ProjectXsIntegrationError("Project_Xs noisy reidentify returned an invalid seed state") from exc
+        raise ProjectXsIntegrationError("Project_Xs 抗干扰校正返回了无效 Seed 状态") from exc
 
     return ProjectXsReidentifyResult(
         state=reidentified_state,

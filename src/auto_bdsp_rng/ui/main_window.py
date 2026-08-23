@@ -525,6 +525,7 @@ TEXT = {
         "config": "配置",
         "browse": "浏览",
         "monitor_window": "捕捉窗口",
+        "reidentify_1_pk_npc": "1 PK NPC 校正",
         "window_prefix": "窗口前缀",
         "camera": "摄像头",
         "x": "X",
@@ -540,7 +541,7 @@ TEXT = {
         "pokemon_npcs": "Pokemon NPC 数",
         "display_percent": "显示百分比",
         "capture_seed": "捕捉 Seed",
-        "reidentify_seed": "重新识别",
+        "reidentify_seed": "校正",
         "stop_capture": "停止捕捉",
         "preview_button": "预览",
         "stop_preview": "停止预览",
@@ -564,7 +565,7 @@ TEXT = {
         "capture_stopped": "捕捉已停止",
         "seed_captured_npc_fallback": "Seed 捕捉完成，已将 NPC 数重置为 0",
         "seed_captured": "Seed 捕捉完成",
-        "seed_reidentified": "Seed 重新识别完成",
+        "seed_reidentified": "Seed 校正完成",
         "config_saved": "配置已保存",
         "preview_running": "正在预览",
         "results": "条结果",
@@ -1210,7 +1211,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.seed_config_combo, 0, 3)
         outer.addWidget(self.advances_label, 1, 0)
         outer.addWidget(self.advances_value, 1, 1)
-        outer.addWidget(QLabel("Reidentify 配置"), 1, 2)
+        outer.addWidget(QLabel("校正配置"), 1, 2)
         outer.addWidget(self.reidentify_config_combo, 1, 3)
         outer.setColumnStretch(3, 1)
         return group
@@ -3348,6 +3349,13 @@ class MainWindow(QMainWindow):
     def _is_capturing(self) -> bool:
         return self._capture_thread is not None and self._capture_thread.is_alive()
 
+    def _capture_mode_label(self) -> str:
+        return {
+            "seed": "Seed 捕捉",
+            "reidentify": "校正捕捉",
+            "tidsid": "TID/SID 捕捉",
+        }.get(self._capture_mode, self._capture_mode)
+
     def _ensure_preview_for_auto_rng(self) -> bool:
         return self._ensure_preview_frame_before_capture()
 
@@ -3388,7 +3396,7 @@ class MainWindow(QMainWindow):
             try:
                 self._current_auto_rng_seed_result()
             except ValueError as exc:
-                QMessageBox.warning(self, "缺少 Seed", f"从 Reidentify 开始需要先填入有效 Seed。\n{exc}")
+                QMessageBox.warning(self, "缺少 Seed", f"从校正开始需要先填入有效 Seed。\n{exc}")
                 return
         if not self._ensure_preview_for_auto_rng():
             return
@@ -4026,7 +4034,7 @@ class MainWindow(QMainWindow):
                 search_max=search_max,
             )
             log_reidentify_debug(
-                "reidentify",
+                "校正",
                 source_config,
                 search_min,
                 search_max,
@@ -4045,7 +4053,7 @@ class MainWindow(QMainWindow):
             # 校验 reidentify 结果与预期的偏差
             if hint is not None and abs(current_advances - hint) > 20_000:
                 self.auto_rng_tab.captureLog.emit(
-                    f"reidentify 结果 {current_advances} 偏离预期 {hint} 超过 20000，"
+                    f"校正结果 {current_advances} 偏离预期 {hint} 超过 20000，"
                     f"可能识别错误，但仍继续（由上层决策判断）"
                 )
             # reidentify 不改变 seed，只更新 current_advances 位置
@@ -4101,7 +4109,7 @@ class MainWindow(QMainWindow):
                 search_max=search_max,
             )
             log_reidentify_debug(
-                "过场 reidentify",
+                "过场校正",
                 exit_tracking_config,
                 search_min,
                 search_max,
@@ -4684,7 +4692,7 @@ class MainWindow(QMainWindow):
             self._capture_cancel.set()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
-            self._write_run_log("Seed 捕捉", f"已请求停止 {self._capture_mode} 捕捉", level="WARNING")
+            self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
             return
         try:
             config = self._config_from_form()
@@ -4760,13 +4768,13 @@ class MainWindow(QMainWindow):
             self._capture_cancel.set()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
-            self._write_run_log("Seed 捕捉", f"已请求停止 {self._capture_mode} 捕捉", level="WARNING")
+            self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
             return
         try:
             config = self._config_from_form()
             current_state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
         except Exception as exc:
-            self._show_error("Reidentify failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            self._show_error("校正失败", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
         if not self._ensure_preview_frame_before_capture():
             return
@@ -4792,7 +4800,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Capturing {reidentify_blink_count} blinks...")
         self._write_run_log(
             "Seed 捕捉",
-            f"开始 Reidentify；眨眼数 {reidentify_blink_count}；NPC {config.npc}；当前 Adv {tracked_advances}",
+            f"开始校正；眨眼数 {reidentify_blink_count}；NPC {config.npc}；当前 Adv {tracked_advances}",
         )
 
         last_display_frame_at = 0.0
@@ -4841,7 +4849,7 @@ class MainWindow(QMainWindow):
             self._capture_cancel.set()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
-            self._write_run_log("Seed 捕捉", f"已请求停止 {self._capture_mode} 捕捉", level="WARNING")
+            self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
             return
         try:
             config = self._config_from_form()
@@ -4934,10 +4942,10 @@ class MainWindow(QMainWindow):
         if self._capture_error is not None:
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))
-                self._write_run_log("Seed 捕捉", f"{self._capture_mode} 捕捉已停止", level="WARNING")
+                self._write_run_log("Seed 捕捉", f"{self._capture_mode_label()}已停止", level="WARNING")
             else:
                 title = (
-                    "Reidentify failed"
+                    "校正失败"
                     if self._capture_mode == "reidentify"
                     else "TID/SID capture failed"
                     if self._capture_mode == "tidsid"
@@ -4949,7 +4957,7 @@ class MainWindow(QMainWindow):
         result = self._capture_result
         if result is None:
             self.statusBar().showMessage(self._text("capture_stopped"))
-            self._write_run_log("Seed 捕捉", f"{self._capture_mode} 捕捉未返回结果", level="WARNING")
+            self._write_run_log("Seed 捕捉", f"{self._capture_mode_label()}未返回结果", level="WARNING")
             return
         # reidentify 不修改 seed，只更新 current_advances
         if self._capture_mode != "reidentify":
@@ -4978,7 +4986,7 @@ class MainWindow(QMainWindow):
         if self._capture_mode == "reidentify":
             self.advances_value.setText(str(self._tracked_advances))
             self.statusBar().showMessage(self._text("seed_reidentified"))
-            self._write_run_log("Seed 捕捉", f"Reidentify 完成；当前 Adv {self._tracked_advances}")
+            self._write_run_log("Seed 捕捉", f"校正完成；当前 Adv {self._tracked_advances}")
         elif self._capture_mode == "tidsid":
             self.statusBar().showMessage("TID/SID 测种完成")
             self._write_run_log(

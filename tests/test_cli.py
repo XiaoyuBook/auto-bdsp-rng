@@ -4,6 +4,12 @@ from auto_bdsp_rng.__main__ import main
 import auto_bdsp_rng.__main__ as cli
 
 
+def test_reidentify_command_help_uses_chinese_term():
+    help_text = cli.build_parser().format_help()
+
+    assert "校正已有的 Seed[0-3]" in help_text
+
+
 def test_blink_config_command_prints_project_xs_config(capsys):
     assert main(["blink-config", "--project-xs-config", "config_cave.json"]) == 0
 

@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reidentify = subparsers.add_parser(
         "reidentify",
-        help="Capture later blink intervals and reidentify an existing Seed[0-3].",
+        help="捕捉后续眨眼间隔，并校正已有的 Seed[0-3]。",
     )
     reidentify.add_argument(
         "--project-xs-config",
@@ -143,7 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--blink-count",
         type=int,
         default=7,
-        help="Blink interval count to capture for reidentify.",
+        help="校正时要捕捉的眨眼间隔数量。",
     )
     reidentify.add_argument(
         "--npc",

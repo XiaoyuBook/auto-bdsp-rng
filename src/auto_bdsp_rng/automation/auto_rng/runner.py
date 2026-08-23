@@ -394,7 +394,7 @@ def decide_after_advance_script(requested_advances: int, *, reseed_threshold_fra
         kind=AutoRngDecisionKind.REIDENTIFY,
         phase=AutoRngPhase.REIDENTIFY,
         requested_advances=requested_advances,
-        message=f"过帧量 {requested_advances} 未超过重测阈值 {reseed_threshold_frames}，执行 reidentify",
+        message=f"过帧量 {requested_advances} 未超过重测阈值 {reseed_threshold_frames}，执行校正",
     )
 
 
@@ -510,7 +510,7 @@ class AutoRngRunner:
                 )
             elif self.config.start_phase == AutoRngPhase.REIDENTIFY:
                 if self.services.current_seed is None:
-                    raise RuntimeError("从 reidentify 开始需要当前 Seed")
+                    raise RuntimeError("从校正开始需要当前 Seed")
                 self._completed_loops += 1
                 self._cycle_started = True
                 self._sync_initial = self.config.sync_mode >= 2
@@ -521,7 +521,7 @@ class AutoRngRunner:
                 self._history("cycle_start", self._completed_loops)
                 self._set_progress(
                     AutoRngPhase.REIDENTIFY,
-                    "开始自动流程，从 reidentify 开始",
+                    "开始自动流程，从校正开始",
                     loop_index=self._completed_loops,
                     seed_text=self._seed_result.seed_text,
                     current_advances=self._seed_result.current_advances,
@@ -858,18 +858,18 @@ class AutoRngRunner:
                 self._call_reidentify_with_retry(
                     self.services.reidentify,
                     seed_with_hint,
-                    label="reidentify",
+                    label="校正",
                 )
             )
         except Exception as exc:
-            self._restart_from_seed_script(f"reidentify 连续 2 次失败: {exc}，进入下一轮测种")
+            self._restart_from_seed_script(f"校正连续 2 次失败: {exc}，进入下一轮测种")
             return
         self._reset_advance_counter(self._seed_result)
         new_advances = self._seed_result.current_advances
         actual_advance = new_advances - prev_advances
         self._set_progress(
             next_phase,
-            f"重新识别完成——目前帧数 {new_advances} 帧，上次实际过帧 {actual_advance} 帧",
+            f"校正完成——目前帧数 {new_advances} 帧，上次实际过帧 {actual_advance} 帧",
             current_advances=new_advances,
             seed_text=self._seed_result.seed_text,
         )
@@ -882,7 +882,7 @@ class AutoRngRunner:
             return
         service = self.services.reidentify_exit
         if service is None:
-            raise RuntimeError("过场 Reidentify 服务未配置")
+            raise RuntimeError("过场校正服务未配置")
         seed = self._require_seed()
         self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
         try:
@@ -891,13 +891,13 @@ class AutoRngRunner:
                     self._call_reidentify_with_retry(
                         service,
                         seed,
-                        label="过场 reidentify",
+                        label="过场校正",
                     )
                 ),
                 after_exit_reseed=True,
             )
         except Exception as exc:
-            self._restart_from_seed_script(f"过场 reidentify 连续 2 次失败: {exc}，进入下一轮测种")
+            self._restart_from_seed_script(f"过场校正连续 2 次失败: {exc}，进入下一轮测种")
             return
         self._reset_advance_counter(self._seed_result)
         self._reserved_exit_reseed_pending = False

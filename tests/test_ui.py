@@ -189,7 +189,10 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     assert layout.itemAtPosition(0, 3).widget() is window.seed_config_combo
     assert layout.itemAtPosition(1, 0).widget() is window.advances_label
     assert layout.itemAtPosition(1, 1).widget() is window.advances_value
+    assert layout.itemAtPosition(1, 2).widget().text() == "校正配置"
     assert layout.itemAtPosition(1, 3).widget() is window.reidentify_config_combo
+    assert window.reidentify_button.text() == "校正"
+    assert window.reidentify_1_pk_npc.text() == "1 PK NPC 校正"
     assert window.status_group.maximumHeight() >= 148
     assert window.status_group.maximumWidth() <= 760
     assert window.refresh_seed_configs_button.isHidden()
@@ -703,6 +706,7 @@ def test_reidentify_updates_advances_and_keeps_seed(app, monkeypatch):
     state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
 
     capture_counts: list[int] = []
+    run_logs: list[str] = []
 
     def fake_capture(config, *args, **kwargs):
         capture_counts.append(config.blink_count)
@@ -712,6 +716,11 @@ def test_reidentify_updates_advances_and_keeps_seed(app, monkeypatch):
     monkeypatch.setattr(
         "auto_bdsp_rng.ui.main_window.reidentify_seed_from_observation",
         lambda *_args, **_kwargs: ProjectXsReidentifyResult(state=state, observation=observation, advances=42),
+    )
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda _source, message, **_kwargs: run_logs.append(str(message)),
     )
     original_words = ["12345678", "9ABCDEF0", "11111111", "22222222"]
     for box, text in zip(window.seed32_inputs, original_words):
@@ -726,6 +735,9 @@ def test_reidentify_updates_advances_and_keeps_seed(app, monkeypatch):
     assert int(window.advances_value.text()) >= 42
     assert capture_counts == [7]
     assert window.result_count.text() == "3 条结果"
+    assert window.statusBar().currentMessage() == "Seed 校正完成"
+    assert any(message.startswith("开始校正；") for message in run_logs)
+    assert any(message.startswith("校正完成；") for message in run_logs)
 
 
 def test_reidentify_noisy_option_uses_20_blinks_and_noisy_reidentify(app, monkeypatch):
@@ -954,6 +966,9 @@ def test_main_window_header_shows_auto_rng_runtime_status(app):
     assert window.auto_phase_badge.text() == "阶段 空闲"
     assert window.auto_advance_badge.text() == "advance 0"
 
+    window.auto_rng_tab.autoProgressChanged.emit(AutoRngProgress(phase=AutoRngPhase.REIDENTIFY))
+    assert window.auto_phase_badge.text() == "阶段 校正位置"
+
     window.auto_rng_tab.autoProgressChanged.emit(
         AutoRngProgress(
             phase=AutoRngPhase.RUN_HIT_SCRIPT,
@@ -1135,6 +1150,7 @@ def test_auto_rng_panel_can_start_from_reidentify_via_menu(app, tmp_path):
     panel.startRequested.connect(lambda config: emitted.append(config))
     panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
 
+    assert panel.start_from_reidentify_action.text() == "从校正开始"
     panel.start_from_reidentify_action.trigger()
 
     assert len(emitted) == 1
@@ -1155,7 +1171,8 @@ def test_main_window_reidentify_start_requires_existing_seed(app, tmp_path, monk
 
     assert not started
     assert warnings
-    assert "Seed" in warnings[0]
+    assert "从校正开始需要先填入有效 Seed" in warnings[0]
+    assert "reidentify" not in warnings[0].lower()
 
 
 def test_main_window_exposes_shiny_threshold_calibration_button_on_seed_capture_tab(app):
@@ -1375,6 +1392,9 @@ def test_auto_rng_stop_button_requests_runner_stop_immediately(app):
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     panel = AutoRngPanel()
 
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.REIDENTIFY))
+    assert panel.status_badge.text() == "校正位置"
+
     panel.apply_progress(
         AutoRngProgress(
             phase=AutoRngPhase.RUN_HIT_SCRIPT,
@@ -1393,6 +1413,20 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
 
     assert panel.status_badge.text() == "运行撞闪脚本"
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
+
+
+def test_manual_reidentify_invalid_seed_uses_chinese_error_title(app, monkeypatch):
+    window = MainWindow()
+    errors: list[str] = []
+    monkeypatch.setattr(window, "_show_error", lambda title, _error, **_kwargs: errors.append(title))
+    for box in window.seed32_inputs:
+        box.clear()
+
+    window.reidentify_seed()
+
+    assert errors == ["校正失败"]
+    window._capture_mode = "reidentify"
+    assert window._capture_mode_label() == "校正捕捉"
 
 
 def test_auto_rng_progress_current_advances_syncs_header_counter(app):

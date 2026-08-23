@@ -255,6 +255,7 @@ def test_advance_request_at_threshold_reidentifies():
 
     assert decision.kind == AutoRngDecisionKind.REIDENTIFY
     assert decision.phase == AutoRngPhase.REIDENTIFY
+    assert decision.message.endswith("执行校正")
 
 
 def test_runner_preserves_original_advance_request_without_exit_script(tmp_path):
@@ -844,6 +845,7 @@ def test_runner_reidentify_failure_restarts_seed_script_in_infinite_loop(tmp_pat
     hit_script.write_text(f"{AUTO_HIT_PARAMETER} = 60\n", encoding="utf-8")
     scripts: list[tuple[str, str]] = []
     attempts = 0
+    messages: list[str] = []
 
     def reidentify(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
         nonlocal attempts
@@ -866,6 +868,7 @@ def test_runner_reidentify_failure_restarts_seed_script_in_infinite_loop(tmp_pat
             reidentify=reidentify,
             run_script_text=lambda text, name: scripts.append((name, text)),
         ),
+        progress_callback=lambda progress: messages.append(progress.log_message or ""),
     )
 
     runner.run(max_steps=7)
@@ -877,6 +880,7 @@ def test_runner_reidentify_failure_restarts_seed_script_in_infinite_loop(tmp_pat
     ]
     assert attempts == 2
     assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+    assert any(message.startswith("校正连续 2 次失败:") for message in messages)
 
 
 def test_runner_continues_when_second_reidentify_attempt_succeeds(tmp_path):
@@ -935,6 +939,7 @@ def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
     exit_script.write_text("EXIT\n", encoding="utf-8")
     scripts: list[tuple[str, str]] = []
     attempts = 0
+    messages: list[str] = []
 
     def reidentify_exit(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
         nonlocal attempts
@@ -958,6 +963,7 @@ def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
             reidentify_exit=reidentify_exit,
             run_script_text=lambda text, name: scripts.append((name, text)),
         ),
+        progress_callback=lambda progress: messages.append(progress.log_message or ""),
     )
 
     runner.run(max_steps=5)
@@ -968,6 +974,7 @@ def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
     ]
     assert attempts == 2
     assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+    assert any(message.startswith("过场校正连续 2 次失败:") for message in messages)
 
 
 def test_runner_retries_seed_capture_failures_until_fifth_failure(tmp_path):
@@ -1127,6 +1134,7 @@ def test_runner_runs_advance_script_then_reidentifies_when_request_is_within_thr
 
 def test_runner_can_start_from_reidentify_with_current_seed(tmp_path):
     calls: list[str] = []
+    messages: list[str] = []
     services = AutoRngServices(
         current_seed=lambda: calls.append("current_seed") or AutoRngSeedResult(seed="seed-0", current_advances=0),
         reidentify=lambda seed: calls.append(f"reidentify:{seed.seed}") or AutoRngSeedResult(
@@ -1141,6 +1149,7 @@ def test_runner_can_start_from_reidentify_with_current_seed(tmp_path):
             start_phase=AutoRngPhase.REIDENTIFY,
         ),
         services=services,
+        progress_callback=lambda progress: messages.append(progress.log_message or ""),
     )
 
     runner.run(max_steps=3)
@@ -1148,6 +1157,7 @@ def test_runner_can_start_from_reidentify_with_current_seed(tmp_path):
     assert calls == ["current_seed", "reidentify:seed-0"]
     assert runner.progress.phase == AutoRngPhase.COMPLETED
     assert runner.progress.current_advances == 123
+    assert "开始自动流程，从校正开始" in messages
 
 
 def test_runner_final_calibrate_runs_fixed_hit_script(tmp_path):

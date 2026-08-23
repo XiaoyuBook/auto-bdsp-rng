@@ -178,7 +178,7 @@ class AutoRngPanel(QWidget):
         self.start_menu = QMenu(self.start_button)
         self.start_from_seed_action = QAction("从测种开始", self.start_button)
         self.start_from_capture_action = QAction("从捕获 Seed 开始", self.start_button)
-        self.start_from_reidentify_action = QAction("从 Reidentify 开始", self.start_button)
+        self.start_from_reidentify_action = QAction("从校正开始", self.start_button)
         self.start_menu.addAction(self.start_from_seed_action)
         self.start_menu.addAction(self.start_from_capture_action)
         self.start_menu.addAction(self.start_from_reidentify_action)

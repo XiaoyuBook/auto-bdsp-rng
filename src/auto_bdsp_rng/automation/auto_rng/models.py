@@ -13,7 +13,7 @@ class AutoRngPhase(str, Enum):
     RUN_SEED_SCRIPT = "运行测种脚本"
     DECIDE_ADVANCE = "决策过帧"
     RUN_ADVANCE_SCRIPT = "运行过帧脚本"
-    REIDENTIFY = "重新识别位置"
+    REIDENTIFY = "校正位置"
     EXIT_RESEED = "exit_reseed"
     FINAL_CALIBRATE = "最终校准"
     FINAL_WAIT = "等待触发"
