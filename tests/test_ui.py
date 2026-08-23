@@ -606,8 +606,15 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     assert panel.escape_continue_check.text() == "逃跑续搜"
     assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.RightToLeft
     assert layout.itemAtPosition(1, 2).alignment() == (
-        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        Qt.AlignmentFlag.AlignLeft
+        | Qt.AlignmentFlag.AlignVCenter
+        | Qt.AlignmentFlag.AlignAbsolute
     )
+    panel.resize(1000, 700)
+    panel.show()
+    app.processEvents()
+    advance_label = layout.itemAtPosition(0, 2).widget()
+    assert panel.escape_continue_check.geometry().left() == advance_label.geometry().left()
     assert not panel.escape_continue_check.isChecked()
     assert not panel.escape_script_combo.isEnabled()
     assert "每次未出闪都会重复" in panel.escape_continue_check.toolTip()
