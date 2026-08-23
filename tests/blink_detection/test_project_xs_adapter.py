@@ -10,6 +10,7 @@ from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     BlinkObservation,
     PokemonBlinkObservation,
+    PreviewFrameCapture,
     SeedState32,
     advance_seed_state,
     capture_pokemon_blinks,
@@ -134,6 +135,22 @@ class FakeWindowCapture:
 
     def read(self):
         return True, "window-frame"
+
+    def release(self):
+        self.released = True
+
+
+class FakeQtWindowCapture:
+    last_instance = None
+
+    def __init__(self, target, crop):
+        self.target = target
+        self.crop = crop
+        self.released = False
+        FakeQtWindowCapture.last_instance = self
+
+    def read(self):
+        return True, "obs-frame"
 
     def release(self):
         self.released = True
@@ -328,6 +345,92 @@ def test_capture_pokemon_blinks_uses_project_xs_rngtool(monkeypatch, tmp_path):
     observation = capture_pokemon_blinks(config)
 
     assert observation.intervals == (1.25, 3.5)
+
+
+def test_capture_player_blinks_from_obs_without_callbacks_uses_controlled(monkeypatch, tmp_path):
+    target = object()
+    calls = []
+    monkeypatch.setattr(project_xs_module, "_read_grayscale_image", lambda _path: "eye-image")
+    monkeypatch.setattr(project_xs_module, "_obs_window_target", lambda _config: target)
+
+    def fake_controlled(eye_image, config, **kwargs):
+        calls.append((eye_image, config, kwargs))
+        return [0, 1], [0, 12], 123.0
+
+    monkeypatch.setattr(project_xs_module, "_tracking_blink_controlled", fake_controlled)
+    monkeypatch.setattr(
+        project_xs_module,
+        "_load_module",
+        lambda _name: pytest.fail("OBS capture must not delegate to Project_Xs rngtool"),
+    )
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        blink_count=2,
+        monitor_window=True,
+        window_prefix="投影 - 源：窗口采集",
+    )
+
+    observation = capture_player_blinks(config)
+
+    assert observation.blinks == (0, 1)
+    assert observation.intervals == (0, 12)
+    assert observation.offset_time == 123.0
+    assert calls == [
+        (
+            "eye-image",
+            config,
+            {
+                "should_stop": None,
+                "frame_callback": None,
+                "progress_callback": None,
+                "show_window": True,
+                "discard_first_blink_within_seconds": None,
+            },
+        )
+    ]
+
+
+def test_capture_pokemon_blinks_from_obs_without_callbacks_uses_controlled(monkeypatch, tmp_path):
+    target = object()
+    calls = []
+    monkeypatch.setattr(project_xs_module, "_read_grayscale_image", lambda _path: "eye-image")
+    monkeypatch.setattr(project_xs_module, "_obs_window_target", lambda _config: target)
+
+    def fake_controlled(eye_image, config, **kwargs):
+        calls.append((eye_image, config, kwargs))
+        return [1.25, 3.5]
+
+    monkeypatch.setattr(project_xs_module, "_tracking_poke_blink_controlled", fake_controlled)
+    monkeypatch.setattr(
+        project_xs_module,
+        "_load_module",
+        lambda _name: pytest.fail("OBS capture must not delegate to Project_Xs rngtool"),
+    )
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        blink_count=2,
+        monitor_window=True,
+        window_prefix="投影 - 源：窗口采集",
+    )
+
+    observation = capture_pokemon_blinks(config)
+
+    assert observation.intervals == (1.25, 3.5)
+    assert calls == [
+        (
+            "eye-image",
+            config,
+            {
+                "should_stop": None,
+                "frame_callback": None,
+                "progress_callback": None,
+                "show_window": True,
+                "discard_first_blink_within_seconds": None,
+            },
+        )
+    ]
 
 
 def test_capture_pokemon_blinks_can_update_preview_without_popup(monkeypatch, tmp_path):
@@ -588,6 +691,11 @@ def test_capture_preview_frame_from_camera(monkeypatch, tmp_path):
         VideoCapture=FakeVideoCapture,
     )
     monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setattr(
+        project_xs_module,
+        "_obs_window_target",
+        lambda _config: pytest.fail("Camera capture must not inspect OBS windows"),
+    )
     config = BlinkCaptureConfig(
         eye_image_path=tmp_path / "eye.png",
         roi=(1, 2, 3, 4),
@@ -608,15 +716,25 @@ def test_capture_preview_frame_from_camera(monkeypatch, tmp_path):
 
 
 def test_capture_preview_frame_from_window(monkeypatch, tmp_path):
+    import auto_bdsp_rng.blink_detection.qt_window_capture as qt_window_capture
+
     fake_cv2 = types.SimpleNamespace()
     fake_windowcapture = types.SimpleNamespace(WindowCapture=FakeWindowCapture)
+    fake_win32gui = types.SimpleNamespace(
+        EnumWindows=lambda callback, context: callback(123, context),
+        IsWindowVisible=lambda hwnd: hwnd == 123,
+        GetWindowText=lambda hwnd: "PotPlayer" if hwnd == 123 else "",
+    )
+    monkeypatch.setattr(qt_window_capture.sys, "platform", "win32")
+    monkeypatch.setattr(qt_window_capture, "_process_name_for_window", lambda _hwnd: "potplayermini64.exe")
     monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
     monkeypatch.setitem(sys.modules, "windowcapture", fake_windowcapture)
     config = BlinkCaptureConfig(
         eye_image_path=tmp_path / "eye.png",
         roi=(1, 2, 3, 4),
         monitor_window=True,
-        window_prefix="SysDVR",
+        window_prefix="PotPlayer",
         crop=(0, 0, 0, 0),
     )
 
@@ -624,8 +742,99 @@ def test_capture_preview_frame_from_window(monkeypatch, tmp_path):
 
     video = FakeWindowCapture.last_instance
     assert frame == "window-frame"
-    assert video.window_prefix == "SysDVR"
+    assert video.window_prefix == "PotPlayer"
     assert video.crop == [0, 0, 0, 0]
+    assert video.released is True
+
+
+def test_capture_preview_frame_from_obs_uses_qt_window_capture(monkeypatch, tmp_path):
+    import auto_bdsp_rng.blink_detection.qt_window_capture as qt_window_capture
+
+    title = "投影 - 源：窗口采集 2"
+    fake_win32gui = types.SimpleNamespace(
+        EnumWindows=lambda callback, context: callback(321, context),
+        IsWindowVisible=lambda hwnd: hwnd == 321,
+        GetWindowText=lambda hwnd: title if hwnd == 321 else "",
+    )
+    fake_windowcapture = types.SimpleNamespace(
+        WindowCapture=lambda *_args: pytest.fail("OBS capture must not use Project_Xs WindowCapture")
+    )
+    monkeypatch.setattr(qt_window_capture.sys, "platform", "win32")
+    monkeypatch.setattr(qt_window_capture, "_process_name_for_window", lambda _hwnd: "obs64.exe")
+    monkeypatch.setattr(qt_window_capture, "QtWindowCapture", FakeQtWindowCapture)
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+    monkeypatch.setitem(sys.modules, "windowcapture", fake_windowcapture)
+    monkeypatch.setitem(sys.modules, "cv2", types.SimpleNamespace())
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        monitor_window=True,
+        window_prefix="投影 - 源：窗口采集",
+        crop=(5, 6, 7, 8),
+    )
+
+    frame = capture_preview_frame(config)
+
+    video = FakeQtWindowCapture.last_instance
+    assert frame == "obs-frame"
+    assert video.target.hwnd == 321
+    assert video.target.title == title
+    assert video.target.process_name == "obs64.exe"
+    assert video.crop == [5, 6, 7, 8]
+    assert video.released is True
+
+
+def test_preview_frame_capture_release_is_idempotent(monkeypatch, tmp_path):
+    class FakeReusableCapture:
+        def __init__(self):
+            self.release_count = 0
+
+        def read(self):
+            return True, "preview-frame"
+
+        def release(self):
+            self.release_count += 1
+
+    video = FakeReusableCapture()
+    monkeypatch.setattr(project_xs_module, "_open_capture_source", lambda _config: video)
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        monitor_window=False,
+    )
+    capture = PreviewFrameCapture(config)
+
+    assert capture.read() == "preview-frame"
+    capture.release()
+    capture.release()
+
+    assert video.release_count == 1
+    with pytest.raises(ProjectXsIntegrationError, match="已经关闭"):
+        capture.read()
+
+
+def test_capture_preview_frame_releases_source_when_read_fails(monkeypatch, tmp_path):
+    class FailingCapture:
+        def __init__(self):
+            self.released = False
+
+        def read(self):
+            raise RuntimeError("read failed")
+
+        def release(self):
+            self.released = True
+
+    video = FailingCapture()
+    monkeypatch.setattr(project_xs_module, "_open_capture_source", lambda _config: video)
+    config = BlinkCaptureConfig(
+        eye_image_path=tmp_path / "eye.png",
+        roi=(1, 2, 3, 4),
+        monitor_window=False,
+    )
+
+    with pytest.raises(ProjectXsIntegrationError, match="read failed"):
+        capture_preview_frame(config)
+
     assert video.released is True
 
 

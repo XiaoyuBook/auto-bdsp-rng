@@ -9,8 +9,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
-from typing import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any, Iterator
 
 from auto_bdsp_rng.resources import resource_path
 from auto_bdsp_rng.blink_detection.models import (
@@ -27,6 +26,9 @@ from auto_bdsp_rng.blink_detection.models import (
     SeedState32,
     TimelineEvent,
 )
+
+if TYPE_CHECKING:
+    from auto_bdsp_rng.blink_detection.qt_window_capture import WindowTarget
 
 
 PROJECT_XS_ROOT = resource_path("third_party", "Project_Xs_CHN")
@@ -107,6 +109,70 @@ def _read_grayscale_image(path: Path) -> Any:
 
 def _project_xs_crop(crop: tuple[int, int, int, int] | None) -> list[int] | None:
     return None if crop is None else list(crop)
+
+
+def _obs_window_target(config: BlinkCaptureConfig) -> WindowTarget | None:
+    if not config.monitor_window:
+        return None
+    from auto_bdsp_rng.blink_detection.qt_window_capture import find_obs_window_target
+
+    return find_obs_window_target(config.window_prefix)
+
+
+def _open_capture_source(
+    config: BlinkCaptureConfig,
+    *,
+    cv2: ModuleType | None = None,
+    prefer_v4l: bool = False,
+) -> Any:
+    cv2 = cv2 or _load_cv2()
+    if config.monitor_window:
+        obs_target = _obs_window_target(config)
+        if obs_target is not None:
+            from auto_bdsp_rng.blink_detection.qt_window_capture import create_qt_window_capture
+
+            return create_qt_window_capture(obs_target, _project_xs_crop(config.crop))
+        windowcapture = _load_module("windowcapture")
+        return windowcapture.WindowCapture(config.window_prefix, _project_xs_crop(config.crop))
+
+    backend = cv2.CAP_V4L if prefer_v4l and sys.platform.startswith("linux") else cv2.CAP_ANY
+    video = cv2.VideoCapture(config.camera, backend)
+    video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    video.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return video
+
+
+class PreviewFrameCapture:
+    """Reusable frame source for the embedded live preview."""
+
+    def __init__(self, config: BlinkCaptureConfig) -> None:
+        self.config = config
+        self._video = _open_capture_source(config)
+        self._released = False
+
+    @property
+    def keep_open_for_preview(self) -> bool:
+        return bool(getattr(self._video, "keep_open_for_preview", False))
+
+    def read(self) -> Any:
+        if self._released:
+            raise ProjectXsIntegrationError("预览捕捉源已经关闭")
+        try:
+            ok, frame = self._video.read()
+        except Exception as exc:
+            raise ProjectXsIntegrationError(f"Project_Xs frame capture failed: {exc}") from exc
+        if not ok or frame is None:
+            raise ProjectXsIntegrationError("Project_Xs frame capture returned an empty frame")
+        return frame
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        release = getattr(self._video, "release", None)
+        if callable(release):
+            release()
 
 
 def _coerce_int_tuple(value: object, *, field_name: str, length: int) -> tuple[int, ...]:
@@ -243,6 +309,7 @@ def capture_player_blinks(
             or progress_callback is not None
             or not show_window
             or discard_first_blink_within_seconds is not None
+            or _obs_window_target(config) is not None
         ):
             blinks, intervals, offset_time = _tracking_blink_controlled(
                 eye_image,
@@ -288,16 +355,7 @@ def _tracking_blink_controlled(
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
         return [], [], 0.0
-    if config.monitor_window:
-        with _project_xs_import_path():
-            windowcapture = _load_module("windowcapture")
-            video = windowcapture.WindowCapture(config.window_prefix, _project_xs_crop(config.crop))
-    else:
-        backend = cv2.CAP_V4L if sys.platform.startswith("linux") else cv2.CAP_ANY
-        video = cv2.VideoCapture(config.camera, backend)
-        video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        video.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    video = _open_capture_source(config, cv2=cv2, prefer_v4l=True)
 
     state_idle = 0xFF
     state_single = 0xF0
@@ -397,16 +455,7 @@ def _tracking_poke_blink_controlled(
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
         return []
-    if config.monitor_window:
-        with _project_xs_import_path():
-            windowcapture = _load_module("windowcapture")
-            video = windowcapture.WindowCapture(config.window_prefix, _project_xs_crop(config.crop))
-    else:
-        backend = cv2.CAP_V4L if sys.platform.startswith("linux") else cv2.CAP_ANY
-        video = cv2.VideoCapture(config.camera, backend)
-        video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        video.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    video = _open_capture_source(config, cv2=cv2, prefer_v4l=True)
 
     state_idle = 0xFF
     state_single = 0xF0
@@ -428,7 +477,7 @@ def _tracking_poke_blink_controlled(
                 consecutive_failures += 1
                 if consecutive_failures > 30:
                     raise ProjectXsIntegrationError(
-                        "鏈娴嬪埌鎹曟崏鐢婚潰锛岃纭鎹曟崏绐楀彛宸叉墦寮€涓旀湭琚渶灏忓寲"
+                        "未检测到捕捉画面，请确认捕捉窗口已打开且未被最小化"
                     )
                 time.sleep(0.1)
                 continue
@@ -498,6 +547,7 @@ def capture_pokemon_blinks(
             or progress_callback is not None
             or not show_window
             or discard_first_blink_within_seconds is not None
+            or _obs_window_target(config) is not None
         ):
             intervals = _tracking_poke_blink_controlled(
                 eye_image,
@@ -533,29 +583,11 @@ def capture_pokemon_blinks(
 def capture_preview_frame(config: BlinkCaptureConfig) -> Any:
     """Capture one raw frame using the same source settings as Project_Xs."""
 
-    cv2 = _load_cv2()
-    if config.monitor_window:
-        windowcapture = _load_module("windowcapture")
-        video = windowcapture.WindowCapture(config.window_prefix, _project_xs_crop(config.crop))
-    else:
-        backend = cv2.CAP_ANY
-        video = cv2.VideoCapture(config.camera, backend)
-        video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        video.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
+    capture = PreviewFrameCapture(config)
     try:
-        ok, frame = video.read()
-    except Exception as exc:
-        raise ProjectXsIntegrationError(f"Project_Xs frame capture failed: {exc}") from exc
+        return capture.read()
     finally:
-        release = getattr(video, "release", None)
-        if callable(release):
-            release()
-
-    if not ok or frame is None:
-        raise ProjectXsIntegrationError("Project_Xs frame capture returned an empty frame")
-    return frame
+        capture.release()
 
 
 def save_preview_frame(config: BlinkCaptureConfig, output_path: str | Path) -> Path:

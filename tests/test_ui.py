@@ -18,8 +18,8 @@ from auto_bdsp_rng.blink_detection import (
     ProjectXsTrackingConfig,
     SeedState32,
 )
-from PySide6.QtCore import QPoint, QPointF, QSettings, QThread, QTimer, Qt
-from PySide6.QtGui import QPaintEvent, QWheelEvent
+from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, QThread, QTimer, Qt
+from PySide6.QtGui import QPaintEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QPushButton, QScrollArea, QSizePolicy
 
@@ -201,6 +201,28 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     assert not window.advances_label.isHidden()
     assert window.timer_label.isHidden()
     assert window.advance_button.isHidden()
+
+
+def test_preview_scaling_uses_physical_pixels_on_high_dpi(app):
+    source = QPixmap(780, 460)
+
+    scaled, logical_size = main_window_module._scale_preview_pixmap(source, QSize(480, 260), 1.5)
+
+    assert scaled.devicePixelRatio() == 1.5
+    assert scaled.height() == 390
+    assert scaled.width() > 600
+    assert logical_size.width() <= 480
+    assert logical_size.height() <= 260
+
+
+def test_preview_scaling_does_not_enlarge_low_resolution_source(app):
+    source = QPixmap(780, 460)
+
+    scaled, logical_size = main_window_module._scale_preview_pixmap(source, QSize(800, 600), 1.5)
+
+    assert (scaled.width(), scaled.height()) == (780, 460)
+    assert scaled.devicePixelRatio() == 1.5
+    assert logical_size == QSize(520, 307)
 
 
 def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
@@ -1668,6 +1690,140 @@ def test_main_window_auto_rng_start_prepares_preview_frame_when_inactive(app, tm
     assert not window._preview_timer.isActive()
     assert preview_updates == ["updated"]
     assert len(started) == 1
+
+
+def test_live_preview_only_keeps_wgc_capture_open(app, monkeypatch):
+    class FakePreviewCapture:
+        instances = []
+
+        def __init__(self, config):
+            self.config = config
+            self.keep_open_for_preview = config.monitor_window
+            self.release_count = 0
+            type(self).instances.append(self)
+
+        def read(self):
+            return f"frame-{len(type(self).instances)}"
+
+        def release(self):
+            self.release_count += 1
+
+    monkeypatch.setattr(main_window_module, "PreviewFrameCapture", FakePreviewCapture)
+    window = MainWindow()
+    camera_config = BlinkCaptureConfig(Path("eye.png"), (0, 0, 1, 1), monitor_window=False)
+
+    assert window._read_live_preview_frame(camera_config) == "frame-1"
+    assert window._read_live_preview_frame(camera_config) == "frame-2"
+    assert window._preview_capture is None
+    assert [capture.release_count for capture in FakePreviewCapture.instances] == [1, 1]
+
+    obs_config = BlinkCaptureConfig(
+        Path("eye.png"),
+        (0, 0, 1, 1),
+        monitor_window=True,
+        window_prefix="投影 - 源：窗口采集 2",
+    )
+    assert window._read_live_preview_frame(obs_config) == "frame-3"
+    same_source_config = BlinkCaptureConfig(
+        Path("different-eye.png"),
+        (10, 20, 30, 40),
+        blink_count=7,
+        monitor_window=True,
+        window_prefix="投影 - 源：窗口采集 2",
+        crop=(0, 0, 0, 0),
+    )
+    assert window._read_live_preview_frame(same_source_config) == "frame-3"
+    assert len(FakePreviewCapture.instances) == 3
+    assert window._preview_capture is FakePreviewCapture.instances[2]
+
+    window._release_preview_capture()
+
+    assert FakePreviewCapture.instances[2].release_count == 1
+
+
+def test_active_preview_frame_request_reuses_live_capture(app, monkeypatch):
+    config = BlinkCaptureConfig(
+        Path("eye.png"),
+        (0, 0, 1, 1),
+        monitor_window=True,
+        window_prefix="投影 - 源：窗口采集 2",
+    )
+
+    class FakePreviewCapture:
+        keep_open_for_preview = True
+
+        def __init__(self, actual_config):
+            self.config = actual_config
+            self.read_count = 0
+
+        def read(self):
+            self.read_count += 1
+            return "shared-frame"
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(main_window_module, "PreviewFrameCapture", FakePreviewCapture)
+    monkeypatch.setattr(
+        main_window_module,
+        "capture_preview_frame",
+        lambda _config: pytest.fail("Active preview must reuse its capture source"),
+    )
+    window = MainWindow()
+    monkeypatch.setattr(window, "_config_from_form", lambda: SimpleNamespace(capture=config))
+    window._preview_timer.start()
+
+    assert window._capture_preview_frame_for_config(config) == "shared-frame"
+    assert window._capture_preview_frame_for_config(config) == "shared-frame"
+    assert window._preview_capture.read_count == 2
+
+
+def test_main_window_close_stops_manual_capture_thread(app):
+    window = MainWindow()
+    started = threading.Event()
+
+    def capture_worker() -> None:
+        started.set()
+        window._capture_cancel.wait(2.0)
+
+    thread = threading.Thread(target=capture_worker, daemon=True)
+    window._capture_thread = thread
+    thread.start()
+    assert started.wait(1.0)
+
+    window.close()
+
+    assert window._capture_cancel.is_set()
+    assert not thread.is_alive()
+
+
+def test_shutdown_automation_runner_stops_and_waits(app):
+    window = MainWindow()
+    calls = []
+
+    class FakeThread:
+        def __init__(self):
+            self.running = True
+
+        def quit(self):
+            calls.append("quit")
+
+        def isRunning(self):
+            return self.running
+
+        def wait(self, milliseconds):
+            calls.append(("wait", milliseconds))
+            self.running = False
+            return True
+
+    panel = SimpleNamespace(
+        _runner_worker=SimpleNamespace(stop=lambda: calls.append("stop")),
+        _runner_thread=FakeThread(),
+    )
+
+    window._shutdown_automation_runner(panel, "测试流程")
+
+    assert calls == ["stop", "quit", ("wait", 50)]
 
 
 def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):

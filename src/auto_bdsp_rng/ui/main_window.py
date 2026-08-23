@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, QSize, QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
+    PreviewFrameCapture,
     ProjectXsIntegrationError,
     ProjectXsReidentifyResult,
     ProjectXsTrackingConfig,
@@ -144,6 +145,33 @@ AUTO_CAPTURE_WARMUP_DISCARD_SECONDS = 1.0
 REIDENTIFY_HINT_BEFORE_FRAMES = 10_000
 REIDENTIFY_HINT_AFTER_FRAMES = 20_000
 NOISY_REIDENTIFY_MAX_SEARCH_FRAMES = 100_000
+
+
+def _uses_same_capture_source(left: BlinkCaptureConfig, right: BlinkCaptureConfig) -> bool:
+    if left.monitor_window != right.monitor_window:
+        return False
+    if not left.monitor_window:
+        return left.camera == right.camera
+
+    def normalized_crop(crop: tuple[int, int, int, int] | None) -> tuple[int, int, int, int] | None:
+        return None if crop is None or crop == (0, 0, 0, 0) else crop
+
+    return left.window_prefix == right.window_prefix and normalized_crop(left.crop) == normalized_crop(right.crop)
+
+
+def _scale_preview_pixmap(pixmap: QPixmap, target: QSize, device_pixel_ratio: float) -> tuple[QPixmap, QSize]:
+    dpr = max(1.0, float(device_pixel_ratio))
+    physical_target = QSize(
+        min(pixmap.width(), max(1, round(target.width() * dpr))),
+        min(pixmap.height(), max(1, round(target.height() * dpr))),
+    )
+    scaled = pixmap.scaled(
+        physical_target,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+    return scaled, scaled.deviceIndependentSize().toSize()
 
 
 def configure_application_identity(app: QApplication) -> QIcon:
@@ -737,15 +765,15 @@ class ShinyThresholdCalibrationWorker(QObject):
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, capture_config: BlinkCaptureConfig) -> None:
+    def __init__(self, capture_frame: Callable[[], object]) -> None:
         super().__init__()
-        self._capture_config = capture_config
+        self._capture_frame = capture_frame
         self._cancel = threading.Event()
 
     def run(self) -> None:
         try:
             result = measure_keyword_interval(
-                lambda: capture_preview_frame(self._capture_config),
+                self._capture_frame,
                 read_ocr_text,
                 should_stop=self._cancel.is_set,
                 timeout_seconds=45.0,
@@ -842,6 +870,7 @@ class MainWindow(QMainWindow):
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(100)
         self._preview_timer.timeout.connect(self._update_preview_frame)
+        self._preview_capture: PreviewFrameCapture | None = None
         self._capture_timer = QTimer(self)
         self._capture_timer.setInterval(100)
         self._capture_timer.timeout.connect(self._poll_capture_thread)
@@ -2364,6 +2393,24 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._is_closing = True
+        self._capture_timer.stop()
+        self._capture_cancel.set()
+        self._shutdown_automation_runner(self.auto_rng_tab, "自动定点")
+        self._shutdown_automation_runner(self.auto_tid_rng_tab, "自动 TID")
+        self._shutdown_worker_thread(
+            self._shiny_calibration_worker,
+            self._shiny_calibration_thread,
+            "闪光判定校准",
+        )
+        capture_thread = self._capture_thread
+        if capture_thread is not None:
+            deadline = time.monotonic() + 2.0
+            while capture_thread.is_alive() and time.monotonic() < deadline:
+                QApplication.processEvents()
+                capture_thread.join(timeout=0.05)
+            if capture_thread.is_alive():
+                self._write_run_log("Seed 捕捉", "关闭时捕捉线程未能在 2 秒内退出", level="WARNING")
+        self._release_preview_capture()
         self.easycon_tab.shutdown_capture_keep_awake()
         warmup_thread = self._ocr_warmup_thread
         if warmup_thread is not None:
@@ -2377,6 +2424,32 @@ class MainWindow(QMainWindow):
         self._ocr_warmup_running = False
         self._save_profile_settings()
         super().closeEvent(event)
+
+    def _shutdown_automation_runner(self, panel: object, label: str) -> None:
+        self._shutdown_worker_thread(
+            getattr(panel, "_runner_worker", None),
+            getattr(panel, "_runner_thread", None),
+            label,
+        )
+
+    def _shutdown_worker_thread(self, worker: object, thread: object, label: str) -> None:
+        if worker is not None:
+            try:
+                worker.stop()  # type: ignore[attr-defined]
+            except Exception as exc:
+                self._write_run_log(label, f"关闭时停止流程失败: {exc}", level="WARNING")
+        if thread is None:
+            return
+        try:
+            thread.quit()  # type: ignore[attr-defined]
+            deadline = time.monotonic() + 2.0
+            while thread.isRunning() and time.monotonic() < deadline:  # type: ignore[attr-defined]
+                QApplication.processEvents()
+                thread.wait(50)  # type: ignore[attr-defined]
+            if thread.isRunning():  # type: ignore[attr-defined]
+                self._write_run_log(label, "关闭时流程未能在 2 秒内退出", level="WARNING")
+        except RuntimeError:
+            pass
 
     def _change_language(self) -> None:
         self.lang = "zh"
@@ -2607,11 +2680,56 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(self._text("config_saved"))
 
+    def _release_preview_capture(self) -> None:
+        capture = self._preview_capture
+        self._preview_capture = None
+        if capture is None:
+            return
+        try:
+            capture.release()
+        except Exception as exc:
+            self._write_run_log("Seed 捕捉", f"关闭预览捕捉源失败: {exc}", level="WARNING")
+
+    def _read_live_preview_frame(self, config: BlinkCaptureConfig) -> object:
+        capture = self._preview_capture
+        if capture is None or not _uses_same_capture_source(capture.config, config):
+            self._release_preview_capture()
+            capture = PreviewFrameCapture(config)
+            if capture.keep_open_for_preview:
+                self._preview_capture = capture
+        try:
+            return capture.read()
+        except Exception:
+            if capture is self._preview_capture:
+                self._release_preview_capture()
+            raise
+        finally:
+            if capture is not self._preview_capture:
+                capture.release()
+
+    def _capture_preview_frame_for_config(self, config: BlinkCaptureConfig) -> object:
+        def read_active_preview() -> tuple[bool, object | None]:
+            if not self._preview_timer.isActive():
+                return False, None
+            try:
+                active_config = self._config_from_form().capture
+            except Exception:
+                return False, None
+            if not _uses_same_capture_source(active_config, config):
+                return False, None
+            return True, self._read_live_preview_frame(config)
+
+        used_preview, frame = self._call_on_ui_thread(read_active_preview)
+        if used_preview:
+            return frame
+        return capture_preview_frame(config)
+
     def toggle_preview(self) -> None:
         if self._is_capturing():
             return
         if self._preview_timer.isActive():
             self._preview_timer.stop()
+            self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
             self.preview_label.set_selection_enabled(False)
             self.preview_label.clear()
@@ -2625,6 +2743,7 @@ class MainWindow(QMainWindow):
         self._resume_preview_after_capture = self._preview_timer.isActive()
         if self._resume_preview_after_capture:
             self._preview_timer.stop()
+            self._release_preview_capture()
             self.preview_button.setText(self._text("stop_preview"))
 
     def _restore_preview_after_capture(self) -> None:
@@ -2649,6 +2768,7 @@ class MainWindow(QMainWindow):
         # 首帧到达后立即停止预览，避免与后续 blink 捕捉抢摄像头资源
         if self._latest_preview_frame is not None and self._preview_timer.isActive():
             self._preview_timer.stop()
+            self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
@@ -2686,10 +2806,11 @@ class MainWindow(QMainWindow):
         self._resume_preview_after_selection = self._preview_timer.isActive()
         if self._preview_timer.isActive():
             self._preview_timer.stop()
+            self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
         if self._latest_preview_frame is None:
             try:
-                frame = capture_preview_frame(self._config_from_form().capture)
+                frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
                 frame_copy = getattr(frame, "copy", None)
                 self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
             except Exception as exc:
@@ -2820,7 +2941,7 @@ class MainWindow(QMainWindow):
 
             frame = self._latest_preview_frame
             if frame is None:
-                frame = capture_preview_frame(self._config_from_form().capture)
+                frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
             frame_height, frame_width = frame.shape[:2]
             left = max(0, min(x, frame_width - 1))
             top = max(0, min(y, frame_height - 1))
@@ -2909,7 +3030,7 @@ class MainWindow(QMainWindow):
     def _current_preview_frame_for_ocr(self) -> object:
         if self._latest_preview_frame is not None:
             return self._latest_preview_frame
-        frame = capture_preview_frame(self._config_from_form().capture)
+        frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
         frame_copy = getattr(frame, "copy", None)
         self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
         self._display_frame(self._latest_preview_frame)
@@ -2995,7 +3116,7 @@ class MainWindow(QMainWindow):
                 self._send_easycon_right()
                 time.sleep(2.0)
 
-                stats_frame = self._call_on_ui_thread(lambda: capture_preview_frame(self._config_from_form().capture))
+                stats_frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
                 for field in STAT_REGION_FIELDS:
                     region = regions.get(field)
                     if region is None:
@@ -3020,31 +3141,44 @@ class MainWindow(QMainWindow):
     def _update_preview_frame(self) -> None:
         try:
             config = self._config_from_form().capture
-            frame = capture_preview_frame(config)
+            frame = self._read_live_preview_frame(config)
             frame_copy = getattr(frame, "copy", None)
             self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
             annotated, preview = render_eye_preview(config, frame)
         except Exception as exc:
             self._preview_timer.stop()
+            self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
             self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
         self._display_frame(annotated)
-        self.statusBar().showMessage(f"{self._text('preview_running')} | score {preview.match_score:.3f}")
+        resolution = ""
+        if self._preview_capture is not None and self._preview_capture.keep_open_for_preview:
+            frame_height, frame_width = frame.shape[:2]
+            resolution = f" | OBS {frame_width}x{frame_height}"
+            if frame_width < 1280 or frame_height < 720:
+                resolution += "（放大投影窗口可提高清晰度）"
+        self.statusBar().showMessage(
+            f"{self._text('preview_running')}{resolution} | score {preview.match_score:.3f}"
+        )
 
     def _display_frame(self, frame: object) -> None:
         pixmap = self._frame_to_pixmap(frame)
         target = self.preview_label.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
             return
-        scaled = pixmap.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        scaled, logical_size = _scale_preview_pixmap(
+            pixmap,
+            target,
+            self.preview_label.devicePixelRatioF(),
+        )
         contents = self.preview_label.contentsRect()
-        left = contents.left() + (contents.width() - scaled.width()) // 2
-        top = contents.top() + (contents.height() - scaled.height()) // 2
+        left = contents.left() + (contents.width() - logical_size.width()) // 2
+        top = contents.top() + (contents.height() - logical_size.height()) // 2
         self.preview_label.set_image_geometry(
             pixmap.width(),
             pixmap.height(),
-            QRect(left, top, scaled.width(), scaled.height()),
+            QRect(left, top, logical_size.width(), logical_size.height()),
         )
         self.preview_label.setPixmap(scaled)
 
@@ -3063,7 +3197,7 @@ class MainWindow(QMainWindow):
         try:
             import cv2
 
-            frame = capture_preview_frame(self._config_from_form().capture)
+            frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
             if not cv2.imwrite(path, frame):
                 raise ProjectXsIntegrationError(f"Cannot save raw screenshot: {path}")
         except Exception as exc:
@@ -3169,7 +3303,9 @@ class MainWindow(QMainWindow):
             return
 
         tracking_config = self._config_from_form()
-        worker = ShinyThresholdCalibrationWorker(tracking_config.capture)
+        worker = ShinyThresholdCalibrationWorker(
+            lambda: self._capture_preview_frame_for_config(tracking_config.capture)
+        )
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -3363,6 +3499,7 @@ class MainWindow(QMainWindow):
         preview_was_running = self._preview_timer.isActive()
         if preview_was_running:
             self._preview_timer.stop()
+            self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
@@ -3384,7 +3521,7 @@ class MainWindow(QMainWindow):
             time.sleep(0.3)  # 与测种捕获使用相同的摄像头释放等待
         try:
             return recover_zoom_overlay(
-                lambda: capture_preview_frame(capture_config),
+                lambda: self._capture_preview_frame_for_config(capture_config),
                 run_script_text,
                 should_stop=self._capture_cancel.is_set,
             )
@@ -3557,7 +3694,7 @@ class MainWindow(QMainWindow):
         def recognize_tid_service() -> str:
             if config.ocr_region is None:
                 raise RuntimeError("未设置 TID OCR ROI")
-            frame = capture_preview_frame(tracking_config.capture)
+            frame = self._capture_preview_frame_for_config(tracking_config.capture)
             text = recognize_ocr_field(frame, "tid", config.ocr_region)
             self.auto_tid_rng_tab.add_log(f"[自动TID] OCR 原始结果：{text or '空'}")
             return text
@@ -4266,7 +4403,7 @@ class MainWindow(QMainWindow):
 
             try:
                 timing = measure_keyword_interval(
-                    lambda: capture_preview_frame(tracking_config.capture),
+                    lambda: self._capture_preview_frame_for_config(tracking_config.capture),
                     read_ocr_text,
                     should_stop=self._capture_cancel.is_set,
                     poll_interval_seconds=0.1,
@@ -4310,7 +4447,7 @@ class MainWindow(QMainWindow):
 
             # OCR 笔记页 → 性格 + 个性（只做一次，识别可靠）
             log("[自动反查] 截图笔记页…")
-            notes_frame = capture_preview_frame(tracking_config.capture)
+            notes_frame = self._capture_preview_frame_for_config(tracking_config.capture)
             ocr_regions = self._ocr_region_config()
             notes_result = extract_pokemon_info(notes_image=notes_frame, ocr_regions=ocr_regions)
             nature = notes_result.get("nature")
@@ -4362,7 +4499,7 @@ class MainWindow(QMainWindow):
             prev_ocr_key: str | None = None
             for attempt in range(1, 4):
                 log(f"[自动反查] 能力页 OCR 第{attempt}次…")
-                stats_frame = capture_preview_frame(tracking_config.capture)
+                stats_frame = self._capture_preview_frame_for_config(tracking_config.capture)
                 stats_result = extract_pokemon_info(stats_image=stats_frame, ocr_regions=ocr_regions)
                 stats = stats_result.get("stats")
                 if not stats:
@@ -4534,7 +4671,7 @@ class MainWindow(QMainWindow):
 
         # 主线程截图笔记页
         try:
-            notes_frame = capture_preview_frame(capture_config)
+            notes_frame = self._capture_preview_frame_for_config(capture_config)
         except Exception as exc:
             self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图笔记页失败: {exc}", level="ERROR")
             return
@@ -4573,7 +4710,7 @@ class MainWindow(QMainWindow):
         """主线程回调：截图能力页 → OCR → 输出。"""
         log = self.auto_rng_tab.captureLog.emit
         try:
-            stats_frame = capture_preview_frame(self._capture_config)
+            stats_frame = self._capture_preview_frame_for_config(self._capture_config)
         except Exception as exc:
             self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图能力页失败: {exc}", level="ERROR")
             return
