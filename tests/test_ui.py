@@ -517,6 +517,34 @@ def test_auto_rng_reverse_lookup_window_is_configurable(app, tmp_path):
     assert panel.reverse_lookup_window.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons
 
 
+def test_auto_rng_strategy_parameters_have_hover_explanations(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    form = panel.strategy_group.layout()
+
+    explained_rows = (
+        (panel.max_advances, "过 100 万帧大约需要 10 分钟"),
+        (panel.fixed_delay, "delay 越大，撞闪脚本启动得越早"),
+        (panel.max_wait_frames, "越依赖过帧脚本接近目标"),
+        (panel.reseeding_threshold, "若重测 Seed 或校正后"),
+        (panel.shiny_threshold_seconds, "判定为疑似闪光并停止自动流程"),
+    )
+    for field, expected_text in explained_rows:
+        assert expected_text in field.toolTip()
+        label = form.labelForField(field)
+        assert label is not None
+        assert label.toolTip() == field.toolTip()
+
+    assert form.labelForField(panel.max_advances).text() == "搜索范围"
+    assert form.labelForField(panel.shiny_threshold_seconds).text() == "闪光阈值（秒）"
+    for control in (
+        panel.sync_combo,
+        panel.sync_nature_input,
+        panel.auto_reverse_combo,
+        panel.reverse_lookup_window,
+    ):
+        assert control.toolTip() == ""
+
+
 def test_auto_rng_panel_persists_exit_script_and_reseeding_threshold(app, tmp_path):
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")

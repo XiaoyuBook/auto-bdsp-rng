@@ -270,11 +270,52 @@ class AutoRngPanel(QWidget):
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames, self.reseeding_threshold):
             spin.setFixedWidth(215)
         self.shiny_threshold_seconds.setFixedWidth(215)
-        form.addRow("最大帧数", self.max_advances)
-        form.addRow("delay", self.fixed_delay)
-        form.addRow("最大等待窗口", self.max_wait_frames)
-        form.addRow("预留帧数", self.reseeding_threshold)
-        form.addRow("闪光阈值(秒)", self.shiny_threshold_seconds)
+        explained_rows = (
+            (
+                "搜索范围",
+                self.max_advances,
+                "设置当前 Seed 下搜索目标候选的最大帧数。\n"
+                "数值越大，能搜索到更远的候选，但命中较远目标时需要更长的过帧时间。\n"
+                "全国图鉴齐全的情况下，过 100 万帧大约需要 10 分钟。",
+            ),
+            (
+                "delay",
+                self.fixed_delay,
+                "表示撞闪脚本内 _闪帧等待结束后，到实际撞到目标之间经过的帧数。\n"
+                "软件按“脚本启动帧 = 目标帧 - delay - _闪帧”计算启动时机；delay 越大，撞闪脚本启动得越早。\n"
+                "可开启自动反查，根据反查得到的实际 delay 校准此值。",
+            ),
+            (
+                "最大等待窗口",
+                self.max_wait_frames,
+                "决定何时停止运行过帧脚本，改为软件实时等待。\n"
+                "距离撞闪脚本启动帧不超过该帧数时，不再运行过帧脚本，而是根据当前活帧等待到启动时机。\n"
+                "数值越大，流程越早进入实时等待；数值越小，越依赖过帧脚本接近目标。",
+            ),
+            (
+                "预留帧数",
+                self.reseeding_threshold,
+                "仅在选择了“过场脚本”时生效。\n"
+                "该数值是运行过场脚本的触发阈值，不是要少过或跳过的帧数。\n"
+                "若重测 Seed 或校正后，发现距离撞闪脚本启动帧的剩余帧数小于或等于该值，流程会运行过场脚本，\n"
+                "并在目标精灵面前重新测定当前位置，之后继续正常流程。\n"
+                "设为 0 时关闭该策略。",
+            ),
+            (
+                "闪光阈值（秒）",
+                self.shiny_threshold_seconds,
+                "使用 OCR 测量战斗文本“出现了！”到“去吧/上吧”之间的时间间隔。\n"
+                "测得的间隔大于或等于该值时，判定为疑似闪光并停止自动流程。\n"
+                "可先在 Seed 捕获页面使用“校准闪光判定”测量合适的阈值。\n"
+                "设为 0 时关闭自动 OCR 判闪。",
+            ),
+        )
+        for label_text, field, tooltip in explained_rows:
+            form.addRow(label_text, field)
+            field.setToolTip(tooltip)
+            label = form.labelForField(field)
+            if label is not None:
+                label.setToolTip(tooltip)
         # 同步开关（三态下拉框 + 性格输入）
         sync_row = QHBoxLayout()
         self.sync_combo = QComboBox()
