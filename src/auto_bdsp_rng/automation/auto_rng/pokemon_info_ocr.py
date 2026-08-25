@@ -11,6 +11,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
+
+configure_ocr_runtime()
+
 import numpy as np
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
@@ -19,7 +23,6 @@ from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
     OcrRegion,
     OcrRegionConfig,
 )
-from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
 
 # ── 全局 PaddleOCR 单例 ────────────────────────────────────────────
 _PADDLE_OCR: object | None = None
@@ -409,27 +412,23 @@ def _bbox_is_red_text(image: np.ndarray, bbox: object) -> bool:
     region = image[y1:y2, x1:x2]
     if region.size == 0:
         return False
-    # 转为 RGB
-    if region.ndim == 3 and region.shape[2] >= 3:
-        rgb = region[:, :, :3]
-    else:
+    if region.ndim != 3 or region.shape[2] < 3:
         return False
 
-    # 过滤接近白色/黑色的像素
-    mask = (rgb[:, :, 1] > 40) | (rgb[:, :, 2] > 40)
-    if not np.any(mask):
-        return False
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("OpenCV is required for OCR color detection") from exc
 
-    r_chan = rgb[:, :, 0][mask]
-    g_chan = rgb[:, :, 1][mask]
-    b_chan = rgb[:, :, 2][mask]
-    if len(r_chan) < 5:
-        return False
-
-    red_mask = (r_chan.astype(float) > g_chan.astype(float) * 1.3) & (
-        r_chan.astype(float) > b_chan.astype(float) * 1.3
-    ) & (r_chan > 100)
-    return float(np.count_nonzero(red_mask)) / len(r_chan) > 0.25
+    hsv = cv2.cvtColor(region[:, :, :3], cv2.COLOR_BGR2HSV)
+    low_red = cv2.inRange(hsv, np.array((0, 70, 50), dtype=np.uint8), np.array((10, 255, 255), dtype=np.uint8))
+    high_red = cv2.inRange(
+        hsv,
+        np.array((170, 70, 50), dtype=np.uint8),
+        np.array((180, 255, 255), dtype=np.uint8),
+    )
+    red_pixels = int(np.count_nonzero(cv2.bitwise_or(low_red, high_red)))
+    return red_pixels >= 5 and red_pixels / float(hsv.shape[0] * hsv.shape[1]) >= 0.05
 
 
 def _extract_nature_and_characteristic(
@@ -632,39 +631,33 @@ def extract_pokemon_info(
     result: dict[str, object] = {"stats": None, "nature": None, "characteristic": None}
     # 能力页 → stats
     if stats_image is not None:
-        try:
-            img = _load_image(stats_image)
-            result["stats"] = _extract_stats_from_regions(img, ocr_regions)
-            if result["stats"] is None:
-                stats_rows = _ocr_rows(img, STATS_ROI)
-                if _detect_page_type(stats_rows) == "unknown":
-                    # 也可能放进错了，用笔记 ROI 再试
-                    alt_rows = _ocr_rows(img, NOTES_ROI)
-                    if _detect_page_type(alt_rows) == "stats":
-                        stats_rows = alt_rows
-                stats = _extract_stats(stats_rows)
-                if len(stats) == 6 and not _stats_have_obvious_digit_drop(stats):
-                    result["stats"] = stats
-        except Exception:
-            pass
+        img = _load_image(stats_image)
+        result["stats"] = _extract_stats_from_regions(img, ocr_regions)
+        if result["stats"] is None:
+            stats_rows = _ocr_rows(img, STATS_ROI)
+            if _detect_page_type(stats_rows) == "unknown":
+                # 也可能放进错了，用笔记 ROI 再试
+                alt_rows = _ocr_rows(img, NOTES_ROI)
+                if _detect_page_type(alt_rows) == "stats":
+                    stats_rows = alt_rows
+            stats = _extract_stats(stats_rows)
+            if len(stats) == 6 and not _stats_have_obvious_digit_drop(stats):
+                result["stats"] = stats
     # 笔记页 → nature + characteristic
     if notes_image is not None:
-        try:
-            img = _load_image(notes_image)
-            nature, chara = _extract_notes_from_regions(img, ocr_regions)
-            if nature is None or chara is None:
-                notes_rows = _ocr_rows(img, NOTES_ROI)
-                if _detect_page_type(notes_rows) == "unknown":
-                    alt_rows = _ocr_rows(img, STATS_ROI)
-                    if _detect_page_type(alt_rows) == "notes":
-                        notes_rows = alt_rows
-                broad_nature, broad_chara = _extract_nature_and_characteristic(img, notes_rows)
-                nature = nature or broad_nature
-                chara = chara or broad_chara
-            result["nature"] = nature
-            result["characteristic"] = chara
-        except Exception:
-            pass
+        img = _load_image(notes_image)
+        nature, chara = _extract_notes_from_regions(img, ocr_regions)
+        if nature is None or chara is None:
+            notes_rows = _ocr_rows(img, NOTES_ROI)
+            if _detect_page_type(notes_rows) == "unknown":
+                alt_rows = _ocr_rows(img, STATS_ROI)
+                if _detect_page_type(alt_rows) == "notes":
+                    notes_rows = alt_rows
+            broad_nature, broad_chara = _extract_nature_and_characteristic(img, notes_rows)
+            nature = nature or broad_nature
+            chara = chara or broad_chara
+        result["nature"] = nature
+        result["characteristic"] = chara
     return result
 
 

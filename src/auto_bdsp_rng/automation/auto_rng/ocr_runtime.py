@@ -18,6 +18,10 @@ def configure_ocr_runtime(*, cpu_threads: int = DEFAULT_OCR_CPU_THREADS) -> None
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 
+# Apply thread limits before NumPy/Paddle can observe them during import.
+configure_ocr_runtime()
+
+
 def resolve_local_ocr_model_dirs() -> tuple[Path, Path] | None:
     """Resolve validated local model directories without allowing a frozen app to fall back online."""
     frozen = bool(getattr(sys, "frozen", False))
@@ -55,6 +59,7 @@ def optimized_paddle_ocr_kwargs(*, cpu_threads: int = DEFAULT_OCR_CPU_THREADS) -
         "use_textline_orientation": False,
         "cpu_threads": max(1, int(cpu_threads)),
         "enable_mkldnn": True,
+        "mkldnn_cache_capacity": 1,
     }
     local_model_dirs = resolve_local_ocr_model_dirs()
     if local_model_dirs is not None:

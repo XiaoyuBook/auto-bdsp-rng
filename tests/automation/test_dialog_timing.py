@@ -5,7 +5,13 @@ import threading
 import numpy as np
 import pytest
 
+from auto_bdsp_rng.automation.auto_rng import dialog_timing
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
+    DialogFrameCaptureError,
+    DialogKeywordTimeoutError,
+    DialogOcrError,
+    DialogScriptTimeoutError,
+    DialogTimingCancelledError,
     detect_bdsp_dialog_box,
     measure_dialog_interval,
     measure_keyword_interval,
@@ -34,6 +40,37 @@ def _non_battle_menu_frame() -> np.ndarray:
     frame[500:690, 390:680] = (245, 245, 245)
     frame[500:690, 720:1000] = (245, 245, 245)
     return frame
+
+
+class _FakeClock:
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _timed_reader(
+    clock: _FakeClock,
+    texts: list[str],
+    durations: list[float] | None = None,
+):
+    text_iter = iter(texts)
+    duration_iter = iter(durations or [0.0] * len(texts))
+
+    def read_text(_frame: object) -> str:
+        clock.advance(next(duration_iter))
+        return next(text_iter)
+
+    return read_text
 
 
 def test_dialog_detector_rejects_non_battle_white_menu_panels():
@@ -69,131 +106,267 @@ def test_measure_dialog_interval_ignores_dialog_visible_at_start_until_clear():
     assert result.interval_seconds == pytest.approx(1.6)
 
 
-def test_normalize_ocr_text_keeps_exclamation_for_shiny_keyword():
-    assert normalize_ocr_text("谢 米 出 现 了 !") == "谢米出现了!"
+def test_normalize_ocr_text_canonicalizes_exclamation_for_shiny_keyword():
+    assert normalize_ocr_text("谢 米 出 现 了 !") == "谢米出现了！"
     assert normalize_ocr_text("谢 米 出 现 了 ！") == "谢米出现了！"
     assert normalize_ocr_text("去吧！ 图图犬！") == "去吧！图图犬！"
 
 
 def test_measure_keyword_interval_uses_ocr_keywords_in_order():
-    frames = iter([object(), object(), object(), object(), object()])
-    texts = iter(["菜单", "谢米出现了！", "谢米出现了！", "空白", "去吧！图图犬！"])
-    times = iter([0.0, 0.1, 0.2, 0.3, 2.6, 2.7])
+    clock = _FakeClock(10.0)
     events: list[tuple[str, float, float | None]] = []
+    structured_events = []
 
     result = measure_keyword_interval(
-        lambda: next(frames),
-        lambda _frame: next(texts),
-        monotonic=lambda: next(times),
-        sleep=lambda _seconds: None,
+        object,
+        _timed_reader(clock, ["菜单", "谢米出现了！", "去吧！图图犬！"], [0.02, 0.02, 0.02]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
         timeout_seconds=5.0,
         poll_interval_seconds=0.1,
         debug_callback=lambda event, elapsed, interval: events.append((event, elapsed, interval)),
+        event_callback=structured_events.append,
     )
 
-    assert result.interval_seconds == pytest.approx(2.5)
+    assert result.first_seen_at == pytest.approx(10.12)
+    assert result.second_seen_at == pytest.approx(10.22)
+    assert result.interval_seconds == pytest.approx(0.1)
     assert events == [
-        ("first_seen", pytest.approx(0.2), None),
-        ("second_seen", pytest.approx(2.7), pytest.approx(2.5)),
+        ("first_seen", pytest.approx(0.12), None),
+        ("second_seen", pytest.approx(0.22), pytest.approx(0.1)),
     ]
+    assert tuple(structured_events) == result.events
+    assert [event.event for event in result.events] == ["monitor_started", "first_seen", "second_seen"]
+    assert result.events[0].observed_at == pytest.approx(10.0)
+    assert result.events[0].elapsed_seconds == pytest.approx(0.0)
+    assert result.events[1].keyword == "出现了！"
+    assert result.events[2].keyword == "去吧"
 
 
 def test_measure_keyword_interval_ignores_second_keyword_before_first_keyword():
-    frames = iter([object(), object(), object(), object()])
-    texts = iter(["去吧！", "菜单", "谢米出现了！", "去吧！图图犬！"])
-    times = iter([0.0, 0.1, 0.2, 0.3, 1.5])
+    clock = _FakeClock()
 
     result = measure_keyword_interval(
-        lambda: next(frames),
-        lambda _frame: next(texts),
-        monotonic=lambda: next(times),
-        sleep=lambda _seconds: None,
+        object,
+        _timed_reader(clock, ["去吧！", "菜单", "谢米出现了！", "去吧！图图犬！"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
         timeout_seconds=5.0,
         poll_interval_seconds=0.1,
     )
 
-    assert result.interval_seconds == pytest.approx(1.2)
+    assert result.interval_seconds == pytest.approx(0.1)
+    assert result.events[-1].keyword == "去吧"
 
 
 def test_measure_keyword_interval_accepts_shangba_as_second_keyword():
-    frames = iter([object(), object(), object(), object()])
-    texts = iter(["菜单", "谢米出现了！", "上吧！图图犬！", "空白"])
-    times = iter([0.0, 0.1, 0.2, 1.4, 5.4])
+    clock = _FakeClock()
 
     result = measure_keyword_interval(
-        lambda: next(frames),
-        lambda _frame: next(texts),
-        monotonic=lambda: next(times),
-        sleep=lambda _seconds: None,
+        object,
+        _timed_reader(clock, ["菜单", "谢米出现了！", "上吧！图图犬！"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
         timeout_seconds=5.0,
         poll_interval_seconds=0.1,
     )
 
-    assert result.interval_seconds == pytest.approx(1.2)
+    assert result.interval_seconds == pytest.approx(0.1)
+    assert result.events[-1].keyword == "上吧"
 
 
-def test_measure_keyword_interval_waits_for_second_keyword_after_script_grace():
-    done = threading.Event()
-    done.set()
-    frames = iter([object(), object(), object()])
-    texts = iter(["菜单", "谢米出现了！", "去吧！图图犬！"])
-    times = iter([0.0, 0.0, 29.9, 31.2, 31.3])
+@pytest.mark.parametrize("first_text", ["谢米出现了!", "谢米出现了！"])
+def test_measure_keyword_interval_accepts_halfwidth_and_fullwidth_exclamation(first_text):
+    clock = _FakeClock()
 
     result = measure_keyword_interval(
-        lambda: next(frames),
-        lambda _frame: next(texts),
-        monotonic=lambda: next(times),
-        sleep=lambda _seconds: None,
-        timeout_seconds=5.0,
+        object,
+        _timed_reader(clock, [first_text, "去吧！图图犬！"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        timeout_seconds=1.0,
+    )
+
+    assert result.interval_seconds == pytest.approx(0.1)
+
+
+def test_measure_keyword_interval_gives_second_keyword_an_independent_window():
+    done = threading.Event()
+    done.set()
+    clock = _FakeClock()
+
+    result = measure_keyword_interval(
+        object,
+        _timed_reader(clock, ["谢米出现了！", "去吧！图图犬！"], [29.9, 29.9]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        timeout_seconds=30.0,
         poll_interval_seconds=0.1,
         script_done=done,
         grace_seconds=30.0,
     )
 
-    assert result.interval_seconds == pytest.approx(1.3)
+    assert result.first_seen_at == pytest.approx(29.9)
+    assert result.second_seen_at == pytest.approx(59.8)
+    assert result.interval_seconds == pytest.approx(29.9)
 
 
 def test_measure_keyword_interval_requires_exclamation_for_first_keyword():
-    frames = iter([object(), object(), object()])
-    texts = iter(["谢米出现了", "菜单", "去吧！图图犬！"])
-    times = iter([0.0, 0.1, 0.2, 5.1])
+    clock = _FakeClock()
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(DialogKeywordTimeoutError) as exc_info:
         measure_keyword_interval(
-            lambda: next(frames),
-            lambda _frame: next(texts),
-            monotonic=lambda: next(times),
-            sleep=lambda _seconds: None,
-            timeout_seconds=5.0,
+            object,
+            lambda _frame: "谢米出现了",
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+            timeout_seconds=0.3,
             poll_interval_seconds=0.1,
         )
 
+    assert exc_info.value.stage == "before_first"
+    assert exc_info.value.event.event == "timeout_before_first"
+    assert exc_info.value.elapsed_seconds == pytest.approx(0.3)
+    assert exc_info.value.events[-1] == exc_info.value.event
 
-def test_measure_keyword_interval_reports_timeout_after_first_keyword():
+
+def test_measure_keyword_interval_distinguishes_script_running_hard_timeout():
+    clock = _FakeClock()
+    done = threading.Event()
+
+    with pytest.raises(DialogScriptTimeoutError) as exc_info:
+        measure_keyword_interval(
+            object,
+            lambda _frame: "菜单",
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+            script_done=done,
+            hard_timeout_seconds=0.3,
+        )
+
+    assert exc_info.value.stage == "script_running"
+    assert exc_info.value.event.event == "script_timeout"
+    assert exc_info.value.elapsed_seconds == pytest.approx(0.3)
+    assert [event.event for event in exc_info.value.events] == ["monitor_started", "script_timeout"]
+
+
+def test_measure_keyword_interval_uses_before_first_after_script_finishes():
+    clock = _FakeClock()
     done = threading.Event()
     done.set()
-    frames = iter([object(), object(), object()])
-    texts = iter(["菜单", "谢米出现了！", "空白"])
-    times = iter([0.0, 0.0, 0.5, 5.6])
+
+    with pytest.raises(DialogKeywordTimeoutError) as exc_info:
+        measure_keyword_interval(
+            object,
+            lambda _frame: "菜单",
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+            script_done=done,
+            grace_seconds=0.3,
+        )
+
+    assert exc_info.value.stage == "before_first"
+    assert exc_info.value.event.event == "timeout_before_first"
+
+
+def test_measure_keyword_interval_reports_independent_timeout_after_first_keyword():
+    done = threading.Event()
+    done.set()
+    clock = _FakeClock()
     events: list[tuple[str, float, float | None]] = []
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(DialogKeywordTimeoutError) as exc_info:
         measure_keyword_interval(
-            lambda: next(frames),
-            lambda _frame: next(texts),
-            monotonic=lambda: next(times),
-            sleep=lambda _seconds: None,
-            timeout_seconds=5.0,
+            object,
+            _timed_reader(clock, ["谢米出现了！", "去吧！图图犬！"], [29.9, 30.0]),
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+            timeout_seconds=30.0,
             poll_interval_seconds=0.1,
             script_done=done,
             grace_seconds=30.0,
             debug_callback=lambda event, elapsed, interval: events.append((event, elapsed, interval)),
         )
 
+    assert exc_info.value.stage == "after_first"
+    assert exc_info.value.event.event == "timeout_after_first"
+    assert exc_info.value.interval_seconds == pytest.approx(30.0)
+    assert exc_info.value.events[-1] == exc_info.value.event
     assert events == [
-        ("first_seen", pytest.approx(0.5), None),
-        ("timeout_after_first", pytest.approx(5.6), pytest.approx(5.1)),
+        ("first_seen", pytest.approx(29.9), None),
+        ("timeout_after_first", pytest.approx(59.9), pytest.approx(30.0)),
     ]
+
+
+def test_measure_keyword_interval_deducts_capture_and_ocr_time_from_poll_period():
+    clock = _FakeClock()
+
+    result = measure_keyword_interval(
+        object,
+        _timed_reader(clock, ["菜单", "谢米出现了！", "去吧！"], [0.04, 0.15, 0.02]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        timeout_seconds=2.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert clock.sleeps == [pytest.approx(0.06)]
+    assert result.first_seen_at == pytest.approx(0.25)
+    assert result.second_seen_at == pytest.approx(0.27)
+
+
+def test_measure_keyword_interval_distinguishes_cancellation():
+    captured = []
+
+    with pytest.raises(DialogTimingCancelledError):
+        measure_keyword_interval(
+            lambda: captured.append(True),
+            lambda _frame: "",
+            should_stop=lambda: True,
+        )
+
+    assert captured == []
+
+
+def test_measure_keyword_interval_wraps_capture_errors():
+    source_error = OSError("camera unavailable")
+
+    with pytest.raises(DialogFrameCaptureError, match="camera unavailable") as exc_info:
+        measure_keyword_interval(
+            lambda: (_ for _ in ()).throw(source_error),
+            lambda _frame: "",
+        )
+
+    assert exc_info.value.__cause__ is source_error
+
+
+def test_measure_keyword_interval_wraps_ocr_errors():
+    source_error = RuntimeError("paddle failed")
+
+    with pytest.raises(DialogOcrError, match="paddle failed") as exc_info:
+        measure_keyword_interval(
+            object,
+            lambda _frame: (_ for _ in ()).throw(source_error),
+        )
+
+    assert exc_info.value.__cause__ is source_error
+
+
+def test_read_ocr_text_propagates_paddle_failure_without_tesseract_fallback(monkeypatch):
+    source_error = RuntimeError("paddle failed")
+    fallback_calls = []
+    monkeypatch.setattr(dialog_timing, "read_paddle_ocr_text", lambda _frame: (_ for _ in ()).throw(source_error))
+    monkeypatch.setattr(
+        dialog_timing,
+        "read_tesseract_ocr_text",
+        lambda _frame: fallback_calls.append(True) or "fallback",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        dialog_timing.read_ocr_text(object())
+
+    assert exc_info.value is source_error
+    assert fallback_calls == []
 
 
 def test_extract_paddle_text_supports_legacy_and_v3_shapes():

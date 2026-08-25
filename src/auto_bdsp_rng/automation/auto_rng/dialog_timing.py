@@ -6,8 +6,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import re
 
-from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
+from auto_bdsp_rng.automation.auto_rng.ocr_runtime import optimized_paddle_ocr_kwargs
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import run_paddle_ocr
+
+
+@dataclass(frozen=True)
+class DialogTimingEvent:
+    event: str
+    observed_at: float
+    elapsed_seconds: float
+    interval_seconds: float | None = None
+    keyword: str | None = None
 
 
 @dataclass(frozen=True)
@@ -15,6 +24,46 @@ class DialogTimingResult:
     first_seen_at: float
     second_seen_at: float
     interval_seconds: float
+    events: tuple[DialogTimingEvent, ...] = ()
+
+
+class DialogTimingCancelledError(RuntimeError):
+    """Raised when dialog monitoring is cancelled cooperatively."""
+
+
+class DialogFrameCaptureError(RuntimeError):
+    """Raised when the capture source cannot provide the next frame."""
+
+
+class DialogOcrError(RuntimeError):
+    """Raised when PaddleOCR cannot process a captured frame."""
+
+
+class DialogTimingTimeoutError(TimeoutError):
+    """Base timeout carrying the structured event history for diagnostics."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        event: DialogTimingEvent,
+        events: tuple[DialogTimingEvent, ...],
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.event = event
+        self.events = events
+        self.elapsed_seconds = event.elapsed_seconds
+        self.interval_seconds = event.interval_seconds
+
+
+class DialogKeywordTimeoutError(DialogTimingTimeoutError):
+    """Raised when either keyword monitoring phase reaches its deadline."""
+
+
+class DialogScriptTimeoutError(DialogTimingTimeoutError):
+    """Raised when the controller script exceeds its hard runtime deadline."""
 
 
 def suggested_shiny_threshold(interval_seconds: float, *, multiplier: float = 1.2) -> float:
@@ -22,9 +71,9 @@ def suggested_shiny_threshold(interval_seconds: float, *, multiplier: float = 1.
 
 
 def normalize_ocr_text(text: str) -> str:
-    """去掉空格和噪声，但保留 !/！ 用于闪符对话框匹配。"""
+    """去掉空格和噪声，并将半角/全角感叹号归一为同一字符。"""
     cleaned = re.sub(r"[^\w！!]+", "", text, flags=re.UNICODE)
-    return cleaned
+    return cleaned.replace("!", "！")
 
 
 def measure_keyword_interval(
@@ -42,6 +91,7 @@ def measure_keyword_interval(
     grace_seconds: float = 30.0,
     hard_timeout_seconds: float = 120.0,
     debug_callback: Callable[[str, float, float | None], None] | None = None,
+    event_callback: Callable[[DialogTimingEvent], None] | None = None,
 ) -> DialogTimingResult:
     first = normalize_ocr_text(first_keyword)
     second_keywords = (second_keyword,) if isinstance(second_keyword, str) else tuple(second_keyword)
@@ -49,65 +99,116 @@ def measure_keyword_interval(
     started_at = monotonic()
     first_seen_at: float | None = None
     script_ended_at: float | None = None
+    events: list[DialogTimingEvent] = []
 
-    def emit_debug(event: str, now: float, interval: float | None = None) -> None:
-        if debug_callback is not None:
-            debug_callback(event, now - started_at, interval)
+    def record_event(
+        event: str,
+        observed_at: float,
+        interval: float | None = None,
+        *,
+        keyword: str | None = None,
+        emit_debug: bool = True,
+    ) -> DialogTimingEvent:
+        item = DialogTimingEvent(event, observed_at, observed_at - started_at, interval, keyword)
+        events.append(item)
+        if event_callback is not None:
+            event_callback(item)
+        if emit_debug and debug_callback is not None:
+            debug_callback(event, item.elapsed_seconds, interval)
+        return item
+
+    record_event("monitor_started", started_at, emit_debug=False)
+
+    def check_stopped(now: float) -> None:
+        if should_stop is not None and should_stop():
+            record_event("cancelled", now, emit_debug=False)
+            raise DialogTimingCancelledError("Dialog timing calibration stopped")
+
+    def update_script_deadline(now: float) -> None:
+        nonlocal script_ended_at
+        if script_done is not None and script_done.is_set() and script_ended_at is None:
+            script_ended_at = now
+
+    def check_timeout(now: float) -> None:
+        if first_seen_at is not None:
+            interval = now - first_seen_at
+            if interval >= timeout_seconds:
+                timeout_event = record_event("timeout_after_first", now, interval)
+                second_label = "/".join(second_keywords)
+                raise DialogKeywordTimeoutError(
+                    f"Timed out while waiting for second OCR keyword: {second_label}",
+                    stage="after_first",
+                    event=timeout_event,
+                    events=tuple(events),
+                )
+            return
+        if script_done is None:
+            timed_out = now - started_at >= timeout_seconds
+        elif script_ended_at is not None:
+            timed_out = now - script_ended_at >= grace_seconds
+        else:
+            if now - started_at >= hard_timeout_seconds:
+                timeout_event = record_event("script_timeout", now, emit_debug=False)
+                raise DialogScriptTimeoutError(
+                    "Controller script did not finish before the dialog monitoring hard timeout",
+                    stage="script_running",
+                    event=timeout_event,
+                    events=tuple(events),
+                )
+            return
+        if timed_out:
+            timeout_event = record_event("timeout_before_first", now)
+            raise DialogKeywordTimeoutError(
+                f"Timed out while waiting for first OCR keyword: {first_keyword}",
+                stage="before_first",
+                event=timeout_event,
+                events=tuple(events),
+            )
 
     while True:
-        now = monotonic()
-        if script_done is not None:
-            # 脚本结束后再给 grace_seconds 检测对话框
-            if script_done.is_set():
-                if script_ended_at is None:
-                    script_ended_at = now
-                if first_seen_at is None and now - script_ended_at > grace_seconds:
-                    emit_debug("timeout_before_first", now)
-                    break
-                if first_seen_at is not None and now - first_seen_at > timeout_seconds:
-                    emit_debug("timeout_after_first", now, now - first_seen_at)
-                    break
-            elif now - started_at > hard_timeout_seconds:
-                # 脚本运行过久，兜底保护
-                if first_seen_at is None:
-                    emit_debug("timeout_before_first", now)
-                else:
-                    emit_debug("timeout_after_first", now, now - first_seen_at)
-                break
-        elif now - started_at > timeout_seconds:
-            if first_seen_at is None:
-                emit_debug("timeout_before_first", now)
-            else:
-                emit_debug("timeout_after_first", now, now - first_seen_at)
-            break
-        if should_stop is not None and should_stop():
-            raise RuntimeError("Dialog timing calibration stopped")
-        frame = capture_frame()
-        text = normalize_ocr_text(read_text(frame))
+        iteration_started_at = monotonic()
+        check_stopped(iteration_started_at)
+        update_script_deadline(iteration_started_at)
+        check_timeout(iteration_started_at)
+        try:
+            frame = capture_frame()
+        except Exception as exc:
+            failed_at = monotonic()
+            record_event("capture_error", failed_at, emit_debug=False)
+            raise DialogFrameCaptureError(f"Dialog frame capture failed: {exc}") from exc
+        check_stopped(monotonic())
+        try:
+            raw_text = read_text(frame)
+        except Exception as exc:
+            failed_at = monotonic()
+            record_event("ocr_error", failed_at, emit_debug=False)
+            raise DialogOcrError(f"Dialog OCR inference failed: {exc}") from exc
+        ocr_completed_at = monotonic()
+        check_stopped(ocr_completed_at)
+        update_script_deadline(ocr_completed_at)
+        check_timeout(ocr_completed_at)
+        text = normalize_ocr_text(raw_text)
         if first_seen_at is None:
             if first in text:
-                first_seen_at = now
-                emit_debug("first_seen", now)
-        elif any(second in text for second in seconds):
-            emit_debug("second_seen", now, now - first_seen_at)
-            return DialogTimingResult(first_seen_at, now, now - first_seen_at)
-        sleep(poll_interval_seconds)
-    second_label = "/".join(second_keywords)
-    raise TimeoutError(f"Timed out while waiting for OCR keywords: {first_keyword} -> {second_label}")
+                first_seen_at = ocr_completed_at
+                record_event("first_seen", ocr_completed_at, keyword=first_keyword)
+        else:
+            matched_keyword = next(
+                (keyword for keyword, normalized in zip(second_keywords, seconds) if normalized in text),
+                None,
+            )
+            if matched_keyword is not None:
+                interval = ocr_completed_at - first_seen_at
+                record_event("second_seen", ocr_completed_at, interval, keyword=matched_keyword)
+                return DialogTimingResult(first_seen_at, ocr_completed_at, interval, tuple(events))
+        sleep_seconds = poll_interval_seconds - (ocr_completed_at - iteration_started_at)
+        if sleep_seconds > 0:
+            sleep(sleep_seconds)
 
 
 def read_ocr_text(frame: object) -> str:
-    try:
-        return read_paddle_ocr_text(frame)
-    except RuntimeError as paddle_error:
-        try:
-            return read_tesseract_ocr_text(frame)
-        except RuntimeError as tesseract_error:
-            raise RuntimeError(
-                "OCR engine is unavailable. Install PaddleOCR with "
-                "`python -m pip install .[ocr]`, or install pytesseract plus Tesseract chi_sim. "
-                f"PaddleOCR error: {paddle_error}; Tesseract error: {tesseract_error}"
-            ) from tesseract_error
+    """Read text with the shared PaddleOCR runtime and propagate its failures."""
+    return read_paddle_ocr_text(frame)
 
 
 def read_paddle_ocr_text(frame: object) -> str:
@@ -174,6 +275,7 @@ def _extract_paddle_text(result: object) -> str:
 
 
 def read_tesseract_ocr_text(frame: object) -> str:
+    """Explicit opt-in compatibility helper; automatic OCR never falls back to it."""
     try:
         import pytesseract
         from PIL import Image

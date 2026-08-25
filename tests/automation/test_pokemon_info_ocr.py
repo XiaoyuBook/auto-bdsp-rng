@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
+    _bbox_is_red_text,
     _clean_characteristic,
     _clean_nature,
     _detect_page_type,
@@ -200,6 +201,42 @@ def test_extract_pokemon_info_discards_obvious_digit_drop(monkeypatch):
     assert result["stats"] is None
 
 
+def test_extract_pokemon_info_returns_unknown_when_ocr_has_no_match(monkeypatch):
+    monkeypatch.setattr(
+        "auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr._ocr_rows",
+        lambda *_args, **_kwargs: [],
+    )
+
+    result = extract_pokemon_info(
+        stats_image=np.zeros((720, 1280, 3), dtype=np.uint8),
+        notes_image=np.zeros((720, 1280, 3), dtype=np.uint8),
+    )
+
+    assert result == {"stats": None, "nature": None, "characteristic": None}
+
+
+@pytest.mark.parametrize("image_field", ["stats_image", "notes_image"])
+def test_extract_pokemon_info_propagates_ocr_runtime_errors(monkeypatch, image_field):
+    def fail_ocr(*_args, **_kwargs):
+        raise RuntimeError("inference failed")
+
+    monkeypatch.setattr(
+        "auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr._ocr_rows",
+        fail_ocr,
+    )
+
+    with pytest.raises(RuntimeError, match="inference failed"):
+        extract_pokemon_info(**{image_field: np.zeros((720, 1280, 3), dtype=np.uint8)})
+
+
+@pytest.mark.parametrize("image_field", ["stats_image", "notes_image"])
+def test_extract_pokemon_info_propagates_image_loading_errors(tmp_path, image_field):
+    missing = tmp_path / "missing.png"
+
+    with pytest.raises(FileNotFoundError, match="Cannot load image"):
+        extract_pokemon_info(**{image_field: missing})
+
+
 # ── _extract_nature_and_characteristic ────────────────────────────
 
 def _make_bbox(y: float, height: float = 12.0) -> list:
@@ -292,6 +329,24 @@ def test_is_pixel_red_false():
     assert _is_pixel_red(200, 200, 200) is False  # white/gray
     assert _is_pixel_red(100, 150, 100) is False  # green > red
     assert _is_pixel_red(80, 60, 200) is False    # blue > red
+
+
+@pytest.mark.parametrize("bgr", [(0, 0, 255), (10, 0, 255)])
+def test_bbox_is_red_text_detects_both_hsv_red_ranges(bgr):
+    image = np.full((20, 40, 3), 255, dtype=np.uint8)
+    image[4:16, 8:32] = bgr
+    bbox = [[0, 0], [40, 0], [40, 20], [0, 20]]
+
+    assert _bbox_is_red_text(image, bbox) is True
+
+
+@pytest.mark.parametrize("bgr", [(255, 0, 0), (0, 255, 0), (160, 160, 160)])
+def test_bbox_is_red_text_rejects_non_red_colors(bgr):
+    image = np.full((20, 40, 3), 255, dtype=np.uint8)
+    image[4:16, 8:32] = bgr
+    bbox = [[0, 0], [40, 0], [40, 20], [0, 20]]
+
+    assert _bbox_is_red_text(image, bbox) is False
 
 
 def test_compute_characteristic_uses_ec_tie_break_and_bdsp_translation():

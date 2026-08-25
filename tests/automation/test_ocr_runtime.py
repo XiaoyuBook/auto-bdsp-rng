@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import os
 from pathlib import Path
 
 import pytest
@@ -42,12 +44,38 @@ def test_configure_ocr_runtime_limits_thread_env(monkeypatch):
     assert __import__("os").environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] == "True"
 
 
+def test_ocr_runtime_import_applies_thread_env(monkeypatch):
+    for name in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    importlib.reload(ocr_runtime)
+
+    assert os.environ["OMP_NUM_THREADS"] == str(DEFAULT_OCR_CPU_THREADS)
+    assert os.environ["MKL_NUM_THREADS"] == str(DEFAULT_OCR_CPU_THREADS)
+    assert os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] == "True"
+
+
+def test_configure_ocr_runtime_preserves_explicit_thread_env(monkeypatch):
+    monkeypatch.setenv("OMP_NUM_THREADS", "6")
+
+    configure_ocr_runtime()
+
+    assert os.environ["OMP_NUM_THREADS"] == "6"
+
+
 def test_optimized_paddle_ocr_kwargs_use_mobile_models_and_limited_threads():
     kwargs = optimized_paddle_ocr_kwargs()
 
     assert kwargs["text_detection_model_name"] == "PP-OCRv5_mobile_det"
     assert kwargs["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
     assert kwargs["cpu_threads"] == DEFAULT_OCR_CPU_THREADS
+    assert kwargs["mkldnn_cache_capacity"] == 1
     assert "lang" not in kwargs
 
 
@@ -85,6 +113,7 @@ def test_dialog_timing_paddle_ocr_prefers_optimized_runtime_kwargs():
     assert calls[0]["text_detection_model_name"] == "PP-OCRv5_mobile_det"
     assert calls[0]["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
     assert calls[0]["cpu_threads"] == DEFAULT_OCR_CPU_THREADS
+    assert calls[0]["mkldnn_cache_capacity"] == 1
 
 
 def test_pokemon_info_paddle_ocr_prefers_optimized_runtime_kwargs():
@@ -99,3 +128,4 @@ def test_pokemon_info_paddle_ocr_prefers_optimized_runtime_kwargs():
     assert calls[0]["text_detection_model_name"] == "PP-OCRv5_mobile_det"
     assert calls[0]["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
     assert calls[0]["cpu_threads"] == DEFAULT_OCR_CPU_THREADS
+    assert calls[0]["mkldnn_cache_capacity"] == 1

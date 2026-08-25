@@ -5,6 +5,10 @@ import json
 import sys
 
 from auto_bdsp_rng import __version__
+from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime
+
+configure_ocr_runtime()
+
 from auto_bdsp_rng.blink_detection import (
     ProjectXsIntegrationError,
     advance_seed_state,

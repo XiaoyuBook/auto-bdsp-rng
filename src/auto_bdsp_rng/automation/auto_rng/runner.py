@@ -1176,6 +1176,11 @@ class AutoRngRunner:
 
     def _handle_shiny_check_result(self, result: ShinyCheckResult, path: object) -> None:
         interval_text = "-" if result.interval_seconds is None else f"{result.interval_seconds:.3f}s"
+        non_shiny_text = (
+            "OCR 超时，按未出闪继续"
+            if result.interval_seconds is None
+            else f"未出闪，间隔 {interval_text}"
+        )
         trigger = self.progress.trigger_advances
         used_delay = self.config.fixed_delay
         attempt_label = self._attempt_label()
@@ -1199,9 +1204,6 @@ class AutoRngRunner:
                 last_script_path=path,
             )
             return
-        if self.config.escape_continue and result.interval_seconds is None:
-            self._stop_for_unknown_shiny_result(path)
-            return
         if self.config.escape_continue and self._later_candidate_count > 0:
             target = self._require_target()
             self._missed_target_advance = target.raw_target_advances
@@ -1216,7 +1218,7 @@ class AutoRngRunner:
             )
             self._set_progress(
                 AutoRngPhase.RUN_ESCAPE_SCRIPT,
-                f"{attempt_label} 未出闪，间隔 {interval_text}；"
+                f"{attempt_label} {non_shiny_text}；"
                 f"当前搜索仍有 {self._later_candidate_count} 个更晚候选，准备逃跑续搜",
                 loop_index=self._completed_loops,
                 last_script_path=path,
@@ -1228,7 +1230,7 @@ class AutoRngRunner:
             self._last_used_delay = used_delay
             self._set_progress(
                 AutoRngPhase.REVERSE_LOOKUP,
-                f"{attempt_label} 未出闪，间隔 {interval_text}，启动自动反查",
+                f"{attempt_label} {non_shiny_text}，启动自动反查",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1239,7 +1241,7 @@ class AutoRngRunner:
         if self.config.loop_mode == "infinite":
             self._set_progress(
                 AutoRngPhase.RUN_SEED_SCRIPT,
-                f"{attempt_label} 未出闪，间隔 {interval_text}，进入下一轮测种",
+                f"{attempt_label} {non_shiny_text}，进入下一轮测种",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1247,14 +1249,14 @@ class AutoRngRunner:
         if self.config.loop_mode == "count" and self._completed_loops < self.config.loop_count:
             self._set_progress(
                 AutoRngPhase.RUN_SEED_SCRIPT,
-                f"{attempt_label} 未出闪，间隔 {interval_text}，进入下一轮测种",
+                f"{attempt_label} {non_shiny_text}，进入下一轮测种",
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
             return
         self._set_progress(
             AutoRngPhase.COMPLETED,
-            f"{attempt_label} 未出闪，间隔 {interval_text}，自动流程完成",
+            f"{attempt_label} {non_shiny_text}，自动流程完成",
             loop_index=self._completed_loops,
             last_script_path=path,
         )

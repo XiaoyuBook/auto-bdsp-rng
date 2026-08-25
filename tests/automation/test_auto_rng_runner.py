@@ -1588,9 +1588,10 @@ def test_runner_keeps_old_non_shiny_behavior_without_escape_candidate(
     assert "未出闪" in runner.progress.log_message
 
 
-def test_runner_escape_continue_stops_when_shiny_interval_is_unknown(tmp_path):
+def test_runner_escape_continue_treats_shiny_timeout_as_non_shiny(tmp_path):
     hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
     scripts: list[str] = []
+    progress_messages: list[str] = []
     candidates = [
         FakeState(1300, ec=0x1301, pid=0x2301),
         FakeState(1500, ec=0x1302, pid=0x2302),
@@ -1616,13 +1617,14 @@ def test_runner_escape_continue_stops_when_shiny_interval_is_unknown(tmp_path):
             ),
             monotonic=lambda: 10.0,
         ),
+        progress_callback=lambda progress: progress_messages.append(progress.log_message),
     )
 
     runner.run(max_steps=5)
 
-    assert scripts == []
-    assert runner.progress.phase == AutoRngPhase.FAILED
-    assert "人工确认" in runner.progress.log_message
+    assert scripts == [escape_script.name]
+    assert runner.progress.phase == AutoRngPhase.REIDENTIFY
+    assert any("OCR 超时，按未出闪继续" in message for message in progress_messages)
 
 
 def test_runner_escape_continue_takes_priority_over_auto_reverse_with_later_candidate(tmp_path):
