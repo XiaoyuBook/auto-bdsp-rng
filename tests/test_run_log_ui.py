@@ -411,6 +411,7 @@ def test_manual_ocr_failure_writes_error_and_reraises_same_exception(
 
 def test_full_ocr_success_logs_each_result_and_completion(app, monkeypatch):
     window = MainWindow()
+    window._ocr_warmup_result = (True, "OCR预热完成")
     records: list[tuple[str, str, str]] = []
     outcomes: list[tuple[bool, str]] = []
     regions = {
@@ -418,13 +419,14 @@ def test_full_ocr_success_logs_each_result_and_completion(app, monkeypatch):
         "hp": main_window_module.OcrRegion(5, 6, 7, 8),
     }
 
-    class ImmediateThread:
-        def __init__(self, *, target, daemon):
-            assert daemon is True
-            self.target = target
-
-        def start(self) -> None:
-            self.target()
+    def run_immediately(_label, task, completed):
+        try:
+            payload = task(lambda: False)
+        except BaseException as exc:
+            completed(False, exc)
+        else:
+            completed(True, payload)
+        return True
 
     monkeypatch.setattr(
         window,
@@ -432,14 +434,14 @@ def test_full_ocr_success_logs_each_result_and_completion(app, monkeypatch):
         lambda source, message, *, level="INFO": records.append((source, str(message), level)),
     )
     monkeypatch.setattr(window, "_ocr_region_config", lambda: regions)
-    monkeypatch.setattr(window, "_current_preview_frame_for_ocr", lambda: "notes-frame")
     monkeypatch.setattr(window, "_config_from_form", lambda: SimpleNamespace(capture=object()))
+    frames = iter(("notes-frame", "stats-frame"))
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: next(frames))
+    monkeypatch.setattr(window, "_start_managed_ocr_task", run_immediately)
     monkeypatch.setattr(window, "_send_easycon_right", lambda: None)
-    monkeypatch.setattr(main_window_module, "capture_preview_frame", lambda _config: "stats-frame")
     monkeypatch.setattr(main_window_module, "NOTE_REGION_FIELDS", ("nature",))
     monkeypatch.setattr(main_window_module, "STAT_REGION_FIELDS", ("hp",))
     monkeypatch.setattr(main_window_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(main_window_module.threading, "Thread", ImmediateThread)
     monkeypatch.setattr(
         main_window_module,
         "recognize_ocr_field",
@@ -463,16 +465,18 @@ def test_full_ocr_success_logs_each_result_and_completion(app, monkeypatch):
 
 def test_full_ocr_failure_logs_error_and_preserves_finished_signal_semantics(app, monkeypatch):
     window = MainWindow()
+    window._ocr_warmup_result = (True, "OCR预热完成")
     records: list[tuple[str, str, str]] = []
     outcomes: list[tuple[bool, str]] = []
 
-    class ImmediateThread:
-        def __init__(self, *, target, daemon):
-            assert daemon is True
-            self.target = target
-
-        def start(self) -> None:
-            self.target()
+    def run_immediately(_label, task, completed):
+        try:
+            payload = task(lambda: False)
+        except BaseException as exc:
+            completed(False, exc)
+        else:
+            completed(True, payload)
+        return True
 
     monkeypatch.setattr(
         window,
@@ -484,10 +488,11 @@ def test_full_ocr_failure_logs_error_and_preserves_finished_signal_semantics(app
         "_ocr_region_config",
         lambda: {"nature": main_window_module.OcrRegion(1, 2, 3, 4)},
     )
-    monkeypatch.setattr(window, "_current_preview_frame_for_ocr", lambda: "notes-frame")
+    monkeypatch.setattr(window, "_config_from_form", lambda: SimpleNamespace(capture=object()))
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: "notes-frame")
+    monkeypatch.setattr(window, "_start_managed_ocr_task", run_immediately)
     monkeypatch.setattr(main_window_module, "NOTE_REGION_FIELDS", ("nature",))
     monkeypatch.setattr(main_window_module, "STAT_REGION_FIELDS", ())
-    monkeypatch.setattr(main_window_module.threading, "Thread", ImmediateThread)
     monkeypatch.setattr(
         main_window_module,
         "recognize_ocr_field",

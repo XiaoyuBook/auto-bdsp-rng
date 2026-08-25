@@ -1627,6 +1627,42 @@ def test_runner_escape_continue_treats_shiny_timeout_as_non_shiny(tmp_path):
     assert any("OCR 超时，按未出闪继续" in message for message in progress_messages)
 
 
+def test_runner_user_stop_during_shiny_monitor_returns_idle(tmp_path):
+    hit_script, _escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    candidates = [FakeState(1300, ec=0x1301, pid=0x2301)]
+    stopped_scripts = []
+    runner_holder = []
+
+    def cancel_monitor(_text, _name, _threshold):
+        runner_holder[0].stop()
+        raise RuntimeError("monitor cancelled")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: candidates,
+            run_script_text=lambda _text, _name: None,
+            run_hit_script_with_shiny_check=cancel_monitor,
+            stop_current_script=lambda: stopped_scripts.append(True),
+            monotonic=lambda: 10.0,
+        ),
+    )
+    runner_holder.append(runner)
+
+    result = runner.run(max_steps=5)
+
+    assert result.phase == AutoRngPhase.IDLE
+    assert stopped_scripts == [True]
+
+
 def test_runner_escape_continue_takes_priority_over_auto_reverse_with_later_candidate(tmp_path):
     hit_script, escape_script, reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
     scripts: list[str] = []

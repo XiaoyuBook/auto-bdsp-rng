@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion, OcrRegionConfig
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
+    SHINY_DIALOG_REGION_FIELD,
+    OcrRegion,
+    OcrRegionConfig,
+    default_ocr_region,
+)
 from auto_bdsp_rng.automation.auto_rng import pokemon_info_ocr
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import extract_pokemon_info
 
@@ -12,6 +17,31 @@ def test_ocr_region_clips_and_converts_to_relative_bounds():
 
     assert region.clip(100, 80) == OcrRegion(90, 0, 10, 40)
     assert region.to_relative_bounds((80, 100, 3)) == (0.9, 1.0, 0.0, 0.5)
+
+
+def test_shiny_dialog_region_resolves_dynamic_lower_half_default():
+    config = OcrRegionConfig()
+
+    assert default_ocr_region(SHINY_DIALOG_REGION_FIELD, (101, 201, 3)) == OcrRegion(0, 50, 201, 51)
+    assert config.resolve(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == OcrRegion(0, 360, 1280, 360)
+
+
+def test_shiny_dialog_region_prefers_absolute_custom_and_falls_back_when_invalid():
+    config = OcrRegionConfig({SHINY_DIALOG_REGION_FIELD: OcrRegion(100, 300, 500, 250)})
+
+    assert config.resolve(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == OcrRegion(100, 300, 500, 250)
+    assert config.to_settings_dict()[SHINY_DIALOG_REGION_FIELD] == "[100, 300, 500, 250]"
+
+    off_frame = OcrRegionConfig({SHINY_DIALOG_REGION_FIELD: OcrRegion(2000, 1000, 20, 20)})
+    empty = OcrRegionConfig.from_settings_dict({SHINY_DIALOG_REGION_FIELD: ""})
+    invalid = OcrRegionConfig.from_settings_dict({SHINY_DIALOG_REGION_FIELD: "[0, 0, 0, 0]"})
+
+    expected_default = OcrRegion(0, 360, 1280, 360)
+    assert off_frame.resolve(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == expected_default
+    assert empty.resolve(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == expected_default
+    assert invalid.resolve(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == expected_default
+    assert not empty.has_invalid_custom(SHINY_DIALOG_REGION_FIELD)
+    assert invalid.has_invalid_custom(SHINY_DIALOG_REGION_FIELD)
 
 
 def test_extract_pokemon_info_prefers_configured_stat_regions(monkeypatch):

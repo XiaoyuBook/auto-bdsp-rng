@@ -1059,7 +1059,12 @@ class AutoRngRunner:
             current_advances=new_current,
             remaining_to_trigger=remaining,
         )
-        shiny_result = self._run_hit_script_text(text, path.name)
+        try:
+            shiny_result = self._run_hit_script_text(text, path.name)
+        except Exception:
+            if self.should_stop():
+                return
+            raise
         if shiny_result is not None:
             self._handle_shiny_check_result(shiny_result, path)
             return

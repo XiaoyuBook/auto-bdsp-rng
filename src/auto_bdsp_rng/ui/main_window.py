@@ -84,12 +84,21 @@ from auto_bdsp_rng.automation.auto_tid_rng import (
     ProjectXsMunchlaxAdvanceCounter,
 )
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
+    DialogKeywordTimeoutError,
+    DialogScriptTimeoutError,
+    DialogTimingEvent,
     measure_keyword_interval,
     read_ocr_text,
     suggested_shiny_threshold,
 )
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
-from auto_bdsp_rng.automation.auto_rng.ocr_regions import NOTE_REGION_FIELDS, OCR_REGION_LABELS, STAT_REGION_FIELDS, OcrRegion
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
+    NOTE_REGION_FIELDS,
+    OCR_REGION_LABELS,
+    SHINY_DIALOG_REGION_FIELD,
+    STAT_REGION_FIELDS,
+    OcrRegion,
+)
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     extract_pokemon_info,
     recognize_ocr_field,
@@ -818,6 +827,33 @@ class OcrWarmupThread(QThread):
             self.completed.emit(success, message)
 
 
+class OcrTaskThread(QThread):
+    """Run one on-demand OCR action while keeping its lifetime owned by the window."""
+
+    completed = Signal(bool, object)
+
+    def __init__(
+        self,
+        task: Callable[[Callable[[], bool]], object],
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._task = task
+
+    def run(self) -> None:
+        if self.isInterruptionRequested():
+            return
+        try:
+            result = self._task(self.isInterruptionRequested)
+        except BaseException as exc:
+            success = False
+            result = exc
+        else:
+            success = True
+        if not self.isInterruptionRequested():
+            self.completed.emit(success, result)
+
+
 class MainWindow(QMainWindow):
     autoCaptureFrameChanged = Signal(object)
     autoCaptureProgressChanged = Signal(int, int)
@@ -863,6 +899,11 @@ class MainWindow(QMainWindow):
         self._ocr_warmup_running = False
         self._ocr_warmup_thread: OcrWarmupThread | None = None
         self._ocr_warmup_result: tuple[bool, str] | None = None
+        self._ocr_after_warmup: tuple[str, Callable[[], None]] | None = None
+        self._ocr_task_thread: OcrTaskThread | None = None
+        self._ocr_task_label: str | None = None
+        self._ocr_task_completed: Callable[[bool, object], None] | None = None
+        self._ocr_shutdown_requested = False
         self._is_closing = False
         self._ocr_full_test_running = False
         self._selection_mode: str | None = None
@@ -908,7 +949,6 @@ class MainWindow(QMainWindow):
         self._sync_seed64_from_state32()
         self._apply_language()
         self.statusBar().showMessage(self._text("ready"))
-        QTimer.singleShot(0, self._start_ocr_warmup)
         QTimer.singleShot(0, self._maybe_show_startup_notice)
 
     def _connect_auto_rng_sync_signals(self) -> None:
@@ -1011,6 +1051,7 @@ class MainWindow(QMainWindow):
         self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)
+        self.auto_rng_tab.runStateChanged.connect(self._set_ocr_automation_active)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self.open_ocr_settings)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
@@ -2415,6 +2456,8 @@ class MainWindow(QMainWindow):
         self._capture_cancel.set()
         self._request_automation_runner_stop(self.auto_rng_tab, "自动定点")
         self._request_automation_runner_stop(self.auto_tid_rng_tab, "自动 TID")
+        self._ocr_shutdown_requested = True
+        self._request_ocr_background_stop()
         easycon_stopped = self.easycon_tab.shutdown()
 
         pending_tasks: list[str] = []
@@ -2443,9 +2486,12 @@ class MainWindow(QMainWindow):
         self._release_preview_capture()
         if not self._shutdown_ocr_warmup_thread():
             pending_tasks.append("OCR 预热")
+        if not self._shutdown_ocr_task_thread():
+            pending_tasks.append("OCR 识别")
 
         if pending_tasks:
             self._is_closing = False
+            self._restore_interrupted_ocr_state_if_idle()
             if self._capture_thread is not None:
                 self._capture_timer.start()
             if pending_tasks == ["伊机控或 CLI"]:
@@ -2583,6 +2629,64 @@ class MainWindow(QMainWindow):
             pass
         self._ocr_warmup_running = False
         return True
+
+    def _request_ocr_background_stop(self) -> None:
+        for thread in (self._ocr_warmup_thread, self._ocr_task_thread):
+            if thread is None:
+                continue
+            try:
+                thread.requestInterruption()
+            except RuntimeError:
+                pass
+
+    def _shutdown_ocr_task_thread(self, *, wait_ms: int = 2000) -> bool:
+        task_thread = self._ocr_task_thread
+        if task_thread is None:
+            return True
+        try:
+            task_thread.requestInterruption()
+            deadline = time.monotonic() + max(0, wait_ms) / 1000.0
+            while task_thread.isRunning() and time.monotonic() < deadline:
+                QApplication.processEvents()
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                task_thread.wait(min(50, remaining_ms))
+            if task_thread.isRunning():
+                timeout_seconds = max(0, wait_ms) / 1000.0
+                self._write_run_log(
+                    "OCR",
+                    f"关闭时{self._ocr_task_label or '识别任务'}未能在 {timeout_seconds:g} 秒内退出",
+                    level="WARNING",
+                )
+                return False
+        except RuntimeError:
+            pass
+        self._ocr_task_thread = None
+        self._ocr_task_label = None
+        self._ocr_task_completed = None
+        return True
+
+    def _restore_interrupted_ocr_state_if_idle(self) -> None:
+        if not self._ocr_shutdown_requested or self._is_closing:
+            return
+        warmup_thread = self._ocr_warmup_thread
+        task_thread = self._ocr_task_thread
+        if warmup_thread is not None and warmup_thread.isRunning():
+            return
+        if task_thread is not None and task_thread.isRunning():
+            return
+        pending_kind = self._ocr_after_warmup[0] if self._ocr_after_warmup is not None else None
+        self._ocr_shutdown_requested = False
+        self._ocr_warmup_running = False
+        self._ocr_after_warmup = None
+        self._ocr_full_test_running = False
+        if self._ocr_settings_dialog is not None:
+            self._ocr_settings_dialog.cancel_background_activity("OCR 任务因关闭操作取消")
+        if pending_kind == "auto_rng":
+            message = "OCR 初始化因关闭操作取消，自动流程未启动"
+            self.auto_rng_tab.set_phase_text(AutoRngPhase.IDLE.value)
+            self.auto_rng_tab.add_log(message, level="WARNING")
+            self.statusBar().showMessage(message)
+        self._refresh_shiny_calibration_button_state()
 
     def _change_language(self) -> None:
         self.lang = "zh"
@@ -3109,9 +3213,10 @@ class MainWindow(QMainWindow):
 
     def open_ocr_settings(self) -> None:
         if self._ocr_settings_dialog is None:
-            dialog = OcrSettingsDialog(self, recognizer=self._recognize_ocr_region)
+            dialog = OcrSettingsDialog(self)
             dialog.regionSelectionRequested.connect(self.start_ocr_region_selection)
             dialog.regionDisplayRequested.connect(self._show_ocr_region_overlay)
+            dialog.recognitionRequested.connect(self._request_ocr_region_recognition)
             dialog.warmupRequested.connect(self._start_ocr_warmup)
             dialog.fullTestRequested.connect(self._start_ocr_full_test)
             self.ocrRegionSelected.connect(dialog.set_region)
@@ -3122,6 +3227,14 @@ class MainWindow(QMainWindow):
                 dialog.finish_warmup(*self._ocr_warmup_result)
             elif self._ocr_warmup_running:
                 dialog.show_warmup_running()
+            dialog.set_automation_active(
+                self.auto_rng_tab._runner_thread is not None
+                or self._shiny_calibration_worker is not None
+            )
+            if self._latest_preview_frame is not None:
+                image_shape = getattr(self._latest_preview_frame, "shape", None)
+                if image_shape is not None:
+                    dialog.set_preview_frame_shape(tuple(image_shape))
         self._ocr_settings_dialog.show()
         self._ocr_settings_dialog.raise_()
         self._ocr_settings_dialog.activateWindow()
@@ -3138,16 +3251,42 @@ class MainWindow(QMainWindow):
         self._tid_ocr_dialog.activateWindow()
 
     def _show_ocr_region_overlay(self, field: str, region: object) -> None:
-        if not isinstance(region, OcrRegion):
-            region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
-        self.preview_label.set_ocr_overlay(field, region)
+        configured_region = region if isinstance(region, OcrRegion) else None
+        if region is not None and configured_region is None:
+            configured_region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
         try:
-            self._display_frame(self._current_preview_frame_for_ocr())
+            frame = self._latest_preview_frame
+            if frame is None:
+                if self.auto_rng_tab._runner_thread is not None:
+                    self.statusBar().showMessage("自动流程运行中，当前没有可显示的 OCR 预览帧")
+                    return
+                frame = self._current_preview_frame_for_ocr()
+            image_shape = tuple(getattr(frame, "shape"))
+            effective_region = self._ocr_region_config().resolve(field, image_shape)
+            if effective_region is None:
+                self.statusBar().showMessage(f"无法在当前画面中显示 OCR 区域：{OCR_REGION_LABELS.get(field, field)}")
+                return
+            if configured_region is not None:
+                image_height, image_width = image_shape[:2]
+                if not configured_region.clip(image_width, image_height).is_valid():
+                    self._write_run_log(
+                        "OCR",
+                        f"{OCR_REGION_LABELS.get(field, field)}自定义 ROI 在当前画面中无效，已使用默认范围",
+                        level="WARNING",
+                    )
+            self.preview_label.set_ocr_overlay(field, effective_region)
+            self._display_frame(frame)
+            if self._ocr_settings_dialog is not None:
+                self._ocr_settings_dialog.set_preview_frame_shape(image_shape)
         except Exception:
             if self._latest_preview_frame is not None:
                 self._display_frame(self._latest_preview_frame)
+            return
         label = OCR_REGION_LABELS.get(field, field)
-        self.statusBar().showMessage(f"显示 OCR 区域：{label}")
+        self.statusBar().showMessage(
+            f"显示 OCR 区域：{label} X={effective_region.x}, Y={effective_region.y}, "
+            f"W={effective_region.width}, H={effective_region.height}"
+        )
 
     def _show_tid_ocr_region_overlay(self, region: object) -> None:
         if not isinstance(region, OcrRegion):
@@ -3180,6 +3319,148 @@ class MainWindow(QMainWindow):
         self._write_run_log("OCR", f"{label}识别结果: {text or '空'}")
         return text
 
+    def _set_ocr_automation_active(self, active: bool) -> None:
+        if self._ocr_settings_dialog is not None:
+            self._ocr_settings_dialog.set_automation_active(active)
+        self._refresh_shiny_calibration_button_state()
+
+    def _ocr_activity_running(self) -> bool:
+        if self._ocr_warmup_running or self._ocr_full_test_running:
+            return True
+        thread = self._ocr_task_thread
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            return False
+
+    def _refresh_shiny_calibration_button_state(self) -> None:
+        if self._shiny_calibration_worker is not None:
+            return
+        auto_rng_active = self.auto_rng_tab._runner_thread is not None
+        self.calibrate_shiny_threshold_button.setEnabled(
+            not auto_rng_active and not self._ocr_activity_running()
+        )
+
+    def _request_ocr_region_recognition(self, field: str, region: object) -> None:
+        configured_region = region if isinstance(region, OcrRegion) else None
+        if self.auto_rng_tab._runner_thread is not None:
+            if self._ocr_settings_dialog is not None:
+                self._ocr_settings_dialog.fail_recognition(field, "自动流程运行中")
+            return
+        if self._shiny_calibration_worker is not None:
+            if self._ocr_settings_dialog is not None:
+                self._ocr_settings_dialog.fail_recognition(field, "闪光判定校准运行中")
+            return
+        action = lambda: self._start_ocr_region_recognition(field, configured_region)
+        if self._ocr_warmup_result is not None and self._ocr_warmup_result[0]:
+            action()
+            return
+        self._ocr_after_warmup = (f"recognize:{field}", action)
+        self._start_ocr_warmup()
+
+    def _start_managed_ocr_task(
+        self,
+        label: str,
+        task: Callable[[Callable[[], bool]], object],
+        completed: Callable[[bool, object], None],
+    ) -> bool:
+        current = self._ocr_task_thread
+        if current is not None and current.isRunning():
+            return False
+        self._ocr_shutdown_requested = False
+        thread = OcrTaskThread(task, self)
+        thread.completed.connect(self._handle_ocr_task_completed)
+        thread.finished.connect(self._handle_ocr_task_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._ocr_task_thread = thread
+        self._ocr_task_label = label
+        self._ocr_task_completed = completed
+        thread.start()
+        self._refresh_shiny_calibration_button_state()
+        return True
+
+    def _handle_ocr_task_completed(self, success: bool, payload: object) -> None:
+        if self._is_closing:
+            return
+        completed = self._ocr_task_completed
+        if completed is not None:
+            completed(success, payload)
+
+    def _handle_ocr_task_thread_finished(self) -> None:
+        if self.sender() is self._ocr_task_thread:
+            self._ocr_task_thread = None
+            self._ocr_task_label = None
+            self._ocr_task_completed = None
+            self._refresh_shiny_calibration_button_state()
+            self._restore_interrupted_ocr_state_if_idle()
+
+    def _start_ocr_region_recognition(self, field: str, configured_region: OcrRegion | None) -> None:
+        if self._is_closing:
+            return
+        dialog = self._ocr_settings_dialog
+        label = OCR_REGION_LABELS.get(field, field)
+        try:
+            capture_config = self._config_from_form().capture
+            regions = self._ocr_region_config()
+        except Exception as exc:
+            if dialog is not None:
+                dialog.fail_recognition(field, str(exc))
+            self._write_run_log("OCR", f"{label}识别失败: {exc}", level="ERROR")
+            return
+
+        def task(should_stop: Callable[[], bool]) -> object:
+            if should_stop():
+                raise InterruptedError("OCR 识别已取消")
+            frame = self._capture_preview_frame_for_config(capture_config)
+            if should_stop():
+                raise InterruptedError("OCR 识别已取消")
+            image_shape = tuple(getattr(frame, "shape"))
+            effective_region = regions.resolve(field, image_shape)
+            if effective_region is None:
+                raise RuntimeError(f"{label} ROI 在当前画面中无效")
+            used_fallback = regions.has_invalid_custom(field)
+            if field == SHINY_DIALOG_REGION_FIELD and configured_region is not None:
+                image_height, image_width = image_shape[:2]
+                used_fallback = used_fallback or not configured_region.clip(image_width, image_height).is_valid()
+            text = recognize_ocr_field(frame, field, effective_region)
+            if should_stop():
+                raise InterruptedError("OCR 识别已取消")
+            return frame, image_shape, effective_region, used_fallback, text
+
+        def completed(success: bool, payload: object) -> None:
+            if self._is_closing:
+                return
+            if not success:
+                message = str(payload)
+                self._write_run_log("OCR", f"{label}识别失败: {message}", level="ERROR")
+                if dialog is not None:
+                    dialog.fail_recognition(field, message)
+                return
+            frame, image_shape, effective_region, used_fallback, text = payload  # type: ignore[misc]
+            if used_fallback:
+                self._write_run_log(
+                    "OCR",
+                    f"{label}自定义 ROI 在当前画面中无效，已回退到画面下方 50%",
+                    level="WARNING",
+                )
+            self._write_run_log(
+                "OCR",
+                f"{label}有效 ROI: X={effective_region.x}, Y={effective_region.y}, "
+                f"W={effective_region.width}, H={effective_region.height}",
+            )
+            self._write_run_log("OCR", f"{label}识别结果: {text or '空'}")
+            frame_copy = getattr(frame, "copy", None)
+            self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
+            if dialog is not None:
+                dialog.set_preview_frame_shape(image_shape)
+                dialog.finish_recognition(field, text)
+
+        if not self._start_managed_ocr_task(f"{label}识别", task, completed):
+            if dialog is not None:
+                dialog.fail_recognition(field, "已有 OCR 任务正在运行")
+
     def _recognize_tid_ocr_region(self, region: OcrRegion) -> str:
         try:
             frame = self._current_preview_frame_for_ocr()
@@ -3198,6 +3479,13 @@ class MainWindow(QMainWindow):
     def _start_ocr_warmup(self) -> None:
         if self._is_closing or self._ocr_warmup_running:
             return
+        if self._shiny_calibration_worker is not None:
+            if self._ocr_settings_dialog is not None:
+                self._ocr_settings_dialog.finish_warmup(False, "闪光判定校准运行中")
+            return
+        if self._ocr_task_thread is not None and self._ocr_task_thread.isRunning():
+            return
+        self._ocr_shutdown_requested = False
         self._ocr_warmup_running = True
         self._ocr_warmup_result = None
         if self._ocr_settings_dialog is not None:
@@ -3205,8 +3493,10 @@ class MainWindow(QMainWindow):
         thread = OcrWarmupThread(warm_up_pokemon_info_ocr, self)
         thread.completed.connect(self._handle_ocr_warmup_completed)
         thread.finished.connect(self._handle_ocr_warmup_thread_finished)
+        thread.finished.connect(thread.deleteLater)
         self._ocr_warmup_thread = thread
         thread.start()
+        self._refresh_shiny_calibration_button_state()
 
     def _handle_ocr_warmup_completed(self, success: bool, message: str) -> None:
         if self._is_closing:
@@ -3215,10 +3505,33 @@ class MainWindow(QMainWindow):
         self._ocr_warmup_result = (success, message)
         self._write_run_log("OCR", message, level="INFO" if success else "ERROR")
         self.ocrWarmupFinished.emit(success, message)
+        pending = self._ocr_after_warmup
+        self._ocr_after_warmup = None
+        if pending is None:
+            return
+        kind, action = pending
+        if success:
+            QTimer.singleShot(0, action)
+            return
+        if kind.startswith("recognize:"):
+            field = kind.split(":", 1)[1]
+            if self._ocr_settings_dialog is not None:
+                self._ocr_settings_dialog.fail_recognition(field, message)
+        elif kind == "full_test":
+            self._ocr_full_test_running = False
+            self.ocrFullTestFinished.emit(False, message)
+        elif kind == "auto_rng":
+            self.auto_rng_tab.set_phase_text("OCR 初始化失败")
+            self.auto_rng_tab.add_log(f"自动流程未启动：{message}", level="ERROR")
+            self.statusBar().showMessage(message)
+            QMessageBox.critical(self, "OCR 初始化失败", f"自动流程未启动。\n{message}")
 
     def _handle_ocr_warmup_thread_finished(self) -> None:
         if self.sender() is self._ocr_warmup_thread:
+            self._ocr_warmup_thread = None
             self._ocr_warmup_running = False
+            self._refresh_shiny_calibration_button_state()
+            self._restore_interrupted_ocr_state_if_idle()
 
     def _set_ocr_test_result_on_ui(self, field: str, text: str) -> None:
         dialog = self._ocr_settings_dialog
@@ -3226,50 +3539,100 @@ class MainWindow(QMainWindow):
             dialog.set_recognition_result(field, text)
 
     def _start_ocr_full_test(self) -> None:
-        if self._ocr_full_test_running:
+        if self._ocr_full_test_running or self.auto_rng_tab._runner_thread is not None:
+            return
+        if self._shiny_calibration_worker is not None:
+            message = "测试全部失败: 闪光判定校准运行中"
+            self.ocrFullTestFinished.emit(False, message)
+            return
+        self._ocr_full_test_running = True
+        self._refresh_shiny_calibration_button_state()
+        if self._ocr_warmup_result is None or not self._ocr_warmup_result[0]:
+            self._ocr_after_warmup = ("full_test", self._start_ocr_full_test_after_warmup)
+            self._start_ocr_warmup()
+            return
+        self._start_ocr_full_test_after_warmup()
+
+    def _start_ocr_full_test_after_warmup(self) -> None:
+        if self._is_closing:
+            self._ocr_full_test_running = False
             return
         self._ocr_full_test_running = True
         self._write_run_log("OCR", "测试全部开始")
 
-        def worker() -> None:
-            try:
-                import time
+        try:
+            regions = self._ocr_region_config()
+            capture_config = self._config_from_form().capture
+        except Exception as exc:
+            message = f"测试全部失败: {exc}"
+            self._ocr_full_test_running = False
+            self._write_run_log("OCR", message, level="ERROR")
+            self.ocrFullTestFinished.emit(False, message)
+            return
 
-                regions = self._ocr_region_config()
-                notes_frame = self._call_on_ui_thread(self._current_preview_frame_for_ocr)
-                for field in NOTE_REGION_FIELDS:
-                    region = regions.get(field)
-                    if region is None:
-                        continue
-                    text = recognize_ocr_field(notes_frame, field, region)
-                    label = OCR_REGION_LABELS.get(field, field)
-                    self._write_run_log("OCR", f"测试全部/{label}识别结果: {text or '空'}")
-                    self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
+        def task(should_stop: Callable[[], bool]) -> object:
+            def check_cancelled() -> None:
+                if should_stop():
+                    raise InterruptedError("OCR 测试已取消")
 
-                self._send_easycon_right()
-                time.sleep(2.0)
+            def wait_interruptibly(seconds: float) -> None:
+                remaining = max(0.0, seconds)
+                while remaining > 0:
+                    check_cancelled()
+                    delay = min(0.05, remaining)
+                    time.sleep(delay)
+                    remaining -= delay
+                check_cancelled()
 
-                stats_frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
-                for field in STAT_REGION_FIELDS:
-                    region = regions.get(field)
-                    if region is None:
-                        continue
-                    text = recognize_ocr_field(stats_frame, field, region)
-                    label = OCR_REGION_LABELS.get(field, field)
-                    self._write_run_log("OCR", f"测试全部/{label}识别结果: {text or '空'}")
-                    self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
-            except Exception as exc:
-                message = f"测试全部失败: {exc}"
-                self._write_run_log("OCR", message, level="ERROR")
-                self.ocrFullTestFinished.emit(False, message)
-            else:
-                message = "测试全部完成"
+            check_cancelled()
+            notes_frame = self._capture_preview_frame_for_config(capture_config)
+            check_cancelled()
+            for field in NOTE_REGION_FIELDS:
+                check_cancelled()
+                region = regions.get(field)
+                if region is None:
+                    continue
+                text = recognize_ocr_field(notes_frame, field, region)
+                check_cancelled()
+                label = OCR_REGION_LABELS.get(field, field)
+                self._write_run_log("OCR", f"测试全部/{label}识别结果: {text or '空'}")
+                self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
+
+            check_cancelled()
+            self._send_easycon_right()
+            wait_interruptibly(2.0)
+
+            stats_frame = self._capture_preview_frame_for_config(capture_config)
+            check_cancelled()
+            for field in STAT_REGION_FIELDS:
+                check_cancelled()
+                region = regions.get(field)
+                if region is None:
+                    continue
+                text = recognize_ocr_field(stats_frame, field, region)
+                check_cancelled()
+                label = OCR_REGION_LABELS.get(field, field)
+                self._write_run_log("OCR", f"测试全部/{label}识别结果: {text or '空'}")
+                self._call_on_ui_thread(lambda field=field, text=text: self._set_ocr_test_result_on_ui(field, text))
+            return "测试全部完成"
+
+        def completed(success: bool, payload: object) -> None:
+            if self._is_closing:
+                return
+            self._ocr_full_test_running = False
+            if success:
+                message = str(payload)
                 self._write_run_log("OCR", message)
-                self.ocrFullTestFinished.emit(True, message)
-            finally:
-                self._ocr_full_test_running = False
+            else:
+                message = f"测试全部失败: {payload}"
+                self._write_run_log("OCR", message, level="ERROR")
+            self.ocrFullTestFinished.emit(success, message)
 
-        threading.Thread(target=worker, daemon=True).start()
+        if not self._start_managed_ocr_task("测试全部", task, completed):
+            self._ocr_full_test_running = False
+            message = "测试全部失败: 已有 OCR 任务正在运行"
+            self._write_run_log("OCR", message, level="ERROR")
+            self.ocrFullTestFinished.emit(False, message)
 
     def _update_preview_frame(self) -> None:
         try:
@@ -3434,11 +3797,49 @@ class MainWindow(QMainWindow):
         if self._shiny_calibration_worker is not None:
             self._stop_shiny_threshold_calibration()
             return
+        if self._ocr_activity_running() or self._ocr_after_warmup is not None:
+            QMessageBox.warning(
+                self,
+                "OCR 正在使用",
+                "请等待当前 OCR 预热、识别或测试完成后再校准闪光判定。",
+            )
+            return
 
         tracking_config = self._config_from_form()
-        worker = ShinyThresholdCalibrationWorker(
-            lambda: self._capture_preview_frame_for_config(tracking_config.capture)
-        )
+        regions = self._ocr_region_config()
+        configured_region = regions.get(SHINY_DIALOG_REGION_FIELD)
+        roi_logged = False
+
+        def capture_dialog_region() -> object:
+            nonlocal roi_logged
+            frame = self._capture_preview_frame_for_config(tracking_config.capture)
+            image_shape = tuple(getattr(frame, "shape"))
+            region = regions.resolve(SHINY_DIALOG_REGION_FIELD, image_shape)
+            if region is None:
+                raise RuntimeError("判闪对话 ROI 在当前画面中无效")
+            if not roi_logged:
+                roi_logged = True
+                image_height, image_width = image_shape[:2]
+                if regions.has_invalid_custom(SHINY_DIALOG_REGION_FIELD) or (
+                    configured_region is not None
+                    and not configured_region.clip(image_width, image_height).is_valid()
+                ):
+                    self._write_run_log(
+                        "OCR",
+                        "闪光判定校准的自定义 ROI 无效，已回退到画面下方 50%",
+                        level="WARNING",
+                    )
+                self._write_run_log(
+                    "OCR",
+                    f"闪光判定校准有效 ROI: X={region.x}, Y={region.y}, W={region.width}, H={region.height}",
+                )
+                dialog = self._ocr_settings_dialog
+                if dialog is not None:
+                    self._call_on_ui_thread(lambda: dialog.set_preview_frame_shape(image_shape))
+            x, y, width, height = region.as_tuple()
+            return frame[y : y + height, x : x + width]
+
+        worker = ShinyThresholdCalibrationWorker(capture_dialog_region)
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -3452,6 +3853,8 @@ class MainWindow(QMainWindow):
         thread.finished.connect(thread.deleteLater)
         self._shiny_calibration_worker = worker
         self._shiny_calibration_thread = thread
+        if self._ocr_settings_dialog is not None:
+            self._ocr_settings_dialog.set_automation_active(True)
         self.calibrate_shiny_threshold_button.setText("停止校准")
         self.auto_rng_tab.captureLog.emit("[闪光判定校准] 开始监控 出现了！ -> 去吧")
         self.statusBar().showMessage("正在后台监控 出现了 -> 去吧 对话框...")
@@ -3468,7 +3871,10 @@ class MainWindow(QMainWindow):
     def _reset_shiny_threshold_calibration(self) -> None:
         self._shiny_calibration_worker = None
         self._shiny_calibration_thread = None
-        self.calibrate_shiny_threshold_button.setEnabled(True)
+        auto_rng_active = self.auto_rng_tab._runner_thread is not None
+        if self._ocr_settings_dialog is not None:
+            self._ocr_settings_dialog.set_automation_active(auto_rng_active)
+        self._refresh_shiny_calibration_button_state()
         self.calibrate_shiny_threshold_button.setText("校准闪光判定")
 
     def _shiny_threshold_calibration_finished(self, interval_seconds: float) -> None:
@@ -3668,6 +4074,29 @@ class MainWindow(QMainWindow):
             except ValueError as exc:
                 QMessageBox.warning(self, "缺少 Seed", f"从校正开始需要先填入有效 Seed。\n{exc}")
                 return
+        if self._ocr_task_thread is not None and self._ocr_task_thread.isRunning():
+            QMessageBox.warning(self, "OCR 正在使用", "请等待当前 OCR 识别任务完成后再启动自动流程。")
+            return
+        if self._ocr_full_test_running or self._shiny_calibration_worker is not None:
+            QMessageBox.warning(self, "OCR 正在使用", "请等待当前 OCR 测试或闪光判定校准完成后再启动自动流程。")
+            return
+        if self._ocr_warmup_result is None or not self._ocr_warmup_result[0]:
+            pending = self._ocr_after_warmup
+            if pending is not None and pending[0].startswith("recognize:"):
+                field = pending[0].split(":", 1)[1]
+                if self._ocr_settings_dialog is not None:
+                    self._ocr_settings_dialog.fail_recognition(field, "自动流程启动，已取消手动识别")
+            self._ocr_after_warmup = ("auto_rng", lambda config=config: self._start_auto_rng_after_warmup(config))
+            self.auto_rng_tab.set_phase_text("初始化 OCR")
+            self.auto_rng_tab.add_log("正在初始化 OCR，完成后将自动启动流程")
+            self.statusBar().showMessage("正在初始化 OCR，完成后将自动启动自动定点流程")
+            self._start_ocr_warmup()
+            return
+        self._start_auto_rng_after_warmup(config)
+
+    def _start_auto_rng_after_warmup(self, config: AutoRngConfig) -> None:
+        if self._is_closing:
+            return
         if not self._ensure_preview_for_auto_rng():
             return
         # 自动连接伊机控（如果尚未连接）
@@ -3834,9 +4263,20 @@ class MainWindow(QMainWindow):
 
         def stop_current_script_service() -> None:
             self._capture_cancel.set()
-            if self.easycon_tab._is_bridge_mode():
+            try:
+                is_bridge, bridge_backend = self._call_on_ui_thread(
+                    lambda: (
+                        self.easycon_tab._is_bridge_mode(),
+                        self.easycon_tab._ensure_bridge_backend()
+                        if self.easycon_tab._is_bridge_mode()
+                        else None,
+                    )
+                )
+            except Exception:
+                is_bridge, bridge_backend = False, None
+            if is_bridge:
                 try:
-                    self.easycon_tab._ensure_bridge_backend().stop_current_script()
+                    bridge_backend.stop_current_script()
                 except Exception:
                     pass
             elif _cli_backend is not None:
@@ -4124,6 +4564,8 @@ class MainWindow(QMainWindow):
         tracking_config = load_project_xs_config(seed_config_path, blink_count=DEFAULT_BLINK_COUNT)
         exit_tracking_config = load_project_xs_config(reidentify_config_path, blink_count=NOISY_REIDENTIFY_BLINK_COUNT)
         exit_tracking_config = replace(exit_tracking_config, reidentify_1_pk_npc=True)
+        ocr_region_config = self._ocr_region_config()
+        shiny_dialog_region = ocr_region_config.get(SHINY_DIALOG_REGION_FIELD)
         self.auto_rng_tab.set_target_version(self._profile_version)
         target_entries = self.auto_rng_tab.targets()
         record, state_filter, shiny_mode = target_entries[0]
@@ -4502,9 +4944,20 @@ class MainWindow(QMainWindow):
 
         def stop_current_script_service() -> None:
             self._capture_cancel.set()
-            if self.easycon_tab._is_bridge_mode():
+            try:
+                is_bridge, bridge_backend = self._call_on_ui_thread(
+                    lambda: (
+                        self.easycon_tab._is_bridge_mode(),
+                        self.easycon_tab._ensure_bridge_backend()
+                        if self.easycon_tab._is_bridge_mode()
+                        else None,
+                    )
+                )
+            except Exception:
+                is_bridge, bridge_backend = False, None
+            if is_bridge:
                 try:
-                    self.easycon_tab._ensure_bridge_backend().stop_current_script()
+                    bridge_backend.stop_current_script()
                 except Exception:
                     pass
             elif _cli_backend is not None:
@@ -4517,6 +4970,10 @@ class MainWindow(QMainWindow):
             self._capture_cancel.clear()
             errors: list[BaseException] = []
             script_done = threading.Event()
+            monitor_started_at = time.monotonic()
+            wall_clock_offset = time.time() - time.monotonic()
+            roi_logged = False
+            first_event: DialogTimingEvent | None = None
 
             def run_script() -> None:
                 try:
@@ -4530,52 +4987,158 @@ class MainWindow(QMainWindow):
             script_thread = threading.Thread(target=run_script, daemon=True)
             script_thread.start()
 
-            def log_ocr_debug(event: str, elapsed: float, interval: float | None) -> None:
-                if not config.debug_output:
+            def capture_dialog_region() -> object:
+                nonlocal roi_logged
+                frame = self._capture_preview_frame_for_config(tracking_config.capture)
+                image_shape = tuple(getattr(frame, "shape"))
+                effective_region = ocr_region_config.resolve(SHINY_DIALOG_REGION_FIELD, image_shape)
+                if effective_region is None:
+                    raise RuntimeError("判闪对话 ROI 在当前画面中无效，且无法使用默认下方 50% 范围")
+                if not roi_logged:
+                    roi_logged = True
+                    if ocr_region_config.has_invalid_custom(SHINY_DIALOG_REGION_FIELD):
+                        self.auto_rng_tab.captureLog.emit(
+                            "[OCR判闪] 判闪对话 ROI 配置无效，已回退到当前画面下方 50%"
+                        )
+                    elif shiny_dialog_region is not None:
+                        image_height, image_width = image_shape[:2]
+                        if not shiny_dialog_region.clip(image_width, image_height).is_valid():
+                            self.auto_rng_tab.captureLog.emit(
+                                "[OCR判闪] 自定义判闪对话 ROI 超出当前画面，已回退到下方 50%"
+                            )
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 有效 ROI：X={effective_region.x}, Y={effective_region.y}, "
+                        f"W={effective_region.width}, H={effective_region.height}"
+                    )
+                    dialog = self._ocr_settings_dialog
+                    if dialog is not None:
+                        self._call_on_ui_thread(lambda: dialog.set_preview_frame_shape(image_shape))
+                x, y, width, height = effective_region.as_tuple()
+                return frame[y : y + height, x : x + width]
+
+            def wall_clock(observed_at: float) -> str:
+                timestamp = observed_at + wall_clock_offset
+                whole = time.strftime("%H:%M:%S", time.localtime(timestamp))
+                milliseconds = int(timestamp % 1 * 1000)
+                return f"{whole}.{milliseconds:03d}"
+
+            def log_ocr_event(event: DialogTimingEvent) -> None:
+                nonlocal first_event
+                observed = wall_clock(event.observed_at)
+                if event.event == "monitor_started":
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 开始监控：{observed}；第一/第二阶段各等待 30.000s"
+                    )
+                elif event.event == "first_seen":
+                    first_event = event
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 识别到「出现了! / 出现了！」：{observed}；"
+                        f"监控累计 {event.elapsed_seconds:.3f}s"
+                    )
+                elif event.event == "second_seen":
+                    keyword = event.keyword or "去吧/上吧"
+                    interval = event.interval_seconds or 0.0
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 识别到「{keyword}」：{observed}；"
+                        f"监控累计 {event.elapsed_seconds:.3f}s；关键词间隔 {interval:.3f}s"
+                    )
+                elif event.event == "timeout_before_first":
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 超时：阶段=等待「出现了! / 出现了！」；"
+                        f"原因=撞闪脚本完成后 30.000s 内未识别；超时时间={observed}；"
+                        f"监控累计 {event.elapsed_seconds:.3f}s"
+                    )
+                elif event.event == "timeout_after_first":
+                    first_time = "未知" if first_event is None else wall_clock(first_event.observed_at)
+                    interval = event.interval_seconds or 0.0
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 超时：阶段=等待「去吧/上吧」；"
+                        f"原因=识别首关键词后 30.000s 内未识别；首关键词时间={first_time}；"
+                        f"超时时间={observed}；实际等待 {interval:.3f}s"
+                    )
+                elif event.event == "script_timeout":
+                    self.auto_rng_tab.captureLog.emit(
+                        f"[OCR判闪] 超时：阶段=撞闪脚本运行；原因=脚本 300.000s 内未完成；"
+                        f"超时时间={observed}；监控累计 {event.elapsed_seconds:.3f}s"
+                    )
+
+            def wait_for_script_after_keyword_timeout() -> None:
+                if script_done.is_set():
                     return
-                if event == "first_seen":
-                    self.auto_rng_tab.captureLog.emit(f"[OCR判闪] 已识别 出现了！ t={elapsed:.3f}s")
-                elif event == "second_seen":
-                    interval_text = "-" if interval is None else f"{interval:.3f}s"
-                    self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 已识别 去吧/上吧 t={elapsed:.3f}s，间隔 {interval_text}"
-                    )
-                elif event == "timeout_before_first":
-                    self.auto_rng_tab.captureLog.emit(f"[OCR判闪] 超时：未识别到 出现了！ t={elapsed:.3f}s")
-                elif event == "timeout_after_first":
-                    interval_text = "-" if interval is None else f"{interval:.3f}s"
-                    self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 超时：已识别 出现了！，但 {interval_text} 内未识别到 去吧/上吧"
-                    )
+                self.auto_rng_tab.captureLog.emit("[OCR判闪] OCR 已超时，等待撞闪脚本完成后继续")
+                deadline = monitor_started_at + 300.0
+                while not script_done.is_set():
+                    if self._capture_cancel.is_set():
+                        raise RuntimeError("自动流程已停止")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self.auto_rng_tab.captureLog.emit(
+                            "[OCR判闪] 超时：阶段=撞闪脚本运行；原因=监控开始后 300.000s 脚本仍未完成"
+                        )
+                        stop_current_script_service()
+                        script_thread.join(timeout=5.0)
+                        raise RuntimeError("撞闪脚本运行超过 300 秒，已停止自动流程")
+                    script_done.wait(timeout=min(0.2, remaining))
 
             try:
                 timing = measure_keyword_interval(
-                    lambda: self._capture_preview_frame_for_config(tracking_config.capture),
+                    capture_dialog_region,
                     read_ocr_text,
-                    should_stop=self._capture_cancel.is_set,
+                    should_stop=lambda: self._capture_cancel.is_set() or bool(errors),
                     poll_interval_seconds=0.1,
                     script_done=script_done,
                     grace_seconds=30.0,
                     hard_timeout_seconds=300.0,
-                    debug_callback=log_ocr_debug if config.debug_output else None,
+                    event_callback=log_ocr_event,
                 )
-            except TimeoutError:
-                stop_current_script_service()
-                script_thread.join(timeout=5.0)
-                self.auto_rng_tab.captureLog.emit("OCR 闪符检测超时，判定结果未知")
+            except DialogKeywordTimeoutError:
+                wait_for_script_after_keyword_timeout()
+                script_thread.join(timeout=0.1)
+                if errors:
+                    raise errors[0]
+                self.auto_rng_tab.captureLog.emit(
+                    "[OCR判闪] 关键词识别超时，判定结果未知；按未出闪继续自动流程"
+                )
                 return ShinyCheckResult(is_shiny=False)
-            except Exception:
+            except DialogScriptTimeoutError as exc:
                 stop_current_script_service()
                 script_thread.join(timeout=5.0)
-                raise
+                if errors:
+                    raise errors[0]
+                raise RuntimeError("撞闪脚本运行超过 300 秒，已停止自动流程") from exc
+            except Exception as exc:
+                stop_current_script_service()
+                script_thread.join(timeout=5.0)
+                if errors:
+                    raise errors[0]
+                raise RuntimeError(f"OCR 判闪基础设施故障，已停止自动流程: {exc}") from exc
             is_shiny = timing.interval_seconds >= threshold_seconds
             if not is_shiny:
                 stop_current_script_service()
-            script_thread.join(timeout=5.0)
-            if not is_shiny and config.escape_continue and script_thread.is_alive():
-                raise RuntimeError("撞闪脚本停止超时，未启动逃跑脚本")
-            if errors and is_shiny:
+                script_thread.join(timeout=5.0)
+                if script_thread.is_alive():
+                    raise RuntimeError("撞闪脚本停止超时，已停止自动流程")
+            elif script_thread.is_alive():
+                self.auto_rng_tab.captureLog.emit("[OCR判闪] 关键词判定完成，等待撞闪脚本结束")
+                deadline = monitor_started_at + 300.0
+                while script_thread.is_alive() and time.monotonic() < deadline:
+                    if self._capture_cancel.is_set():
+                        stop_current_script_service()
+                        raise RuntimeError("自动流程已停止")
+                    script_thread.join(timeout=min(0.2, max(0.0, deadline - time.monotonic())))
+                if script_thread.is_alive():
+                    self.auto_rng_tab.captureLog.emit(
+                        "[OCR判闪] 超时：阶段=撞闪脚本运行；原因=监控开始后 300.000s 脚本仍未完成"
+                    )
+                    stop_current_script_service()
+                    script_thread.join(timeout=5.0)
+                    raise RuntimeError("撞闪脚本运行超过 300 秒，已停止自动流程")
+            if errors:
                 raise errors[0]
+            self.auto_rng_tab.captureLog.emit(
+                f"[OCR判闪] 判定：关键词间隔 {timing.interval_seconds:.3f}s，"
+                f"阈值 {threshold_seconds:.3f}s，结果={'疑似出闪' if is_shiny else '未出闪'}"
+            )
             return ShinyCheckResult(is_shiny=is_shiny, interval_seconds=timing.interval_seconds)
 
         def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> None:
@@ -4887,17 +5450,22 @@ class MainWindow(QMainWindow):
         """通过伊机控发送 RIGHT d-pad 按钮。"""
         log = self.auto_rng_tab.captureLog.emit
         script_text = "RIGHT 200\n"
-        if self.easycon_tab._is_bridge_mode():
+        is_bridge, bridge_backend, port = self._call_on_ui_thread(
+            lambda: (
+                self.easycon_tab._is_bridge_mode(),
+                self.easycon_tab._ensure_bridge_backend() if self.easycon_tab._is_bridge_mode() else None,
+                self.easycon_tab.port_combo.currentText(),
+            )
+        )
+        if is_bridge:
             if log_details:
                 log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT 200")
-            backend = self.easycon_tab._ensure_bridge_backend()
-            result = backend.run_script_text(script_text, "right_press")
+            result = bridge_backend.run_script_text(script_text, "right_press")
             if log_details:
                 log(f"[捕获精灵信息] Bridge 脚本完成: exit_code={result.exit_code}")
         else:
             if log_details:
                 log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT 200")
-            port = self.easycon_tab.port_combo.currentText()
             if not port:
                 raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
             from auto_bdsp_rng.automation.easycon import CliEasyConBackend

@@ -7,7 +7,9 @@ from typing import Mapping
 
 NOTE_REGION_FIELDS = ("nature", "characteristic")
 STAT_REGION_FIELDS = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
-OCR_REGION_FIELDS = NOTE_REGION_FIELDS + STAT_REGION_FIELDS
+SHINY_DIALOG_REGION_FIELD = "shiny_dialog"
+DYNAMIC_DEFAULT_REGION_FIELDS = (SHINY_DIALOG_REGION_FIELD,)
+OCR_REGION_FIELDS = NOTE_REGION_FIELDS + STAT_REGION_FIELDS + DYNAMIC_DEFAULT_REGION_FIELDS
 
 OCR_REGION_LABELS = {
     "nature": "性格",
@@ -18,6 +20,7 @@ OCR_REGION_LABELS = {
     "sp_attack": "特攻",
     "sp_defense": "特防",
     "speed": "速度",
+    SHINY_DIALOG_REGION_FIELD: "判闪对话区域",
 }
 
 STAT_FIELD_NAMES = {
@@ -96,25 +99,63 @@ class OcrRegion:
         return region if region.is_valid() else None
 
 
+def default_ocr_region(field: str, image_shape: tuple[int, ...]) -> OcrRegion | None:
+    """Resolve a field's frame-relative default into absolute pixels."""
+    if field not in OCR_REGION_FIELDS:
+        raise KeyError(f"Unknown OCR region field: {field}")
+    if field != SHINY_DIALOG_REGION_FIELD or len(image_shape) < 2:
+        return None
+    image_height = max(0, int(image_shape[0]))
+    image_width = max(0, int(image_shape[1]))
+    if image_width <= 0 or image_height <= 0:
+        return None
+    top = image_height // 2
+    return OcrRegion(0, top, image_width, image_height - top)
+
+
 class OcrRegionConfig:
     def __init__(self, regions: Mapping[str, OcrRegion | tuple[int, int, int, int]] | None = None) -> None:
         self._regions: dict[str, OcrRegion] = {}
+        self._invalid_fields: set[str] = set()
         for field, region in (regions or {}).items():
             self.set(field, region)
 
     def get(self, field: str) -> OcrRegion | None:
         return self._regions.get(field)
 
+    def resolve(self, field: str, image_shape: tuple[int, ...]) -> OcrRegion | None:
+        """Return the effective clipped ROI, falling back to a dynamic default."""
+        if field not in OCR_REGION_FIELDS:
+            raise KeyError(f"Unknown OCR region field: {field}")
+        image_height = int(image_shape[0]) if len(image_shape) >= 1 else 0
+        image_width = int(image_shape[1]) if len(image_shape) >= 2 else 0
+        region = self.get(field)
+        if region is not None and image_width > 0 and image_height > 0:
+            clipped = region.clip(image_width, image_height)
+            if clipped.is_valid():
+                return clipped
+        return default_ocr_region(field, image_shape)
+
     def set(self, field: str, region: OcrRegion | tuple[int, int, int, int] | None) -> None:
         if field not in OCR_REGION_FIELDS:
             raise KeyError(f"Unknown OCR region field: {field}")
         if region is None:
             self._regions.pop(field, None)
+            self._invalid_fields.discard(field)
             return
-        if not isinstance(region, OcrRegion):
-            region = OcrRegion(*(int(value) for value in region))
+        try:
+            if not isinstance(region, OcrRegion):
+                region = OcrRegion(*(int(value) for value in region))
+        except Exception:
+            self._regions.pop(field, None)
+            self._invalid_fields.add(field)
+            return
         if region.is_valid():
             self._regions[field] = region
+            self._invalid_fields.discard(field)
+        else:
+            self._regions.pop(field, None)
+            self._invalid_fields.add(field)
 
     def remove(self, field: str) -> None:
         self.set(field, None)
@@ -124,6 +165,9 @@ class OcrRegionConfig:
 
     def is_empty(self) -> bool:
         return not self._regions
+
+    def has_invalid_custom(self, field: str) -> bool:
+        return field in self._invalid_fields
 
     def items(self):
         return self._regions.items()
@@ -135,7 +179,10 @@ class OcrRegionConfig:
     def from_settings_dict(cls, values: Mapping[str, object]) -> OcrRegionConfig:
         config = cls()
         for field in OCR_REGION_FIELDS:
-            region = OcrRegion.from_settings_value(values.get(field))
+            raw_value = values.get(field)
+            region = OcrRegion.from_settings_value(raw_value)
             if region is not None:
                 config.set(field, region)
+            elif raw_value is not None and str(raw_value).strip():
+                config._invalid_fields.add(field)
         return config

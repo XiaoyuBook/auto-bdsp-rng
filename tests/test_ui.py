@@ -24,7 +24,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
-from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
+from auto_bdsp_rng.automation.auto_rng.dialog_timing import DialogTimingResult
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion, OcrRegionConfig
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, ProjectXsMunchlaxAdvanceCounter
 from auto_bdsp_rng.automation.easycon import EasyConInstallation, EasyConRunResult, EasyConStatus
@@ -100,7 +101,7 @@ def test_main_window_generates_static_results(app):
     assert window.table.item(0, 1).text()
 
 
-def test_main_window_starts_ocr_warmup_after_ui_is_ready(app, monkeypatch):
+def test_main_window_does_not_warm_ocr_until_requested(app, monkeypatch):
     started = []
 
     monkeypatch.setattr(MainWindow, "_start_ocr_warmup", lambda self: started.append(self))
@@ -108,7 +109,8 @@ def test_main_window_starts_ocr_warmup_after_ui_is_ready(app, monkeypatch):
     window = MainWindow()
     app.processEvents()
 
-    assert started == [window]
+    assert started == []
+    assert window._ocr_warmup_result is None
 
 
 def test_static_generation_runs_in_background(app, monkeypatch):
@@ -1344,6 +1346,27 @@ def test_main_window_exposes_shiny_threshold_calibration_button_on_seed_capture_
     assert window.calibrate_shiny_threshold_button.text() == "校准闪光判定"
 
 
+def test_shiny_threshold_calibration_rejects_concurrent_ocr_activity(app, monkeypatch):
+    window = MainWindow()
+    warnings = []
+    window._ocr_warmup_running = True
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    window.calibrate_shiny_threshold()
+
+    assert window._shiny_calibration_worker is None
+    assert warnings == [
+        (
+            "OCR 正在使用",
+            "请等待当前 OCR 预热、识别或测试完成后再校准闪光判定。",
+        )
+    ]
+
+
 def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app, monkeypatch):
     window = MainWindow()
     cursor_states: list[bool] = []
@@ -1795,6 +1818,14 @@ def test_auto_rng_panel_logs_same_failed_progress_message_once(app, tmp_path):
     assert events == [("ERROR", progress.log_message)]
 
 
+def test_auto_rng_panel_reports_cancelled_idle_result_as_stopped(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+
+    panel._runner_finished(AutoRngProgress(phase=AutoRngPhase.IDLE))
+
+    assert panel.status_badge.text() == "已停止"
+
+
 def test_auto_rng_worker_emits_progress_and_finished(app):
     progress = AutoRngProgress(phase=AutoRngPhase.COMPLETED, log_message="完成")
 
@@ -1852,6 +1883,7 @@ def test_auto_rng_worker_emits_failed_for_failed_result(app):
 
 def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, monkeypatch):
     window = MainWindow()
+    window._ocr_warmup_result = (True, "OCR预热完成")
     seed_script = tmp_path / "BDSP测种.txt"
     advance_script = tmp_path / "bdsp过帧.txt"
     hit_script = tmp_path / "谢米.txt"
@@ -1884,6 +1916,7 @@ def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, mon
 
 def test_main_window_auto_rng_start_prepares_preview_frame_when_inactive(app, tmp_path, monkeypatch):
     window = MainWindow()
+    window._ocr_warmup_result = (True, "OCR预热完成")
     config = AutoRngConfig(script_dir=tmp_path)
     started: list[AutoRngRunner] = []
     preview_updates: list[str] = []
@@ -1900,6 +1933,29 @@ def test_main_window_auto_rng_start_prepares_preview_frame_when_inactive(app, tm
 
     assert not window._preview_timer.isActive()
     assert preview_updates == ["updated"]
+    assert len(started) == 1
+
+
+def test_main_window_auto_rng_waits_for_lazy_ocr_warmup_then_starts(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    config = AutoRngConfig(script_dir=tmp_path)
+    started: list[AutoRngRunner] = []
+    warmups: list[bool] = []
+    window._latest_preview_frame = object()
+    monkeypatch.setattr(window, "_start_ocr_warmup", lambda: warmups.append(True))
+    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
+
+    window._start_auto_rng(config)
+
+    assert warmups == [True]
+    assert started == []
+    assert window._ocr_after_warmup is not None
+    assert window._ocr_after_warmup[0] == "auto_rng"
+
+    window._handle_ocr_warmup_completed(True, "OCR预热完成")
+    app.processEvents()
+
     assert len(started) == 1
 
 
@@ -2229,6 +2285,7 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
     monkeypatch.setattr(window, "_shutdown_worker_thread", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(window, "_shutdown_capture_thread", lambda: False)
     monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: False)
+    monkeypatch.setattr(window, "_shutdown_ocr_task_thread", lambda: False)
     monkeypatch.setattr(
         main_window_module.QMessageBox,
         "warning",
@@ -2241,14 +2298,30 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
     assert warnings == [
         (
             "正在停止后台任务",
-            "闪光判定校准、Seed 捕捉、OCR 预热尚未退出，请稍后再关闭程序。",
+            "闪光判定校准、Seed 捕捉、OCR 预热、OCR 识别尚未退出，请稍后再关闭程序。",
         )
     ]
 
     monkeypatch.setattr(window, "_shutdown_worker_thread", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(window, "_shutdown_capture_thread", lambda: True)
     monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: True)
+    monkeypatch.setattr(window, "_shutdown_ocr_task_thread", lambda: True)
     assert window.close() is True
+
+
+def test_close_rejection_cancels_lazy_ocr_auto_start_and_restores_idle_status(app):
+    window = MainWindow()
+    window._ocr_shutdown_requested = True
+    window._ocr_after_warmup = ("auto_rng", lambda: None)
+    window._ocr_warmup_running = True
+    window.auto_rng_tab.set_phase_text("初始化 OCR")
+
+    window._restore_interrupted_ocr_state_if_idle()
+
+    assert window._ocr_after_warmup is None
+    assert window._ocr_warmup_running is False
+    assert window.auto_rng_tab.status_badge.text() == AutoRngPhase.IDLE.value
+    assert "自动流程未启动" in window.auto_rng_tab.log_view.toPlainText()
 
 
 def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
@@ -2256,6 +2329,8 @@ def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
     window.tabs.setCurrentWidget(window.bdsp_tab)
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
+    record, _state_filter, _shiny_mode = window.auto_rng_tab.targets()[0]
+    window.auto_rng_tab.set_targets([(record, StateFilter(), "any")])
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, max_advances=2))
 
     candidates = services.search_candidates(AutoRngSeedResult(seed=window._current_seed_pair()))
@@ -2871,7 +2946,16 @@ def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(app, tmp_path
     monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
 
     def raise_timeout(*_args, **_kwargs):
-        raise TimeoutError("OCR timeout")
+        event = main_window_module.DialogTimingEvent("timeout_before_first", 31.0, 31.0)
+        callback = _kwargs.get("event_callback")
+        if callback is not None:
+            callback(event)
+        raise main_window_module.DialogKeywordTimeoutError(
+            "OCR timeout",
+            stage="before_first",
+            event=event,
+            events=(event,),
+        )
 
     monkeypatch.setattr(main_window_module, "measure_keyword_interval", raise_timeout)
     services = window._build_auto_rng_services(
@@ -2882,8 +2966,81 @@ def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(app, tmp_path
 
     assert result.is_shiny is False
     assert result.interval_seconds is None
-    assert stops == [True]
-    assert "OCR 闪符检测超时，判定结果未知" in logs
+    assert stops == []
+    assert any("阶段=等待" in message and "出现了" in message for message in logs)
+    assert any("按未出闪继续自动流程" in message for message in logs)
+
+
+def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    logs: list[str] = []
+    slices: list[object] = []
+
+    class FakeFrame:
+        shape = (100, 200, 3)
+
+        def __getitem__(self, key):
+            slices.append(key)
+            return "dialog-roi"
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str) -> str:
+            return "ok"
+
+    def fake_measure(capture_frame, _read_text, **kwargs):
+        assert capture_frame() == "dialog-roi"
+        callback = kwargs["event_callback"]
+        callback(main_window_module.DialogTimingEvent("monitor_started", 100.0, 0.0))
+        first = main_window_module.DialogTimingEvent("first_seen", 101.25, 1.25, keyword="出现了！")
+        second = main_window_module.DialogTimingEvent("second_seen", 104.75, 4.75, 3.5, "上吧")
+        callback(first)
+        callback(second)
+        return DialogTimingResult(101.25, 104.75, 3.5, (first, second))
+
+    window.easycon_tab.backend_mode.setCurrentIndex(0)
+    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+    window.auto_rng_tab.captureLog.connect(logs.append)
+    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
+    monkeypatch.setattr(window, "_ocr_region_config", OcrRegionConfig)
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: FakeFrame())
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure)
+
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, shiny_threshold_seconds=3.0))
+    result = services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0)
+
+    assert result == main_window_module.ShinyCheckResult(is_shiny=True, interval_seconds=3.5)
+    assert slices == [(slice(50, 100, None), slice(0, 200, None))]
+    assert any("有效 ROI" in message and "Y=50" in message and "H=50" in message for message in logs)
+    assert any("识别到「出现了! / 出现了！」" in message and "监控累计 1.250s" in message for message in logs)
+    assert any("识别到「上吧」" in message and "关键词间隔 3.500s" in message for message in logs)
+
+
+def test_main_window_auto_rng_shiny_check_propagates_script_error_before_ocr_result(app, tmp_path, monkeypatch):
+    window = MainWindow()
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str) -> str:
+            raise RuntimeError("EasyCon failed")
+
+        def stop_current_script(self) -> None:
+            pass
+
+    def fake_measure(_capture_frame, _read_text, **kwargs):
+        deadline = time.monotonic() + 1.0
+        while not kwargs["should_stop"]() and time.monotonic() < deadline:
+            time.sleep(0.001)
+        raise RuntimeError("monitor stopped")
+
+    window.easycon_tab.backend_mode.setCurrentIndex(0)
+    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
+    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure)
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, shiny_threshold_seconds=3.0))
+
+    with pytest.raises(RuntimeError, match="EasyCon failed"):
+        services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0)
 
 
 def test_main_window_auto_rng_cli_settles_keep_awake_before_script(app, tmp_path, monkeypatch):

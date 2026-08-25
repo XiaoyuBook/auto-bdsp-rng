@@ -118,6 +118,7 @@ class AutoRngPanel(QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
     autoProgressChanged = Signal(object)
+    runStateChanged = Signal(bool)
     ivCalculatorRequested = Signal()
     captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
     captureLog = Signal(str)  # 临时：后台线程日志输出
@@ -695,12 +696,13 @@ class AutoRngPanel(QWidget):
         self._runner_worker = worker
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
+        self.runStateChanged.emit(True)
         thread.start()
 
     def _runner_finished(self, progress: object) -> None:
         # 不重复 apply_progress：最后一条进度已通过 progressChanged 信号输出
         if isinstance(progress, AutoRngProgress):
-            self.set_phase_text("已完成")
+            self.set_phase_text("已停止" if progress.phase == AutoRngPhase.IDLE else "已完成")
         self._clear_runner_thread()
 
     def _runner_failed(self, message: str) -> None:
@@ -714,6 +716,7 @@ class AutoRngPanel(QWidget):
         self._runner_thread = None
         self._runner_worker = None
         self.start_button.setEnabled(True)
+        self.runStateChanged.emit(False)
 
     def _selected_path(self, combo: QComboBox) -> Path | None:
         value = combo.currentData()
