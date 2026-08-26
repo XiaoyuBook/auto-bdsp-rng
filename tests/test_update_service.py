@@ -34,13 +34,18 @@ def _asset(from_version: str, to_version: str, size: int, *, digest: str = "a" *
     }
 
 
-def _release(version: str, *assets: dict[str, object], prerelease: bool = False) -> dict[str, object]:
+def _release(
+    version: str,
+    *assets: dict[str, object],
+    prerelease: bool = False,
+    body: str | None = None,
+) -> dict[str, object]:
     return {
         "tag_name": f"v{version}",
         "draft": False,
         "prerelease": prerelease,
         "html_url": f"https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v{version}",
-        "body": f"notes {version}",
+        "body": f"notes {version}" if body is None else body,
         "assets": list(assets),
     }
 
@@ -117,6 +122,75 @@ def test_build_update_plan_ignores_assets_without_github_sha256_digest():
 
     assert plan.update_available is True
     assert plan.incremental_available is False
+
+
+def test_build_update_plan_collects_only_update_sections_for_newer_releases():
+    releases = [
+        _release(
+            "3.0.0",
+            body=(
+                "# 珍钻复刻自动乱数 v3.0.0\n\n"
+                "## 本次更新\n\n- 新增共享视频源\n- 新增 Python 伊机控\n\n"
+                "## 下载\n\n`auto-bdsp-rng-v3.0.0-windows-x64.zip`\n"
+            ),
+        ),
+        _release(
+            "2.2.0",
+            body="# v2.2.0\n\n## 本次更新\n\n- 新增增量升级\n\n## 使用方式\n\n1. 下载\n",
+        ),
+        _release("2.1.7", body="## 旧版本\n\n- 不应显示\n"),
+    ]
+
+    plan = build_update_plan("2.1.7", releases)
+
+    assert plan.release_notes == (
+        "### v3.0.0\n\n- 新增共享视频源\n- 新增 Python 伊机控\n\n"
+        "### v2.2.0\n\n- 新增增量升级"
+    )
+    assert "## 下载" not in plan.release_notes
+    assert "## 使用方式" not in plan.release_notes
+    assert "不应显示" not in plan.release_notes
+
+
+def test_build_update_plan_omits_old_release_notes_when_current_is_ahead():
+    plan = build_update_plan(
+        "3.0.0",
+        [_release("2.1.7", body="## 本次更新\n\n- 旧版说明\n")],
+    )
+
+    assert plan.update_available is False
+    assert plan.latest_version == "2.1.7"
+    assert plan.release_notes == ""
+
+
+def test_build_update_plan_ignores_indented_release_notes_heading():
+    plan = build_update_plan(
+        "2.1.7",
+        [
+            _release(
+                "3.0.0",
+                body=(
+                    "# v3.0.0\n\n"
+                    "    ## 本次更新\n"
+                    "    - 代码示例，不是更新日志\n\n"
+                    "## 下载\n\n- 下载说明\n"
+                ),
+            )
+        ],
+    )
+
+    assert plan.update_available is True
+    assert plan.release_notes == ""
+
+
+def test_build_update_plan_omits_notes_when_current_matches_latest():
+    plan = build_update_plan(
+        "3.0.0",
+        [_release("3.0.0", body="## 本次更新\r\n\r\n- 当前版本说明\r\n")],
+    )
+
+    assert plan.update_available is False
+    assert plan.release_notes == ""
 
 
 def test_download_update_assets_streams_and_validates_patch(tmp_path: Path):

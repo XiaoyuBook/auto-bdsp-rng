@@ -53,7 +53,7 @@ def _wait_until(predicate, *, timeout_ms: int = 2000) -> None:
 
 
 def test_update_dialog_shows_incremental_version_and_size(app):
-    dialog = UpdateDialog()
+    dialog = UpdateDialog(changelog_text="# 2.1.7\n\n- 历史修复")
 
     dialog.show_plan(_plan())
 
@@ -62,6 +62,73 @@ def test_update_dialog_shows_incremental_version_and_size(app):
     assert dialog.package_label.text() == "增量升级包：3.0 MiB"
     assert dialog.download_button.isVisibleTo(dialog)
     assert "新增增量升级" in dialog.release_notes.toPlainText()
+    assert dialog.notes_label.isVisibleTo(dialog)
+    assert dialog.notes_tabs.currentWidget() is dialog.release_notes
+    assert "历史修复" in dialog.history_notes.toPlainText()
+
+
+def test_update_dialog_shows_local_history_when_current_version_is_ahead(app):
+    dialog = UpdateDialog(changelog_text="# 3.0.0\n\n- 新增共享视频源\n\n# 2.1.7\n\n- 优化 OCR")
+    dialog.show()
+
+    dialog.show_plan(
+        _plan(
+            current_version="3.0.0",
+            latest_version="2.1.7",
+            release_notes="## 本次更新\n\n- 旧版说明",
+            update_available=False,
+            incremental_available=False,
+            assets=(),
+        )
+    )
+
+    assert dialog.status_label.text() == "当前版本高于线上最新正式版"
+    assert dialog.release_notes.toPlainText() == ""
+    assert dialog.notes_tabs.indexOf(dialog.release_notes) == -1
+    assert dialog.notes_tabs.currentWidget() is dialog.history_notes
+    assert "3.0.0" in dialog.history_notes.toPlainText()
+    assert "新增共享视频源" in dialog.history_notes.toPlainText()
+    assert "2.1.7" in dialog.history_notes.toPlainText()
+    assert "旧版说明" not in dialog.history_notes.toPlainText()
+
+
+def test_update_dialog_shows_history_when_current_matches_latest(app):
+    dialog = UpdateDialog(changelog_text="# 3.0.0\n\n- 当前版本记录")
+
+    dialog.show_plan(
+        _plan(
+            current_version="3.0.0",
+            latest_version="3.0.0",
+            release_notes="",
+            update_available=False,
+            incremental_available=False,
+            assets=(),
+        )
+    )
+
+    assert dialog.status_label.text() == "当前已是最新版本"
+    assert dialog.notes_tabs.currentWidget() is dialog.history_notes
+    assert "当前版本记录" in dialog.history_notes.toPlainText()
+
+
+def test_update_dialog_renders_release_notes_markdown(app):
+    dialog = UpdateDialog()
+
+    dialog.show_plan(_plan(release_notes="### v3.0.0\n\n- 支持 `Python` 伊机控"))
+
+    assert dialog.release_notes.toPlainText() == "v3.0.0\n支持 Python 伊机控"
+    assert "<h3" in dialog.release_notes.toHtml()
+
+
+def test_update_dialog_does_not_render_release_notes_html(app):
+    dialog = UpdateDialog()
+
+    dialog.show_plan(_plan(release_notes='<img src="https://example.invalid/tracker.png">'))
+
+    assert "tracker.png" in dialog.release_notes.toPlainText()
+    assert '<img src="https://example.invalid/tracker.png"' not in dialog.release_notes.toHtml()
+    assert dialog.release_notes.openLinks() is False
+    assert dialog.release_notes.openExternalLinks() is False
 
 
 def test_update_controller_source_mode_opens_release_instead_of_installing(app):

@@ -33,6 +33,8 @@ _ASSET_PATTERN = re.compile(
     r"-windows-x64\.update\.zip$"
 )
 _ASSET_DIGEST_PATTERN = re.compile(r"^sha256:([0-9a-f]{64})$")
+_RELEASE_NOTES_HEADING_PATTERN = re.compile(r"^##[ \t]+本次更新(?:[ \t]+##)?[ \t]*$")
+_RELEASE_NOTES_END_PATTERN = re.compile(r"^#{1,2}[ \t]+")
 
 
 class UpdateServiceError(RuntimeError):
@@ -173,18 +175,54 @@ def build_update_plan(current_version: str, releases: object) -> UpdatePlan:
     latest_version = max(valid_releases, key=parse_version)
     latest_release = valid_releases[latest_version]
     release_url = _release_url(latest_release, latest_version)
-    release_notes = latest_release.get("body")
-    if not isinstance(release_notes, str):
-        release_notes = ""
 
     if parse_version(latest_version) <= current_key:
-        return UpdatePlan(current_version, latest_version, (), release_url, release_notes)
+        return UpdatePlan(current_version, latest_version, (), release_url, "")
 
+    release_notes = _collect_release_notes(current_key, valid_releases)
     assets = tuple(_iter_update_assets(valid_releases))
     chain = _shortest_asset_chain(current_version, latest_version, assets)
     if sum(asset.size for asset in chain) > MAX_UPDATE_DOWNLOAD_SIZE:
         chain = ()
     return UpdatePlan(current_version, latest_version, chain, release_url, release_notes)
+
+
+def _collect_release_notes(
+    current_key: tuple[int, int, int],
+    releases: dict[str, dict[str, Any]],
+) -> str:
+    sections: list[str] = []
+    newer_versions = sorted(
+        (version for version in releases if parse_version(version) > current_key),
+        key=parse_version,
+        reverse=True,
+    )
+    for version in newer_versions:
+        body = releases[version].get("body")
+        if not isinstance(body, str):
+            continue
+        notes = _extract_release_notes_section(body)
+        if notes:
+            sections.append(f"### v{version}\n\n{notes}")
+    return "\n\n".join(sections)
+
+
+def _extract_release_notes_section(body: str) -> str:
+    lines = body.splitlines()
+    heading_index: int | None = None
+    for index, line in enumerate(lines):
+        if _RELEASE_NOTES_HEADING_PATTERN.fullmatch(line):
+            heading_index = index
+            break
+    if heading_index is None:
+        return ""
+
+    end_index = len(lines)
+    for index in range(heading_index + 1, len(lines)):
+        if _RELEASE_NOTES_END_PATTERN.match(lines[index]):
+            end_index = index
+            break
+    return "\n".join(lines[heading_index + 1 : end_index]).strip()
 
 
 def download_update_assets(

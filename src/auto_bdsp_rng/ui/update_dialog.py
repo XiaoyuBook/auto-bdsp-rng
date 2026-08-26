@@ -8,21 +8,25 @@ from pathlib import Path
 from typing import Protocol
 
 from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QTextDocument
 from PySide6.QtWidgets import (
     QDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QTabWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
 from auto_bdsp_rng import __version__
+from auto_bdsp_rng.resources import app_path
+from auto_bdsp_rng.update_core import parse_version
+from auto_bdsp_rng.ui.markdown_viewer import read_markdown_text
 
 
 class UpdatePlanLike(Protocol):
@@ -92,13 +96,18 @@ class UpdateDialog(QDialog):
     openReleaseRequested = Signal()
     cancelRequested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, changelog_text: str | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("软件更新")
-        self.setMinimumWidth(520)
-        self.resize(560, 420)
+        self.setMinimumWidth(560)
+        self.resize(640, 500)
         self.setModal(False)
         self._busy = False
+        self._changelog_text = (
+            read_markdown_text(app_path("CHANGELOG.md"))
+            if changelog_text is None
+            else str(changelog_text)
+        )
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -119,7 +128,7 @@ class UpdateDialog(QDialog):
         self.current_version_label = QLabel("-")
         self.current_version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         versions.addWidget(self.current_version_label, 0, 1)
-        versions.addWidget(QLabel("最新版本"), 1, 0)
+        versions.addWidget(QLabel("线上最新版本"), 1, 0)
         self.latest_version_label = QLabel("-")
         self.latest_version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         versions.addWidget(self.latest_version_label, 1, 1)
@@ -130,14 +139,23 @@ class UpdateDialog(QDialog):
         self.package_label.setWordWrap(True)
         layout.addWidget(self.package_label)
 
-        notes_label = QLabel("本次更新")
-        notes_label.setStyleSheet("font-weight: 600;")
-        layout.addWidget(notes_label)
-        self.release_notes = QPlainTextEdit()
-        self.release_notes.setReadOnly(True)
-        self.release_notes.setPlaceholderText("暂无更新说明")
-        self.release_notes.setMinimumHeight(140)
-        layout.addWidget(self.release_notes, 1)
+        self.notes_label = QLabel("更新日志")
+        self.notes_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(self.notes_label)
+
+        self.notes_tabs = QTabWidget()
+        self.release_notes = self._create_notes_browser("该版本未提供更新说明")
+        self.history_notes = self._create_notes_browser("暂无更新日志")
+        self.notes_tabs.addTab(self.release_notes, "新版内容")
+        self.notes_tabs.addTab(self.history_notes, "历史更新")
+        self.history_notes.document().setMarkdown(
+            self._changelog_text,
+            QTextDocument.MarkdownFeature.MarkdownDialectGitHub
+            | QTextDocument.MarkdownFeature.MarkdownNoHTML,
+        )
+        self.notes_tabs.setMinimumHeight(190)
+        layout.addWidget(self.notes_tabs, 1)
+        self._set_release_notes_available(False)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -161,6 +179,31 @@ class UpdateDialog(QDialog):
         buttons.addWidget(self.close_button)
         layout.addLayout(buttons)
 
+    @staticmethod
+    def _create_notes_browser(placeholder: str) -> QTextBrowser:
+        browser = QTextBrowser()
+        browser.setReadOnly(True)
+        browser.setOpenLinks(False)
+        browser.setOpenExternalLinks(False)
+        browser.setPlaceholderText(placeholder)
+        browser.document().setDefaultStyleSheet(
+            "h1 { font-size: 16px; font-weight: 600; margin: 10px 0 6px 0; }"
+            "h2 { font-size: 15px; font-weight: 600; margin: 8px 0 5px 0; }"
+            "h3 { font-size: 14px; font-weight: 600; margin: 7px 0 4px 0; }"
+        )
+        return browser
+
+    def _set_release_notes_available(self, available: bool) -> None:
+        index = self.notes_tabs.indexOf(self.release_notes)
+        if available and index < 0:
+            self.notes_tabs.insertTab(0, self.release_notes, "新版内容")
+        elif not available and index >= 0:
+            self.notes_tabs.removeTab(index)
+        if available:
+            self.notes_tabs.setCurrentWidget(self.release_notes)
+        else:
+            self.notes_tabs.setCurrentWidget(self.history_notes)
+
     def show_checking(self, current_version: str) -> None:
         self._busy = True
         self.status_label.setText("正在检查更新…")
@@ -168,6 +211,7 @@ class UpdateDialog(QDialog):
         self.latest_version_label.setText("-")
         self.package_label.clear()
         self.release_notes.clear()
+        self._set_release_notes_available(False)
         self.progress_bar.hide()
         self.download_button.hide()
         self.download_button.setEnabled(False)
@@ -179,18 +223,28 @@ class UpdateDialog(QDialog):
         self._busy = False
         self.current_version_label.setText(str(plan.current_version))
         self.latest_version_label.setText(str(plan.latest_version))
-        self.release_notes.setPlainText(str(plan.release_notes or ""))
+        self.release_notes.clear()
         self.progress_bar.hide()
         self.release_button.setEnabled(True)
         self.close_button.setText("关闭")
 
         if not plan.update_available:
-            self.status_label.setText("当前已是最新版本")
+            if parse_version(str(plan.current_version)) > parse_version(str(plan.latest_version)):
+                self.status_label.setText("当前版本高于线上最新正式版")
+            else:
+                self.status_label.setText("当前已是最新版本")
             self.package_label.clear()
             self.download_button.hide()
             self.release_button.hide()
+            self._set_release_notes_available(False)
             return
 
+        self.release_notes.document().setMarkdown(
+            str(plan.release_notes or ""),
+            QTextDocument.MarkdownFeature.MarkdownDialectGitHub
+            | QTextDocument.MarkdownFeature.MarkdownNoHTML,
+        )
+        self._set_release_notes_available(True)
         self.release_button.setVisible(bool(plan.release_url))
         if not plan.incremental_available:
             self.status_label.setText("检测到新版本，但没有适用于当前版本的增量升级链")
