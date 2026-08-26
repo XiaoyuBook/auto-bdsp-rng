@@ -1,0 +1,414 @@
+# 前言：首先感谢“黑侠聚聚”提示用搜宝可表判断草丛遇怪，再次感谢群友“赫拉利”提示不开宝可表搜游走，让时间又快了很多，然后自己又优化了搜图时间和走路时间等，目前平均不到4min一次，比之前的刷美梦的游走脚本快2min左右。
+# 准备：
+# 1．放入Imglable文件夹：艾姆利多在202路、宝可表、站在艾姆利多面前、艾姆利多出现了、上吧嘴、艾姆利多在水域、喷雾消失了，这次分辨率为1080p可以直接用的。
+# 2．宝可表公司得到追踪应用并按R调到追踪应用，菜单界面按y调整顺序（见附图，或者背包在宝可梦右边即可），把光标移到宝可梦关菜单，进出一次祝庆市pc,背包准备好黄金喷雾（喷雾要在物品的第一个位置）
+# 3．一只会瞬间移动的宝可梦和一只发光属性的宝可梦（凯西和海星），这两只濒死放在队首（凯西在前），一只等级在(40，49]之间的宝可梦在第三位
+# 4. 前往心之湖在红圣姑脸前存档
+
+_遭遇与去吧之间的时间间隔 = 2400
+
+#唤醒设备
+FOR 5
+    LCLICK 120
+    100
+NEXT
+
+$1 = 1582
+$5 = 0
+FOR 10000
+    # ------------------------------------------------------------------
+    #  此处为重启->开机画面
+    # ------------------------------------------------------------------
+    HOME 250
+    1000
+    X 100
+    1000
+    A 100
+    1000
+    A 100
+    1000
+    LS UP,100   # 此处是因为没更新1.1.3
+    500
+    FOR 8
+        A 100
+        500
+    NEXT
+    WAIT 19000
+    FOR 20
+        A 100
+        200
+    NEXT
+    7500     # 此处依据机能延长缩短
+    FOR 100    # 此处识别是否站在精灵面前，做一个时间校正
+        $2 = @站在艾姆利多面前
+        IF $2 >= 95
+            BREAK 1
+        ENDIF
+    WAIT 50
+    NEXT
+    FOR 2 # 开始触发艾姆利多游走
+        A 100
+        200
+    NEXT
+    1000
+    FOR 75
+            A 100
+            200
+    NEXT
+    WAIT 1500
+    FOR 2
+        RIGHT 200
+        300
+    NEXT
+    LS DOWN,5000    # 出洞
+    WAIT 1000
+        R 100
+        800
+    X 100    # 回到祝庆市
+    500
+    A 100
+    1000
+    A 100
+    500
+    LS DOWN,100
+    500
+    A 100
+    WAIT 12000
+
+    LEFT 200  # 左走1格
+    300
+
+    $重开本轮 = 0
+    FOR 50 # 先判定一次右边水域
+        $2 = @艾姆利多在水域
+        IF $2 >= 95
+            PRINT 艾姆利多在水域
+            FOR 4
+                LEFT 200  # 走路到水域
+                300
+            NEXT
+            LS UP,2600
+            WAIT 100
+            PLUS DOWN
+            WAIT 100
+            PLUS UP
+            WAIT 200
+            LS LEFT,13000
+            WAIT 300
+            # 开喷雾器
+            X 200
+            500
+            RIGHT 200
+            500
+            A 200
+            1000
+            FOR 4
+                RIGHT 200
+                300
+            NEXT
+            A 200
+            500
+            A 200
+            500
+            A 200
+            500
+            B 200
+            1000
+            B 200
+            1000
+            #下水后下2格
+            A 100
+            WAIT 800
+            A 100
+            WAIT 800
+            A 100
+            WAIT 800
+            A 100
+            WAIT 5000
+            LS DOWN,500
+            WAIT 300
+            # 循环:左右走判定进入战斗
+            FOR
+                FOR 2
+                    LS LEFT,1300
+                    50
+                    FOR 10
+                        $2 = @宝可表
+                        IF $2 >= 95
+                        ELSE
+                            PRINT 这次一定闪
+                            BREAK 3
+                        ENDIF
+                        WAIT 10
+                    NEXT
+                NEXT
+                FOR 1
+                    $3 = @喷雾消失了
+                    IF $3 >= 95
+                        PRINT 加喷雾
+                        FOR 10
+                            A 100
+                            200
+                        NEXT
+                    ENDIF
+                    WAIT 10
+                NEXT
+                FOR 2
+                    LS RIGHT,1300
+                    50
+                    FOR 10
+                        $2 = @宝可表
+                        IF $2 >= 95
+                        ELSE
+                            PRINT 这次一定闪
+                            BREAK 3
+                        ENDIF
+                        WAIT 10
+                    NEXT
+                NEXT
+            NEXT
+            # 判定艾姆利多出现和去吧
+            PRINT 开始搜艾姆利多出现
+            $1 += 1
+            PRINT 第 & $1 & 次刷闪艾姆利多
+            FOR 500
+                $2 = @艾姆利多出现了
+                IF $2 > 95
+                    PRINT 艾姆利多出现了
+                    $5 = 0
+                    FOR 300
+                        $3 = @上吧嘴
+                        IF $3 > 95
+                            BREAK 2
+                        ELSE
+                            $5 += 1
+                        ENDIF
+                        WAIT 50
+                    NEXT
+                    BREAK 1
+                ENDIF
+                WAIT 50
+            NEXT
+            $5 *= 50
+            PRINT 与去吧之间间隔 & $5
+            IF $5 > _遭遇与去吧之间的时间间隔
+                2000
+                CAPTURE 5000
+                PRINT 快醒醒，你出闪了
+                BREAK 2
+            ENDIF
+            $重开本轮 = 1
+            BREAK 1
+        ENDIF
+        WAIT 10
+    NEXT
+    IF $重开本轮 == 1
+        CONTINUE
+    ENDIF
+
+    LS DOWN,2500    # 向下走到城市分界线
+    300
+    FOR 4
+        LEFT 200
+        300
+    NEXT
+    FOR 7
+        DOWN 200
+        300
+    NEXT
+    WAIT 500
+    FOR    # 上下走判定水域和202路草丛是否出现
+        FOR 50
+            $2 = @艾姆利多在202路
+            IF $2 >= 95
+                PRINT 艾姆利多在202路
+                LS DOWN,1400
+                300
+                # 开喷雾器
+                X 200
+                500
+                RIGHT 200
+                300
+                A 200
+                1000
+                FOR 4
+                    RIGHT 200
+                    300
+                NEXT
+                A 200
+                500
+                A 200
+                500
+                A 200
+                500
+                B 200
+                1000
+                B 200
+                1000
+                # 往右走4格,进入草丛
+                FOR 4
+                    RIGHT 200
+                    300
+                NEXT
+                # 循环:上下走判定进入战斗
+                FOR
+                    LS UP,550
+                    50
+                    FOR 10
+                        $2 = @宝可表
+                        IF $2 >= 95
+                        ELSE
+                            PRINT 这次一定闪
+                            BREAK 2
+                        ENDIF
+                        WAIT 10
+                    NEXT
+                    LS DOWN,550
+                    50
+                    FOR 10
+                        $2 = @宝可表
+                        IF $2 >= 95
+                        ELSE
+                            PRINT 这次一定闪
+                            BREAK 2
+                        ENDIF
+                        WAIT 10
+                    NEXT
+                    FOR 1
+                        $3 = @喷雾消失了
+                        IF $3 >= 95
+                            PRINT 加喷雾
+                            FOR 10
+                                A 100
+                                200
+                            NEXT
+                        ENDIF
+                        WAIT 10
+                    NEXT
+                NEXT
+                BREAK 2
+            ENDIF
+            WAIT 10
+        NEXT
+        UP 200
+        600
+        FOR 50
+            $2 = @艾姆利多在水域
+            IF $2 >= 95
+                PRINT 艾姆利多在水域
+                LS UP,5550    # 走路到水域
+                WAIT 100
+                PLUS DOWN
+                WAIT 100
+                PLUS UP
+                WAIT 200
+                LS LEFT,13000
+                WAIT 100
+                # 开喷雾器
+                X 200
+                500
+                RIGHT 200
+                300
+                A 200
+                1000
+                FOR 4
+                    RIGHT 200
+                    300
+                NEXT
+                A 200
+                500
+                A 200
+                500
+                A 200
+                500
+                B 200
+                1000
+                B 200
+                1200
+                #下水后下2格
+                FOR 7
+                    A 200
+                    WAIT 400
+                NEXT
+                WAIT 4500
+                LS DOWN,500
+                WAIT 300
+                # 循环:左右走判定进入战斗
+                FOR
+                    FOR 2
+                        LS LEFT,1000
+                        50
+                        FOR 10
+                            $2 = @宝可表
+                            IF $2 >= 95
+                            ELSE
+                                PRINT 这次一定闪
+                                BREAK 3
+                            ENDIF
+                            WAIT 10
+                        NEXT
+                    NEXT
+                    FOR 1
+                        $3 = @喷雾消失了
+                        IF $3 >= 95
+                            PRINT 加喷雾
+                            FOR 10
+                                A 100
+                                200
+                            NEXT
+                        ENDIF
+                        WAIT 50
+                    NEXT
+                    FOR 2
+                        LS RIGHT,1000
+                        50
+                        FOR 10
+                            $2 = @宝可表
+                            IF $2 >= 95
+                            ELSE
+                                PRINT 这次一定闪
+                                BREAK 3
+                            ENDIF
+                            WAIT 10
+                        NEXT
+                    NEXT
+                NEXT
+                BREAK 2
+            ENDIF
+            WAIT 10
+        NEXT
+        DOWN 200
+        600
+    NEXT
+
+    # 判定艾姆利多出现和去吧
+    PRINT 开始搜艾姆利多出现
+    $1 += 1
+    PRINT 第 & $1 & 次刷闪艾姆利多
+    FOR 500
+        $2 = @艾姆利多出现了
+        IF $2 > 95
+            PRINT 艾姆利多出现了
+            $5 = 0
+            FOR 300
+                $3 = @上吧嘴
+                IF $3 > 95
+                    BREAK 2
+                ELSE
+                    $5 += 1
+                ENDIF
+                WAIT 50
+            NEXT
+            BREAK 1
+        ENDIF
+        WAIT 50
+    NEXT
+    $5 *= 50
+    PRINT 与去吧之间间隔 & $5
+    IF $5 > _遭遇与去吧之间的时间间隔
+        2000
+        CAPTURE 5000
+        PRINT 快醒醒，艾姆利多闪了
+        BREAK 1
+    ENDIF
+NEXT
