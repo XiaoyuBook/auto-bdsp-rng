@@ -1647,6 +1647,16 @@ class MainWindow(QMainWindow):
         self.display_percent = self._spin(1, 300, 80)
         self.blink_count = DEFAULT_BLINK_COUNT
 
+        # Keep legacy Project_Xs fields alive for lossless config load/save.
+        for legacy_widget in (
+            self.monitor_window,
+            self.window_prefix,
+            self.camera,
+            self.display_percent,
+        ):
+            legacy_widget.setParent(group)
+            legacy_widget.hide()
+
         compact_fields = [
             self.config_combo,
             self.window_prefix,
@@ -1711,20 +1721,16 @@ class MainWindow(QMainWindow):
         checks_row.addWidget(self.calibrate_shiny_threshold_button)
         layout.addWidget(self.tidsid_button, 2, 0)
         layout.addLayout(checks_row, 2, 1, 1, 3)
-        layout.addWidget(self.monitor_window, 3, 0)
-        layout.addWidget(self.window_prefix, 3, 1, 1, 3)
-        self._add_form_row(layout, 4, "camera", self.camera)
-        layout.addWidget(self.select_roi_button, 5, 1, 1, 3)
-        self._add_form_row(layout, 6, "threshold", self.threshold)
-        self._add_form_row(layout, 7, "time_delay", self.white_delay)
-        self._add_form_row(layout, 8, "advance_delay", self.advance_delay)
-        self._add_form_row(layout, 9, "advance_delay_2", self.advance_delay_2)
-        self._add_form_row(layout, 10, "npcs", self.npc_count)
-        self._add_form_row(layout, 11, "timeline_npcs", self.timeline_npc)
-        self._add_form_row(layout, 12, "pokemon_npcs", self.pokemon_npc)
-        self._add_form_row(layout, 13, "display_percent", self.display_percent)
-        layout.addWidget(self.save_config_button, 14, 2)
-        layout.addWidget(self.raw_screenshot_button, 14, 3)
+        layout.addWidget(self.select_roi_button, 3, 1, 1, 3)
+        self._add_form_row(layout, 4, "threshold", self.threshold)
+        self._add_form_row(layout, 5, "time_delay", self.white_delay)
+        self._add_form_row(layout, 6, "advance_delay", self.advance_delay)
+        self._add_form_row(layout, 7, "advance_delay_2", self.advance_delay_2)
+        self._add_form_row(layout, 8, "npcs", self.npc_count)
+        self._add_form_row(layout, 9, "timeline_npcs", self.timeline_npc)
+        self._add_form_row(layout, 10, "pokemon_npcs", self.pokemon_npc)
+        layout.addWidget(self.save_config_button, 11, 2)
+        layout.addWidget(self.raw_screenshot_button, 11, 3)
         return group
 
     def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:

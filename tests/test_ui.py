@@ -180,6 +180,10 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
     assert seed.x() == capture.x()
     assert seed.y() > capture.bottom()
     assert window.window_prefix.parent() is window.capture_group
+    assert not window.monitor_window.isVisible()
+    assert not window.window_prefix.isVisible()
+    assert not window.camera.isVisible()
+    assert not window.display_percent.isVisible()
     assert all(not box.isVisible() for box in window.seed32_inputs)
     assert [label.text() for label in window.seed_group.findChildren(QLabel)] == ["Seed0", "Seed1"]
     assert window.threshold.height() <= 32
