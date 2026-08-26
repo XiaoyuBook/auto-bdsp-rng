@@ -893,7 +893,7 @@ class EasyConPanel(QWidget):
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
         self.auto_select_port_button = QPushButton("自动选择串口")
         self.auto_select_port_button.clicked.connect(self.auto_select_port)
-        self.mock_check = QCheckBox("mock 模式")
+        self.mock_check = QCheckBox("模拟串口（测试模式）")
         self.mock_check.setChecked(self.config.mock_enabled)
         self.mock_check.toggled.connect(self._save_config_from_ui)
         self.cli_test_button = QPushButton("测试 CLI 运行")
@@ -1127,7 +1127,7 @@ class EasyConPanel(QWidget):
         self.port_combo.blockSignals(False)
         self._append_log("info", f"已刷新串口: {', '.join(ports) if ports else '未发现'}")
         if not ports and not self.mock_check.isChecked():
-            self._append_log("warn", "未发现串口；请选择串口或启用 mock 模式，运行按钮已禁用")
+            self._append_log("warn", "未发现串口；请选择串口或启用模拟串口（测试模式），运行按钮已禁用")
         self._save_config_from_ui()
         self._update_run_enabled()
         self._update_status_labels()
@@ -1136,7 +1136,7 @@ class EasyConPanel(QWidget):
         ports = [self.port_combo.itemText(index) for index in range(self.port_combo.count())]
         selected = self._select_preferred_port(ports)
         if selected is None:
-            self._append_log("warn", "未发现可自动选择的串口，请刷新串口或启用 mock 模式")
+            self._append_log("warn", "未发现可自动选择的串口，请刷新串口或启用模拟串口（测试模式）")
             self._update_run_enabled()
             return
         self.port_combo.setCurrentText(selected)

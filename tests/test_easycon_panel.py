@@ -374,6 +374,7 @@ def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_pat
 
     panel = EasyConPanel(native_backend=backend, video_source_connected=lambda: True)
 
+    assert panel.mock_check.text() == "模拟串口（测试模式）"
     assert panel.port_combo.currentText() == "mock"
     assert panel.connect_native()
     assert backend.connected_port == "mock"
@@ -1205,7 +1206,7 @@ def test_easycon_panel_reports_empty_ports_when_mock_disabled(monkeypatch, tmp_p
 
     panel = EasyConPanel(native_backend=FakeNativeBackend([]))
 
-    assert "未发现串口；请选择串口或启用 mock 模式，运行按钮已禁用" in panel.log_view.toPlainText()
+    assert "未发现串口；请选择串口或启用模拟串口（测试模式），运行按钮已禁用" in panel.log_view.toPlainText()
     assert panel.run_button.isEnabled() is False
 
 
