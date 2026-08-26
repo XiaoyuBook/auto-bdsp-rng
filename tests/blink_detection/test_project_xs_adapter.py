@@ -9,6 +9,7 @@ import pytest
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     BlinkObservation,
+    BrokerFrameCapture,
     PokemonBlinkObservation,
     PreviewFrameCapture,
     SeedState32,
@@ -30,6 +31,45 @@ from auto_bdsp_rng.blink_detection import (
 )
 from auto_bdsp_rng.blink_detection.project_xs import ProjectXsIntegrationError
 import auto_bdsp_rng.blink_detection.project_xs as project_xs_module
+
+
+def test_broker_frame_capture_returns_private_bgr_copy_and_closes_only_client():
+    original = np.arange(18, dtype=np.uint8).reshape((2, 3, 3))
+
+    class Client:
+        def __init__(self):
+            self.closed = False
+
+        def read_array(self):
+            return original
+
+        def close(self):
+            self.closed = True
+
+    client = Client()
+    capture = BrokerFrameCapture(lambda: client)
+
+    ok, frame = capture.read()
+    frame[0, 0, 0] = 255
+    capture.release()
+
+    assert ok
+    assert frame is not original
+    assert original[0, 0, 0] == 0
+    assert client.closed
+
+
+def test_blink_capture_config_keeps_legacy_default_and_accepts_broker_factory(tmp_path):
+    legacy = BlinkCaptureConfig(tmp_path / "eye.png", (0, 0, 1, 1))
+    shared = BlinkCaptureConfig(
+        tmp_path / "eye.png",
+        (0, 0, 1, 1),
+        source="broker",
+        frame_source_factory=lambda: object(),
+    )
+
+    assert not legacy.uses_shared_video_source
+    assert shared.uses_shared_video_source
 
 
 class FakeRng:

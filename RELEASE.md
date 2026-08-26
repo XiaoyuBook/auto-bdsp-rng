@@ -44,7 +44,8 @@ Confirm:
 - no console window appears for normal GUI launch,
 - scripts and Project_Xs configs can be found,
 - `_native` imports,
-- EasyConBridge is present if it was publishable,
+- native EasyCon can connect to the shared Broker in a test setup, and the packaged Tesseract smoke test succeeds,
+- `_internal/easycon_native/x64` and `_internal/easycon_native/Tessdata` contain the bundled native EasyCon OCR runtime,
 - `release/auto-bdsp-rng-vX.Y.Z-windows-x64.zip` exists,
 - `release/auto-bdsp-rng-vX.Y.Z-windows-x64.manifest.json` exists and lists the complete `dist/auto-bdsp-rng/` tree,
 - `release/release-notes.md` shows the intended **本次更新** content.

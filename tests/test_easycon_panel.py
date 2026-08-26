@@ -24,6 +24,69 @@ from auto_bdsp_rng.automation.easycon import (
 from auto_bdsp_rng.ui.easycon_panel import DEFAULT_KEY_MAPPING, EasyConPanel, KeyMappingDialog
 
 
+class FakeNativeBackend:
+    def __init__(self, ports: list[str] | None = None) -> None:
+        self.ports = list(ports) if ports is not None else ["COM7"]
+        self.connected_port: str | None = None
+        self.script_runs: list[tuple[str, str | None, Path | None]] = []
+        self.presses: list[tuple[str, int]] = []
+        self.sticks: list[tuple[str, str | int, int | None]] = []
+        self.key_events: list[tuple[str, str]] = []
+        self.stick_events: list[tuple[str, str, bool]] = []
+        self.stopped = False
+        self.closed = False
+
+    def list_ports(self) -> list[str]:
+        return list(self.ports)
+
+    def status(self) -> EasyConStatus:
+        return EasyConStatus.BRIDGE_CONNECTED if self.connected_port else EasyConStatus.BRIDGE_DISCONNECTED
+
+    def connect(self, port: str) -> None:
+        self.connected_port = port
+
+    def disconnect(self) -> None:
+        self.connected_port = None
+
+    def close(self) -> None:
+        self.closed = True
+        self.connected_port = None
+
+    def run_script_text(self, script_text, name=None, *, script_dir=None):
+        source_dir = Path(script_dir) if script_dir is not None else None
+        self.script_runs.append((script_text, name, source_dir))
+
+        class Result:
+            status = EasyConStatus.COMPLETED
+            exit_code = 0
+            started_at = datetime.now()
+            ended_at = datetime.now()
+            script_path = (source_dir or Path(".")) / (name or "<native-script>")
+            port = "COM7"
+            stdout = "native stdout"
+            stderr = ""
+
+        return Result()
+
+    def stop_current_script(self) -> None:
+        self.stopped = True
+
+    def press(self, button, duration_ms, **_kwargs):
+        self.presses.append((button, duration_ms))
+
+    def stick(self, side, direction, duration_ms):
+        self.sticks.append((side, direction, duration_ms))
+
+    def key_down(self, button):
+        self.key_events.append(("down", button))
+
+    def key_up(self, button):
+        self.key_events.append(("up", button))
+
+    def stick_direction(self, side, direction, down):
+        self.stick_events.append((side, direction, down))
+
+
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -49,7 +112,7 @@ def easycon_panel(monkeypatch, tmp_path, app):
         lambda _config: EasyConInstallation(path=Path("D:/EasyCon/ezcon.exe"), version="1.6.3", source="test"),
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
-    return EasyConPanel()
+    return EasyConPanel(native_backend=FakeNativeBackend(), video_source_connected=lambda: True)
 
 
 def process_events_until(predicate, timeout_ms=1000):
@@ -232,6 +295,90 @@ def test_easycon_panel_lists_builtin_scripts(easycon_panel):
     assert easycon_panel.script_list.item(0).text() == "玫瑰公园.txt"
 
 
+def test_easycon_panel_exposes_only_native_product_mode(easycon_panel):
+    assert easycon_panel.backend_mode.currentData() == "native"
+    assert easycon_panel.backend_mode.isVisible() is False
+    assert easycon_panel.ezcon_path.isVisible() is False
+    assert easycon_panel.status_backend_label.text() == "后端: Python 原生"
+
+
+def test_easycon_panel_native_script_requires_broker_and_preserves_source_dir(easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    easycon_panel._load_script_item(easycon_panel.script_list.item(0))
+    blink_input = easycon_panel.parameter_widgets["_闪帧"]
+    assert isinstance(blink_input, QLineEdit)
+    blink_input.setText("123")
+    easycon_panel.connect_native()
+
+    easycon_panel._video_source_connected = lambda: False
+    easycon_panel.run_script()
+    assert backend.script_runs == []
+    assert "请先在 Seed 捕捉页面连接视频源" in easycon_panel.log_view.toPlainText()
+
+    easycon_panel._video_source_connected = lambda: True
+    easycon_panel.run_script()
+    process_events_until(lambda: easycon_panel.native_run_thread is None)
+
+    assert len(backend.script_runs) == 1
+    assert easycon_panel._native_run_reserved is False
+    script_text, script_name, script_dir = backend.script_runs[0]
+    assert script_name == "玫瑰公园.txt"
+    assert script_dir == easycon_panel.current_script_path.parent
+    assert "_闪帧 = 123" in script_text
+
+
+def test_easycon_panel_native_controls_and_keep_awake_share_backend(easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    assert easycon_panel.connect_native()
+
+    easycon_panel.send_controller_press("A", duration_ms=120)
+    easycon_panel.send_controller_stick("left", "RESET")
+    assert easycon_panel.request_capture_keep_awake(10, 40, duration_ms=100)
+    process_events_until(lambda: easycon_panel._capture_keep_awake_future is None)
+
+    assert backend.presses == [("A", 120), ("L", 100)]
+    assert backend.sticks == [("left", "RESET", 100)]
+
+
+def test_easycon_panel_releases_reservation_when_worker_setup_fails(easycon_panel, monkeypatch):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    easycon_panel._load_script_item(easycon_panel.script_list.item(0))
+    blink_input = easycon_panel.parameter_widgets["_闪帧"]
+    assert isinstance(blink_input, QLineEdit)
+    blink_input.setText("123")
+    easycon_panel.connect_native()
+    monkeypatch.setattr(
+        panel_module,
+        "NativeScriptWorker",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("worker setup failed")),
+    )
+
+    easycon_panel.run_script()
+
+    assert easycon_panel._native_run_reserved is False
+    assert easycon_panel.native_run_thread is None
+    assert easycon_panel.native_run_worker is None
+    assert not easycon_panel.run_timer.isActive()
+    assert "worker setup failed" in easycon_panel.log_view.toPlainText()
+
+
+def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_path, app):
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", tmp_path)
+    monkeypatch.setattr(panel_module, "GENERATED_DIR", tmp_path / ".generated")
+    monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
+    monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
+    backend = FakeNativeBackend([])
+
+    panel = EasyConPanel(native_backend=backend, video_source_connected=lambda: True)
+
+    assert panel.port_combo.currentText() == "mock"
+    assert panel.connect_native()
+    assert backend.connected_port == "mock"
+
+
 def test_easycon_panel_ignores_stale_bridge_config(monkeypatch, tmp_path, app):
     script_dir = tmp_path / "script"
     script_dir.mkdir()
@@ -407,6 +554,8 @@ def select_bridge_mode(panel: EasyConPanel) -> None:
     index = panel.backend_mode.findData("bridge")
     assert index >= 0
     panel.backend_mode.setCurrentIndex(index)
+    if panel.port_combo.findText("COM7") >= 0:
+        panel.port_combo.setCurrentText("COM7")
 
 
 def test_easycon_panel_bridge_mode_requires_connection(easycon_panel):
@@ -423,6 +572,7 @@ def test_easycon_panel_bridge_mode_requires_connection(easycon_panel):
 
 def test_easycon_panel_cli_mode_is_not_reported_as_connected(easycon_panel):
     easycon_panel.backend_mode.setCurrentIndex(1)
+    easycon_panel.detect_easycon()
 
     assert easycon_panel.backend_label.text() == "单片机: CLI 过渡后端可用（未长期连接）"
     assert easycon_panel._connection_state_text() == "CLI 可用（未长期连接）"
@@ -444,7 +594,7 @@ def test_easycon_panel_auto_selects_last_port(monkeypatch, tmp_path, app):
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7", "COM9"])
 
-    panel = EasyConPanel()
+    panel = EasyConPanel(native_backend=FakeNativeBackend(["COM7", "COM9"]))
     panel.port_combo.blockSignals(True)
     panel.port_combo.setCurrentText("COM7")
     panel.port_combo.blockSignals(False)
@@ -567,6 +717,7 @@ def test_capture_keep_awake_cli_uses_cached_installation_without_blocking_discov
 
     monkeypatch.setattr(easycon_panel, "detect_easycon", delayed_discovery)
     monkeypatch.setattr(easycon_panel, "_start_capture_keep_awake_cli", capture_start)
+    easycon_panel.backend_mode.setCurrentIndex(easycon_panel.backend_mode.findData("cli"))
 
     started_at = time.monotonic()
     accepted = easycon_panel.request_capture_keep_awake(10, 40, duration_ms=100)
@@ -908,6 +1059,7 @@ def test_easycon_panel_cli_smoke_accepts_chinese_and_space_paths(monkeypatch, tm
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
     panel = EasyConPanel()
+    panel.detect_easycon()
     panel.backend_mode.setCurrentIndex(1)
 
     panel.run_cli_smoke_test()
@@ -1011,6 +1163,7 @@ def test_easycon_panel_reports_missing_ezcon_and_empty_ports(monkeypatch, tmp_pa
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: [])
 
     panel = EasyConPanel()
+    panel.detect_easycon()
 
     assert "请选择 ezcon.exe 或设置 EASYCON_ROOT" in panel.log_view.toPlainText()
     assert panel.run_button.isEnabled() is False
@@ -1031,6 +1184,7 @@ def test_easycon_panel_reports_invalid_ezcon_version(monkeypatch, tmp_path, app)
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: [])
 
     panel = EasyConPanel()
+    panel.detect_easycon()
 
     assert "ezcon 路径可能无效或文件损坏" in panel.log_view.toPlainText()
 
@@ -1067,6 +1221,19 @@ def test_easycon_panel_shutdown_closes_persistent_bridge(easycon_panel):
         easycon_panel._ensure_bridge_backend()
 
     assert easycon_panel.shutdown() is True
+
+
+def test_easycon_panel_shutdown_clears_pending_native_run_reservation(easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    assert easycon_panel.connect_native()
+    assert easycon_panel.reserve_native_script_run()
+    assert easycon_panel.native_run_thread is None
+
+    assert easycon_panel.shutdown() is True
+
+    assert easycon_panel._native_run_reserved is False
+    assert backend.closed is True
 
 
 def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel):

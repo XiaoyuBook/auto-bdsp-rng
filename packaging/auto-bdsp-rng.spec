@@ -19,6 +19,7 @@ OCR_MODEL_NAMES = (
     "PP-OCRv5_mobile_det",
     "PP-OCRv5_mobile_rec",
 )
+EASYCON_NATIVE_RUNTIME = ROOT / "packaging" / "easycon_native"
 
 
 def tree_datas(source: str, target: str):
@@ -66,6 +67,7 @@ hiddenimports = [
     "cv2",
     "PIL.Image",
     "pyautogui",
+    "serial",
     "win32api",
     "win32con",
     "win32gui",
@@ -76,9 +78,11 @@ hiddenimports = [
 for package in (
     "PySide6",
     "cv2",
+    "cv2_enumerate_cameras",
     "numpy",
     "PIL",
     "pyautogui",
+    "serial",
     "paddle",
     "paddleocr",
     "paddlex",
@@ -113,6 +117,7 @@ for distribution in (
     "paddleocr",
     "paddlex",
     "beautifulsoup4",
+    "cv2-enumerate-cameras",
     "einops",
     "ftfy",
     "imagesize",
@@ -124,6 +129,7 @@ for distribution in (
     "premailer",
     "pyclipper",
     "pypdfium2",
+    "pyserial",
     "python-bidi",
     "regex",
     "safetensors",
@@ -143,6 +149,11 @@ datas += tree_datas("docs/assets", "docs/assets")
 datas += tree_datas("private_assets/sponsor", "private_assets/sponsor")
 datas += tree_datas("third_party/Project_Xs_CHN", "third_party/Project_Xs_CHN")
 datas += tree_datas("third_party/PokeFinder/Core/Resources", "third_party/PokeFinder/Core/Resources")
+datas += tree_datas("packaging/easycon_native/Tessdata", "easycon_native/Tessdata")
+binaries += [
+    (str(path), "easycon_native/x64")
+    for path in (EASYCON_NATIVE_RUNTIME / "x64").glob("*.dll")
+]
 for site_root in site.getsitepackages():
     model_cache = Path(site_root).parent.parent / "paddlex_cache" / "official_models"
     if model_cache.exists():

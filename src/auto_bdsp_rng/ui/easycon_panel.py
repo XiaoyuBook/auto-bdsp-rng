@@ -251,6 +251,36 @@ class BridgeScriptWorker(QObject):
         self.finished.emit(result)
 
 
+class NativeScriptWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        backend: object,
+        script_text: str,
+        script_name: str,
+        script_dir: Path,
+    ) -> None:
+        super().__init__()
+        self.backend = backend
+        self.script_text = script_text
+        self.script_name = script_name
+        self.script_dir = script_dir
+
+    def run(self) -> None:
+        try:
+            result = self.backend.run_script_text(  # type: ignore[attr-defined]
+                self.script_text,
+                self.script_name,
+                script_dir=self.script_dir,
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
+
+
 class KeyMappingDialog(QDialog):
     """按键映射对话框 — 手柄背景图 + 可点击按键位置绑定"""
 
@@ -395,14 +425,25 @@ class KeyMappingDialog(QDialog):
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
     capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
+    nativeScriptStarted = Signal()
 
     def __init__(
         self,
         parent: QWidget | None = None,
         run_log_sink: Callable[[str, str], None] | None = None,
+        native_backend: object | None = None,
+        video_source_connected: Callable[[], bool] | None = None,
+        frame_client_factory: Callable[[], object] | None = None,
     ) -> None:
         super().__init__(parent)
         self._run_log_sink = run_log_sink
+        self.native_backend = native_backend
+        self._video_source_connected = video_source_connected
+        self._frame_client_factory = frame_client_factory
+        self.native_run_thread: QThread | None = None
+        self.native_run_worker: NativeScriptWorker | None = None
+        self._native_run_reserved = False
+        self.native_connecting = False
         self.config = load_config()
         self._preferred_last_port = self.config.last_port
         self.installation = EasyConInstallation(path=None, error="未检测")
@@ -442,7 +483,7 @@ class EasyConPanel(QWidget):
         self.current_run_stdout: list[str] = []
         self.current_run_stderr: list[str] = []
         self.stop_requested = False
-        self.task_state_text = "未检测"
+        self.task_state_text = "未运行"
         self.run_seconds = 0
         self.run_timer = QTimer(self)
         self.run_timer.setInterval(1000)
@@ -460,7 +501,6 @@ class EasyConPanel(QWidget):
         save_action.triggered.connect(self.save_script)
         self.addAction(save_action)
         self._refresh_script_list()
-        self.detect_easycon()
         self.refresh_ports()
         self._update_run_enabled()
 
@@ -564,7 +604,13 @@ class EasyConPanel(QWidget):
         script_menu.addAction(run_menu_action)
 
         stop_action = QAction("停止", self)
-        stop_action.triggered.connect(lambda: self.stop_bridge_script() if self._is_bridge_mode() else None)
+        stop_action.triggered.connect(
+            lambda: self.stop_native_script()
+            if self._is_native_mode()
+            else self.stop_bridge_script()
+            if self._is_bridge_mode()
+            else None
+        )
         script_menu.addAction(stop_action)
 
         compile_action = QAction("编译", self)
@@ -798,21 +844,10 @@ class EasyConPanel(QWidget):
             f" QComboBox QAbstractItemView {{ font-size: 11px; }}"
         )
 
-        self.connect_button = QPushButton("自动连接(推荐)")
+        self.connect_button = QPushButton("连接伊机控")
         self.connect_button.setStyleSheet(btn_style)
-        self.connect_button.clicked.connect(self.toggle_bridge_connection)
+        self.connect_button.clicked.connect(self.toggle_native_connection)
         layout.addWidget(self.connect_button)
-
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("连接模式"))
-        self.backend_mode = QComboBox()
-        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
-        self.backend_mode.addItem("CLI 模式", "cli")
-        self.backend_mode.setStyleSheet(combo_style)
-        self.backend_mode.setCurrentIndex(1)  # 默认 CLI 模式
-        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
-        mode_row.addWidget(self.backend_mode, 1)
-        layout.addLayout(mode_row)
 
         serial_row = QHBoxLayout()
         self.port_combo = QComboBox()
@@ -822,9 +857,9 @@ class EasyConPanel(QWidget):
         self.port_combo.currentIndexChanged.connect(self._port_changed)
         serial_row.addWidget(self.port_combo, 1)
 
-        self.disconnect_button = QPushButton("手动连接")
+        self.disconnect_button = QPushButton("刷新")
         self.disconnect_button.setStyleSheet(btn_style)
-        self.disconnect_button.clicked.connect(self.connect_bridge)
+        self.disconnect_button.clicked.connect(self.refresh_ports)
         serial_row.addWidget(self.disconnect_button)
         layout.addLayout(serial_row)
 
@@ -834,6 +869,13 @@ class EasyConPanel(QWidget):
 
     def _hidden_config_widgets(self) -> None:
         """创建隐藏的配置控件，保留原有业务逻辑所需的所有属性"""
+        self.backend_mode = QComboBox()
+        self.backend_mode.addItem("常驻连接（Bridge）", "bridge")
+        self.backend_mode.addItem("CLI 模式", "cli")
+        self.backend_mode.addItem("Python 原生", "native")
+        self.backend_mode.setCurrentIndex(self.backend_mode.findData("native"))
+        self.backend_mode.setVisible(False)
+        self.backend_mode.currentIndexChanged.connect(self._backend_mode_changed)
         self.ezcon_path = QLineEdit(str(self.config.ezcon_path or ""))
         self.ezcon_path.setVisible(False)
         bridge_default = _configured_or_default_bridge_path(self.config)
@@ -859,7 +901,7 @@ class EasyConPanel(QWidget):
         self.detect_button = QPushButton("检测 EasyCon")
         self.detect_button.clicked.connect(self.detect_easycon)
         self.toolbar_connect_button = QPushButton("连接伊机控")
-        self.toolbar_connect_button.clicked.connect(self.toggle_bridge_connection)
+        self.toolbar_connect_button.clicked.connect(self.toggle_native_connection)
         self.clear_log_button = QPushButton("清空日志")
         self.clear_log_button.clicked.connect(self.log_view.clear)
         self.copy_log_button = QPushButton("复制日志")
@@ -980,6 +1022,77 @@ class EasyConPanel(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, path)
             self.script_list.addItem(item)
 
+    def _ensure_native_backend(self) -> object:
+        if self._shutting_down:
+            raise RuntimeError("伊机控页面正在关闭")
+        if self.native_backend is None:
+            from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
+
+            kwargs = {}
+            if self._frame_client_factory is not None:
+                kwargs["frame_client_factory"] = self._frame_client_factory
+            self.native_backend = NativeEasyConBackend(**kwargs)
+        return self.native_backend
+
+    def _native_status(self) -> EasyConStatus:
+        if self._native_run_reserved:
+            return EasyConStatus.RUNNING
+        try:
+            status = self._ensure_native_backend().status()  # type: ignore[attr-defined]
+        except Exception:
+            return EasyConStatus.FAILED
+        if isinstance(status, EasyConStatus):
+            return status
+        try:
+            return EasyConStatus(str(status))
+        except ValueError:
+            return EasyConStatus.FAILED
+
+    def reserve_native_script_run(self) -> bool:
+        """Atomically reserve the shared native backend from the UI thread."""
+
+        if self._shutting_down or self._native_run_reserved:
+            return False
+        if self.native_run_thread is not None:
+            return False
+        if self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
+            return False
+        self._native_run_reserved = True
+        self._update_run_enabled()
+        return True
+
+    def release_native_script_run(self) -> None:
+        if not self._native_run_reserved:
+            return
+        self._native_run_reserved = False
+        self._update_run_enabled()
+
+    def _native_is_connected(self) -> bool:
+        return self._native_status() in (EasyConStatus.BRIDGE_CONNECTED, EasyConStatus.RUNNING)
+
+    def _has_video_source(self) -> bool:
+        if self._video_source_connected is None:
+            return True
+        try:
+            return bool(self._video_source_connected())
+        except Exception:
+            return False
+
+    def _require_video_source(self) -> None:
+        if not self._has_video_source():
+            raise RuntimeError("请先在 Seed 捕捉页面连接视频源")
+
+    def video_source_state_changed(self) -> None:
+        """Refresh script controls after MainWindow connects or disconnects Broker."""
+
+        self._update_run_enabled()
+
+    def _current_native_script_dir(self) -> Path:
+        path = self.current_script_path
+        if path is not None:
+            return path.parent
+        return SCRIPT_DIR
+
     def detect_easycon(self) -> None:
         override_path = self.ezcon_path.text().strip() if hasattr(self, "ezcon_path") else ""
         config = replace(self.config, ezcon_path=Path(override_path) if override_path else self.config.ezcon_path)
@@ -995,7 +1108,16 @@ class EasyConPanel(QWidget):
         self._update_run_enabled()
 
     def refresh_ports(self) -> None:
-        ports = list_ports(self.installation) if self.installation.is_available else []
+        if self._is_native_mode():
+            try:
+                ports = list(self._ensure_native_backend().list_ports())  # type: ignore[attr-defined]
+            except Exception as exc:
+                ports = []
+                self._append_log("warn", f"刷新串口失败: {exc}")
+        else:
+            ports = list_ports(self.installation) if self.installation.is_available else []
+        if self._is_native_mode() and self.mock_check.isChecked() and "mock" not in ports:
+            ports.insert(0, "mock")
         self.port_combo.blockSignals(True)
         self.port_combo.clear()
         self.port_combo.addItems(ports)
@@ -1260,6 +1382,12 @@ class EasyConPanel(QWidget):
 
 
     def toggle_run(self) -> None:
+        if self._is_native_mode():
+            if self._native_status() == EasyConStatus.RUNNING:
+                self.stop_native_script()
+                return
+            self.run_script()
+            return
         if self._is_bridge_mode():
             self.run_script()
             return
@@ -1271,6 +1399,9 @@ class EasyConPanel(QWidget):
         self.run_script()
 
     def run_script(self) -> None:
+        if self._is_native_mode():
+            self.run_script_via_native()
+            return
         if self._is_bridge_mode():
             self.run_script_via_bridge()
             return
@@ -1306,6 +1437,151 @@ class EasyConPanel(QWidget):
         self.task_state_text = "执行中"
         self._update_status_labels()
         self.process.start()
+
+    def run_script_via_native(self) -> None:
+        if self._native_status() == EasyConStatus.RUNNING:
+            self.stop_native_script()
+            return
+        try:
+            self._require_video_source()
+        except RuntimeError as exc:
+            self._append_log("warn", str(exc))
+            self.easycon_status.showMessage(str(exc))
+            return
+        if not self._can_run():
+            if not self._native_is_connected():
+                self._append_log("warn", "请先连接伊机控，再运行脚本")
+            else:
+                self._append_log("warn", "脚本内容或参数未准备完成")
+            return
+        generated_script = self.save_generated_script()
+        if generated_script is None:
+            return
+        script_text = self.editor.toPlainText()
+        script_dir = self._current_native_script_dir()
+        try:
+            native_backend = self._ensure_native_backend()
+        except Exception as exc:
+            self._append_log("error", f"原生伊机控后端不可用: {exc}")
+            return
+        if not self.reserve_native_script_run():
+            self._append_log("warn", "已有伊机控脚本正在运行")
+            self._update_run_enabled()
+            return
+        thread: QThread | None = None
+        try:
+            started_at = datetime.now()
+            self.stop_requested = False
+            self.current_run_stdout = []
+            self.current_run_stderr = []
+            self.current_run_started_at = started_at
+            self.current_run_script_path = self.current_script_path or generated_script
+            self.current_run_port = self.port_combo.currentText()
+            self.run_seconds = 0
+            self.elapsed_label.setText("00:00:00")
+            self.run_timer.start()
+            self.run_button.setText("停止脚本")
+            self.run_button.setEnabled(True)
+            self.task_state_text = "执行中"
+            self._release_virtual_controller_keys()
+            self._append_log("info", f"通过 Python 原生后端运行脚本: {self.current_script_name}")
+            self._update_native_controls()
+            self.nativeScriptStarted.emit()
+
+            thread = QThread(self)
+            worker = NativeScriptWorker(
+                native_backend,
+                script_text,
+                self.current_script_name,
+                script_dir,
+            )
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._native_run_finished)
+            worker.failed.connect(self._native_run_failed)
+            worker.finished.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.failed.connect(worker.deleteLater)
+            thread.finished.connect(self._native_run_thread_finished)
+            self.native_run_thread = thread
+            self.native_run_worker = worker
+            thread.start()
+        except BaseException as exc:
+            self.native_run_thread = None
+            self.native_run_worker = None
+            self.run_timer.stop()
+            self.release_native_script_run()
+            if not isinstance(exc, Exception):
+                if thread is not None:
+                    thread.deleteLater()
+                raise
+            self._append_log("error", f"无法启动原生伊机控脚本线程: {exc}")
+            self._finish_run("失败", exit_code=1)
+            if thread is not None:
+                thread.deleteLater()
+
+    def _native_run_finished(self, result: object) -> None:
+        if self._shutting_down:
+            return
+        stdout = getattr(result, "stdout", "")
+        stderr = getattr(result, "stderr", "")
+        if stdout:
+            self._append_log("stdout", str(stdout).rstrip())
+        if stderr:
+            self._append_log("stderr", str(stderr).rstrip())
+        status = getattr(result, "status", None)
+        exit_code = getattr(result, "exit_code", None)
+        summary = (
+            "已中止"
+            if self.stop_requested or exit_code == 130 or status == EasyConStatus.CANCELLED
+            else "已完成，连接保持"
+            if status == EasyConStatus.COMPLETED and exit_code == 0
+            else "失败"
+        )
+        self.stop_requested = False
+        self._finish_run(
+            summary,
+            exit_code=exit_code,
+            started_at=getattr(result, "started_at", None),
+            ended_at=getattr(result, "ended_at", None),
+            script_path=getattr(result, "script_path", None),
+            port=getattr(result, "port", None),
+        )
+        self._update_native_controls()
+
+    def _native_run_failed(self, error: str) -> None:
+        if self._shutting_down:
+            return
+        self.stop_requested = False
+        self._append_log("error", f"原生脚本运行失败: {error}")
+        self._finish_run(
+            "失败",
+            exit_code=1,
+            started_at=self.current_run_started_at,
+            script_path=self.current_run_script_path,
+            port=self.current_run_port,
+        )
+        self._update_native_controls()
+
+    def _native_run_thread_finished(self) -> None:
+        thread = self.native_run_thread
+        self.native_run_thread = None
+        self.native_run_worker = None
+        self.release_native_script_run()
+        if thread is not None:
+            thread.deleteLater()
+
+    def stop_native_script(self) -> None:
+        try:
+            self._ensure_native_backend().stop_current_script()  # type: ignore[attr-defined]
+        except Exception as exc:
+            self._append_log("error", f"停止当前脚本失败: {exc}")
+            return
+        self.stop_requested = True
+        self.task_state_text = "正在停止"
+        self._append_log("warn", "已请求停止当前脚本，等待脚本退出")
+        self._update_status_labels()
 
     def run_script_via_bridge(self) -> None:
         if self.bridge_status == EasyConStatus.RUNNING:
@@ -1415,6 +1691,56 @@ class EasyConPanel(QWidget):
         self.task_state_text = "正在停止"
         self._append_log("warn", "已请求停止当前 Bridge 任务，等待脚本退出")
         self._update_status_labels()
+
+    def begin_external_native_script(self, name: str) -> None:
+        started_at = datetime.now()
+        self.stop_requested = False
+        self.current_run_stdout = []
+        self.current_run_stderr = []
+        self.current_run_started_at = started_at
+        self.current_run_script_path = Path(name)
+        self.current_run_port = self.port_combo.currentText()
+        self.run_seconds = 0
+        self.elapsed_label.setText("00:00:00")
+        self.run_timer.start()
+        self.run_button.setText("停止脚本")
+        self.run_button.setEnabled(True)
+        self.task_state_text = "执行中"
+        self._append_log("info", f"自动流程运行脚本: {Path(name).name}")
+        self._update_native_controls()
+
+    def finish_external_native_script(self, result: object) -> None:
+        stdout = getattr(result, "stdout", "")
+        stderr = getattr(result, "stderr", "")
+        if stdout:
+            self._append_log("stdout", str(stdout).rstrip())
+        if stderr:
+            self._append_log("stderr", str(stderr).rstrip())
+        result_status = getattr(result, "status", None)
+        exit_code = getattr(result, "exit_code", None)
+        status = (
+            "已中止"
+            if self.stop_requested or exit_code == 130 or result_status == EasyConStatus.CANCELLED
+            else "已完成，连接保持"
+            if result_status == EasyConStatus.COMPLETED and exit_code == 0
+            else "失败"
+        )
+        self.stop_requested = False
+        self._finish_run(
+            status,
+            exit_code=exit_code,
+            started_at=getattr(result, "started_at", None),
+            ended_at=getattr(result, "ended_at", None),
+            script_path=getattr(result, "script_path", None),
+            port=getattr(result, "port", None),
+        )
+        self._update_native_controls()
+
+    def fail_external_native_script(self, error: str) -> None:
+        self.stop_requested = False
+        self._append_log("error", f"自动流程脚本失败: {error}")
+        self._finish_run("失败", exit_code=1)
+        self._update_native_controls()
 
     def begin_external_bridge_script(self, name: str) -> None:
         started_at = datetime.now()
@@ -1594,7 +1920,13 @@ class EasyConPanel(QWidget):
         self.elapsed_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
     def _can_run(self) -> bool:
-        if self._is_bridge_mode():
+        if self._is_native_mode():
+            status = self._native_status()
+            if status == EasyConStatus.RUNNING:
+                return True
+            if status != EasyConStatus.BRIDGE_CONNECTED or not self._has_video_source():
+                return False
+        elif self._is_bridge_mode():
             if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
                 return False
         elif not self.installation.is_available:
@@ -1603,8 +1935,12 @@ class EasyConPanel(QWidget):
             return False
         if not self._validate_parameters_for_run(focus=False):
             return False
-        if not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
+        if self._is_native_mode() and not self.port_combo.currentText():
             return False
+        if not self._is_native_mode() and not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
+            return False
+        if self.native_run_thread is not None and self.native_run_thread.isRunning():
+            return self._native_status() == EasyConStatus.RUNNING
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             return False
         return True
@@ -1631,7 +1967,10 @@ class EasyConPanel(QWidget):
         if hasattr(self, "run_button"):
             self.run_button.setEnabled(self._can_run())
         if hasattr(self, "connect_button"):
-            self._update_bridge_controls()
+            if self._is_native_mode():
+                self._update_native_controls()
+            else:
+                self._update_bridge_controls()
         if hasattr(self, "connection_state_label"):
             self._update_status_labels()
 
@@ -1749,6 +2088,59 @@ class EasyConPanel(QWidget):
             self._append_log("info", f"脚本路径: {script_path}")
         if port:
             self._append_log("info", f"串口: {port}")
+
+    def toggle_native_connection(self) -> None:
+        if self._native_is_connected():
+            self.disconnect_native()
+            return
+        self.connect_native()
+
+    def connect_native(self) -> bool:
+        if self._native_status() == EasyConStatus.RUNNING:
+            self._append_log("warn", "脚本正在运行，不能切换串口连接")
+            return False
+        port = self.port_combo.currentText().strip()
+        if not port:
+            self._append_log("warn", "请先选择串口")
+            return False
+        self.native_connecting = True
+        self.task_state_text = "正在连接"
+        self._update_native_controls()
+        try:
+            self._ensure_native_backend().connect(port)  # type: ignore[attr-defined]
+        except Exception as exc:
+            self.native_connecting = False
+            self.task_state_text = "连接失败"
+            self._append_log("error", f"连接伊机控失败: {exc}")
+            self._show_failure_toast(str(exc))
+            self._update_native_controls()
+            return False
+        self.native_connecting = False
+        self.task_state_text = "已完成"
+        self._preferred_last_port = port
+        self._save_config_from_ui()
+        self._append_log("info", f"Python 原生伊机控已连接: {port}")
+        self.easycon_status.showMessage("已长期连接")
+        self._show_connection_toast(port)
+        self._update_native_controls()
+        self._update_run_enabled()
+        return True
+
+    def disconnect_native(self) -> bool:
+        if self.virtual_controller_enabled:
+            self.keyboard_controller_check.setChecked(False)
+        try:
+            self._ensure_native_backend().disconnect()  # type: ignore[attr-defined]
+        except Exception as exc:
+            self._append_log("error", f"断开伊机控失败: {exc}")
+            return False
+        self.stop_requested = False
+        self.task_state_text = "未运行"
+        self._append_log("info", "已断开伊机控")
+        self.easycon_status.showMessage("已断开")
+        self._update_native_controls()
+        self._update_run_enabled()
+        return True
 
     def toggle_bridge_connection(self) -> None:
         if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
@@ -1871,6 +2263,21 @@ class EasyConPanel(QWidget):
             if duration_ms is None
             else max(20, min(5000, int(duration_ms)))
         )
+        if self._is_native_mode():
+            if not self._native_is_connected() or self._native_status() == EasyConStatus.RUNNING:
+                self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
+                return
+            try:
+                self._ensure_native_backend().press(button, duration)  # type: ignore[attr-defined]
+            except Exception as exc:
+                self.task_state_text = "连接失败"
+                self._append_log("error", f"发送手柄按钮失败: {exc}")
+                self._update_native_controls()
+                return
+            self.task_state_text = "已完成"
+            self._append_log("info", f"{log_label}: {button} {duration}ms")
+            self._update_status_labels()
+            return
         if self._is_bridge_mode():
             if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
                 self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
@@ -1894,26 +2301,35 @@ class EasyConPanel(QWidget):
         log_label = f"捕捉亮屏保活 {done}/{total}"
         if self._capture_keep_awake_shutting_down:
             return False
-        if not self._is_bridge_mode():
+        if not self._is_native_mode() and not self._is_bridge_mode():
             return self._start_capture_keep_awake_cli(log_label, duration)
-        if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+        if self._is_native_mode():
+            if self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
+                self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
+                return False
+            backend = self._ensure_native_backend()
+        elif self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
             self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
             return False
+        else:
+            backend = self._ensure_bridge_backend()
         active_future = self._capture_keep_awake_future
         if active_future is not None and not active_future.done():
             return False
         try:
-            backend = self._ensure_bridge_backend()
             executor = self._ensure_capture_keep_awake_executor()
             self._capture_keep_awake_task_id += 1
             task_id = self._capture_keep_awake_task_id
-            future = executor.submit(
-                backend.press,
-                CAPTURE_KEEP_AWAKE_BUTTON,
-                duration,
-                timeout_seconds=CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS,
-                terminate_on_timeout=True,
-            )
+            if self._is_native_mode():
+                future = executor.submit(backend.press, CAPTURE_KEEP_AWAKE_BUTTON, duration)  # type: ignore[attr-defined]
+            else:
+                future = executor.submit(
+                    backend.press,
+                    CAPTURE_KEEP_AWAKE_BUTTON,
+                    duration,
+                    timeout_seconds=CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS,
+                    terminate_on_timeout=True,
+                )
         except Exception as exc:
             self._append_log(
                 "warn",
@@ -2019,10 +2435,31 @@ class EasyConPanel(QWidget):
 
     def shutdown(self, *, wait_ms: int = 2000) -> bool:
         if not self._shutting_down:
-            self._shutting_down = True
             self.run_timer.stop()
             self._release_virtual_controller_keys()
+            self._shutting_down = True
+        self.release_native_script_run()
         stopped = self.shutdown_capture_keep_awake()
+
+        native_backend = self.native_backend
+        native_thread = self.native_run_thread
+        if native_backend is not None and native_thread is not None and native_thread.isRunning():
+            try:
+                native_backend.stop_current_script()  # type: ignore[attr-defined]
+            except Exception as exc:
+                self._append_log("warn", f"停止原生伊机控脚本失败: {exc}")
+            native_thread.requestInterruption()
+            native_thread.quit()
+            if not native_thread.wait(wait_ms):
+                stopped = False
+        if native_backend is not None and not (native_thread is not None and native_thread.isRunning()):
+            try:
+                native_backend.close()  # type: ignore[attr-defined]
+            except Exception as exc:
+                stopped = False
+                self._append_log("warn", f"关闭原生伊机控连接失败: {exc}")
+            else:
+                self.native_backend = None
 
         process = self.process
         if process is not None and process.state() != QProcess.ProcessState.NotRunning:
@@ -2168,6 +2605,21 @@ class EasyConPanel(QWidget):
     def send_controller_stick(self, side: str, direction: str) -> None:
         duration = self.controller_duration.value()
         label = f"{side.upper()} {direction}"
+        if self._is_native_mode():
+            if self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
+                self._append_log("warn", "请先连接伊机控，再测试摇杆")
+                return
+            try:
+                self._ensure_native_backend().stick(side, direction, duration)  # type: ignore[attr-defined]
+            except Exception as exc:
+                self.task_state_text = "连接失败"
+                self._append_log("error", f"发送摇杆动作失败: {exc}")
+                self._update_native_controls()
+                return
+            self.task_state_text = "已完成"
+            self._append_log("info", f"手柄测试: {label} {duration}ms")
+            self._update_status_labels()
+            return
         if self._is_bridge_mode():
             if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
                 self._append_log("warn", "请先连接伊机控，再测试摇杆")
@@ -2199,11 +2651,16 @@ class EasyConPanel(QWidget):
 
     def set_keyboard_controller_enabled(self, enabled: bool) -> None:
         if enabled:
-            if not self._is_bridge_mode() or self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+            connected = (
+                self._native_status() == EasyConStatus.BRIDGE_CONNECTED
+                if self._is_native_mode()
+                else self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+            )
+            if not connected:
                 self.keyboard_controller_check.blockSignals(True)
                 self.keyboard_controller_check.setChecked(False)
                 self.keyboard_controller_check.blockSignals(False)
-                self._append_log("warn", "请先使用常驻 Bridge 连接伊机控，再启用键盘虚拟手柄")
+                self._append_log("warn", "请先连接伊机控，再启用键盘虚拟手柄")
                 return
             QApplication.instance().installEventFilter(self)
             self.virtual_controller_enabled = True
@@ -2247,13 +2704,14 @@ class EasyConPanel(QWidget):
         # 录制：生成 EasyCon 脚本命令
         if self._recording and down:
             self._append_recorded_action(action)
+        backend = self._ensure_native_backend() if self._is_native_mode() else self._ensure_bridge_backend()
         try:
             if kind == "button":
                 if down:
-                    self._ensure_bridge_backend().key_down(value)
+                    backend.key_down(value)  # type: ignore[attr-defined]
                     self.virtual_controller_keys[key] = action
                 else:
-                    self._ensure_bridge_backend().key_up(value)
+                    backend.key_up(value)  # type: ignore[attr-defined]
                     self.virtual_controller_keys.pop(key, None)
                     # 录制按键释放
                     if self._recording:
@@ -2264,13 +2722,14 @@ class EasyConPanel(QWidget):
                         self._recorded_lines.append(f"{value.upper()} UP")
                         self._last_record_ts = now
             elif direction is not None:
-                self._ensure_bridge_backend().stick_direction(value, direction, down)
+                backend.stick_direction(value, direction, down)  # type: ignore[attr-defined]
                 if down:
                     self.virtual_controller_keys[key] = action
                 else:
                     self.virtual_controller_keys.pop(key, None)
         except Exception as exc:
-            self.bridge_status = EasyConStatus.FAILED
+            if not self._is_native_mode():
+                self.bridge_status = EasyConStatus.FAILED
             self._append_log("error", f"键盘虚拟手柄发送失败: {exc}")
             self.keyboard_controller_check.setChecked(False)
         return True
@@ -2297,8 +2756,8 @@ class EasyConPanel(QWidget):
         if self._recording:
             self._stop_recording()
             return
-        if not self._is_bridge_mode():
-            self._append_log("warn", "录制脚本仅支持常驻连接（Bridge）模式，请切换连接模式")
+        if not self._is_native_mode() and not self._is_bridge_mode():
+            self._append_log("warn", "录制脚本需要先使用常驻连接")
             return
         if not self.virtual_controller_enabled:
             self._append_log("warn", "请先启用键盘虚拟手柄（勾选连接）再开始录制")
@@ -2354,13 +2813,19 @@ class EasyConPanel(QWidget):
         self.pause_btn.clicked.connect(self._toggle_pause_recording)
 
     def _release_virtual_controller_keys(self) -> None:
+        if not self.virtual_controller_keys:
+            return
+        backend = self.native_backend if self._is_native_mode() else self.bridge_backend
+        if backend is None:
+            self.virtual_controller_keys.clear()
+            return
         for key, action in list(self.virtual_controller_keys.items()):
             kind, value, direction = action
             try:
                 if kind == "button":
-                    self._ensure_bridge_backend().key_up(value)
+                    backend.key_up(value)  # type: ignore[attr-defined]
                 elif direction is not None:
-                    self._ensure_bridge_backend().stick_direction(value, direction, False)
+                    backend.stick_direction(value, direction, False)  # type: ignore[attr-defined]
             except Exception as exc:
                 self._append_log("error", f"释放键盘虚拟手柄按键失败: {exc}")
             finally:
@@ -2426,12 +2891,18 @@ class EasyConPanel(QWidget):
     def _is_bridge_mode(self) -> bool:
         return self.backend_mode.currentData() == "bridge"
 
+    def _is_native_mode(self) -> bool:
+        return self.backend_mode.currentData() == "native"
+
     def _backend_mode_changed(self) -> None:
         # 切换到 Bridge 模式时，如果之前 CLI 运行残留了已连接状态，重置之
         if self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
             if self.bridge_backend is None:
                 self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
-        self._update_bridge_controls()
+        if self._is_native_mode():
+            self._update_native_controls()
+        else:
+            self._update_bridge_controls()
         self._update_run_enabled()
         self._save_config_from_ui()
         self._update_status_labels()
@@ -2439,6 +2910,41 @@ class EasyConPanel(QWidget):
     def _port_changed(self) -> None:
         self._save_config_from_ui()
         self._update_run_enabled()
+        self._update_status_labels()
+
+    def _update_native_controls(self) -> None:
+        if not hasattr(self, "connect_button"):
+            return
+        status = self._native_status()
+        connected = status == EasyConStatus.BRIDGE_CONNECTED
+        running = status == EasyConStatus.RUNNING
+        self.connect_button.setEnabled(not self.native_connecting and not running)
+        self.toolbar_connect_button.setEnabled(not self.native_connecting and not running)
+        self.disconnect_button.setEnabled(not self.native_connecting and not running)
+        self.bridge_path.setEnabled(False)
+        self.browse_bridge_button.setEnabled(False)
+        self.mock_check.setEnabled(False)
+        self.auto_select_port_button.setEnabled(bool(self.port_combo.count()) and not connected and not running)
+        if self.native_connecting:
+            button_text = "正在连接"
+            backend_text = "单片机: 正在连接"
+        elif running:
+            button_text = "连接伊机控"
+            backend_text = "单片机: 执行中"
+        elif connected:
+            button_text = "断开连接"
+            backend_text = "单片机: 已长期连接"
+        elif status == EasyConStatus.FAILED:
+            button_text = "连接伊机控"
+            backend_text = "单片机: 连接失败"
+        else:
+            button_text = "连接伊机控"
+            state = "未选择串口" if not self.port_combo.currentText() else "未连接"
+            backend_text = f"单片机: {state}"
+        self.connect_button.setText(button_text)
+        self.toolbar_connect_button.setText(button_text)
+        self.backend_label.setText(backend_text)
+        self._update_controller_controls()
         self._update_status_labels()
 
     def _update_bridge_controls(self) -> None:
@@ -2486,10 +2992,14 @@ class EasyConPanel(QWidget):
         self._update_status_labels()
 
     def _update_controller_controls(self) -> None:
-        enabled = self.bridge_status != EasyConStatus.RUNNING and (
-            (self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED)
-            or (not self._is_bridge_mode() and self.installation.is_available)
-        )
+        if self._is_native_mode():
+            native_status = self._native_status()
+            enabled = native_status == EasyConStatus.BRIDGE_CONNECTED
+        else:
+            enabled = self.bridge_status != EasyConStatus.RUNNING and (
+                (self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED)
+                or (not self._is_bridge_mode() and self.installation.is_available)
+            )
         for button in (
             self.test_a_button,
             self.test_b_button,
@@ -2498,9 +3008,14 @@ class EasyConPanel(QWidget):
             self.test_rs_reset_button,
         ):
             button.setEnabled(enabled)
-        self.keyboard_controller_check.setEnabled(self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED)
+        self.keyboard_controller_check.setEnabled(
+            self._native_status() == EasyConStatus.BRIDGE_CONNECTED
+            if self._is_native_mode()
+            else self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+        )
         self.cli_test_button.setEnabled(
-            not self._is_bridge_mode()
+            not self._is_native_mode()
+            and not self._is_bridge_mode()
             and self.installation.is_available
             and self.bridge_status != EasyConStatus.RUNNING
             and not (self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning)
@@ -2510,7 +3025,7 @@ class EasyConPanel(QWidget):
         if not hasattr(self, "connection_state_label"):
             return
         connection_text = self._connection_state_text()
-        backend_text = "常驻连接" if self._is_bridge_mode() else "CLI 过渡"
+        backend_text = "Python 原生" if self._is_native_mode() else "常驻连接" if self._is_bridge_mode() else "CLI 过渡"
         easycon_text = "LOG"
         self.connection_state_label.setText(f"连接: {connection_text}")
         self.task_state_label.setText(f"任务: {self.task_state_text}")
@@ -2519,6 +3034,19 @@ class EasyConPanel(QWidget):
         self.status_backend_label.setText(f"后端: {backend_text}")
 
     def _connection_state_text(self) -> str:
+        if self._is_native_mode():
+            if self.native_connecting:
+                return "正在连接"
+            status = self._native_status()
+            if status == EasyConStatus.RUNNING:
+                return "执行中"
+            if status == EasyConStatus.BRIDGE_CONNECTED:
+                return "已长期连接"
+            if status == EasyConStatus.FAILED:
+                return "连接失败"
+            if not self.port_combo.currentText():
+                return "未选择串口"
+            return "未连接"
         if self._is_bridge_mode():
             if self.bridge_connecting:
                 return "正在连接"

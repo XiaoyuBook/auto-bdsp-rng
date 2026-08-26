@@ -15,6 +15,7 @@ from auto_bdsp_rng.blink_detection.models import (
     TimelineEvent,
 )
 from auto_bdsp_rng.blink_detection.project_xs import (
+    BrokerFrameCapture,
     PreviewFrameCapture,
     ProjectXsIntegrationError,
     advance_seed_state,
@@ -38,6 +39,7 @@ __all__ = [
     "AdvanceEvent",
     "BlinkCaptureConfig",
     "BlinkObservation",
+    "BrokerFrameCapture",
     "EyePreviewResult",
     "PokemonBlinkObservation",
     "PreviewFrameCapture",

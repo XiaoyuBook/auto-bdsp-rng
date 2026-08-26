@@ -90,10 +90,11 @@ def build_release_body(version: str, changes: str) -> str:
 ## 说明
 
 - Windows x64 onedir 绿色版，不需要安装 Python。
-- 请保留 exe 旁边的 `_internal`、`script`、`bridge` 等目录，不要只复制 exe。
+- 请保留 exe 旁边的 `_internal`、`script`、`docs` 等目录，不要只复制 exe。
 - 应用内升级会校验 GitHub Release 资产和每个变化文件；用户修改过的脚本、Project_Xs 配置和自定义眼图会保留。
 - 首次启动或首次 OCR 初始化可能较慢。
-- 自动乱数流程仍需要游戏窗口、采集环境、串口/驱动、EasyCon 或兼容后端等实际运行环境。
+- 软件已内置 Python 原生伊机控运行时，不需要安装 EasyCon、EasyConBridge、ezcon，也不需要设置 `easycon_root`。
+- 自动乱数流程仍需要采集卡、对应脚本、串口单片机和驱动等实际运行环境。
 - 本软件永久免费且开源，请勿购买倒卖版本。
 """
 

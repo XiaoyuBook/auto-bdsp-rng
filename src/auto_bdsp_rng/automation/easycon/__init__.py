@@ -25,6 +25,10 @@ from auto_bdsp_rng.automation.easycon.models import (
     EasyConStatus,
     ScriptParameter,
 )
+from auto_bdsp_rng.automation.easycon.native_backend import (
+    NativeEasyConBackend,
+    NativeEasyConBusyError,
+)
 from auto_bdsp_rng.automation.easycon.scripts import (
     apply_parameter_values,
     detect_newline_style,
@@ -43,6 +47,8 @@ __all__ = [
     "CLI_RESET_NOTICE",
     "CLI_TRANSITION_NOTICE",
     "EasyConBackend",
+    "NativeEasyConBackend",
+    "NativeEasyConBusyError",
     "EasyConConfig",
     "EasyConInstallation",
     "EasyConLogEntry",

@@ -10,6 +10,36 @@ def test_reidentify_command_help_uses_chinese_term():
     assert "校正已有的 Seed[0-3]" in help_text
 
 
+def test_capture_broker_hidden_command_runs_standalone_service(monkeypatch, tmp_path):
+    import auto_bdsp_rng.capture_broker as broker_module
+
+    calls = []
+
+    class FakeBroker:
+        def __init__(self, device_index, capture_api, **kwargs):
+            calls.append((device_index, capture_api, kwargs))
+
+        def serve_forever(self):
+            return True
+
+    monkeypatch.setattr(broker_module, "CaptureBroker", FakeBroker)
+    manifest = tmp_path / "broker.json"
+
+    assert main(
+        [
+            "capture-broker",
+            "--device-index",
+            "3",
+            "--capture-api",
+            "700",
+            "--manifest",
+            str(manifest),
+        ]
+    ) == 0
+    assert calls[0][0:2] == (3, 700)
+    assert calls[0][2]["manifest_path"] == str(manifest)
+
+
 def test_blink_config_command_prints_project_xs_config(capsys):
     assert main(["blink-config", "--project-xs-config", "config_cave.json"]) == 0
 

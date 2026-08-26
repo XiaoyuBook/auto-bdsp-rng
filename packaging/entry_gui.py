@@ -42,8 +42,27 @@ def _run_ocr_smoke(output_path: str) -> int:
     return 0
 
 
+def _run_easycon_ocr_smoke(output_path: str) -> int:
+    try:
+        import numpy as np
+
+        from auto_bdsp_rng.automation.easycon.native.tesseract import read_tesseract
+
+        read_tesseract(np.zeros((32, 96, 3), dtype=np.uint8))
+    except Exception:
+        Path(output_path).write_text(traceback.format_exc(), encoding="utf-8")
+        return 1
+    Path(output_path).write_text("EasyCon OCR smoke ok\n", encoding="utf-8")
+    return 0
+
+
 if __name__ == "__main__":
     smoke_output = os.environ.get("AUTO_BDSP_RNG_OCR_SMOKE")
     if smoke_output:
         raise SystemExit(_run_ocr_smoke(smoke_output))
+    easycon_ocr_smoke_output = os.environ.get("AUTO_BDSP_RNG_EASYCON_OCR_SMOKE")
+    if easycon_ocr_smoke_output:
+        raise SystemExit(_run_easycon_ocr_smoke(easycon_ocr_smoke_output))
+    if len(sys.argv) > 1 and sys.argv[1] == "--capture-broker-child":
+        raise SystemExit(main(["capture-broker", *sys.argv[2:]]))
     raise SystemExit(main(["gui"]))

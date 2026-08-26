@@ -44,6 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Start the PySide6 desktop interface.",
     )
 
+    capture_broker = subparsers.add_parser(
+        "capture-broker",
+        help=argparse.SUPPRESS,
+        description="Run the standalone shared capture-card Broker.",
+    )
+    capture_broker.add_argument("--device-index", type=int, required=True)
+    capture_broker.add_argument("--capture-api", type=int, default=700)
+    capture_broker.add_argument("--manifest", default=None)
+    capture_broker.add_argument("--first-frame-timeout", type=float, default=5.0)
+    capture_broker.add_argument("--frame-timeout", type=float, default=1.0)
+
     blink_config = subparsers.add_parser(
         "blink-config",
         help="Load and print a Project_Xs blink config without starting capture.",
@@ -298,6 +309,21 @@ def main(argv: list[str] | None = None) -> int:
         from auto_bdsp_rng.ui import run
 
         return run()
+    if args.command == "capture-broker":
+        from auto_bdsp_rng.capture_broker import CaptureBroker
+
+        broker = CaptureBroker(
+            args.device_index,
+            args.capture_api,
+            manifest_path=args.manifest,
+            first_frame_timeout=args.first_frame_timeout,
+            frame_timeout=args.frame_timeout,
+        )
+        try:
+            return 0 if broker.serve_forever() else 2
+        except KeyboardInterrupt:
+            broker.stop()
+            return 0
     if args.command == "blink-config":
         try:
             config = load_project_xs_config(args.project_xs_config, blink_count=args.blink_count)

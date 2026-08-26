@@ -18,7 +18,7 @@ auto-bdsp-rng-v1.0.0-windows-x64.zip
 珍钻复刻自动乱数.exe
 ```
 
-目标电脑不需要安装 Python。请保留 exe 旁边的 `_internal`、`script`、`bridge`、`docs` 等目录，不要只复制单独的 exe。
+目标电脑不需要安装 Python、EasyCon、EasyConBridge 或 `ezcon.exe`。请保留 exe 旁边的 `_internal`、`script`、`docs` 等目录，不要只复制单独的 exe。
 
 从首个内置升级器的 Windows 正式版开始，后续可在软件右上角“帮助 -> 检查更新…”中升级。软件会优先下载只包含变化文件的增量包，校验完成后自动退出、替换并重启；独立升级器会再次校验 Release SHA-256，并在新版确认启动前保留旧文件，替换失败或新版启动失败时自动恢复。首次安装、较老版本没有连续升级链或需要修复程序文件时，仍使用完整 Release zip。旧版因为本身没有升级器，需要最后完整下载一次带升级器的新版本。
 
@@ -31,13 +31,13 @@ auto-bdsp-rng-v1.0.0-windows-x64.zip
 - 自动定点乱数：串联测种、目标搜索、过帧脚本、reidentify / 重新测种、最终撞闪脚本和 OCR 闪光判定。
 - Seed 捕捉：复用 Project_Xs 的画面捕获、眼部模板、眨眼识别、Seed 恢复、重新识别和时间线能力。
 - 定点数据区：在本仓库内实现 BDSP Gen 8 Static 生成、筛选、结果表格、存档信息和个体值计算器。
-- 伊机控：提供 EasyCon 风格的脚本编辑、串口选择、Bridge 常驻连接、CLI 诊断后端、虚拟手柄和按键映射。
+- 伊机控：由 Python 原生后端长期连接串口，直接运行 EasyCon 风格脚本、`.IL` 搜图和 `TesserDetect`，并提供虚拟手柄和按键映射。
 - 历史记录：按轮次记录测种、候选、锁定、错过、反查和最终结果，便于复盘实机流程。
 - 软件更新：从 GitHub Releases 检查正式版，下载并校验文件级增量包，由独立升级器在主程序退出后以持久事务完成替换、启动确认、回滚和重启。
 
 ## 适用范围
 
-本项目优先服务 Windows 64-bit 环境，默认使用 Python 3.12、PySide6、OpenCV、Project_Xs_CHN、PokeFinder 参考实现，以及 EasyCon / 伊机控相关工具链。仓库内的 `third_party` 目录用于固定上游版本和对照实现，项目自身代码位于 `src/auto_bdsp_rng`。
+本项目优先服务 Windows 64-bit 环境，默认使用 Python 3.12、PySide6、OpenCV、Project_Xs_CHN、PokeFinder 参考实现，以及项目内维护的 Python 原生 EasyCon 运行时。仓库内的 `third_party` 目录用于固定上游版本和对照实现，项目自身代码位于 `src/auto_bdsp_rng`。
 
 > 这不是通用的宝可梦乱数工具，而是围绕 BDSP 定点 / 游走定点、眨眼测种、EasyCon 自动执行流程做的集成工作台。
 
@@ -45,6 +45,7 @@ auto-bdsp-rng-v1.0.0-windows-x64.zip
 
 ### Seed 捕捉
 
+- 连接一个由独立 Capture Broker 独占的采集卡视频源，同时供常驻预览、眨眼识别、OCR 和伊机控搜图读取最新帧。
 - 读取 Project_Xs 配置，支持窗口捕获和摄像头捕获。
 - 预览画面、截取眼睛模板、拖拽框选 ROI。
 - 捕捉玩家眨眼并恢复 `Seed[0-3]`。
@@ -63,8 +64,9 @@ auto-bdsp-rng-v1.0.0-windows-x64.zip
 - 提供浅色桌面风格的脚本编辑界面。
 - 支持 `.txt` / `.ecs` 脚本加载、编辑、保存、未保存标记和 `Ctrl+S`。
 - 支持脚本参数扫描、生成临时脚本、日志保留和文本选择。
-- 支持串口自动选择、CLI 模式诊断、Bridge 常驻连接模式。
-- Bridge 通过 UTF-8 JSON Lines 协议复用同一个串口连接，避免每次脚本执行都重连。
+- Python 原生后端复刻 EasyCon 串口握手并长期保持连接，脚本结束不会主动断开。
+- 支持 `.IL` 模板搜图、XY/Laplacian 边缘匹配、`TesserDetect`、`IMPORT` 和脚本目录下的 `lib/`；第一版不支持 `.ILX`。
+- 所有脚本复用 Seed 页连接的共享视频源，搜图框只叠加到主预览或画中画副本，不会污染 OCR、眨眼识别或其他消费者的原始帧。
 - 支持按键映射对话框、手柄背景图定位、键盘虚拟手柄、按键按下/释放与摇杆方向事件。
 
 ### 自动定点乱数
@@ -151,39 +153,27 @@ python -m auto_bdsp_rng capture-blinks --project-xs-config config_camera.json --
 python -m auto_bdsp_rng reidentify --project-xs-config config_camera.json --seed 12345678 9ABCDEF0 11111111 22222222
 ```
 
-## EasyCon Bridge
+## Python 原生 EasyCon
 
-仓库内包含 `bridge/EasyConBridge`，它是 Python 应用和 EasyCon 串口会话之间的常驻后端。Bridge 连接一次串口后，会复用同一个会话运行多个脚本、发送按键和处理虚拟手柄事件。
+产品主路径完全由 `src/auto_bdsp_rng/automation/easycon/native/` 和 `native_backend.py` 实现，不启动 EasyCon GUI、CLI、Bridge 或 `ezcon.exe`，也不读取 `EASYCON_ROOT`。用户先在 Seed 捕捉页连接采集卡，再在伊机控页连接串口，之后脚本、自动定点、自动 TID、RIGHT 按键和捕捉亮屏保活都复用同一后端。
 
-构建示例：
+仓库仍保留旧 CLI/Bridge 源码和协议测试，供兼容回归与上游实现对照；它们不会被默认界面选择，也不会进入正式包的主执行路径。旧 Bridge 的开发资料见：
 
-```powershell
-dotnet build .\bridge\EasyConBridge\EasyConBridge.csproj -p:EasyConSourceRoot=D:\path\to\EasyCon
-```
-
-Mock session 可用于协议和连接生命周期冒烟测试：
-
-```powershell
-.\bridge\EasyConBridge\bin\Debug\net10.0\EasyConBridge.exe --mock-session
-```
-
-协议细节见：
-
-- `docs/easycon_bridge_protocol.md`
-- `bridge/EasyConBridge/README.md`
+- `docs/easycon_bridge_protocol.md`（旧兼容协议）
+- `bridge/EasyConBridge/README.md`（旧 Bridge 开发说明）
 
 ## 目录结构
 
 ```text
 auto_bdsp_rng/
-  bridge/EasyConBridge/             EasyCon 常驻 Bridge 后端
+  bridge/EasyConBridge/             保留的旧 EasyCon Bridge 兼容源码
   docs/                             设计文档、协议说明和验证记录
     assets/                         README 图标等展示资源
   script/                           内置测种、过帧、撞闪脚本
   src/auto_bdsp_rng/
     automation/
       auto_rng/                     自动定点乱数状态机、脚本处理、搜索封装
-      easycon/                      EasyCon CLI / Bridge 后端、发现、脚本生成
+      easycon/                      Python 原生 EasyCon、旧兼容后端和脚本工具
     blink_detection/                Project_Xs 捕获、眨眼、reidentify 适配
     data/                           BDSP 定点数据加载
     gen8_static/                    Gen 8 BDSP 定点生成器
@@ -209,7 +199,7 @@ python -m pytest
 - RNG 核心与 BDSP Static 生成器。
 - Project_Xs 适配层。
 - BDSP 数据表加载校验。
-- EasyCon 脚本、CLI 后端、Bridge 后端和串口发现。
+- EasyCon 原生脚本引擎、串口设备、`.IL` 搜图、Tesseract、Broker 接入及旧后端兼容。
 - 自动定点乱数状态机、脚本参数和最终等待逻辑。
 - PySide6 界面启动、布局和信号层。
 
@@ -276,9 +266,9 @@ pip install -e .
 ```
 `(锁定)` 表示被选中的最低帧，`(同步)` 表示该候选来自同步搜索（另一队首状态）。
 
-### CLI 默认模式
+### 历史：CLI 默认模式
 
-伊机控连接模式默认选中「CLI 模式」（之前默认「常驻连接 Bridge」），标签文本从 `CLI 诊断` 改为 `CLI 模式`。
+旧版本曾默认选中「CLI 模式」。当前版本已由 Python 原生后端取代该产品路径；这段仅保留为版本演进记录。
 
 ### 单次模式死循环修复
 

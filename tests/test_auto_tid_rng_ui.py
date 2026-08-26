@@ -273,6 +273,7 @@ def test_main_window_starts_auto_tid_runner_from_panel_signal(app, tmp_path: Pat
     )
     started = []
     window._latest_preview_frame = object()
+    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
     monkeypatch.setattr(window.auto_tid_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_tid_rng(config)

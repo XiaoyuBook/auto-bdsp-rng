@@ -28,8 +28,6 @@ SPEC_PATH = ROOT / "packaging" / f"{APP_NAME}.spec"
 UPDATER_SPEC_PATH = ROOT / "packaging" / f"{APP_NAME}-updater.spec"
 ICON_PNG = ROOT / "docs" / "assets" / "app-icon.png"
 ICON_ICO = ROOT / "docs" / "assets" / "app-icon.ico"
-BRIDGE_PROJECT = ROOT / "bridge" / "EasyConBridge" / "EasyConBridge.csproj"
-BRIDGE_DIST = DIST_DIR / "bridge" / "EasyConBridge"
 PROJECT_XS_ROOT = ROOT / "third_party" / "Project_Xs_CHN"
 PROJECT_XS_OVERRIDES = ROOT / "packaging" / "project_xs_overrides"
 PRIVATE_SPONSOR_ASSETS = ROOT / "private_assets" / "sponsor"
@@ -62,12 +60,12 @@ def main(argv: list[str] | None = None) -> int:
     build_updater(python)
     stage("Verify packaged OCR")
     verify_packaged_ocr()
+    stage("Verify packaged native EasyCon OCR")
+    verify_packaged_easycon_ocr()
     stage("Copy release files")
     copy_release_files()
     stage("Verify Project_Xs assets")
     verify_project_xs_assets()
-    stage("Build EasyConBridge")
-    build_easycon_bridge()
     stage("Create release zip")
     create_release_zip()
     print()
@@ -208,41 +206,25 @@ def verify_packaged_ocr() -> None:
         raise SystemExit(f"Packaged OCR smoke test failed:\n{text}")
 
 
-def build_easycon_bridge() -> None:
-    source_root = Path(os.environ.get("EASYCON_SOURCE_ROOT", ROOT / "third_party" / "EasyCon"))
-    required = source_root / "src" / "EasyCon.Core" / "EasyCon.Core.csproj"
-    if not BRIDGE_PROJECT.exists():
-        print(f"EasyConBridge project not found, skipping: {BRIDGE_PROJECT}")
-        return
-    if not required.exists():
-        print(f"EasyCon source not found, skipping bridge publish: {required}")
-        print("Set EASYCON_SOURCE_ROOT to publish EasyConBridge.")
-        return
-    dotnet = shutil.which("dotnet")
-    if not dotnet:
-        print("dotnet was not found, skipping EasyConBridge publish.")
-        return
-    publish_dir = ROOT / "build" / "EasyConBridge" / "publish"
-    if publish_dir.exists():
-        shutil.rmtree(publish_dir)
-    run([
-        dotnet,
-        "publish",
-        str(BRIDGE_PROJECT),
-        "-c",
-        "Release",
-        "-r",
-        "win-x64",
-        "--self-contained",
-        "true",
-        "-p:PublishSingleFile=true",
-        f"-p:EasyConSourceRoot={source_root}",
-        "-o",
-        str(publish_dir),
-    ])
-    copy_tree(publish_dir, BRIDGE_DIST)
-    if not (BRIDGE_DIST / "EasyConBridge.exe").exists():
-        raise SystemExit("EasyConBridge publish finished but EasyConBridge.exe was not copied.")
+def verify_packaged_easycon_ocr() -> None:
+    exe = DIST_DIR / f"{EXE_NAME}.exe"
+    output = BUILD_DIR / "easycon-ocr-smoke.txt"
+    if output.exists():
+        output.unlink()
+    env = os.environ.copy()
+    env["AUTO_BDSP_RNG_EASYCON_OCR_SMOKE"] = str(output)
+    try:
+        completed = subprocess.run([str(exe)], cwd=DIST_DIR, env=env, check=False, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        text = output.read_text(encoding="utf-8", errors="replace") if output.exists() else ""
+        raise SystemExit(f"Packaged native EasyCon OCR smoke test timed out.\n{text}") from exc
+    if completed.returncode != 0:
+        print(f"Packaged native EasyCon OCR smoke process exited with code {completed.returncode}", flush=True)
+    if not output.exists():
+        raise SystemExit("Packaged native EasyCon OCR smoke test did not write a result file.")
+    text = output.read_text(encoding="utf-8", errors="replace")
+    if "EasyCon OCR smoke ok" not in text:
+        raise SystemExit(f"Packaged native EasyCon OCR smoke test failed:\n{text}")
 
 
 def copy_release_files() -> None:
@@ -277,14 +259,14 @@ def write_user_readme(path: Path) -> None:
                 f"启动方式：双击 {EXE_NAME}.exe。",
                 "后续版本可在软件的“帮助 -> 检查更新…”中下载增量升级包并自动重启完成升级。",
                 "",
-                f"请不要只复制 exe。必须保留 {EXE_NAME}.exe 旁边的 _internal、script、bridge、docs 等目录。",
+                f"请不要只复制 exe。必须保留 {EXE_NAME}.exe 旁边的 _internal、script、docs 等目录。",
                 f"普通用户不要下载 GitHub 绿色 Code 按钮里的 Source code zip，请下载 Release 里的 {ZIP_NAME}。",
                 "首次启动可能较慢，这是正常现象。",
                 "",
                 "Windows SmartScreen 如果提示未知发布者，可以点击“更多信息”，确认来源是本项目 Release 后再选择“仍要运行”。",
                 "杀毒软件误报时，请先确认 zip 来自 XiaoyuBook/auto-bdsp-rng 的 GitHub Release，再将解压目录加入信任列表或提交误报反馈。",
                 "",
-                "运行条件：目标电脑不需要安装 Python。实际乱数流程仍需要 BDSP 游戏窗口或采集画面、对应脚本、串口/单片机/驱动，以及 EasyConBridge 或 ezcon 后端。",
+                "运行条件：目标电脑不需要安装 Python、EasyCon、EasyConBridge 或 ezcon。实际乱数流程仍需要采集卡、对应脚本、串口单片机和驱动。",
                 "本包已内置 paddlepaddle/paddleocr，用于 OCR 闪光判定、能力页和笔记页识别。首次使用 OCR 可能需要初始化模型，耗时较长。",
                 "",
                 "如果软件打不开，请到 GitHub Issues 反馈，并附上 Windows 版本、解压路径、是否有杀毒拦截、以及截图或日志。",

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
 
 pytest.importorskip("PySide6")
 
@@ -34,7 +35,14 @@ from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
-from auto_bdsp_rng.ui.main_window import NATURES_ZH, _normalize_iv_ranges, _reverse_lookup_search_span, _reverse_species_label
+from auto_bdsp_rng.ui.main_window import (
+    NATURES_ZH,
+    PictureInPicturePreview,
+    _draw_easycon_search_overlay,
+    _normalize_iv_ranges,
+    _reverse_lookup_search_span,
+    _reverse_species_label,
+)
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 
@@ -225,6 +233,850 @@ def test_preview_scaling_does_not_enlarge_low_resolution_source(app):
     assert (scaled.width(), scaled.height()) == (780, 460)
     assert scaled.devicePixelRatio() == 1.5
     assert logical_size == QSize(520, 307)
+
+
+def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(app):
+    class Client:
+        def close(self):
+            return None
+
+    class BrokerProcess:
+        def __init__(self):
+            self.started = None
+            self.stopped = False
+
+        def start(self, *, device_index, capture_api):
+            self.started = (device_index, capture_api)
+            return True
+
+        def client(self):
+            return Client()
+
+        def stop(self):
+            self.stopped = True
+
+    process = BrokerProcess()
+    window = MainWindow(capture_broker_process=process)
+
+    assert window.connect_video_source()
+    deadline = time.perf_counter() + 2
+    while not window._video_source_connected and time.perf_counter() < deadline:
+        app.processEvents()
+        QTest.qWait(5)
+    config = window._config_from_form().capture
+
+    assert process.started == (0, 700)
+    assert config.uses_shared_video_source
+    assert callable(config.frame_source_factory)
+    assert window._preview_timer.isActive()
+    assert window.preview_button.text() == "预览常驻"
+
+    window._pause_preview_for_capture()
+    assert window._preview_timer.isActive()
+
+    assert window.disconnect_video_source(force=True)
+    assert process.stopped
+    assert not window._preview_timer.isActive()
+
+
+def test_shared_video_source_connection_does_not_block_ui(app):
+    class Client:
+        def close(self):
+            return None
+
+    class BrokerProcess:
+        def start(self, *, device_index, capture_api):
+            del device_index, capture_api
+            time.sleep(0.2)
+            return True
+
+        def client(self):
+            return Client()
+
+        def stop(self):
+            return None
+
+    window = MainWindow(capture_broker_process=BrokerProcess())
+
+    started_at = time.perf_counter()
+    assert window.connect_video_source()
+    assert time.perf_counter() - started_at < 0.1
+    assert window._video_source_connecting
+
+    deadline = time.perf_counter() + 2
+    while not window._video_source_connected and time.perf_counter() < deadline:
+        app.processEvents()
+        QTest.qWait(5)
+    assert window._video_source_connected
+    assert window.disconnect_video_source(force=True)
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_capture_broker_controller_cannot_change_while_start_attempt_is_pending(app, running):
+    class StartThread:
+        def isRunning(self):
+            return running
+
+    window = MainWindow()
+    window._capture_broker_start_thread = StartThread()  # type: ignore[assignment]
+
+    assert window.connect_video_source() is False
+    with pytest.raises(RuntimeError, match="请先断开"):
+        window.set_capture_broker_process(object())
+    window._capture_broker_start_thread = None
+
+
+def test_non_running_broker_start_attempt_disconnect_rejects_late_success(app):
+    class StartThread:
+        def __init__(self):
+            self.interruptions = 0
+
+        def isRunning(self):
+            return False
+
+        def requestInterruption(self):
+            self.interruptions += 1
+
+    class BrokerProcess:
+        def __init__(self):
+            self.stop_calls = 0
+
+        def stop(self):
+            self.stop_calls += 1
+            return True
+
+    thread = StartThread()
+    process = BrokerProcess()
+    window = MainWindow(capture_broker_process=process)
+    window._capture_broker_start_thread = thread  # type: ignore[assignment]
+    window._capture_broker_attempt = 7
+    window._video_source_connecting = True
+    window.video_source_button.setEnabled(False)
+    window._preview_timer.start()
+
+    assert window.disconnect_video_source(force=True) is True
+    generation = window._video_source_generation
+    status = window.video_source_status.text()
+
+    assert process.stop_calls == 2
+    assert thread.interruptions == 1
+    assert window._capture_broker_start_thread is None
+    assert not window._video_source_connecting
+    assert not window._video_source_cancel_requested
+    assert not window._video_source_connected
+    assert not window._preview_timer.isActive()
+    assert window.video_source_button.isEnabled()
+    assert status == "连接已取消"
+
+    window._finish_video_source_connection(
+        thread,  # type: ignore[arg-type]
+        7,
+        process,
+        0,
+        700,
+        True,
+        None,
+    )
+    window._capture_broker_start_finished(thread, 7)  # type: ignore[arg-type]
+
+    assert window._video_source_generation == generation
+    assert not window._video_source_connected
+    assert not window._preview_timer.isActive()
+    assert window.video_source_status.text() == status
+
+
+def test_running_broker_start_cancel_finally_stops_owner_created_after_initial_stop(app):
+    class BrokerProcess:
+        def __init__(self):
+            self.start_entered = threading.Event()
+            self.allow_start = threading.Event()
+            self.started = False
+            self.stop_calls: list[bool] = []
+
+        def start(self, *, device_index, capture_api):
+            del device_index, capture_api
+            self.start_entered.set()
+            if not self.allow_start.wait(2):
+                return False
+            self.started = True
+            return True
+
+        def client(self):
+            return SimpleNamespace(close=lambda: None)
+
+        def stop(self):
+            self.stop_calls.append(self.started)
+            self.started = False
+            return True
+
+    process = BrokerProcess()
+    window = MainWindow(capture_broker_process=process)
+
+    assert window.connect_video_source()
+    assert process.start_entered.wait(1)
+    assert window.disconnect_video_source(force=True) is False
+    assert process.stop_calls == [False]
+
+    process.allow_start.set()
+    deadline = time.perf_counter() + 2
+    while window._capture_broker_start_thread is not None and time.perf_counter() < deadline:
+        app.processEvents()
+        QTest.qWait(5)
+
+    assert window._capture_broker_start_thread is None
+    assert process.stop_calls == [False, True]
+    assert not process.started
+    assert not window._video_source_connected
+    assert not window._video_source_connecting
+    assert not window._video_source_cancel_requested
+    assert window.video_source_button.isEnabled()
+    assert window.video_source_status.text() == "连接已取消"
+
+
+def test_non_running_broker_start_stop_failure_requires_retry_and_rejects_late_success(app):
+    class StartThread:
+        def isRunning(self):
+            return False
+
+        def requestInterruption(self):
+            return None
+
+    class BrokerProcess:
+        stopped = False
+
+        def stop(self):
+            return self.stopped
+
+    thread = StartThread()
+    process = BrokerProcess()
+    window = MainWindow(capture_broker_process=process)
+    window._capture_broker_start_thread = thread  # type: ignore[assignment]
+    window._capture_broker_attempt = 10
+    window._video_source_connecting = True
+    window.video_source_button.setEnabled(False)
+
+    assert window.disconnect_video_source(force=True) is False
+
+    assert window._capture_broker_start_thread is None
+    assert not window._video_source_connected
+    assert not window._video_source_connecting
+    assert window._video_source_stop_pending
+    assert window.video_source_button.isEnabled()
+    assert window.video_source_button.text() == "重试断开"
+    assert window.connect_video_source() is False
+    with pytest.raises(RuntimeError, match="请先断开"):
+        window.set_capture_broker_process(object())
+
+    window._finish_video_source_connection(
+        thread,  # type: ignore[arg-type]
+        10,
+        process,
+        0,
+        700,
+        True,
+        None,
+    )
+    window._capture_broker_start_finished(thread, 10)  # type: ignore[arg-type]
+
+    assert not window._video_source_connected
+    assert window._video_source_stop_pending
+
+    process.stopped = True
+    assert window.disconnect_video_source(force=True) is True
+    assert not window._video_source_stop_pending
+    assert window.video_source_button.text() == "连接视频源"
+
+
+def test_close_stops_non_running_broker_start_attempt_before_queued_success(app, monkeypatch):
+    class StartThread:
+        def __init__(self):
+            self.interruptions = 0
+
+        def isRunning(self):
+            return False
+
+        def requestInterruption(self):
+            self.interruptions += 1
+
+    class BrokerProcess:
+        def __init__(self):
+            self.stop_calls = 0
+
+        def stop(self):
+            self.stop_calls += 1
+            return True
+
+    thread = StartThread()
+    process = BrokerProcess()
+    window = MainWindow(capture_broker_process=process)
+    window._capture_broker_start_thread = thread  # type: ignore[assignment]
+    window._capture_broker_attempt = 8
+    window._video_source_connecting = True
+    window.video_source_button.setEnabled(False)
+    monkeypatch.setattr(window.easycon_tab, "shutdown", lambda: True)
+    window.show()
+
+    assert window.close() is True
+    generation = window._video_source_generation
+
+    assert process.stop_calls == 2
+    assert thread.interruptions == 1
+    assert window._capture_broker_start_thread is None
+    assert not window._video_source_connected
+    assert window.video_source_button.isEnabled()
+    assert window.video_source_status.text() == "连接已取消"
+
+    window._finish_video_source_connection(
+        thread,  # type: ignore[arg-type]
+        8,
+        process,
+        0,
+        700,
+        True,
+        None,
+    )
+    window._capture_broker_start_finished(thread, 8)  # type: ignore[arg-type]
+
+    assert window._video_source_generation == generation
+    assert not window._video_source_connected
+    assert not window._preview_timer.isActive()
+
+
+def test_broker_start_finish_while_closing_restores_controls_after_shutdown_timeout(app):
+    class StartThread:
+        def __init__(self):
+            self.running = True
+
+        def isRunning(self):
+            return self.running
+
+        def requestInterruption(self):
+            return None
+
+        def wait(self, _wait_ms):
+            return False
+
+    thread = StartThread()
+    process = SimpleNamespace(stop=lambda: True)
+    window = MainWindow(capture_broker_process=process)
+    window._capture_broker_start_thread = thread  # type: ignore[assignment]
+    window._capture_broker_attempt = 9
+    window._video_source_connected = True
+    window._video_source_connecting = False
+
+    assert window._shutdown_capture_broker_start_thread(wait_ms=0) is False
+    assert window._capture_broker_start_thread is thread
+    assert window._video_source_cancel_requested
+    assert window._video_source_connecting
+    assert not window.video_source_button.isEnabled()
+    assert window.video_source_button.text() == "正在断开..."
+
+    window._is_closing = True
+    thread.running = False
+    window._capture_broker_start_finished(thread, 9)  # type: ignore[arg-type]
+    window._is_closing = False
+
+    assert window._capture_broker_start_thread is None
+    assert not window._video_source_connecting
+    assert not window._video_source_cancel_requested
+    assert window.video_source_button.isEnabled()
+    assert window.video_source_status.text() == "连接已取消"
+
+
+def test_stale_capture_broker_completion_cannot_publish_a_new_connection(app):
+    current_thread = object()
+    old_thread = object()
+    process = object()
+    window = MainWindow(capture_broker_process=process)
+    window._capture_broker_start_thread = current_thread  # type: ignore[assignment]
+    window._capture_broker_attempt = 2
+    window._video_source_connecting = True
+
+    window._finish_video_source_connection(
+        old_thread,  # type: ignore[arg-type]
+        1,
+        process,
+        0,
+        700,
+        True,
+        None,
+    )
+    window._finish_video_source_connection(
+        current_thread,  # type: ignore[arg-type]
+        1,
+        process,
+        0,
+        700,
+        True,
+        None,
+    )
+
+    assert window._video_source_connecting
+    assert not window._video_source_connected
+    window._capture_broker_start_thread = None
+    window._video_source_connecting = False
+
+
+def test_late_capture_broker_thread_finish_restores_connection_controls(app):
+    thread = object()
+    window = MainWindow()
+    window._capture_broker_start_thread = thread  # type: ignore[assignment]
+    window._capture_broker_attempt = 1
+    window._video_source_connecting = True
+    window._video_source_pending_status = "连接已取消"
+    window.video_source_button.setEnabled(False)
+
+    window._capture_broker_start_finished(thread, 1)  # type: ignore[arg-type]
+
+    assert window._capture_broker_start_thread is None
+    assert not window._video_source_connecting
+    assert window.video_source_button.isEnabled()
+    assert window.video_source_status.text() == "连接已取消"
+
+
+def test_video_source_stop_failure_requires_an_explicit_retry(app):
+    class BrokerProcess:
+        stopped = False
+
+        def stop(self):
+            return self.stopped
+
+    process = BrokerProcess()
+    window = MainWindow(capture_broker_process=process)
+    window._video_source_connected = True
+    window._preview_timer.start()
+
+    assert window.disconnect_video_source(force=True) is False
+    assert not window._video_source_connected
+    assert window._video_source_stop_pending
+    assert window.video_source_button.text() == "重试断开"
+    assert window.video_source_status.text() == "停止失败，请重试"
+    assert not window.capture_device_combo.isEnabled()
+
+    process.stopped = True
+    assert window.disconnect_video_source(force=True) is True
+    assert not window._video_source_stop_pending
+    assert window.video_source_button.text() == "连接视频源"
+    assert window.capture_device_combo.isEnabled()
+
+
+def test_video_source_stop_exception_keeps_retry_state(app):
+    class BrokerProcess:
+        def stop(self):
+            raise OSError("device owner is still running")
+
+    window = MainWindow(capture_broker_process=BrokerProcess())
+    window._video_source_connected = True
+
+    assert window.disconnect_video_source(force=True) is False
+    assert window._video_source_stop_pending
+    assert window._video_source_stop_error == "device owner is still running"
+    assert window.video_source_button.text() == "重试断开"
+    window._capture_broker_process = None
+    window._video_source_stop_pending = False
+
+
+def test_main_window_refuses_close_until_video_source_stop_is_confirmed(app, monkeypatch):
+    class BrokerProcess:
+        stopped = False
+
+        def stop(self):
+            return self.stopped
+
+    process = BrokerProcess()
+    window = MainWindow(capture_broker_process=process)
+    window._video_source_connected = True
+    window.show()
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(window.easycon_tab, "shutdown", lambda: True)
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    assert window.close() is False
+    assert window.isVisible()
+    assert window._video_source_stop_pending
+    assert warnings[-1][0] == "视频源未能停止"
+
+    process.stopped = True
+    assert window.close() is True
+
+
+def test_capture_devices_use_selected_backend_and_real_indices(app, monkeypatch):
+    calls: list[int] = []
+
+    def enumerate_devices(capture_api: int) -> list[tuple[int, str]]:
+        calls.append(capture_api)
+        if capture_api == 0:
+            return [(1400, "USB Video"), (700, "USB Video"), (701, "OBS Virtual Camera")]
+        if capture_api == 1400:
+            return [(0, "USB Video")]
+        return [(0, "USB Video"), (1, "OBS Virtual Camera")]
+
+    monkeypatch.setattr(
+        main_window_module,
+        "_enumerate_capture_devices",
+        enumerate_devices,
+    )
+    window = MainWindow()
+    window.capture_device_combo.setCurrentIndex(1)
+
+    window.refresh_capture_devices()
+
+    assert window.capture_device_combo.itemText(0) == "0 - USB Video"
+    assert window.capture_device_combo.itemText(1) == "1 - OBS Virtual Camera"
+    assert window._capture_device_index() == 1
+
+    window.capture_api_combo.setCurrentIndex(window.capture_api_combo.findData(1400))
+
+    assert window.capture_device_combo.count() == 1
+    assert window.capture_device_combo.itemText(0) == "0 - USB Video"
+    assert window._capture_device_index() == 0
+
+    window.capture_api_combo.setCurrentIndex(window.capture_api_combo.findData(0))
+
+    assert [window.capture_device_combo.itemData(row) for row in range(3)] == [1400, 700, 701]
+    assert window._capture_device_index() == 1400
+    assert calls[-3:] == [700, 1400, 0]
+
+
+def test_enumerate_capture_devices_uses_library_indices(monkeypatch):
+    cameras = [
+        SimpleNamespace(index=1400, name=" USB Video "),
+        SimpleNamespace(index=701, name="OBS Virtual Camera"),
+    ]
+    fake_module = SimpleNamespace(enumerate_cameras=lambda capture_api: cameras if capture_api == 0 else [])
+    monkeypatch.setitem(__import__("sys").modules, "cv2_enumerate_cameras", fake_module)
+
+    assert main_window_module._enumerate_capture_devices(0) == [
+        (1400, "USB Video"),
+        (701, "OBS Virtual Camera"),
+    ]
+
+
+def test_easycon_search_overlay_only_changes_display_copy():
+    frame = np.zeros((24, 24, 3), dtype=np.uint8)
+    result = SimpleNamespace(
+        range_rect=(1, 1, 18, 18),
+        match_rect=(6, 6, 5, 5),
+    )
+
+    annotated = _draw_easycon_search_overlay(frame, result)
+
+    assert np.count_nonzero(frame) == 0
+    assert annotated is not frame
+    assert annotated[1, 1].tolist() == [0, 196, 255]
+    assert annotated[6, 6].tolist() == [76, 210, 76]
+
+
+def test_preview_annotation_failure_keeps_broker_and_raw_frame(app, monkeypatch):
+    frame = np.zeros((24, 24, 3), dtype=np.uint8)
+    stops: list[bool] = []
+    process = SimpleNamespace(stop=lambda: stops.append(True) or True)
+    window = MainWindow(capture_broker_process=process)
+    window._video_source_connected = True
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_config_from_form",
+        lambda: SimpleNamespace(capture=object()),
+    )
+    monkeypatch.setattr(window, "_read_live_preview_frame", lambda _config: frame)
+    monkeypatch.setattr(
+        main_window_module,
+        "render_eye_preview",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("bad eye template")),
+    )
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda _source, message, **_kwargs: warnings.append(str(message)),
+    )
+
+    window._update_preview_frame()
+    window._update_preview_frame()
+
+    assert window._video_source_connected
+    assert window._latest_preview_frame is not frame
+    assert np.array_equal(window._latest_preview_frame, frame)
+    assert np.array_equal(window._latest_annotated_preview_frame, frame)
+    assert len(warnings) == 1
+    assert "回退到原始画面" in warnings[0]
+    assert stops == []
+    window._video_source_connected = False
+
+
+def test_invalid_preview_config_keeps_broker_raw_frames_updating(app, monkeypatch):
+    frames = [
+        np.zeros((24, 24, 3), dtype=np.uint8),
+        np.full((24, 24, 3), 37, dtype=np.uint8),
+    ]
+    reads: list[object] = []
+    stops: list[bool] = []
+    warnings: list[str] = []
+    process = SimpleNamespace(stop=lambda: stops.append(True) or True)
+    window = MainWindow(capture_broker_process=process)
+    picture_in_picture_frames: list[tuple[object, object]] = []
+    window._picture_in_picture = SimpleNamespace(
+        isVisible=lambda: True,
+        set_frames=lambda raw, annotated: picture_in_picture_frames.append((raw, annotated)),
+    )
+    window._video_source_connected = True
+    window._preview_timer.start()
+    monkeypatch.setattr(
+        window,
+        "_config_from_form",
+        lambda: (_ for _ in ()).throw(ValueError("editing ROI")),
+    )
+
+    def read_frame(_config):
+        frame = frames[len(reads)]
+        reads.append(frame)
+        return frame
+
+    monkeypatch.setattr(window, "_read_live_preview_frame", read_frame)
+    monkeypatch.setattr(
+        main_window_module,
+        "render_eye_preview",
+        lambda *_args: pytest.fail("invalid annotation config must not be rendered"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda _source, message, **_kwargs: warnings.append(str(message)),
+    )
+
+    window._update_preview_frame()
+    window._update_preview_frame()
+
+    assert len(reads) == 2
+    assert np.array_equal(window._latest_preview_frame, frames[1])
+    assert window._latest_preview_frame is not frames[1]
+    assert np.array_equal(window._latest_annotated_preview_frame, frames[1])
+    assert window._latest_annotated_preview_frame is not window._latest_preview_frame
+    assert window._preview_timer.isActive()
+    assert window._video_source_connected
+    assert len(picture_in_picture_frames) == 2
+    assert np.array_equal(picture_in_picture_frames[-1][0], frames[1])
+    assert np.array_equal(picture_in_picture_frames[-1][1], frames[1])
+    assert stops == []
+    assert len(warnings) == 1
+    assert "预览识别配置无效" in warnings[0]
+    assert "显示原始画面" in window.statusBar().currentMessage()
+    window._picture_in_picture = None
+    window._video_source_connected = False
+
+
+def test_preview_frame_read_failure_disconnects_broker(app, monkeypatch):
+    stopped: list[bool] = []
+    process = SimpleNamespace(stop=lambda: stopped.append(True) or True)
+    window = MainWindow(capture_broker_process=process)
+    window._video_source_connected = True
+    window._preview_timer.start()
+    monkeypatch.setattr(
+        window,
+        "_config_from_form",
+        lambda: SimpleNamespace(capture=object()),
+    )
+    monkeypatch.setattr(
+        window,
+        "_read_live_preview_frame",
+        lambda _config: (_ for _ in ()).throw(RuntimeError("no new frame")),
+    )
+    monkeypatch.setattr(window, "_show_error", lambda *_args, **_kwargs: None)
+
+    window._update_preview_frame()
+
+    assert stopped == [True]
+    assert not window._video_source_connected
+    assert not window._preview_timer.isActive()
+    assert window.video_source_status.text() == "视频源故障"
+
+
+def test_easycon_search_results_are_scoped_to_source_and_script_generations(app):
+    window = MainWindow()
+    current = object()
+    stale = object()
+    window._video_source_connected = True
+    window._video_source_generation = 4
+    window._easycon_run_generation = 6
+
+    window._handle_easycon_image_search_result(3, 6, stale)
+    assert window._latest_easycon_image_search_result is None
+
+    window._handle_easycon_image_search_result(4, 5, stale)
+    assert window._latest_easycon_image_search_result is None
+
+    window._handle_easycon_image_search_result(4, 6, current)
+    assert window._latest_easycon_image_search_result is current
+
+    window._latest_easycon_image_search_result = None
+    window._video_source_connected = False
+    window._handle_easycon_image_search_result(4, 6, current)
+    assert window._latest_easycon_image_search_result is None
+
+
+def test_new_native_script_rejects_queued_results_from_previous_run(app):
+    window = MainWindow()
+    window._video_source_connected = True
+    window._video_source_generation = 4
+    window._install_easycon_image_result_callback(4, 0)
+    backend = window.easycon_tab._ensure_native_backend()
+    previous_callback = backend._image_result_callback
+    previous = object()
+    current = object()
+    window._latest_easycon_image_search_result = object()
+
+    previous_callback(previous)
+
+    window.easycon_tab.nativeScriptStarted.emit()
+    current_callback = backend._image_result_callback
+    app.processEvents()
+
+    assert window._latest_easycon_image_search_result is None
+    assert window._easycon_run_generation == 1
+    assert current_callback is not previous_callback
+
+    current_callback(current)
+    app.processEvents()
+
+    assert window._latest_easycon_image_search_result is current
+    window._video_source_connected = False
+
+
+def test_page_script_reservation_blocks_auto_without_replacing_overlay_generation(app):
+    window = MainWindow()
+
+    class CallbackBackend:
+        def __init__(self) -> None:
+            self.image_callback = None
+
+        def status(self) -> EasyConStatus:
+            return EasyConStatus.BRIDGE_CONNECTED
+
+        def set_image_result_callback(self, callback) -> None:
+            self.image_callback = callback
+
+        def close(self) -> None:
+            return None
+
+    backend = CallbackBackend()
+    window.easycon_tab.native_backend = backend
+    window._video_source_connected = True
+
+    assert window.easycon_tab.reserve_native_script_run()
+    window.easycon_tab.nativeScriptStarted.emit()
+    generation = window._easycon_run_generation
+    callback = backend.image_callback
+
+    with pytest.raises(RuntimeError, match="已有伊机控脚本正在运行"):
+        window._prepare_auto_easycon_script("auto.txt")
+
+    assert window._easycon_run_generation == generation
+    assert backend.image_callback is callback
+    window.easycon_tab.release_native_script_run()
+    window._video_source_connected = False
+
+
+def test_auto_script_reservation_blocks_page_without_replacing_overlay_generation(app):
+    window = MainWindow()
+
+    class CallbackBackend:
+        def __init__(self) -> None:
+            self.image_callback = None
+
+        def status(self) -> EasyConStatus:
+            return EasyConStatus.BRIDGE_CONNECTED
+
+        def set_image_result_callback(self, callback) -> None:
+            self.image_callback = callback
+
+        def close(self) -> None:
+            return None
+
+    backend = CallbackBackend()
+    window.easycon_tab.native_backend = backend
+    window._video_source_connected = True
+
+    assert window._prepare_auto_easycon_script("auto.txt") is backend
+    generation = window._easycon_run_generation
+    callback = backend.image_callback
+
+    page_reserved = window.easycon_tab.reserve_native_script_run()
+    if page_reserved:
+        window.easycon_tab.nativeScriptStarted.emit()
+
+    assert page_reserved is False
+    assert window._easycon_run_generation == generation
+    assert backend.image_callback is callback
+    window._fail_auto_script(RuntimeError("test cleanup"))
+    window._video_source_connected = False
+
+
+def test_auto_script_terminal_signal_holds_reservation_until_all_slots_return(app):
+    window = MainWindow()
+
+    class CallbackBackend:
+        def __init__(self) -> None:
+            self.image_callback = None
+
+        def status(self) -> EasyConStatus:
+            return EasyConStatus.BRIDGE_CONNECTED
+
+        def set_image_result_callback(self, callback) -> None:
+            self.image_callback = callback
+
+        def close(self) -> None:
+            return None
+
+    backend = CallbackBackend()
+    window.easycon_tab.native_backend = backend
+    window._video_source_connected = True
+    assert window._prepare_auto_easycon_script("auto.txt") is backend
+    nested_reservations: list[bool] = []
+    window.autoScriptFinished.connect(
+        lambda _result: nested_reservations.append(window.easycon_tab.reserve_native_script_run())
+    )
+    result = EasyConRunResult(
+        status=EasyConStatus.COMPLETED,
+        exit_code=0,
+        started_at=datetime.now(),
+        ended_at=datetime.now(),
+        script_path=Path("auto.txt"),
+        port="COM1",
+    )
+
+    assert window._finalize_auto_script_result(result, "auto.txt") is result
+
+    assert nested_reservations == [False]
+    assert window.easycon_tab._native_run_reserved is False
+    assert window.easycon_tab.reserve_native_script_run()
+    window.easycon_tab.release_native_script_run()
+    window._video_source_connected = False
+
+
+def test_picture_in_picture_preview_controls_are_independent(app):
+    window = MainWindow()
+    picture_in_picture = PictureInPicturePreview(window)
+
+    assert window.main_preview_overlay_check.isChecked()
+    assert picture_in_picture.overlay_enabled()
+    assert not picture_in_picture.always_on_top()
+
+    picture_in_picture.set_overlay_enabled(False)
+    picture_in_picture.set_always_on_top(True)
+
+    assert window.main_preview_overlay_check.isChecked()
+    assert not picture_in_picture.overlay_enabled()
+    assert picture_in_picture.always_on_top()
+
+    window.main_preview_overlay_check.setChecked(False)
+    picture_in_picture.set_overlay_enabled(True)
+
+    assert not window.main_preview_overlay_check.isChecked()
+    assert picture_in_picture.overlay_enabled()
 
 
 def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
@@ -1898,6 +2750,7 @@ def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, mon
     )
     started: list[AutoRngRunner] = []
     window._latest_preview_frame = object()
+    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
     monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_rng(config)
@@ -2908,22 +3761,76 @@ def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_pa
     assert result.advance_delay_2 == 13
 
 
-def test_main_window_auto_rng_run_script_service_uses_bridge(app, tmp_path, monkeypatch):
+def _install_connected_native_backend(window, monkeypatch, backend) -> None:
+    window._video_source_connected = True
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
+    monkeypatch.setattr(window.easycon_tab, "_ensure_native_backend", lambda: backend)
+
+
+def test_main_window_auto_rng_run_script_service_uses_native_backend(app, tmp_path, monkeypatch):
     window = MainWindow()
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, Path]] = []
 
     class FakeBackend:
-        def run_script_text(self, script_text: str, name: str) -> str:
-            calls.append((script_text, name))
+        def run_script_text(self, script_text: str, name: str, *, script_dir: Path) -> str:
+            calls.append((script_text, name, script_dir))
             return "ok"
 
-    window.easycon_tab.backend_mode.setCurrentIndex(0)
-    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
-    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
 
     assert services.run_script_text("A 100", "hit.txt") == "ok"
-    assert calls == [("A 100", "hit.txt")]
+    assert calls == [("A 100", "hit.txt", tmp_path)]
+
+
+def test_auto_rng_script_installs_overlay_generation_before_backend_runs(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    image_result = object()
+    observations: list[tuple[int, object | None]] = []
+
+    class FakeBackend:
+        def __init__(self):
+            self.image_callback = None
+
+        def set_image_result_callback(self, callback):
+            self.image_callback = callback
+
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            observations.append((window._easycon_run_generation, self.image_callback))
+            assert self.image_callback is not None
+            self.image_callback(image_result)
+            return "ok"
+
+    backend = FakeBackend()
+    _install_connected_native_backend(window, monkeypatch, backend)
+    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run_service() -> None:
+        try:
+            results.append(services.run_script_text("A 100", "hit.txt"))
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run_service)
+    worker.start()
+    deadline = time.perf_counter() + 2
+    while worker.is_alive() and time.perf_counter() < deadline:
+        app.processEvents()
+        QTest.qWait(5)
+    worker.join(timeout=0.1)
+    app.processEvents()
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert results == ["ok"]
+    assert len(observations) == 1
+    assert observations[0][0] == 1
+    assert observations[0][1] is not None
+    assert window._latest_easycon_image_search_result is image_result
+    window._video_source_connected = False
 
 
 def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(app, tmp_path, monkeypatch):
@@ -2932,17 +3839,15 @@ def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(app, tmp_path
     logs: list[str] = []
 
     class FakeBackend:
-        def run_script_text(self, _script_text: str, _name: str) -> str:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
             return "ok"
 
         def stop_current_script(self) -> None:
             stops.append(True)
 
     backend = FakeBackend()
-    window.easycon_tab.backend_mode.setCurrentIndex(0)
-    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
     window.auto_rng_tab.captureLog.connect(logs.append)
-    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: backend)
+    _install_connected_native_backend(window, monkeypatch, backend)
     monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
 
     def raise_timeout(*_args, **_kwargs):
@@ -2984,7 +3889,7 @@ def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times
             return "dialog-roi"
 
     class FakeBackend:
-        def run_script_text(self, _script_text: str, _name: str) -> str:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
             return "ok"
 
     def fake_measure(capture_frame, _read_text, **kwargs):
@@ -2997,10 +3902,8 @@ def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times
         callback(second)
         return DialogTimingResult(101.25, 104.75, 3.5, (first, second))
 
-    window.easycon_tab.backend_mode.setCurrentIndex(0)
-    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
     window.auto_rng_tab.captureLog.connect(logs.append)
-    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
     monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
     monkeypatch.setattr(window, "_ocr_region_config", OcrRegionConfig)
     monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: FakeFrame())
@@ -3020,7 +3923,7 @@ def test_main_window_auto_rng_shiny_check_propagates_script_error_before_ocr_res
     window = MainWindow()
 
     class FakeBackend:
-        def run_script_text(self, _script_text: str, _name: str) -> str:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
             raise RuntimeError("EasyCon failed")
 
         def stop_current_script(self) -> None:
@@ -3032,9 +3935,7 @@ def test_main_window_auto_rng_shiny_check_propagates_script_error_before_ocr_res
             time.sleep(0.001)
         raise RuntimeError("monitor stopped")
 
-    window.easycon_tab.backend_mode.setCurrentIndex(0)
-    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
-    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
     monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
     monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure)
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, shiny_threshold_seconds=3.0))
@@ -3043,29 +3944,23 @@ def test_main_window_auto_rng_shiny_check_propagates_script_error_before_ocr_res
         services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0)
 
 
-def test_main_window_auto_rng_cli_settles_keep_awake_before_script(app, tmp_path, monkeypatch):
+def test_main_window_auto_rng_script_rejects_when_broker_is_disconnected(app, tmp_path, monkeypatch):
     window = MainWindow()
-    events: list[str] = []
+    calls: list[str] = []
 
-    class FakeCliBackend:
-        def run_script_text(self, script_text: str, name: str, *, port: str) -> str:
-            events.append(f"run:{port}:{name}:{script_text}")
+    class FakeBackend:
+        def run_script_text(self, script_text: str, name: str, *, script_dir: Path) -> str:
+            calls.append(name)
             return "ok"
 
-    cli_index = window.easycon_tab.backend_mode.findData("cli")
-    window.easycon_tab.backend_mode.setCurrentIndex(cli_index)
-    window.easycon_tab.port_combo.addItem("COM7")
-    window.easycon_tab.port_combo.setCurrentText("COM7")
-    monkeypatch.setattr(
-        window.easycon_tab,
-        "prepare_for_external_cli_script",
-        lambda: events.append("settled") or True,
-    )
-    monkeypatch.setattr(main_window_module, "CliEasyConBackend", FakeCliBackend)
+    backend = FakeBackend()
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
+    monkeypatch.setattr(window.easycon_tab, "_ensure_native_backend", lambda: backend)
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
 
-    assert services.run_script_text("A 100", "hit.txt") == "ok"
-    assert events == ["settled", "run:COM7:hit.txt:A 100"]
+    with pytest.raises(RuntimeError, match="连接视频源"):
+        services.run_script_text("A 100", "hit.txt")
+    assert calls == []
 
 
 def test_main_window_auto_rng_run_script_syncs_easycon_status_and_output(app, tmp_path, monkeypatch):
@@ -3074,7 +3969,8 @@ def test_main_window_auto_rng_run_script_syncs_easycon_status_and_output(app, tm
     ended = datetime(2026, 5, 8, 12, 0, 1)
 
     class FakeBackend:
-        def run_script_text(self, script_text: str, name: str) -> EasyConRunResult:
+        def run_script_text(self, script_text: str, name: str, *, script_dir: Path) -> EasyConRunResult:
+            assert script_dir == tmp_path
             return EasyConRunResult(
                 status=EasyConStatus.COMPLETED,
                 exit_code=0,
@@ -3085,9 +3981,7 @@ def test_main_window_auto_rng_run_script_syncs_easycon_status_and_output(app, tm
                 stdout="done\n",
             )
 
-    window.easycon_tab.backend_mode.setCurrentIndex(0)
-    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
-    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
 
     services.run_script_text("A 100", "hit.txt")
@@ -3109,7 +4003,8 @@ def test_main_window_auto_rng_run_script_raises_on_easycon_failure(app, tmp_path
     window.autoScriptFailed.connect(failed_messages.append)
 
     class FakeBackend:
-        def run_script_text(self, script_text: str, name: str) -> EasyConRunResult:
+        def run_script_text(self, script_text: str, name: str, *, script_dir: Path) -> EasyConRunResult:
+            assert script_dir == tmp_path
             return EasyConRunResult(
                 status=EasyConStatus.FAILED,
                 exit_code=1,
@@ -3121,9 +4016,7 @@ def test_main_window_auto_rng_run_script_raises_on_easycon_failure(app, tmp_path
                 stderr="串口连接失败: COM7\n",
             )
 
-    window.easycon_tab.backend_mode.setCurrentIndex(0)
-    window.easycon_tab.bridge_status = EasyConStatus.BRIDGE_CONNECTED
-    monkeypatch.setattr(window.easycon_tab, "_ensure_bridge_backend", lambda: FakeBackend())
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
 
     with pytest.raises(RuntimeError, match="串口连接失败"):
@@ -3133,6 +4026,60 @@ def test_main_window_auto_rng_run_script_raises_on_easycon_failure(app, tmp_path
     assert "串口连接失败" in window.easycon_tab.log_view.toPlainText()
     assert len(finished_results) == 1
     assert failed_messages == []
+
+
+def test_main_window_auto_tid_run_script_uses_native_backend_and_script_dir(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    calls: list[tuple[str, str, Path]] = []
+
+    class FakeBackend:
+        def run_script_text(self, script_text: str, name: str, *, script_dir: Path) -> str:
+            calls.append((script_text, name, script_dir))
+            return "ok"
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    services = window._build_auto_tid_rng_services(AutoTidRngConfig(script_dir=tmp_path))
+
+    assert services.run_script_text("A 100", "tid.txt") == "ok"
+    assert calls == [("A 100", "tid.txt", tmp_path)]
+    assert window.easycon_tab._native_run_reserved is False
+
+
+def test_main_window_auto_tid_releases_native_reservation_after_base_exception(app, tmp_path, monkeypatch):
+    window = MainWindow()
+
+    class FatalScriptError(BaseException):
+        pass
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            raise FatalScriptError("fatal script failure")
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    services = window._build_auto_tid_rng_services(AutoTidRngConfig(script_dir=tmp_path))
+
+    with pytest.raises(FatalScriptError, match="fatal script failure"):
+        services.run_script_text("A 100", "tid.txt")
+
+    assert window.easycon_tab._native_run_reserved is False
+    assert window.easycon_tab.task_state_text == "失败"
+
+
+def test_main_window_send_easycon_right_reuses_connected_native_backend(app, monkeypatch):
+    window = MainWindow()
+    presses: list[tuple[str, int]] = []
+
+    class FakeBackend:
+        def press(self, button: str, duration_ms: int) -> None:
+            presses.append((button, duration_ms))
+
+    backend = FakeBackend()
+    _install_connected_native_backend(window, monkeypatch, backend)
+
+    window._send_easycon_right(log_details=False)
+
+    assert presses == [("RIGHT", 200)]
 
 
 def test_main_window_applies_selected_roi(app, monkeypatch):

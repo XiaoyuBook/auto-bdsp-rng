@@ -1,5 +1,8 @@
 # 自动定点乱数界面设计方案
 
+> 历史设计记录：文中的 EasyCon Bridge 服务边界已由同一个 Python 原生 EasyCon
+> backend 取代；当前流程还要求先连接共享 Capture Broker。状态机和帧数公式部分仍有效。
+
 ## 目标
 
 新增一个同级 Tab：`自动定点乱数`，把 Project_Xs 测 seed、BDSP 定点结果搜索、EasyCon 过帧脚本、Project_Xs 重新识别/重新测 seed、撞闪脚本串成一个可观察、可停止、可循环的全自动流程。

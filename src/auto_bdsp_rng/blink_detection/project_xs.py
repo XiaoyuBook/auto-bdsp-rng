@@ -125,6 +125,11 @@ def _open_capture_source(
     cv2: ModuleType | None = None,
     prefer_v4l: bool = False,
 ) -> Any:
+    if config.uses_shared_video_source:
+        return BrokerFrameCapture(
+            config.frame_source_factory,
+            session=config.broker_session,
+        )
     cv2 = cv2 or _load_cv2()
     if config.monitor_window:
         obs_target = _obs_window_target(config)
@@ -141,6 +146,108 @@ def _open_capture_source(
     video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     video.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return video
+
+
+def _default_broker_client(session: str | None = None) -> Any:
+    """Discover the active Capture Broker without importing it at startup.
+
+    The broker is optional for the legacy CLI and Project_Xs command paths, so
+    this import deliberately happens only after a config selects the shared
+    source.  A few small constructor/classmethod spellings are accepted to
+    keep this adapter compatible with the standalone broker and test doubles.
+    """
+
+    try:
+        module = importlib.import_module("auto_bdsp_rng.capture_broker")
+    except ImportError as exc:
+        raise ProjectXsIntegrationError("共享视频源组件不可用，请先启动 Broker") from exc
+    client_type = getattr(module, "CaptureBrokerClient", None)
+    if client_type is None:
+        raise ProjectXsIntegrationError("共享视频源客户端未安装")
+
+    for method_name in ("connect", "discover", "open"):
+        method = getattr(client_type, method_name, None)
+        if not callable(method):
+            continue
+        for kwargs in ({"path": session, "require_running": True}, {"path": session}, {}):
+            if kwargs.get("path", object()) is None:
+                kwargs = {key: value for key, value in kwargs.items() if key != "path"}
+            try:
+                client = method(**kwargs)
+            except (TypeError, LookupError, FileNotFoundError):
+                continue
+            if client is not None:
+                return client
+
+    for args in ((session,), ()):
+        if args == (None,):
+            continue
+        try:
+            return client_type(*args)
+        except TypeError:
+            continue
+    raise ProjectXsIntegrationError("无法连接共享视频源，请先启动 Broker")
+
+
+class BrokerFrameCapture:
+    """OpenCV-like read/release wrapper around one Broker consumer connection."""
+
+    keep_open_for_preview = True
+
+    def __init__(self, factory: Callable[[], Any] | None = None, *, session: str | None = None) -> None:
+        self._client = factory() if factory is not None else _default_broker_client(session)
+        self._released = False
+
+    @staticmethod
+    def _frame_from_result(result: Any) -> Any:
+        if result is None:
+            return None
+        # A tuple follows OpenCV's ``(ok, frame)`` convention.
+        if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], bool):
+            return result[1] if result[0] else None
+        for attribute in ("frame", "array"):
+            frame = getattr(result, attribute, None)
+            if frame is not None:
+                return frame
+        as_array = getattr(result, "as_array", None)
+        if callable(as_array):
+            return as_array()
+        return result
+
+    def read(self) -> tuple[bool, Any]:
+        if self._released:
+            raise ProjectXsIntegrationError("共享视频源客户端已经关闭")
+        reader = None
+        for name in ("read_array", "read_latest", "read", "get_latest_frame", "read_frame"):
+            candidate = getattr(self._client, name, None)
+            if callable(candidate):
+                reader = candidate
+                break
+        if reader is None:
+            raise ProjectXsIntegrationError("共享视频源客户端不支持读取帧")
+        try:
+            result = self._frame_from_result(reader())
+        except Exception as exc:
+            raise ProjectXsIntegrationError(f"共享视频源读取失败: {exc}") from exc
+        if result is None:
+            return False, None
+        # Consumers must never annotate the broker's backing memory.  Numpy
+        # frames are copied here; immutable/test frames pass through unchanged.
+        copier = getattr(result, "copy", None)
+        return True, copier() if callable(copier) else result
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        for name in ("close", "release", "disconnect", "stop"):
+            method = getattr(self._client, name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+                break
 
 
 class PreviewFrameCapture:
@@ -304,7 +411,8 @@ def capture_player_blinks(
 
     try:
         if (
-            should_stop is not None
+            config.uses_shared_video_source
+            or should_stop is not None
             or frame_callback is not None
             or progress_callback is not None
             or not show_window
@@ -394,9 +502,12 @@ def _tracking_blink_controlled(
             result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
             _, match, _, max_loc = cv2.minMaxLoc(result)
 
-            cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (0, 0, 255), 2)
+            # Draw detection helpers on a private copy. Broker consumers must
+            # never mutate the shared backing frame.
+            display_frame = frame.copy() if callable(getattr(frame, "copy", None)) else frame
+            cv2.rectangle(display_frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (0, 0, 255), 2)
             if 0.01 < match < config.threshold:
-                cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
+                cv2.rectangle(display_frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
                 if state == state_idle:
                     should_discard = (
                         discard_first_blink_within_seconds is not None
@@ -422,12 +533,12 @@ def _tracking_blink_controlled(
             else:
                 match_location = (max_loc[0] + roi_x, max_loc[1] + roi_y)
                 match_bottom_right = (match_location[0] + eye_width, match_location[1] + eye_height)
-                cv2.rectangle(frame, match_location, match_bottom_right, 255, 2)
+                cv2.rectangle(display_frame, match_location, match_bottom_right, 255, 2)
 
             if frame_callback is not None:
-                frame_callback(frame)
+                frame_callback(display_frame)
             if show_window:
-                cv2.imshow("view", frame)
+                cv2.imshow("view", display_frame)
                 if cv2.waitKey(1) == ord("q"):
                     break
             if state != state_idle and time_counter - prev_time > 0.7:
@@ -490,9 +601,10 @@ def _tracking_poke_blink_controlled(
             result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
             _, match, _, max_loc = cv2.minMaxLoc(result)
 
-            cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (0, 0, 255), 2)
+            display_frame = frame.copy() if callable(getattr(frame, "copy", None)) else frame
+            cv2.rectangle(display_frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (0, 0, 255), 2)
             if 0.4 < match < config.threshold:
-                cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
+                cv2.rectangle(display_frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), 255, 2)
                 if state == state_idle:
                     should_discard = (
                         discard_first_blink_within_seconds is not None
@@ -508,12 +620,12 @@ def _tracking_poke_blink_controlled(
             else:
                 match_location = (max_loc[0] + roi_x, max_loc[1] + roi_y)
                 match_bottom_right = (match_location[0] + eye_width, match_location[1] + eye_height)
-                cv2.rectangle(frame, match_location, match_bottom_right, 255, 2)
+                cv2.rectangle(display_frame, match_location, match_bottom_right, 255, 2)
 
             if frame_callback is not None:
-                frame_callback(frame)
+                frame_callback(display_frame)
             if show_window:
-                cv2.imshow("view", frame)
+                cv2.imshow("view", display_frame)
                 if cv2.waitKey(1) == ord("q"):
                     break
             if state != state_idle and time_counter - prev_time > 0.7:
@@ -542,7 +654,8 @@ def capture_pokemon_blinks(
 
     try:
         if (
-            should_stop is not None
+            config.uses_shared_video_source
+            or should_stop is not None
             or frame_callback is not None
             or progress_callback is not None
             or not show_window

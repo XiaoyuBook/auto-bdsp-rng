@@ -52,6 +52,9 @@ def test_generate_release_notes_includes_matching_changelog_entry(tmp_path: Path
     assert "auto-bdsp-rng-v2.2.0-windows-x64.zip" in body
     assert "帮助 -> 检查更新…" in body
     assert "只下载发生变化的文件" in body
+    assert "不需要安装 EasyCon、EasyConBridge、ezcon" in body
+    assert "`bridge`" not in body
+    assert "`easycon_root`" in body
 
 
 def test_generate_release_notes_rejects_mismatched_tag(tmp_path: Path):

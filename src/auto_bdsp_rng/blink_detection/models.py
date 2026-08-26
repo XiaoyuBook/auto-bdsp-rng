@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Sequence
 
 from auto_bdsp_rng.rng_core import SeedState32
 
@@ -48,6 +48,22 @@ class BlinkCaptureConfig:
     window_prefix: str = "SysDVR-Client [PID "
     crop: tuple[int, int, int, int] | None = None
     camera: int = 0
+    # ``source`` is deliberately orthogonal to the Project_Xs JSON fields.  A
+    # loaded legacy config remains valid, while the GUI can inject the shared
+    # capture broker for all consumers in the current process.
+    source: str = "legacy"
+    # ``video_source`` is accepted as a more descriptive integration alias.
+    # When supplied it takes precedence over ``source``.
+    video_source: str | None = None
+    broker_session: str | None = None
+    frame_source_factory: Callable[[], Any] | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def uses_shared_video_source(self) -> bool:
+        """Whether Project_Xs should read frames from the shared broker."""
+
+        value = self.video_source if self.video_source is not None else self.source
+        return str(value).strip().lower() in {"broker", "shared", "shared_video", "shared-video"}
 
 
 @dataclass(frozen=True)

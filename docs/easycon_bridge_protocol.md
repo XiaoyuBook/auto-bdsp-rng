@@ -1,7 +1,9 @@
 # EasyCon Bridge Protocol
 
-`EasyConBridge.exe` is the required persistent backend for the EasyCon module.
-The CLI backend remains a diagnostic fallback only.
+> Legacy compatibility reference. The product now uses the in-process Python
+> native backend and Capture Broker; it does not start EasyConBridge or require
+> `ezcon.exe`. This protocol remains documented for regression tests and older
+> integrations.
 
 ## Process Model
 

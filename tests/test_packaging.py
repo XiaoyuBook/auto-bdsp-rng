@@ -20,6 +20,16 @@ def test_pyinstaller_spec_collects_project_xs_win32ui_dependency():
     assert '"win32ui"' in spec
 
 
+def test_capture_device_enumerator_is_installed_and_bundled():
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    spec = (root / "packaging" / "auto-bdsp-rng.spec").read_text(encoding="utf-8")
+
+    assert '"cv2-enumerate-cameras>=1.3.3,<2"' in pyproject
+    assert '"cv2_enumerate_cameras"' in spec
+    assert '"cv2-enumerate-cameras"' in spec
+
+
 def test_build_script_copies_project_xs_user_resources_next_to_exe():
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts" / "build_exe.py").read_text(encoding="utf-8")

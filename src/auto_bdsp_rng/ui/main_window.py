@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStatusBar,
+    QStyle,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -118,7 +119,7 @@ from auto_bdsp_rng.app_settings import (
     set_startup_notice_acknowledged,
     should_show_startup_notice,
 )
-from auto_bdsp_rng.automation.easycon import CliEasyConBackend, EasyConRunResult, EasyConStatus
+from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_id import IDFilter, generate_ids
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
@@ -158,6 +159,12 @@ NOISY_REIDENTIFY_MAX_SEARCH_FRAMES = 100_000
 
 
 def _uses_same_capture_source(left: BlinkCaptureConfig, right: BlinkCaptureConfig) -> bool:
+    if left.uses_shared_video_source or right.uses_shared_video_source:
+        return (
+            left.uses_shared_video_source
+            and right.uses_shared_video_source
+            and left.broker_session == right.broker_session
+        )
     if left.monitor_window != right.monitor_window:
         return False
     if not left.monitor_window:
@@ -182,6 +189,50 @@ def _scale_preview_pixmap(pixmap: QPixmap, target: QSize, device_pixel_ratio: fl
     )
     scaled.setDevicePixelRatio(dpr)
     return scaled, scaled.deviceIndependentSize().toSize()
+
+
+def _enumerate_capture_devices(capture_api: int) -> list[tuple[int, str]]:
+    """Return OpenCV device indices and names for the selected backend."""
+
+    try:
+        from cv2_enumerate_cameras import enumerate_cameras
+
+        return [
+            (int(camera.index), str(camera.name).strip())
+            for camera in enumerate_cameras(int(capture_api))
+        ]
+    except Exception:
+        return []
+
+
+def _draw_easycon_search_overlay(frame: object, result: object | None) -> object:
+    """Draw EasyCon search metadata on an owned display copy."""
+
+    copy_frame = getattr(frame, "copy", None)
+    annotated = copy_frame() if callable(copy_frame) else frame
+    if result is None:
+        return annotated
+    try:
+        import cv2
+
+        rectangles = (
+            (getattr(result, "range_rect"), (0, 196, 255), 2),
+            (getattr(result, "match_rect"), (76, 210, 76), 3),
+        )
+        for raw_rect, color, width in rectangles:
+            x, y, rect_width, rect_height = (int(value) for value in raw_rect)
+            if rect_width <= 0 or rect_height <= 0:
+                continue
+            cv2.rectangle(
+                annotated,
+                (x, y),
+                (x + rect_width - 1, y + rect_height - 1),
+                color,
+                width,
+            )
+    except Exception:
+        return annotated
+    return annotated
 
 
 def configure_application_identity(app: QApplication) -> QIcon:
@@ -617,6 +668,7 @@ class RoiPreviewLabel(QLabel):
     def __init__(self) -> None:
         super().__init__()
         self._selection_enabled = False
+        self._overlay_enabled = True
         self._drag_start: QPoint | None = None
         self._drag_current: QPoint | None = None
         self._image_width = 0
@@ -624,6 +676,15 @@ class RoiPreviewLabel(QLabel):
         self._pixmap_rect = QRect()
         self._ocr_overlay_field: str | None = None
         self._ocr_overlay_region: OcrRegion | None = None
+
+    def set_overlay_enabled(self, enabled: bool) -> None:
+        """Toggle recognition overlays without changing the underlying frame."""
+
+        self._overlay_enabled = bool(enabled)
+        self.update()
+
+    def overlay_enabled(self) -> bool:
+        return self._overlay_enabled
 
     def set_image_geometry(self, image_width: int, image_height: int, pixmap_rect: QRect) -> None:
         self._image_width = image_width
@@ -699,7 +760,7 @@ class RoiPreviewLabel(QLabel):
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().paintEvent(event)
         needs_drag_rect = self._selection_enabled and self._drag_start is not None and self._drag_current is not None
-        needs_ocr_overlay = self._ocr_overlay_region is not None
+        needs_ocr_overlay = self._overlay_enabled and self._ocr_overlay_region is not None
         if not needs_drag_rect and not needs_ocr_overlay:
             return
         painter = QPainter(self)
@@ -717,6 +778,104 @@ class RoiPreviewLabel(QLabel):
         end = getattr(painter, "end", None)
         if callable(end):
             end()
+
+
+class PictureInPicturePreview(QDialog):
+    """Non-modal preview of the same raw frame consumed by the application.
+
+    The window owns no capture handle.  ``set_frames`` receives independent
+    raw/annotated images from :class:`MainWindow`; toggling either option only
+    changes this widget's presentation and cannot affect Broker consumers.
+    """
+
+    overlayChanged = Signal(bool)
+    alwaysOnTopChanged = Signal(bool)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("画中画预览")
+        self.setModal(False)
+        self.setWindowFlag(Qt.WindowType.Window, True)
+        self.setMinimumSize(320, 220)
+        self.resize(480, 300)
+        self._raw_frame: object | None = None
+        self._annotated_frame: object | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        self.frame_label = QLabel()
+        self.frame_label.setObjectName("Preview")
+        self.frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.frame_label.setMinimumSize(300, 180)
+        self.frame_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        layout.addWidget(self.frame_label, 1)
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        self.overlay_check = QCheckBox("显示识别框")
+        self.overlay_check.setChecked(True)
+        self.overlay_check.toggled.connect(self._handle_overlay_toggled)
+        self.always_on_top_check = QCheckBox("始终置顶")
+        self.always_on_top_check.toggled.connect(self._handle_always_on_top_toggled)
+        controls.addWidget(self.overlay_check)
+        controls.addWidget(self.always_on_top_check)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+    def _handle_overlay_toggled(self, enabled: bool) -> None:
+        self.overlayChanged.emit(bool(enabled))
+        self._refresh_frame()
+
+    def _handle_always_on_top_toggled(self, enabled: bool) -> None:
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(enabled))
+        self.alwaysOnTopChanged.emit(bool(enabled))
+        if self.isVisible():
+            self.show()
+
+    def set_overlay_enabled(self, enabled: bool) -> None:
+        self.overlay_check.setChecked(bool(enabled))
+
+    def overlay_enabled(self) -> bool:
+        return self.overlay_check.isChecked()
+
+    def set_always_on_top(self, enabled: bool) -> None:
+        self.always_on_top_check.setChecked(bool(enabled))
+
+    def always_on_top(self) -> bool:
+        return self.always_on_top_check.isChecked()
+
+    def set_frames(self, raw_frame: object, annotated_frame: object | None = None) -> None:
+        self._raw_frame = raw_frame
+        self._annotated_frame = annotated_frame if annotated_frame is not None else raw_frame
+        self._refresh_frame()
+
+    def _refresh_frame(self) -> None:
+        frame = self._annotated_frame if self.overlay_enabled() else self._raw_frame
+        if frame is None:
+            return
+        try:
+            import cv2
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            height, width, channel = rgb.shape
+            image = QImage(rgb.data, width, height, channel * width, QImage.Format.Format_RGB888).copy()
+            pixmap = QPixmap.fromImage(image)
+        except Exception:
+            return
+        target = self.frame_label.contentsRect().size()
+        if target.width() <= 0 or target.height() <= 0:
+            return
+        scaled = pixmap.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.frame_label.setPixmap(scaled)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        self._refresh_frame()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        # Closing PiP only hides this display; the Broker remains connected.
+        event.ignore()
+        self.hide()
 
 
 class NoWheelDoubleSpinBox(QDoubleSpinBox):
@@ -854,6 +1013,41 @@ class OcrTaskThread(QThread):
             self.completed.emit(success, result)
 
 
+class CaptureBrokerStartThread(QThread):
+    """Wait for the Broker's first frame without blocking the Qt event loop."""
+
+    completed = Signal(bool, object)
+
+    def __init__(
+        self,
+        start_broker: Callable[[], bool],
+        probe_client: Callable[[], object],
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._start_broker = start_broker
+        self._probe_client = probe_client
+
+    def run(self) -> None:
+        try:
+            if not self._start_broker():
+                raise ProjectXsIntegrationError("5 秒内未收到采集卡首帧")
+            if self.isInterruptionRequested():
+                raise ProjectXsIntegrationError("视频源连接已取消")
+            client = self._probe_client()
+            try:
+                if self.isInterruptionRequested():
+                    raise ProjectXsIntegrationError("视频源连接已取消")
+            finally:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
+        except BaseException as exc:
+            self.completed.emit(False, exc)
+        else:
+            self.completed.emit(True, None)
+
+
 class MainWindow(QMainWindow):
     autoCaptureFrameChanged = Signal(object)
     autoCaptureProgressChanged = Signal(int, int)
@@ -869,11 +1063,13 @@ class MainWindow(QMainWindow):
     ocrFullTestFinished = Signal(bool, str)
     runLogFailed = Signal(str)
     uiCallRequested = Signal(object, object, object, object)
+    easyConImageSearchResultChanged = Signal(int, int, object)
 
     def __init__(
         self,
         profile_settings: QSettings | None = None,
         run_log_manager: RunLogManager | None = None,
+        capture_broker_process: object | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(APP_DISPLAY_TITLE)
@@ -892,6 +1088,21 @@ class MainWindow(QMainWindow):
         self._states: list[State8] = []
         self._eye_image_path: Path | None = None
         self._latest_preview_frame: object | None = None
+        self._latest_annotated_preview_frame: object | None = None
+        self._latest_easycon_image_search_result: object | None = None
+        self._capture_broker_process = capture_broker_process
+        self._capture_broker_start_thread: CaptureBrokerStartThread | None = None
+        self._capture_broker_attempt = 0
+        self._video_source_connected = False
+        self._video_source_connecting = False
+        self._video_source_cancel_requested = False
+        self._video_source_stop_pending = False
+        self._video_source_stop_error: str | None = None
+        self._video_source_pending_status = "未连接"
+        self._video_source_generation = 0
+        self._easycon_run_generation = 0
+        self._preview_annotation_error_reported = False
+        self._picture_in_picture: PictureInPicturePreview | None = None
         self._roi_before_selection: tuple[int, int, int, int] | None = None
         self._ocr_selection_field: str | None = None
         self._ocr_settings_dialog: OcrSettingsDialog | None = None
@@ -939,6 +1150,10 @@ class MainWindow(QMainWindow):
         self._advance_step = 1
         self._advance_counter = ProjectXsAdvanceCounter()
         self._advance_counter.reset(current_advances=0, npc=0, now=time.monotonic())
+        self.easyConImageSearchResultChanged.connect(
+            self._handle_easycon_image_search_result,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._build_actions()
         self._build_ui()
         self._restore_profile_settings()
@@ -956,9 +1171,11 @@ class MainWindow(QMainWindow):
         self.autoCaptureProgressChanged.connect(self._handle_auto_capture_progress)
         self.captureKeepAwakeRequested.connect(self._handle_capture_keep_awake_requested)
         self.autoSeedCaptured.connect(self._handle_auto_seed_captured)
-        self.autoScriptStarted.connect(self.easycon_tab.begin_external_bridge_script)
-        self.autoScriptFinished.connect(self.easycon_tab.finish_external_bridge_script)
-        self.autoScriptFailed.connect(self.easycon_tab.fail_external_bridge_script)
+        self.autoScriptStarted.connect(self.easycon_tab.begin_external_native_script)
+        self.autoScriptStarted.connect(self._begin_easycon_image_search_run)
+        self.easycon_tab.nativeScriptStarted.connect(self._begin_easycon_image_search_run)
+        self.autoScriptFinished.connect(self.easycon_tab.finish_external_native_script)
+        self.autoScriptFailed.connect(self.easycon_tab.fail_external_native_script)
         self.autoHistoryEvent.connect(self._handle_auto_history_event)
         self.uiCallRequested.connect(self._handle_ui_call_requested)
 
@@ -975,11 +1192,70 @@ class MainWindow(QMainWindow):
         return result[0] if result else None
 
     def _finalize_auto_script_result(self, result: object, name: str) -> object:
-        self.autoScriptFinished.emit(result)
+        def finish_script() -> None:
+            try:
+                self.autoScriptFinished.emit(result)
+            finally:
+                self.easycon_tab.release_native_script_run()
+
+        self._call_on_ui_thread(finish_script)
         failure_message = _auto_script_failure_message(result, name)
         if failure_message is not None:
             raise RuntimeError(failure_message)
         return result
+
+    def _fail_auto_script(self, error: BaseException) -> None:
+        def fail_script() -> None:
+            try:
+                self.autoScriptFailed.emit(str(error))
+            finally:
+                self.easycon_tab.release_native_script_run()
+
+        self._call_on_ui_thread(fail_script)
+
+    def _prepare_auto_easycon_script(self, script_name: str) -> object:
+        if not self._video_source_connected:
+            raise RuntimeError("请先在 Seed 捕捉页面连接视频源")
+        native_status = self.easycon_tab._native_status()
+        if native_status != EasyConStatus.BRIDGE_CONNECTED:
+            if native_status == EasyConStatus.RUNNING:
+                raise RuntimeError("已有伊机控脚本正在运行")
+            raise RuntimeError("请先连接伊机控")
+        if not self.easycon_tab.reserve_native_script_run():
+            raise RuntimeError("已有伊机控脚本正在运行")
+        try:
+            backend = self.easycon_tab._ensure_native_backend()
+            self.autoScriptStarted.emit(script_name)
+        except BaseException:
+            self.easycon_tab.release_native_script_run()
+            raise
+        return backend
+
+    @staticmethod
+    def _native_script_context(config: object, script_text: str, name: str) -> tuple[str, Path]:
+        supplied = Path(name)
+        if supplied.is_absolute() or supplied.parent != Path("."):
+            return supplied.name, supplied.parent
+
+        matching_paths: list[Path] = []
+        for key, value in vars(config).items():
+            if not key.endswith("_script_path") or value is None:
+                continue
+            candidate = Path(value)
+            if candidate.name == supplied.name:
+                matching_paths.append(candidate)
+        if len(matching_paths) > 1:
+            for candidate in matching_paths:
+                try:
+                    if candidate.read_text(encoding="utf-8") == script_text:
+                        return candidate.name, candidate.parent
+                except OSError:
+                    continue
+        if matching_paths:
+            return matching_paths[0].name, matching_paths[0].parent
+
+        configured_dir = getattr(config, "script_dir", None)
+        return supplied.name, Path(configured_dir) if configured_dir is not None else resource_path("script")
 
     def _handle_ui_call_requested(
         self,
@@ -1043,7 +1319,15 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
-        self.easycon_tab = EasyConPanel(run_log_sink=self._run_log_sink("伊机控"))
+        self.easycon_tab = EasyConPanel(
+            run_log_sink=self._run_log_sink("伊机控"),
+            video_source_connected=lambda: self._video_source_connected,
+            frame_client_factory=self._new_broker_client,
+        )
+        self._install_easycon_image_result_callback(
+            self._video_source_generation,
+            self._easycon_run_generation,
+        )
         self.auto_rng_tab = AutoRngPanel(run_log_sink=self._run_log_sink("自动定点"))
         self.auto_tid_rng_tab = AutoTidRngPanel(run_log_sink=self._run_log_sink("自动 TID"))
         self.history_tab = HistoryPanel()
@@ -1788,6 +2072,67 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         self.preview_group = QGroupBox()
         preview_layout = QVBoxLayout(self.preview_group)
+        source_row = QHBoxLayout()
+        source_row.setContentsMargins(0, 0, 0, 0)
+        source_row.setSpacing(8)
+        self.video_source_combo = QComboBox()
+        self.video_source_combo.addItem("共享视频源", "broker")
+        self.video_source_combo.setMinimumWidth(120)
+        self.capture_device_combo = QComboBox()
+        self.capture_device_combo.setEditable(True)
+        for index in range(10):
+            self.capture_device_combo.addItem(str(index), index)
+        self.capture_device_combo.setCurrentText(
+            str(self._profile_settings.value("video_source/device_index", "0") or "0")
+        )
+        self.capture_device_combo.setMinimumWidth(180)
+        self.capture_device_combo.setMaximumWidth(300)
+        self.capture_device_refresh_button = QToolButton()
+        self.capture_device_refresh_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
+        )
+        self.capture_device_refresh_button.setToolTip("刷新采集设备")
+        self.capture_device_refresh_button.setFixedSize(28, 28)
+        self.capture_device_refresh_button.clicked.connect(self.refresh_capture_devices)
+        self.capture_api_combo = QComboBox()
+        self.capture_api_combo.addItem("DirectShow", 700)
+        self.capture_api_combo.addItem("Media Foundation", 1400)
+        self.capture_api_combo.addItem("自动", 0)
+        saved_api = self._profile_settings_int(
+            self._profile_settings.value("video_source/capture_api", 700),
+            700,
+        )
+        api_index = self.capture_api_combo.findData(saved_api)
+        self.capture_api_combo.setCurrentIndex(max(0, api_index))
+        self.capture_api_combo.currentIndexChanged.connect(
+            lambda _index: self.refresh_capture_devices()
+        )
+        self.video_source_button = QPushButton("连接视频源")
+        self.video_source_button.setObjectName("PrimaryButton")
+        self.video_source_button.clicked.connect(self.toggle_video_source)
+        self.video_source_status = QLabel("未连接")
+        self.video_source_status.setObjectName("VideoSourceStatus")
+        source_row.addWidget(self.video_source_combo)
+        source_row.addWidget(QLabel("设备"))
+        source_row.addWidget(self.capture_device_combo)
+        source_row.addWidget(self.capture_device_refresh_button)
+        source_row.addWidget(self.capture_api_combo)
+        source_row.addWidget(self.video_source_button)
+        source_row.addWidget(self.video_source_status)
+        source_row.addStretch(1)
+        preview_layout.addLayout(source_row)
+
+        preview_controls = QHBoxLayout()
+        preview_controls.setContentsMargins(0, 0, 0, 0)
+        self.main_preview_overlay_check = QCheckBox("显示识别框")
+        self.main_preview_overlay_check.setChecked(True)
+        self.main_preview_overlay_check.toggled.connect(self._refresh_preview_presentation)
+        self.picture_in_picture_button = QPushButton("弹出画中画")
+        self.picture_in_picture_button.clicked.connect(self.show_picture_in_picture)
+        preview_controls.addWidget(self.main_preview_overlay_check)
+        preview_controls.addWidget(self.picture_in_picture_button)
+        preview_controls.addStretch(1)
+        preview_layout.addLayout(preview_controls)
         self.preview_label = RoiPreviewLabel()
         self.preview_label.roiSelected.connect(self._handle_preview_selection)
         self.preview_label.setObjectName("Preview")
@@ -1797,6 +2142,7 @@ class MainWindow(QMainWindow):
         self.preview_label.setScaledContents(False)
         preview_layout.addWidget(self.preview_label)
         layout.addWidget(self.preview_group, 1)
+        QTimer.singleShot(0, self.refresh_capture_devices)
         return panel
 
     def _build_results(self) -> QWidget:
@@ -2458,7 +2804,8 @@ class MainWindow(QMainWindow):
         self._request_automation_runner_stop(self.auto_tid_rng_tab, "自动 TID")
         self._ocr_shutdown_requested = True
         self._request_ocr_background_stop()
-        easycon_stopped = self.easycon_tab.shutdown()
+        broker_start_stopped = self._shutdown_capture_broker_start_thread()
+        easycon_stopped = self.easycon_tab.shutdown() if broker_start_stopped else True
 
         pending_tasks: list[str] = []
         if not self._shutdown_automation_runner(
@@ -2475,6 +2822,8 @@ class MainWindow(QMainWindow):
             pending_tasks.append("自动 TID")
         if not easycon_stopped:
             pending_tasks.append("伊机控或 CLI")
+        if not broker_start_stopped:
+            pending_tasks.append("视频源连接")
         if not self._shutdown_worker_thread(
             self._shiny_calibration_worker,
             self._shiny_calibration_thread,
@@ -2503,6 +2852,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, title, message)
             event.ignore()
             return
+        if not self.disconnect_video_source(force=True):
+            self._is_closing = False
+            QMessageBox.warning(
+                self,
+                "视频源未能停止",
+                "共享视频源尚未确认停止，请重试断开后再关闭程序。",
+            )
+            event.ignore()
+            return
         self._save_profile_settings()
         super().closeEvent(event)
 
@@ -2526,6 +2884,53 @@ class MainWindow(QMainWindow):
 
     def _request_automation_runner_stop(self, panel: object, label: str) -> None:
         self._request_worker_stop(getattr(panel, "_runner_worker", None), label)
+
+    def _shutdown_capture_broker_start_thread(self, *, wait_ms: int = 3000) -> bool:
+        thread = self._capture_broker_start_thread
+        if thread is None:
+            return True
+        self._video_source_cancel_requested = True
+        self._video_source_pending_status = "连接已取消"
+        if self._video_source_connected or self._video_source_connecting:
+            self._invalidate_video_source_consumers()
+        else:
+            self._clear_video_source_preview()
+        thread.requestInterruption()
+        process = self._capture_broker_process
+        stopped, stop_error = self._stop_capture_broker_process(
+            process,
+            context="关闭时停止 Broker 失败",
+        )
+        deadline = time.monotonic() + max(0, wait_ms) / 1000.0
+        while thread.isRunning() and time.monotonic() < deadline:
+            QApplication.processEvents()
+            remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+            thread.wait(min(50, remaining_ms))
+        if thread.isRunning():
+            if not stopped:
+                self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
+            else:
+                self._video_source_connecting = True
+                self.video_source_button.setEnabled(False)
+                self.video_source_button.setText("正在断开...")
+                self.video_source_status.setText("正在结束视频源连接")
+            self._write_run_log("视频源", "关闭时视频源连接线程未能及时退出", level="WARNING")
+            return False
+        stopped, stop_error = self._stop_capture_broker_process(
+            process,
+            context="关闭时最终确认 Broker 停止失败",
+        )
+        if self._capture_broker_start_thread is thread:
+            self._capture_broker_start_thread = None
+        self._video_source_connecting = False
+        self._video_source_cancel_requested = False
+        if not stopped:
+            self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
+            return False
+        self._video_source_stop_pending = False
+        self._video_source_stop_error = None
+        self._set_video_source_disconnected_ui(self._video_source_pending_status)
+        return True
 
     def _shutdown_automation_runner(
         self,
@@ -2859,6 +3264,7 @@ class MainWindow(QMainWindow):
             crop=loaded.capture.crop,
             camera=int(self.camera.text() or 0),
         )
+        capture = self._shared_capture_config(capture)
         return ProjectXsTrackingConfig(
             source_path=loaded.source_path,
             capture=capture,
@@ -2917,6 +3323,489 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(self._text("config_saved"))
 
+    def set_capture_broker_process(self, process: object | None) -> None:
+        """Install the independently hosted Broker process controller."""
+
+        start_thread = self._capture_broker_start_thread
+        if (
+            self._video_source_connected
+            or self._video_source_connecting
+            or self._video_source_stop_pending
+            or start_thread is not None
+        ):
+            raise RuntimeError("请先断开当前视频源")
+        self._capture_broker_process = process
+
+    def _clear_easycon_image_search_result(self, *_args: object) -> None:
+        self._latest_easycon_image_search_result = None
+
+    def _begin_easycon_image_search_run(self, *_args: object) -> None:
+        self._easycon_run_generation += 1
+        self._clear_easycon_image_search_result()
+        self._install_easycon_image_result_callback(
+            self._video_source_generation,
+            self._easycon_run_generation,
+        )
+
+    def _install_easycon_image_result_callback(
+        self,
+        source_generation: int,
+        run_generation: int,
+    ) -> None:
+        backend = self.easycon_tab._ensure_native_backend()
+        setter = getattr(backend, "set_image_result_callback", None)
+        if callable(setter):
+            setter(
+                lambda result, source=int(source_generation), run=int(run_generation): (
+                    self.easyConImageSearchResultChanged.emit(
+                        source,
+                        run,
+                        result,
+                    )
+                )
+            )
+
+    def _invalidate_video_source_consumers(self) -> None:
+        self._video_source_connected = False
+        self._video_source_generation += 1
+        self._preview_annotation_error_reported = False
+        self._latest_preview_frame = None
+        self._latest_annotated_preview_frame = None
+        self._clear_easycon_image_search_result()
+        self.easycon_tab.video_source_state_changed()
+
+    def _clear_video_source_preview(self) -> None:
+        self._latest_preview_frame = None
+        self._latest_annotated_preview_frame = None
+        self._clear_easycon_image_search_result()
+        self.preview_label.clear()
+        self.preview_label.setText(self._text("no_preview"))
+        if self._picture_in_picture is not None:
+            self._picture_in_picture.hide()
+
+    def _set_video_source_disconnected_ui(self, status: str = "未连接") -> None:
+        self.video_source_button.setEnabled(True)
+        self.video_source_button.setText("连接视频源")
+        self.video_source_status.setText(status)
+        self.capture_device_combo.setEnabled(True)
+        self.capture_device_refresh_button.setEnabled(True)
+        self.capture_api_combo.setEnabled(True)
+        self.video_source_combo.setEnabled(True)
+        self.preview_button.setEnabled(True)
+        self.preview_button.setText(self._text("preview_button"))
+        self._clear_video_source_preview()
+
+    def _set_video_source_stop_failure(self, message: str) -> None:
+        self._video_source_stop_pending = True
+        self._video_source_stop_error = str(message)
+        self._invalidate_video_source_consumers()
+        start_thread = self._capture_broker_start_thread
+        self.video_source_button.setEnabled(start_thread is None)
+        self.video_source_button.setText("重试断开")
+        self.video_source_status.setText("停止失败，请重试")
+        self.capture_device_combo.setEnabled(False)
+        self.capture_device_refresh_button.setEnabled(False)
+        self.capture_api_combo.setEnabled(False)
+        self.video_source_combo.setEnabled(False)
+        self.preview_button.setEnabled(False)
+        self._clear_video_source_preview()
+
+    def _stop_capture_broker_process(
+        self,
+        process: object | None,
+        *,
+        context: str,
+    ) -> tuple[bool, str | None]:
+        if process is None:
+            if self._video_source_stop_pending:
+                message = "共享视频源进程控制器不存在，无法确认停止"
+                self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
+                return False, message
+            return True, None
+        stop = getattr(process, "stop", None)
+        if not callable(stop):
+            message = "共享视频源进程控制器不支持停止"
+            self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
+            return False, message
+        try:
+            result = stop()
+        except Exception as exc:
+            message = str(exc) or type(exc).__name__
+            self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
+            return False, message
+        if result is False:
+            message = "Broker 未确认停止"
+            self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
+            return False, message
+        return True, None
+
+    def _capture_device_index(self) -> int:
+        data = self.capture_device_combo.currentData()
+        text = self.capture_device_combo.currentText().strip()
+        try:
+            if self.capture_device_combo.currentIndex() >= 0 and data is not None:
+                return max(0, int(data))
+            index_text = text.partition(" - ")[0].strip()
+            return max(0, int(index_text if index_text else data))
+        except (TypeError, ValueError) as exc:
+            raise ProjectXsIntegrationError("采集卡设备序号无效") from exc
+
+    def refresh_capture_devices(self) -> None:
+        selected_name = self.capture_device_combo.currentText().partition(" - ")[2].strip()
+        try:
+            selected_index = self._capture_device_index()
+        except ProjectXsIntegrationError:
+            selected_index = self._profile_settings_int(
+                self._profile_settings.value("video_source/device_index", 0),
+                0,
+            )
+        devices = _enumerate_capture_devices(self._capture_api())
+        if not devices:
+            fallback_indices = list(range(10))
+            if selected_index not in fallback_indices:
+                fallback_indices.append(selected_index)
+            devices = [(index, "") for index in fallback_indices]
+        self.capture_device_combo.blockSignals(True)
+        self.capture_device_combo.clear()
+        for index, name in devices:
+            label = f"{index} - {name}" if name else str(index)
+            self.capture_device_combo.addItem(label, index)
+        selected = -1
+        if selected_name:
+            selected = next(
+                (
+                    row
+                    for row, (_index, name) in enumerate(devices)
+                    if name == selected_name
+                ),
+                -1,
+            )
+        if selected < 0:
+            selected = self.capture_device_combo.findData(selected_index)
+        self.capture_device_combo.setCurrentIndex(max(0, selected))
+        self.capture_device_combo.blockSignals(False)
+
+    def _capture_api(self) -> int:
+        return int(self.capture_api_combo.currentData() or 0)
+
+    def _new_broker_client_for(self, controller: object | None) -> object:
+        if controller is not None:
+            for name in ("client", "connect_client", "create_client"):
+                value = getattr(controller, name, None)
+                if callable(value):
+                    client = value()
+                    if client is not None:
+                        return client
+                elif value is not None:
+                    return value
+        from auto_bdsp_rng.capture_broker import CaptureBrokerClient
+
+        return CaptureBrokerClient.connect(require_running=True)
+
+    def _new_broker_client(self) -> object:
+        return self._new_broker_client_for(self._capture_broker_process)
+
+    def _shared_capture_config(self, capture: BlinkCaptureConfig) -> BlinkCaptureConfig:
+        if not self._video_source_connected:
+            return capture
+        return replace(
+            capture,
+            source="broker",
+            video_source="broker",
+            frame_source_factory=self._new_broker_client,
+        )
+
+    def _create_capture_broker_process(self, device_index: int, capture_api: int) -> object:
+        try:
+            module = __import__("auto_bdsp_rng.capture_broker_process", fromlist=["CaptureBrokerProcess"])
+            process_type = getattr(module, "CaptureBrokerProcess")
+        except (ImportError, AttributeError) as exc:
+            raise ProjectXsIntegrationError("共享视频源进程组件尚未安装") from exc
+        try:
+            return process_type(device_index=device_index, capture_api=capture_api)
+        except TypeError:
+            return process_type(device_index, capture_api)
+
+    def _start_capture_broker_process(self, process: object, device_index: int, capture_api: int) -> bool:
+        configure = getattr(process, "configure", None)
+        if callable(configure):
+            configure(device_index=device_index, capture_api=capture_api)
+        start = getattr(process, "start", None)
+        if not callable(start):
+            raise ProjectXsIntegrationError("共享视频源进程控制器不支持启动")
+        for kwargs in (
+            {"device_index": device_index, "capture_api": capture_api},
+            {},
+        ):
+            try:
+                result = start(**kwargs)
+                return result is not False
+            except TypeError:
+                continue
+        raise ProjectXsIntegrationError("共享视频源进程启动参数不兼容")
+
+    def toggle_video_source(self) -> None:
+        if self._video_source_connecting:
+            return
+        if self._video_source_connected or self._video_source_stop_pending:
+            self.disconnect_video_source()
+        else:
+            self.connect_video_source()
+
+    def connect_video_source(self) -> bool:
+        if self._video_source_connected:
+            return True
+        start_thread = self._capture_broker_start_thread
+        if self._video_source_connecting or self._video_source_stop_pending:
+            return False
+        if start_thread is not None:
+            return False
+        try:
+            device_index = self._capture_device_index()
+            capture_api = self._capture_api()
+            process = self._capture_broker_process
+            if process is None:
+                process = self._create_capture_broker_process(device_index, capture_api)
+                self._capture_broker_process = process
+        except Exception as exc:
+            self._show_error("视频源连接失败", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            return False
+
+        self._capture_broker_attempt += 1
+        attempt = self._capture_broker_attempt
+        thread = CaptureBrokerStartThread(
+            lambda: self._start_capture_broker_process(process, device_index, capture_api),
+            lambda: self._new_broker_client_for(process),
+            self,
+        )
+        thread.completed.connect(
+            lambda success, payload, current=thread, token=attempt, controller=process: (
+                self._finish_video_source_connection(
+                    current,
+                    token,
+                    controller,
+                    device_index,
+                    capture_api,
+                    success,
+                    payload,
+                )
+            )
+        )
+        thread.finished.connect(
+            lambda current=thread, token=attempt, controller=process: self._capture_broker_start_finished(
+                current,
+                token,
+                controller,
+            )
+        )
+        thread.finished.connect(thread.deleteLater)
+        self._capture_broker_start_thread = thread
+        self._video_source_connecting = True
+        self._video_source_cancel_requested = False
+        self._video_source_pending_status = "连接失败"
+        self._clear_easycon_image_search_result()
+        self.video_source_button.setEnabled(False)
+        self.video_source_button.setText("连接中...")
+        self.video_source_status.setText("正在等待第一帧")
+        self.capture_device_combo.setEnabled(False)
+        self.capture_device_refresh_button.setEnabled(False)
+        self.capture_api_combo.setEnabled(False)
+        self.video_source_combo.setEnabled(False)
+        thread.start()
+        return True
+
+    def _finish_video_source_connection(
+        self,
+        thread: CaptureBrokerStartThread,
+        attempt: int,
+        process: object,
+        device_index: int,
+        capture_api: int,
+        success: bool,
+        payload: object,
+    ) -> None:
+        if (
+            thread is not self._capture_broker_start_thread
+            or attempt != self._capture_broker_attempt
+            or process is not self._capture_broker_process
+        ):
+            return
+        if self._is_closing or self._video_source_cancel_requested:
+            return
+        if not success:
+            stopped, stop_error = self._stop_capture_broker_process(
+                process,
+                context="清理启动失败的 Broker 时出错",
+            )
+            self._video_source_connected = False
+            self._video_source_pending_status = "连接失败"
+            if stopped:
+                self._video_source_stop_pending = False
+                self._video_source_stop_error = None
+                self.video_source_status.setText("连接失败，正在清理")
+            else:
+                self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
+            error = payload if isinstance(payload, BaseException) else RuntimeError(str(payload))
+            self._show_error("视频源连接失败", error)
+            return
+
+        self._video_source_connecting = False
+        self._video_source_connected = True
+        self._video_source_stop_pending = False
+        self._video_source_stop_error = None
+        self._video_source_cancel_requested = False
+        self._video_source_pending_status = "未连接"
+        self._video_source_generation += 1
+        self._preview_annotation_error_reported = False
+        self._clear_easycon_image_search_result()
+        self._install_easycon_image_result_callback(
+            self._video_source_generation,
+            self._easycon_run_generation,
+        )
+        self.easycon_tab.video_source_state_changed()
+        self.video_source_button.setEnabled(True)
+        self.video_source_button.setText("断开视频源")
+        self.video_source_status.setText("已连接")
+        self.capture_device_combo.setEnabled(False)
+        self.capture_device_refresh_button.setEnabled(False)
+        self.capture_api_combo.setEnabled(False)
+        self.video_source_combo.setEnabled(False)
+        self.preview_button.setEnabled(False)
+        self.preview_button.setText("预览常驻")
+        self._profile_settings.setValue("video_source/device_index", device_index)
+        self._profile_settings.setValue("video_source/capture_api", capture_api)
+        self._latest_preview_frame = None
+        self._release_preview_capture()
+        self._preview_timer.start()
+        self.statusBar().showMessage("共享视频源已连接，预览将持续显示")
+
+    def _capture_broker_start_finished(
+        self,
+        thread: CaptureBrokerStartThread,
+        attempt: int,
+        process: object | None = None,
+    ) -> None:
+        if thread is not self._capture_broker_start_thread or attempt != self._capture_broker_attempt:
+            return
+        if self._video_source_connected:
+            self._capture_broker_start_thread = None
+            return
+        controller = self._capture_broker_process if process is None else process
+        stopped, stop_error = self._stop_capture_broker_process(
+            controller,
+            context="连接线程结束后最终确认 Broker 停止失败",
+        )
+        self._capture_broker_start_thread = None
+        self._video_source_connecting = False
+        self._video_source_cancel_requested = False
+        if not stopped:
+            self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
+            return
+        self._video_source_stop_pending = False
+        self._video_source_stop_error = None
+        self._set_video_source_disconnected_ui(self._video_source_pending_status)
+
+    def disconnect_video_source(self, *, force: bool = False) -> bool:
+        start_thread = self._capture_broker_start_thread
+        starter_pending = start_thread is not None
+        starter_running = start_thread is not None and start_thread.isRunning()
+        was_starting = self._video_source_connecting and not self._video_source_connected
+        if (
+            not self._video_source_connected
+            and not self._video_source_connecting
+            and not self._video_source_stop_pending
+            and not starter_pending
+        ):
+            return True
+        active = (
+            self._is_capturing()
+            or self.auto_rng_tab._runner_thread is not None
+            or self.auto_tid_rng_tab._runner_thread is not None
+            or self.easycon_tab._native_status() == EasyConStatus.RUNNING
+        )
+        if active and not force:
+            choice = QMessageBox.question(
+                self,
+                "切换视频源",
+                "正在运行的任务需要当前视频源。是否停止这些任务并断开？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                return False
+        if active:
+            self._capture_cancel.set()
+            self._request_automation_runner_stop(self.auto_rng_tab, "自动定点")
+            self._request_automation_runner_stop(self.auto_tid_rng_tab, "自动 TID")
+            if self.easycon_tab._native_status() == EasyConStatus.RUNNING:
+                self.easycon_tab.stop_native_script()
+
+        self._preview_timer.stop()
+        self._release_preview_capture()
+        if starter_pending and start_thread is not None:
+            self._video_source_cancel_requested = True
+            if was_starting:
+                self._video_source_pending_status = "连接已取消"
+            start_thread.requestInterruption()
+        process = self._capture_broker_process
+        if self._video_source_connected or self._video_source_connecting or starter_pending:
+            self._invalidate_video_source_consumers()
+        else:
+            self._clear_video_source_preview()
+        stopped, stop_error = self._stop_capture_broker_process(
+            process,
+            context="停止 Broker 失败",
+        )
+        starter_running = start_thread is not None and start_thread.isRunning()
+        if starter_pending and not starter_running:
+            stopped, stop_error = self._stop_capture_broker_process(
+                process,
+                context="取消连接后最终确认 Broker 停止失败",
+            )
+        if starter_pending and not starter_running and self._capture_broker_start_thread is start_thread:
+            self._capture_broker_start_thread = None
+        if not stopped:
+            if not starter_running:
+                self._video_source_connecting = False
+                self._video_source_cancel_requested = False
+            self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
+            return False
+        self._video_source_stop_pending = False
+        self._video_source_stop_error = None
+        if starter_running:
+            self._video_source_connecting = True
+            self.video_source_button.setEnabled(False)
+            self.video_source_button.setText("正在断开...")
+            self.video_source_status.setText("正在结束视频源连接")
+            return False
+        self._video_source_connecting = False
+        self._video_source_cancel_requested = False
+        status = self._video_source_pending_status if starter_pending else "未连接"
+        self._video_source_pending_status = "未连接"
+        self._set_video_source_disconnected_ui(status)
+        return True
+
+    def show_picture_in_picture(self) -> None:
+        if self._picture_in_picture is None:
+            self._picture_in_picture = PictureInPicturePreview(self)
+        if self._latest_preview_frame is not None:
+            self._picture_in_picture.set_frames(
+                self._latest_preview_frame,
+                self._latest_annotated_preview_frame,
+            )
+        self._picture_in_picture.show()
+        self._picture_in_picture.raise_()
+
+    def _refresh_preview_presentation(self) -> None:
+        self.preview_label.set_overlay_enabled(self.main_preview_overlay_check.isChecked())
+        frame = (
+            self._latest_annotated_preview_frame
+            if self.main_preview_overlay_check.isChecked()
+            else self._latest_preview_frame
+        )
+        if frame is not None:
+            self._display_frame(frame)
+
     def _release_preview_capture(self) -> None:
         capture = self._preview_capture
         self._preview_capture = None
@@ -2964,6 +3853,8 @@ class MainWindow(QMainWindow):
     def toggle_preview(self) -> None:
         if self._is_capturing():
             return
+        if self._video_source_connected:
+            return
         if self._preview_timer.isActive():
             self._preview_timer.stop()
             self._release_preview_capture()
@@ -2978,18 +3869,28 @@ class MainWindow(QMainWindow):
 
     def _pause_preview_for_capture(self) -> None:
         self._resume_preview_after_capture = self._preview_timer.isActive()
+        if self._video_source_connected:
+            return
         if self._resume_preview_after_capture:
             self._preview_timer.stop()
             self._release_preview_capture()
             self.preview_button.setText(self._text("stop_preview"))
 
     def _restore_preview_after_capture(self) -> None:
+        if self._video_source_connected:
+            if not self._preview_timer.isActive():
+                self._preview_timer.start()
+            self._resume_preview_after_capture = False
+            return
         if self._resume_preview_after_capture:
             self._preview_timer.start()
             self.preview_button.setText(self._text("stop_preview"))
         self._resume_preview_after_capture = False
 
     def _ensure_preview_frame_before_capture(self) -> bool:
+        if self._capture_broker_process is not None and not self._video_source_connected:
+            QMessageBox.warning(self, "视频源未连接", "请先连接视频源后再运行需要画面的任务。")
+            return False
         if self._latest_preview_frame is not None:
             return True
         if not self._preview_timer.isActive():
@@ -3002,8 +3903,13 @@ class MainWindow(QMainWindow):
             time.sleep(0.2)
             waited += 0.2
             self._update_preview_frame()
-        # 首帧到达后立即停止预览，避免与后续 blink 捕捉抢摄像头资源
-        if self._latest_preview_frame is not None and self._preview_timer.isActive():
+        # Legacy camera capture must release the handle before blink tracking;
+        # Broker consumers can keep the shared preview alive throughout.
+        if (
+            not self._video_source_connected
+            and self._latest_preview_frame is not None
+            and self._preview_timer.isActive()
+        ):
             self._preview_timer.stop()
             self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
@@ -3041,7 +3947,7 @@ class MainWindow(QMainWindow):
     def _begin_preview_selection(self, mode: str) -> None:
         self._selection_mode = mode
         self._resume_preview_after_selection = self._preview_timer.isActive()
-        if self._preview_timer.isActive():
+        if self._preview_timer.isActive() and not self._video_source_connected:
             self._preview_timer.stop()
             self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
@@ -3634,28 +4540,116 @@ class MainWindow(QMainWindow):
             self._write_run_log("OCR", message, level="ERROR")
             self.ocrFullTestFinished.emit(False, message)
 
+    def _handle_easycon_image_search_result(
+        self,
+        source_generation: int,
+        run_generation: int,
+        result: object,
+    ) -> None:
+        if not self._video_source_connected:
+            return
+        if source_generation != self._video_source_generation:
+            return
+        if run_generation != self._easycon_run_generation:
+            return
+        self._latest_easycon_image_search_result = result
+
     def _update_preview_frame(self) -> None:
+        config_error: Exception | None = None
         try:
             config = self._config_from_form().capture
-            frame = self._read_live_preview_frame(config)
-            frame_copy = getattr(frame, "copy", None)
-            self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
-            annotated, preview = render_eye_preview(config, frame)
         except Exception as exc:
+            config_error = exc if isinstance(exc, Exception) else Exception(str(exc))
+            if not self._preview_annotation_error_reported:
+                self._preview_annotation_error_reported = True
+                self._write_run_log(
+                    "视频源",
+                    f"预览识别配置无效，继续保持视频源: {exc}",
+                    level="WARNING",
+                )
+            self.statusBar().showMessage(f"预览识别配置无效，显示原始画面: {exc}")
+            if self._preview_capture is not None:
+                config = self._preview_capture.config
+            elif self._video_source_connected:
+                config = self._shared_capture_config(
+                    BlinkCaptureConfig(
+                        eye_image_path=Path(),
+                        roi=(0, 0, 0, 0),
+                    )
+                )
+            else:
+                return
+
+        try:
+            frame = self._read_live_preview_frame(config)
+        except Exception as exc:
+            shared_source_failed = self._video_source_connected
             self._preview_timer.stop()
             self._release_preview_capture()
-            self.preview_button.setText(self._text("preview_button"))
+            stopped = True
+            if shared_source_failed:
+                stopped = self.disconnect_video_source(force=True)
+            else:
+                self.preview_button.setText(self._text("preview_button"))
             self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            if shared_source_failed:
+                self.video_source_status.setText(
+                    "视频源故障" if stopped else "停止失败，请重试"
+                )
             return
-        self._display_frame(annotated)
+
+        frame_copy = getattr(frame, "copy", None)
+        self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
+        preview = None
+        if config_error is not None:
+            annotated_copy = getattr(self._latest_preview_frame, "copy", None)
+            annotated = (
+                annotated_copy()
+                if callable(annotated_copy)
+                else self._latest_preview_frame
+            )
+        else:
+            try:
+                annotated, preview = render_eye_preview(config, frame)
+                annotated = _draw_easycon_search_overlay(
+                    annotated,
+                    self._latest_easycon_image_search_result,
+                )
+            except Exception as exc:
+                annotated_copy = getattr(self._latest_preview_frame, "copy", None)
+                annotated = (
+                    annotated_copy()
+                    if callable(annotated_copy)
+                    else self._latest_preview_frame
+                )
+                if not self._preview_annotation_error_reported:
+                    self._preview_annotation_error_reported = True
+                    self._write_run_log(
+                        "视频源",
+                        f"预览识别框绘制失败，已回退到原始画面: {exc}",
+                        level="WARNING",
+                    )
+        annotated_copy = getattr(annotated, "copy", None)
+        self._latest_annotated_preview_frame = annotated_copy() if callable(annotated_copy) else annotated
+        self._refresh_preview_presentation()
+        if self._picture_in_picture is not None and self._picture_in_picture.isVisible():
+            self._picture_in_picture.set_frames(
+                self._latest_preview_frame,
+                self._latest_annotated_preview_frame,
+            )
         resolution = ""
         if self._preview_capture is not None and self._preview_capture.keep_open_for_preview:
             frame_height, frame_width = frame.shape[:2]
             resolution = f" | OBS {frame_width}x{frame_height}"
             if frame_width < 1280 or frame_height < 720:
                 resolution += "（放大投影窗口可提高清晰度）"
+        score = "" if preview is None else f" | score {preview.match_score:.3f}"
+        if config_error is not None:
+            annotation_status = " | 识别配置无效，显示原始画面"
+        else:
+            annotation_status = " | 识别框不可用" if preview is None else ""
         self.statusBar().showMessage(
-            f"{self._text('preview_running')}{resolution} | score {preview.match_score:.3f}"
+            f"{self._text('preview_running')}{resolution}{score}{annotation_status}"
         )
 
     def _display_frame(self, frame: object) -> None:
@@ -4036,6 +5030,8 @@ class MainWindow(QMainWindow):
 
     def _pause_auto_preview_for_capture(self) -> bool:
         preview_was_running = self._preview_timer.isActive()
+        if self._video_source_connected:
+            return False
         if preview_was_running:
             self._preview_timer.stop()
             self._release_preview_capture()
@@ -4045,7 +5041,7 @@ class MainWindow(QMainWindow):
         return preview_was_running
 
     def _restore_auto_preview_after_capture(self, preview_was_running: bool) -> None:
-        if preview_was_running and not self._preview_timer.isActive():
+        if (preview_was_running or self._video_source_connected) and not self._preview_timer.isActive():
             self._preview_timer.start()
             self.preview_button.setText(self._text("stop_preview"))
 
@@ -4130,6 +5126,10 @@ class MainWindow(QMainWindow):
     def _build_auto_tid_rng_services(self, config: AutoTidRngConfig) -> AutoTidRngServices:
         seed_config_path = self._selected_auto_seed_config_path()
         tracking_config = load_project_xs_config(seed_config_path, blink_count=TIDSID_BLINK_COUNT)
+        tracking_config = replace(
+            tracking_config,
+            capture=self._shared_capture_config(tracking_config.capture),
+        )
 
         def seed_pair_from_result(seed_result: AutoTidSeedResult) -> SeedPair64:
             seed = seed_result.seed
@@ -4210,48 +5210,21 @@ class MainWindow(QMainWindow):
                 return None
             return min(states, key=lambda state: (abs(int(state.advances) - int(center_advances)), int(state.advances)))
 
-        _cli_backend: CliEasyConBackend | None = None
-
-        def _get_cli_backend() -> CliEasyConBackend:
-            nonlocal _cli_backend
-            if _cli_backend is None:
-                _cli_backend = CliEasyConBackend()
-            return _cli_backend
-
         def run_script_text_service(script_text: str, name: str) -> object:
-            is_bridge, bridge_status, port, bridge_backend = self._call_on_ui_thread(
-                lambda: (
-                    self.easycon_tab._is_bridge_mode(),
-                    self.easycon_tab.bridge_status,
-                    self.easycon_tab.port_combo.currentText(),
-                    self.easycon_tab._ensure_bridge_backend() if self.easycon_tab._is_bridge_mode() else None,
-                )
+            script_name, script_dir = self._native_script_context(config, script_text, name)
+            native_backend = self._call_on_ui_thread(
+                lambda: self._prepare_auto_easycon_script(script_name)
             )
-            if is_bridge:
-                if bridge_status != EasyConStatus.BRIDGE_CONNECTED:
-                    raise RuntimeError("请先连接伊机控 Bridge")
-                self.autoScriptStarted.emit(name)
-                try:
-                    result = bridge_backend.run_script_text(script_text, name)
-                except Exception as exc:
-                    self.autoScriptFailed.emit(str(exc))
-                    raise
-                return self._finalize_auto_script_result(result, name)
-            if not port:
-                raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
-            if not self._call_on_ui_thread(self.easycon_tab.prepare_for_external_cli_script):
-                raise RuntimeError("捕捉亮屏保活 CLI 未能及时停止，已取消自动脚本启动")
-            self.autoScriptStarted.emit(name)
             try:
-                result = _get_cli_backend().run_script_text(script_text, name, port=port)
-                if config.debug_output:
-                    for line in result.stdout.splitlines():
-                        if line.startswith("CLI 模式"):
-                            self.auto_tid_rng_tab.add_log(line)
-            except Exception as exc:
-                self.autoScriptFailed.emit(str(exc))
+                result = native_backend.run_script_text(
+                    script_text,
+                    script_name,
+                    script_dir=script_dir,
+                )
+            except BaseException as exc:
+                self._fail_auto_script(exc)
                 raise
-            return self._finalize_auto_script_result(result, name)
+            return self._finalize_auto_script_result(result, script_name)
 
         def recognize_tid_service() -> str:
             if config.ocr_region is None:
@@ -4264,26 +5237,13 @@ class MainWindow(QMainWindow):
         def stop_current_script_service() -> None:
             self._capture_cancel.set()
             try:
-                is_bridge, bridge_backend = self._call_on_ui_thread(
-                    lambda: (
-                        self.easycon_tab._is_bridge_mode(),
-                        self.easycon_tab._ensure_bridge_backend()
-                        if self.easycon_tab._is_bridge_mode()
-                        else None,
-                    )
-                )
+                native_backend = self._call_on_ui_thread(self.easycon_tab._ensure_native_backend)
             except Exception:
-                is_bridge, bridge_backend = False, None
-            if is_bridge:
-                try:
-                    bridge_backend.stop_current_script()
-                except Exception:
-                    pass
-            elif _cli_backend is not None:
-                try:
-                    _cli_backend.stop_current_script()
-                except Exception:
-                    pass
+                return
+            try:
+                native_backend.stop_current_script()
+            except Exception:
+                pass
 
         def recover_zoom_mode_service() -> bool:
             return self._recover_zoom_mode_with_preview_paused(
@@ -4382,22 +5342,17 @@ class MainWindow(QMainWindow):
             self._write_run_log("历史记录", f"反查完成；候选 {len(results)} 个；个性 {chara or '-'}")
 
     def _ensure_bridge_connected(self) -> bool:
-        """确保伊机控连接就绪；CLI 模式只需串口可用，Bridge 模式需要连接。"""
-        if not self.easycon_tab._is_bridge_mode():
-            # CLI 模式：只需要串口配置
-            port = self.easycon_tab.port_combo.currentText()
-            if not port:
-                self._show_error("CLI 模式需要串口", "请先在伊机控面板选择串口")
-                return False
+        """Compatibility name for ensuring the native persistent backend is ready."""
+
+        if not self._video_source_connected:
+            self._show_error("视频源未连接", "请先在 Seed 捕捉页面连接视频源")
+            return False
+        status = self.easycon_tab._native_status()
+        if status == EasyConStatus.BRIDGE_CONNECTED:
             return True
-        # Bridge 模式：确保连接
-        bridge_status = self.easycon_tab.bridge_status
-        if bridge_status == EasyConStatus.BRIDGE_CONNECTED:
-            return True
-        if bridge_status == EasyConStatus.RUNNING:
-            self.easycon_tab.stop_bridge_script()
-            return True
-        # 未连接，尝试自动连接
+        if status == EasyConStatus.RUNNING:
+            self._show_error("伊机控正在运行", "已有伊机控脚本正在运行，请先停止当前脚本")
+            return False
         port = self.easycon_tab.port_combo.currentText()
         if not port:
             port = self.easycon_tab.config.last_port or ""
@@ -4406,14 +5361,16 @@ class MainWindow(QMainWindow):
         if not port:
             self._show_error("自动连接失败", "请先在伊机控面板选择串口并连接单片机")
             return False
-        self.easycon_tab.connect_bridge()
-        if self.easycon_tab.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
+        if not self.easycon_tab.connect_native():
             self._show_error("自动连接失败", "无法连接到单片机，请检查串口和连接")
             return False
         return True
 
     def _handle_auto_capture_frame(self, frame: object) -> None:
-        self._display_frame(frame)
+        if self._video_source_connected:
+            self._refresh_preview_presentation()
+        else:
+            self._display_frame(frame)
 
     def _handle_auto_capture_progress(self, done: int, total: int) -> None:
         self.progress_value.setText(f"{done}/{total}")
@@ -4563,6 +5520,14 @@ class MainWindow(QMainWindow):
         reidentify_config_path = config.reidentify_config_path or self._selected_auto_reidentify_config_path()
         tracking_config = load_project_xs_config(seed_config_path, blink_count=DEFAULT_BLINK_COUNT)
         exit_tracking_config = load_project_xs_config(reidentify_config_path, blink_count=NOISY_REIDENTIFY_BLINK_COUNT)
+        tracking_config = replace(
+            tracking_config,
+            capture=self._shared_capture_config(tracking_config.capture),
+        )
+        exit_tracking_config = replace(
+            exit_tracking_config,
+            capture=self._shared_capture_config(exit_tracking_config.capture),
+        )
         exit_tracking_config = replace(exit_tracking_config, reidentify_1_pk_npc=True)
         ocr_region_config = self._ocr_region_config()
         shiny_dialog_region = ocr_region_config.get(SHINY_DIALOG_REGION_FIELD)
@@ -4896,75 +5861,32 @@ class MainWindow(QMainWindow):
             candidates = generate_static_candidates_multi(crit, sync_targets)
             return list(candidates)
 
-        # CLI 后端（按需创建，复用同一个实例以便 stop_current_script 生效）
-        _cli_backend: CliEasyConBackend | None = None
-
-        def _get_cli_backend() -> CliEasyConBackend:
-            nonlocal _cli_backend
-            if _cli_backend is None:
-                _cli_backend = CliEasyConBackend()
-            return _cli_backend
-
         def run_script_text_service(script_text: str, name: str) -> object:
-            is_bridge, bridge_status, port, bridge_backend = self._call_on_ui_thread(
-                lambda: (
-                    self.easycon_tab._is_bridge_mode(),
-                    self.easycon_tab.bridge_status,
-                    self.easycon_tab.port_combo.currentText(),
-                    self.easycon_tab._ensure_bridge_backend() if self.easycon_tab._is_bridge_mode() else None,
-                )
+            script_name, script_dir = self._native_script_context(config, script_text, name)
+            native_backend = self._call_on_ui_thread(
+                lambda: self._prepare_auto_easycon_script(script_name)
             )
-            if is_bridge:
-                if bridge_status != EasyConStatus.BRIDGE_CONNECTED:
-                    raise RuntimeError("请先连接伊机控 Bridge")
-                self.autoScriptStarted.emit(name)
-                try:
-                    result = bridge_backend.run_script_text(script_text, name)
-                except Exception as exc:
-                    self.autoScriptFailed.emit(str(exc))
-                    raise
-                return self._finalize_auto_script_result(result, name)
-            # CLI 模式：通过 ezcon.exe 执行脚本
-            if not port:
-                raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
-            if not self._call_on_ui_thread(self.easycon_tab.prepare_for_external_cli_script):
-                raise RuntimeError("捕捉亮屏保活 CLI 未能及时停止，已取消自动脚本启动")
-            self.autoScriptStarted.emit(name)
             try:
-                result = _get_cli_backend().run_script_text(script_text, name, port=port)
-                # 调试模式下从 stdout 提取 CLI 诊断行
-                if config.debug_output:
-                    diag_lines = [line for line in result.stdout.splitlines() if line.startswith("CLI 模式")]
-                    for line in diag_lines:
-                        self.auto_rng_tab.captureLog.emit(line)
-            except Exception as exc:
-                self.autoScriptFailed.emit(str(exc))
+                result = native_backend.run_script_text(
+                    script_text,
+                    script_name,
+                    script_dir=script_dir,
+                )
+            except BaseException as exc:
+                self._fail_auto_script(exc)
                 raise
-            return self._finalize_auto_script_result(result, name)
+            return self._finalize_auto_script_result(result, script_name)
 
         def stop_current_script_service() -> None:
             self._capture_cancel.set()
             try:
-                is_bridge, bridge_backend = self._call_on_ui_thread(
-                    lambda: (
-                        self.easycon_tab._is_bridge_mode(),
-                        self.easycon_tab._ensure_bridge_backend()
-                        if self.easycon_tab._is_bridge_mode()
-                        else None,
-                    )
-                )
+                native_backend = self._call_on_ui_thread(self.easycon_tab._ensure_native_backend)
             except Exception:
-                is_bridge, bridge_backend = False, None
-            if is_bridge:
-                try:
-                    bridge_backend.stop_current_script()
-                except Exception:
-                    pass
-            elif _cli_backend is not None:
-                try:
-                    _cli_backend.stop_current_script()
-                except Exception:
-                    pass
+                return
+            try:
+                native_backend.stop_current_script()
+            except Exception:
+                pass
 
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
             self._capture_cancel.clear()
@@ -5449,30 +6371,20 @@ class MainWindow(QMainWindow):
     def _send_easycon_right(self, *, log_details: bool = True) -> None:
         """通过伊机控发送 RIGHT d-pad 按钮。"""
         log = self.auto_rng_tab.captureLog.emit
-        script_text = "RIGHT 200\n"
-        is_bridge, bridge_backend, port = self._call_on_ui_thread(
+        video_connected, native_status, native_backend = self._call_on_ui_thread(
             lambda: (
-                self.easycon_tab._is_bridge_mode(),
-                self.easycon_tab._ensure_bridge_backend() if self.easycon_tab._is_bridge_mode() else None,
-                self.easycon_tab.port_combo.currentText(),
+                self._video_source_connected,
+                self.easycon_tab._native_status(),
+                self.easycon_tab._ensure_native_backend(),
             )
         )
-        if is_bridge:
-            if log_details:
-                log(f"[捕获精灵信息] Bridge 模式, 发送脚本: RIGHT 200")
-            result = bridge_backend.run_script_text(script_text, "right_press")
-            if log_details:
-                log(f"[捕获精灵信息] Bridge 脚本完成: exit_code={result.exit_code}")
-        else:
-            if log_details:
-                log(f"[捕获精灵信息] CLI 模式, 发送脚本: RIGHT 200")
-            if not port:
-                raise RuntimeError("CLI 模式需要先在伊机控面板选择串口")
-            from auto_bdsp_rng.automation.easycon import CliEasyConBackend
-            cli = CliEasyConBackend()
-            result = cli.run_script_text(script_text, "right_press", port=port)
-            if log_details:
-                log(f"[捕获精灵信息] CLI 脚本完成: exit_code={result.exit_code}, stdout={result.stdout[:150] if result.stdout else '无'}")
+        if not video_connected:
+            raise RuntimeError("请先在 Seed 捕捉页面连接视频源")
+        if native_status != EasyConStatus.BRIDGE_CONNECTED:
+            raise RuntimeError("请先连接伊机控")
+        if log_details:
+            log("[捕获精灵信息] Python 原生后端发送 RIGHT 200ms")
+        native_backend.press("RIGHT", 200)
 
     def _pause_ocr_and_turn_to_stats_page(self, *, log_details: bool = True) -> None:
         time.sleep(0.1)
@@ -5778,7 +6690,10 @@ class MainWindow(QMainWindow):
             self._capture_frame = None
             done, total = self._capture_progress
         if frame is not None:
-            self._display_frame(frame)
+            if self._video_source_connected:
+                self._refresh_preview_presentation()
+            else:
+                self._display_frame(frame)
         self.progress_value.setText(f"{done}/{total}")
         if self._is_capturing():
             return
