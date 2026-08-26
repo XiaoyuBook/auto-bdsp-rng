@@ -176,7 +176,27 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
 
     capture = window.capture_group.geometry()
     seed = window.seed_group.geometry()
+    capture_top = window.capture_group.mapTo(window.project_xs_tab, QPoint(0, 0)).y()
 
+    assert capture_top <= 5
+    assert not hasattr(window, "video_source_group")
+    assert window.video_source_dialog.parent() is window
+    assert not window.video_source_dialog.isVisible()
+    assert window.capture_device_combo.parent() is window.video_source_dialog
+    assert window.capture_device_label.text() == "采集设备"
+    assert window.capture_api_label.text() == "采集方式"
+    assert [
+        window.capture_api_combo.itemText(row)
+        for row in range(window.capture_api_combo.count())
+    ] == ["DirectShow（推荐）", "Media Foundation（兼容）", "自动选择"]
+    assert not window.capture_device_combo.isEditable()
+    assert not hasattr(window, "video_source_combo")
+    assert window.video_source_status_dot.property("state") == "disconnected"
+    assert window.video_source_header_button.text() == "视频源 未连接"
+    QTest.mouseClick(window.video_source_header_button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert window.video_source_dialog.isVisible()
+    window.video_source_dialog.hide()
     assert seed.x() == capture.x()
     assert seed.y() > capture.bottom()
     assert window.window_prefix.parent() is window.capture_group
@@ -262,7 +282,12 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
     process = BrokerProcess()
     window = MainWindow(capture_broker_process=process)
 
+    assert window.video_source_status_dot.property("state") == "disconnected"
+    window.show_video_source_dialog()
+    assert window.video_source_dialog.isVisible()
     assert window.connect_video_source()
+    assert window.video_source_status_dot.property("state") == "connecting"
+    assert "连接中" in window.video_source_header_button.text()
     deadline = time.perf_counter() + 2
     while not window._video_source_connected and time.perf_counter() < deadline:
         app.processEvents()
@@ -274,6 +299,11 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
     assert callable(config.frame_source_factory)
     assert window._preview_timer.isActive()
     assert window.preview_button.text() == "预览常驻"
+    assert window.video_source_status_dot.property("state") == "connected"
+    assert "已连接" in window.video_source_header_button.text()
+    assert not window.video_source_dialog.isVisible()
+    assert not window.capture_device_label.isEnabled()
+    assert not window.capture_api_label.isEnabled()
 
     window._pause_preview_for_capture()
     assert window._preview_timer.isActive()
@@ -281,6 +311,10 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
     assert window.disconnect_video_source(force=True)
     assert process.stopped
     assert not window._preview_timer.isActive()
+    assert window.video_source_status_dot.property("state") == "disconnected"
+    assert "未连接" in window.video_source_header_button.text()
+    assert window.capture_device_label.isEnabled()
+    assert window.capture_api_label.isEnabled()
 
 
 def test_shared_video_source_connection_does_not_block_ui(app):
@@ -655,7 +689,11 @@ def test_video_source_stop_failure_requires_an_explicit_retry(app):
     assert window._video_source_stop_pending
     assert window.video_source_button.text() == "重试断开"
     assert window.video_source_status.text() == "停止失败，请重试"
+    assert window.video_source_status_dot.property("state") == "failed"
+    assert "故障" in window.video_source_header_button.text()
     assert not window.capture_device_combo.isEnabled()
+    assert not window.capture_device_refresh_button.isEnabled()
+    assert not window.capture_api_combo.isEnabled()
 
     process.stopped = True
     assert window.disconnect_video_source(force=True) is True
@@ -744,6 +782,61 @@ def test_capture_devices_use_selected_backend_and_real_indices(app, monkeypatch)
     assert [window.capture_device_combo.itemData(row) for row in range(3)] == [1400, 700, 701]
     assert window._capture_device_index() == 1400
     assert calls[-3:] == [700, 1400, 0]
+
+
+def test_capture_device_restores_saved_backend_domain_index(app, monkeypatch, tmp_path):
+    settings = _profile_settings(tmp_path)
+    settings.setValue("video_source/device_index", 1400)
+    settings.setValue("video_source/capture_api", 0)
+    monkeypatch.setattr(
+        main_window_module,
+        "_enumerate_capture_devices",
+        lambda _capture_api: [(1400, "USB Video"), (701, "OBS Virtual Camera")],
+    )
+
+    window = MainWindow(profile_settings=settings)
+    window.refresh_capture_devices()
+
+    assert window.capture_api_combo.currentData() == 0
+    assert window._capture_device_index() == 1400
+    assert window.capture_device_combo.currentText() == "1400 - USB Video"
+
+
+def test_video_source_combo_uses_opaque_menu_popup(app):
+    window = MainWindow()
+    window.show()
+    window.show_video_source_dialog()
+    app.processEvents()
+
+    for combo in (window.capture_device_combo, window.capture_api_combo):
+        QTest.mouseClick(
+            combo,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(combo.width() - 10, combo.height() // 2),
+        )
+        QTest.qWait(20)
+        app.processEvents()
+
+        menu = combo._popup_menu
+        assert menu is not None
+        assert menu.isVisible()
+        assert menu.objectName() == "VideoSourceComboMenu"
+        assert menu.autoFillBackground()
+        assert [action.text() for action in menu.actions()] == [
+            combo.itemText(row) for row in range(combo.count())
+        ]
+        assert sum(action.isChecked() for action in menu.actions()) == 1
+
+        image = menu.grab().toImage()
+        assert not image.isNull()
+        assert any(
+            image.pixelColor(x, y).lightness() < 100
+            for y in range(0, image.height(), 2)
+            for x in range(0, image.width(), 2)
+        )
+        combo.hidePopup()
+        app.processEvents()
+        assert combo._popup_menu is None
 
 
 def test_enumerate_capture_devices_uses_library_indices(monkeypatch):
@@ -897,6 +990,7 @@ def test_preview_frame_read_failure_disconnects_broker(app, monkeypatch):
     assert not window._video_source_connected
     assert not window._preview_timer.isActive()
     assert window.video_source_status.text() == "视频源故障"
+    assert window.video_source_status_dot.property("state") == "failed"
 
 
 def test_easycon_search_results_are_scoped_to_source_and_script_generations(app):

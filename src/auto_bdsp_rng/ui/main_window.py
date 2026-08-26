@@ -158,6 +158,59 @@ REIDENTIFY_HINT_AFTER_FRAMES = 20_000
 NOISY_REIDENTIFY_MAX_SEARCH_FRAMES = 100_000
 
 
+def _status_dot_icon(color: str) -> QIcon:
+    pixmap = QPixmap(12, 12)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawEllipse(2, 2, 8, 8)
+    painter.end()
+    return QIcon(pixmap)
+
+
+class _MenuPopupComboBox(QComboBox):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._popup_menu: QMenu | None = None
+
+    def showPopup(self) -> None:  # noqa: N802
+        if not self.isEnabled() or self.count() == 0:
+            return
+        if self._popup_menu is not None:
+            self._popup_menu.close()
+
+        menu = QMenu(self)
+        menu.setObjectName("VideoSourceComboMenu")
+        menu.setMinimumWidth(self.width())
+        menu.setAutoFillBackground(True)
+        menu.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        current = self.currentIndex()
+        for row in range(self.count()):
+            action = menu.addAction(self.itemIcon(row), self.itemText(row))
+            action.setCheckable(True)
+            action.setChecked(row == current)
+            action.triggered.connect(
+                lambda _checked=False, index=row: self.setCurrentIndex(index)
+            )
+
+        self._popup_menu = menu
+        menu.aboutToHide.connect(lambda current_menu=menu: self._dispose_popup(current_menu))
+        menu.popup(self.mapToGlobal(QPoint(0, self.height())))
+        menu.setAutoFillBackground(True)
+        QTimer.singleShot(0, menu.repaint)
+
+    def hidePopup(self) -> None:  # noqa: N802
+        if self._popup_menu is not None:
+            self._popup_menu.close()
+
+    def _dispose_popup(self, menu: QMenu) -> None:
+        if self._popup_menu is menu:
+            self._popup_menu = None
+        menu.deleteLater()
+
+
 def _uses_same_capture_source(left: BlinkCaptureConfig, right: BlinkCaptureConfig) -> bool:
     if left.uses_shared_video_source or right.uses_shared_video_source:
         return (
@@ -1289,6 +1342,8 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(14, 12, 14, 12)
         root_layout.setSpacing(10)
 
+        self.video_source_dialog = self._build_video_source_dialog()
+
         header = QFrame()
         header.setObjectName("Header")
         header_layout = QHBoxLayout(header)
@@ -1301,6 +1356,18 @@ class MainWindow(QMainWindow):
         self.auto_phase_badge.setObjectName("Badge")
         self.auto_advance_badge = QLabel("advance 0")
         self.auto_advance_badge.setObjectName("Badge")
+        self.video_source_header_button = QToolButton()
+        self.video_source_header_button.setObjectName("VideoSourceHeaderButton")
+        self.video_source_header_button.setText("视频源 未连接")
+        self.video_source_header_button.setIcon(_status_dot_icon("#9CA3AF"))
+        self.video_source_header_button.setIconSize(QSize(12, 12))
+        self.video_source_header_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.video_source_header_button.setFixedSize(190, 30)
+        self.video_source_header_button.setToolTip("打开视频源设置")
+        self.video_source_header_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.video_source_header_button.clicked.connect(self.show_video_source_dialog)
         self.help_button = QToolButton()
         self.help_button.setObjectName("HelpMenuButton")
         self.help_button.setText("帮助 ▾")
@@ -1312,7 +1379,9 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.auto_phase_badge)
         header_layout.addSpacing(8)
         header_layout.addWidget(self.auto_advance_badge)
-        header_layout.addSpacing(10)
+        header_layout.addSpacing(8)
+        header_layout.addWidget(self.video_source_header_button)
+        header_layout.addSpacing(8)
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
@@ -2071,39 +2140,55 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_results(), 1)
         return panel
 
-    def _build_preview_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 0, 0, 0)
-        layout.setSpacing(10)
-        self.preview_group = QGroupBox()
-        preview_layout = QVBoxLayout(self.preview_group)
-        source_row = QHBoxLayout()
-        source_row.setContentsMargins(0, 0, 0, 0)
-        source_row.setSpacing(8)
-        self.video_source_combo = QComboBox()
-        self.video_source_combo.addItem("共享视频源", "broker")
-        self.video_source_combo.setMinimumWidth(120)
-        self.capture_device_combo = QComboBox()
-        self.capture_device_combo.setEditable(True)
-        for index in range(10):
-            self.capture_device_combo.addItem(str(index), index)
-        self.capture_device_combo.setCurrentText(
-            str(self._profile_settings.value("video_source/device_index", "0") or "0")
+    def _build_video_source_dialog(self) -> QDialog:
+        dialog = QDialog(self)
+        dialog.setObjectName("VideoSourceDialog")
+        dialog.setWindowTitle("视频源设置")
+        dialog.setModal(False)
+        dialog.setMinimumWidth(520)
+        dialog.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
+        form = QGridLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(12)
+
+        self.capture_device_label = QLabel("采集设备")
+        self.capture_device_combo = _MenuPopupComboBox()
+        self.capture_device_combo.setObjectName("CaptureDeviceCombo")
+        saved_device_index = self._profile_settings_int(
+            self._profile_settings.value("video_source/device_index", 0),
+            0,
         )
-        self.capture_device_combo.setMinimumWidth(180)
-        self.capture_device_combo.setMaximumWidth(300)
+        initial_device_indices = list(range(10))
+        if saved_device_index not in initial_device_indices:
+            initial_device_indices.append(saved_device_index)
+        for index in initial_device_indices:
+            self.capture_device_combo.addItem(str(index), index)
+        self.capture_device_combo.setCurrentIndex(
+            max(0, self.capture_device_combo.findData(saved_device_index))
+        )
+        self.capture_device_combo.setMinimumWidth(240)
+        self.capture_device_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
         self.capture_device_refresh_button = QToolButton()
+        self.capture_device_refresh_button.setObjectName("CaptureDeviceRefreshButton")
         self.capture_device_refresh_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
         )
         self.capture_device_refresh_button.setToolTip("刷新采集设备")
-        self.capture_device_refresh_button.setFixedSize(28, 28)
+        self.capture_device_refresh_button.setFixedSize(34, 34)
         self.capture_device_refresh_button.clicked.connect(self.refresh_capture_devices)
-        self.capture_api_combo = QComboBox()
-        self.capture_api_combo.addItem("DirectShow", 700)
-        self.capture_api_combo.addItem("Media Foundation", 1400)
-        self.capture_api_combo.addItem("自动", 0)
+
+        self.capture_api_label = QLabel("采集方式")
+        self.capture_api_combo = _MenuPopupComboBox()
+        self.capture_api_combo.setObjectName("CaptureApiCombo")
+        self.capture_api_combo.addItem("DirectShow（推荐）", 700)
+        self.capture_api_combo.addItem("Media Foundation（兼容）", 1400)
+        self.capture_api_combo.addItem("自动选择", 0)
+        self.capture_api_combo.setMinimumWidth(240)
         saved_api = self._profile_settings_int(
             self._profile_settings.value("video_source/capture_api", 700),
             700,
@@ -2113,20 +2198,51 @@ class MainWindow(QMainWindow):
         self.capture_api_combo.currentIndexChanged.connect(
             lambda _index: self.refresh_capture_devices()
         )
+
         self.video_source_button = QPushButton("连接视频源")
         self.video_source_button.setObjectName("PrimaryButton")
+        self.video_source_button.setMinimumWidth(116)
         self.video_source_button.clicked.connect(self.toggle_video_source)
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(dialog.hide)
+        self.video_source_status_dot = QFrame()
+        self.video_source_status_dot.setObjectName("VideoSourceStatusDot")
+        self.video_source_status_dot.setProperty("state", "disconnected")
+        self.video_source_status_dot.setFixedSize(10, 10)
         self.video_source_status = QLabel("未连接")
         self.video_source_status.setObjectName("VideoSourceStatus")
-        source_row.addWidget(self.video_source_combo)
-        source_row.addWidget(QLabel("设备"))
-        source_row.addWidget(self.capture_device_combo)
-        source_row.addWidget(self.capture_device_refresh_button)
-        source_row.addWidget(self.capture_api_combo)
-        source_row.addWidget(self.video_source_button)
-        source_row.addWidget(self.video_source_status)
-        source_row.addStretch(1)
-        preview_layout.addLayout(source_row)
+        self.video_source_status.setMinimumWidth(112)
+
+        form.addWidget(self.capture_device_label, 0, 0)
+        form.addWidget(self.capture_device_combo, 0, 1)
+        form.addWidget(self.capture_device_refresh_button, 0, 2)
+        form.addWidget(self.capture_api_label, 1, 0)
+        form.addWidget(self.capture_api_combo, 1, 1, 1, 2)
+        layout.addLayout(form)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(8)
+        footer.addWidget(
+            self.video_source_status_dot,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        footer.addWidget(self.video_source_status)
+        footer.addStretch(1)
+        footer.addWidget(close_button)
+        footer.addWidget(self.video_source_button)
+        layout.addLayout(footer)
+        QTimer.singleShot(0, self.refresh_capture_devices)
+        return dialog
+
+    def _build_preview_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 0, 0, 0)
+        layout.setSpacing(10)
+        self.preview_group = QGroupBox()
+        preview_layout = QVBoxLayout(self.preview_group)
 
         preview_controls = QHBoxLayout()
         preview_controls.setContentsMargins(0, 0, 0, 0)
@@ -2148,7 +2264,6 @@ class MainWindow(QMainWindow):
         self.preview_label.setScaledContents(False)
         preview_layout.addWidget(self.preview_label)
         layout.addWidget(self.preview_group, 1)
-        QTimer.singleShot(0, self.refresh_capture_devices)
         return panel
 
     def _build_results(self) -> QWidget:
@@ -2234,6 +2349,21 @@ class MainWindow(QMainWindow):
                 font-size: 22px;
                 font-weight: 700;
                 color: #111827;
+            }
+            QToolButton#VideoSourceHeaderButton {
+                background: #F9FAFB;
+                border: 1px solid #D1D5DB;
+                border-radius: 7px;
+                color: #374151;
+                font-weight: 600;
+                padding: 0 10px;
+            }
+            QToolButton#VideoSourceHeaderButton:hover {
+                background: #F3F4F6;
+                border-color: #9CA3AF;
+            }
+            QToolButton#VideoSourceHeaderButton:pressed {
+                background: #E5E7EB;
             }
 
             /* ── Badge ── */
@@ -2338,6 +2468,73 @@ class MainWindow(QMainWindow):
             }
             QComboBox::drop-down {
                 border: none;
+            }
+            QDialog#VideoSourceDialog QComboBox,
+            QDialog#VideoSourceDialog QPushButton {
+                min-height: 34px;
+                max-height: 34px;
+                padding-top: 0;
+                padding-bottom: 0;
+            }
+            QComboBox#CaptureDeviceCombo::drop-down,
+            QComboBox#CaptureApiCombo::drop-down {
+                width: 26px;
+                border-left: 1px solid #E5E7EB;
+            }
+            QMenu#VideoSourceComboMenu {
+                background: #FFFFFF;
+                color: #111827;
+                border: 1px solid #D1D5DB;
+                padding: 4px;
+            }
+            QMenu#VideoSourceComboMenu::item {
+                min-height: 28px;
+                padding: 4px 28px 4px 10px;
+                border-radius: 4px;
+            }
+            QMenu#VideoSourceComboMenu::item:selected {
+                background: #F3F4F6;
+                color: #111827;
+            }
+            QMenu#VideoSourceComboMenu::item:checked {
+                background: #E6F6F0;
+                color: #0E8F70;
+                font-weight: 600;
+            }
+            QToolButton#CaptureDeviceRefreshButton {
+                background: #FFFFFF;
+                border: 1px solid #D1D5DB;
+                border-radius: 8px;
+            }
+            QToolButton#CaptureDeviceRefreshButton:hover {
+                background: #F3F4F6;
+                border-color: #9CA3AF;
+            }
+            QToolButton#CaptureDeviceRefreshButton:disabled {
+                background: #F3F4F6;
+                border-color: #E5E7EB;
+            }
+            QLabel#VideoSourceStatus {
+                color: #374151;
+                font-weight: 600;
+            }
+            QFrame#VideoSourceStatusDot {
+                min-width: 10px;
+                max-width: 10px;
+                min-height: 10px;
+                max-height: 10px;
+                border: none;
+                border-radius: 5px;
+                background: #9CA3AF;
+            }
+            QFrame#VideoSourceStatusDot[state="connecting"] {
+                background: #D97706;
+            }
+            QFrame#VideoSourceStatusDot[state="connected"] {
+                background: #0E8F70;
+            }
+            QFrame#VideoSourceStatusDot[state="failed"] {
+                background: #DC2626;
             }
 
             /* ── SpinBox 微调按钮 ── */
@@ -2919,7 +3116,7 @@ class MainWindow(QMainWindow):
                 self._video_source_connecting = True
                 self.video_source_button.setEnabled(False)
                 self.video_source_button.setText("正在断开...")
-                self.video_source_status.setText("正在结束视频源连接")
+                self._set_video_source_status("正在结束视频源连接", "connecting")
             self._write_run_log("视频源", "关闭时视频源连接线程未能及时退出", level="WARNING")
             return False
         stopped, stop_error = self._stop_capture_broker_process(
@@ -3112,6 +3309,11 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(4, self._text("easycon"))
         self.tabs.setTabText(5, "历史记录" if self.lang == "zh" else "History")
         self.status_group.setTitle("配置" if self.lang == "zh" else "Config")
+        self.video_source_dialog.setWindowTitle(
+            "视频源设置" if self.lang == "zh" else "Video Source"
+        )
+        self.capture_device_label.setText("采集设备" if self.lang == "zh" else "Capture Device")
+        self.capture_api_label.setText("采集方式" if self.lang == "zh" else "Capture API")
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
         self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
@@ -3389,14 +3591,63 @@ class MainWindow(QMainWindow):
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
 
+    def _set_video_source_status(self, text: str, state: str) -> None:
+        self.video_source_status.setText(text)
+        self._update_video_source_header(text, state)
+        if self.video_source_status_dot.property("state") == state:
+            return
+        self.video_source_status_dot.setProperty("state", state)
+        style = self.video_source_status_dot.style()
+        style.unpolish(self.video_source_status_dot)
+        style.polish(self.video_source_status_dot)
+        self.video_source_status_dot.update()
+
+    def _update_video_source_header(self, status: str, state: str) -> None:
+        button = getattr(self, "video_source_header_button", None)
+        if button is None:
+            return
+        colors = {
+            "disconnected": "#9CA3AF",
+            "connecting": "#D97706",
+            "connected": "#0E8F70",
+            "failed": "#DC2626",
+        }
+        if state == "connected":
+            device_text = self.capture_device_combo.currentText().strip()
+            device_name = device_text.partition(" - ")[2].strip() or device_text or "视频源"
+            full_text = f"已连接 · {device_name}"
+        elif state == "connecting":
+            full_text = "视频源 断开中" if "断开" in status or "结束" in status else "视频源 连接中"
+        elif state == "failed":
+            full_text = "视频源 故障"
+        else:
+            full_text = "视频源 未连接"
+        button.setText(
+            button.fontMetrics().elidedText(
+                full_text,
+                Qt.TextElideMode.ElideRight,
+                145,
+            )
+        )
+        button.setIcon(_status_dot_icon(colors.get(state, colors["disconnected"])))
+        button.setToolTip(f"{full_text}\n{status}\n点击打开视频源设置")
+
+    def _set_video_source_config_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self.capture_device_label,
+            self.capture_device_combo,
+            self.capture_device_refresh_button,
+            self.capture_api_label,
+            self.capture_api_combo,
+        ):
+            widget.setEnabled(enabled)
+
     def _set_video_source_disconnected_ui(self, status: str = "未连接") -> None:
         self.video_source_button.setEnabled(True)
         self.video_source_button.setText("连接视频源")
-        self.video_source_status.setText(status)
-        self.capture_device_combo.setEnabled(True)
-        self.capture_device_refresh_button.setEnabled(True)
-        self.capture_api_combo.setEnabled(True)
-        self.video_source_combo.setEnabled(True)
+        state = "failed" if status == "连接失败" else "disconnected"
+        self._set_video_source_status(status, state)
+        self._set_video_source_config_enabled(True)
         self.preview_button.setEnabled(True)
         self.preview_button.setText(self._text("preview_button"))
         self._clear_video_source_preview()
@@ -3408,11 +3659,8 @@ class MainWindow(QMainWindow):
         start_thread = self._capture_broker_start_thread
         self.video_source_button.setEnabled(start_thread is None)
         self.video_source_button.setText("重试断开")
-        self.video_source_status.setText("停止失败，请重试")
-        self.capture_device_combo.setEnabled(False)
-        self.capture_device_refresh_button.setEnabled(False)
-        self.capture_api_combo.setEnabled(False)
-        self.video_source_combo.setEnabled(False)
+        self._set_video_source_status("停止失败，请重试", "failed")
+        self._set_video_source_config_enabled(False)
         self.preview_button.setEnabled(False)
         self._clear_video_source_preview()
 
@@ -3612,11 +3860,8 @@ class MainWindow(QMainWindow):
         self._clear_easycon_image_search_result()
         self.video_source_button.setEnabled(False)
         self.video_source_button.setText("连接中...")
-        self.video_source_status.setText("正在等待第一帧")
-        self.capture_device_combo.setEnabled(False)
-        self.capture_device_refresh_button.setEnabled(False)
-        self.capture_api_combo.setEnabled(False)
-        self.video_source_combo.setEnabled(False)
+        self._set_video_source_status("正在等待第一帧", "connecting")
+        self._set_video_source_config_enabled(False)
         thread.start()
         return True
 
@@ -3648,7 +3893,7 @@ class MainWindow(QMainWindow):
             if stopped:
                 self._video_source_stop_pending = False
                 self._video_source_stop_error = None
-                self.video_source_status.setText("连接失败，正在清理")
+                self._set_video_source_status("连接失败，正在清理", "connecting")
             else:
                 self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
             error = payload if isinstance(payload, BaseException) else RuntimeError(str(payload))
@@ -3671,11 +3916,8 @@ class MainWindow(QMainWindow):
         self.easycon_tab.video_source_state_changed()
         self.video_source_button.setEnabled(True)
         self.video_source_button.setText("断开视频源")
-        self.video_source_status.setText("已连接")
-        self.capture_device_combo.setEnabled(False)
-        self.capture_device_refresh_button.setEnabled(False)
-        self.capture_api_combo.setEnabled(False)
-        self.video_source_combo.setEnabled(False)
+        self._set_video_source_status("已连接", "connected")
+        self._set_video_source_config_enabled(False)
         self.preview_button.setEnabled(False)
         self.preview_button.setText("预览常驻")
         self._profile_settings.setValue("video_source/device_index", device_index)
@@ -3684,6 +3926,7 @@ class MainWindow(QMainWindow):
         self._release_preview_capture()
         self._preview_timer.start()
         self.statusBar().showMessage("共享视频源已连接，预览将持续显示")
+        self.video_source_dialog.hide()
 
     def _capture_broker_start_finished(
         self,
@@ -3782,7 +4025,7 @@ class MainWindow(QMainWindow):
             self._video_source_connecting = True
             self.video_source_button.setEnabled(False)
             self.video_source_button.setText("正在断开...")
-            self.video_source_status.setText("正在结束视频源连接")
+            self._set_video_source_status("正在结束视频源连接", "connecting")
             return False
         self._video_source_connecting = False
         self._video_source_cancel_requested = False
@@ -3801,6 +4044,12 @@ class MainWindow(QMainWindow):
             )
         self._picture_in_picture.show()
         self._picture_in_picture.raise_()
+
+    def show_video_source_dialog(self) -> None:
+        self.video_source_dialog.adjustSize()
+        self.video_source_dialog.show()
+        self.video_source_dialog.raise_()
+        self.video_source_dialog.activateWindow()
 
     def _refresh_preview_presentation(self) -> None:
         self.preview_label.set_overlay_enabled(self.main_preview_overlay_check.isChecked())
@@ -4599,8 +4848,9 @@ class MainWindow(QMainWindow):
                 self.preview_button.setText(self._text("preview_button"))
             self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             if shared_source_failed:
-                self.video_source_status.setText(
-                    "视频源故障" if stopped else "停止失败，请重试"
+                self._set_video_source_status(
+                    "视频源故障" if stopped else "停止失败，请重试",
+                    "failed",
                 )
             return
 
