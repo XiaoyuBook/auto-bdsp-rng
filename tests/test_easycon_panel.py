@@ -1203,7 +1203,7 @@ def test_easycon_panel_reports_empty_ports_when_mock_disabled(monkeypatch, tmp_p
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: [])
 
-    panel = EasyConPanel()
+    panel = EasyConPanel(native_backend=FakeNativeBackend([]))
 
     assert "未发现串口；请选择串口或启用 mock 模式，运行按钮已禁用" in panel.log_view.toPlainText()
     assert panel.run_button.isEnabled() is False
