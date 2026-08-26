@@ -29,7 +29,7 @@ The script will:
 1. verify Windows x64 and Python 3.12,
 2. initialize git submodules,
 3. create or reuse `.venv`,
-4. install `.[dev]`, PyInstaller, and Pillow,
+4. install `.[dev,ocr]`, PyInstaller, and Pillow,
 5. build the pybind11 native extension,
 6. run a lightweight version check,
 7. generate `docs/assets/app-icon.ico` from `docs/assets/app-icon.png`,
@@ -49,7 +49,7 @@ This writes the SHA-256 manifest for the current `dist/auto-bdsp-rng/` tree. To 
 
 ```powershell
 python .\scripts\build_update_package.py `
-  --previous-manifest .\build\previous\auto-bdsp-rng-v2.2.0-windows-x64.manifest.json
+  --previous-manifest .\build\previous\auto-bdsp-rng-vPREVIOUS-windows-x64.manifest.json
 ```
 
 ## Clean Build Outputs
