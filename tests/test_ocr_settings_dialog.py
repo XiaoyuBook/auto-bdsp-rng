@@ -25,6 +25,17 @@ from auto_bdsp_rng.ui.ocr_settings_dialog import (
 
 
 _ORIGINAL_START_OCR_WARMUP = MainWindow._start_ocr_warmup
+_EXPECTED_DEFAULT_OCR_REGIONS = {
+    "nature": OcrRegion(112, 203, 230, 64),
+    "characteristic": OcrRegion(103, 569, 432, 64),
+    "hp": OcrRegion(517, 197, 54, 42),
+    "attack": OcrRegion(735, 315, 85, 64),
+    "defense": OcrRegion(717, 478, 115, 54),
+    "sp_attack": OcrRegion(224, 306, 63, 67),
+    "sp_defense": OcrRegion(218, 487, 85, 42),
+    "speed": OcrRegion(475, 596, 85, 39),
+    SHINY_DIALOG_REGION_FIELD: OcrRegion(6, 895, 1914, 175),
+}
 
 
 @pytest.fixture
@@ -32,6 +43,18 @@ def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setattr(MainWindow, "_start_ocr_warmup", lambda self: None)
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def isolate_main_window_ocr_settings(monkeypatch, tmp_path):
+    import auto_bdsp_rng.ui.main_window as main_window_module
+
+    settings = QSettings(str(tmp_path / "main_window_ocr.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(
+        main_window_module,
+        "OcrSettingsDialog",
+        lambda parent=None: OcrSettingsDialog(parent, settings=settings),
+    )
 
 
 def _settings(tmp_path) -> QSettings:
@@ -71,22 +94,27 @@ def test_ocr_settings_dialog_uses_default_regions_on_first_load(app, tmp_path):
 
     config = load_ocr_region_config(settings)
 
-    assert dict(config.items()) == DEFAULT_OCR_REGIONS
+    assert DEFAULT_OCR_REGIONS == _EXPECTED_DEFAULT_OCR_REGIONS
+    assert dict(config.items()) == _EXPECTED_DEFAULT_OCR_REGIONS
+    assert all(region.clip(1920, 1080) == region for region in DEFAULT_OCR_REGIONS.values())
     assert not any(settings.contains(f"regions/{field}") for field in DEFAULT_OCR_REGIONS)
 
 
-def test_ocr_settings_dialog_shows_dynamic_shiny_dialog_default(app, tmp_path):
+def test_ocr_settings_dialog_shows_calibrated_shiny_dialog_default(app, tmp_path):
     dialog = OcrSettingsDialog(settings=_settings(tmp_path))
     row = dialog._field_rows[SHINY_DIALOG_REGION_FIELD]
+    default_region = _EXPECTED_DEFAULT_OCR_REGIONS[SHINY_DIALOG_REGION_FIELD]
 
-    assert dialog.region_config.get(SHINY_DIALOG_REGION_FIELD) is None
-    assert "当前帧下方50%" in dialog.table.item(row, 1).text()
-    assert dialog.table.item(row, 2).text() == "默认"
+    assert dialog.region_config.get(SHINY_DIALOG_REGION_FIELD) == default_region
+    assert dialog.table.item(row, 1).text() == "6, 895, 1914, 175"
+    assert dialog.table.item(row, 2).text() == "已设置"
 
-    dialog.set_preview_frame_shape((720, 1280, 3))
+    dialog.set_preview_frame_shape((1080, 1920, 3))
+
+    assert dialog.resolve_region(SHINY_DIALOG_REGION_FIELD, (1080, 1920, 3)) == default_region
+    assert dialog.table.item(row, 1).text() == "有效: 6, 895, 1914, 175"
 
     assert dialog.resolve_region(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == OcrRegion(0, 360, 1280, 360)
-    assert dialog.table.item(row, 1).text() == "有效: 0, 360, 1280, 360"
 
 
 def test_ocr_settings_dialog_marks_malformed_shiny_dialog_config(app, tmp_path):
@@ -151,8 +179,9 @@ def test_ocr_settings_dialog_row_actions_are_on_demand(app, tmp_path):
     assert dialog.table.item(0, 4).text() == "胆小"
 
 
-def test_shiny_dialog_actions_emit_dynamic_default_for_async_controller(app, tmp_path):
+def test_shiny_dialog_actions_emit_calibrated_default_for_async_controller(app, tmp_path):
     dialog = OcrSettingsDialog(settings=_settings(tmp_path))
+    default_region = _EXPECTED_DEFAULT_OCR_REGIONS[SHINY_DIALOG_REGION_FIELD]
     selections = []
     displays = []
     recognitions = []
@@ -166,8 +195,8 @@ def test_shiny_dialog_actions_emit_dynamic_default_for_async_controller(app, tmp
 
     row = dialog._field_rows[SHINY_DIALOG_REGION_FIELD]
     assert selections == [SHINY_DIALOG_REGION_FIELD]
-    assert displays == [(SHINY_DIALOG_REGION_FIELD, None)]
-    assert recognitions == [(SHINY_DIALOG_REGION_FIELD, None)]
+    assert displays == [(SHINY_DIALOG_REGION_FIELD, default_region)]
+    assert recognitions == [(SHINY_DIALOG_REGION_FIELD, default_region)]
     assert dialog.table.item(row, 4).text() == "识别中…"
     assert dialog.interaction_busy
     assert all(not button.isEnabled() for button in dialog._row_action_buttons)
@@ -217,6 +246,7 @@ def test_ocr_settings_dialog_test_all_excludes_shiny_dialog_region(app, tmp_path
 
 def test_ocr_settings_dialog_automation_active_keeps_only_display_actions(app, tmp_path):
     dialog = OcrSettingsDialog(settings=_settings(tmp_path))
+    default_region = _EXPECTED_DEFAULT_OCR_REGIONS[SHINY_DIALOG_REGION_FIELD]
     selections = []
     displays = []
     recognitions = []
@@ -241,9 +271,9 @@ def test_ocr_settings_dialog_automation_active_keeps_only_display_actions(app, t
     dialog.set_region(SHINY_DIALOG_REGION_FIELD, OcrRegion(1, 2, 30, 40))
 
     assert selections == []
-    assert displays == [(SHINY_DIALOG_REGION_FIELD, None)]
+    assert displays == [(SHINY_DIALOG_REGION_FIELD, default_region)]
     assert recognitions == []
-    assert dialog.region_config.get(SHINY_DIALOG_REGION_FIELD) is None
+    assert dialog.region_config.get(SHINY_DIALOG_REGION_FIELD) == default_region
 
     dialog.set_automation_active(False)
     assert all(button.isEnabled() for button in dialog._row_action_buttons)

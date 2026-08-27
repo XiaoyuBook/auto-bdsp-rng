@@ -29,15 +29,17 @@ from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
 
 Recognizer = Callable[[str, OcrRegion | None], str]
 
+# Absolute source-frame coordinates calibrated against the 1920x1080 Broker output.
 DEFAULT_OCR_REGIONS = {
-    "nature": OcrRegion(40, 110, 260, 38),
-    "characteristic": OcrRegion(40, 300, 320, 38),
-    "hp": OcrRegion(145, 155, 92, 34),
-    "attack": OcrRegion(335, 250, 92, 34),
-    "defense": OcrRegion(335, 365, 92, 34),
-    "sp_attack": OcrRegion(145, 250, 92, 34),
-    "sp_defense": OcrRegion(145, 365, 92, 34),
-    "speed": OcrRegion(240, 470, 92, 34),
+    "nature": OcrRegion(112, 203, 230, 64),
+    "characteristic": OcrRegion(103, 569, 432, 64),
+    "hp": OcrRegion(517, 197, 54, 42),
+    "attack": OcrRegion(735, 315, 85, 64),
+    "defense": OcrRegion(717, 478, 115, 54),
+    "sp_attack": OcrRegion(224, 306, 63, 67),
+    "sp_defense": OcrRegion(218, 487, 85, 42),
+    "speed": OcrRegion(475, 596, 85, 39),
+    SHINY_DIALOG_REGION_FIELD: OcrRegion(6, 895, 1914, 175),
 }
 
 
@@ -392,4 +394,3 @@ class OcrSettingsDialog(QDialog):
             return
         for field, region in DEFAULT_OCR_REGIONS.items():
             self.set_region(field, region)
-        self.reset_region(SHINY_DIALOG_REGION_FIELD)
