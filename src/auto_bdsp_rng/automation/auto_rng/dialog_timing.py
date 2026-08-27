@@ -71,9 +71,10 @@ def suggested_shiny_threshold(interval_seconds: float, *, multiplier: float = 1.
 
 
 def normalize_ocr_text(text: str) -> str:
-    """去掉空格和噪声，并将半角/全角感叹号归一为同一字符。"""
+    """去掉空格和噪声，并归一化判闪关键词使用的字符。"""
     cleaned = re.sub(r"[^\w！!]+", "", text, flags=re.UNICODE)
-    return cleaned.replace("!", "！")
+    cleaned = cleaned.replace("!", "！")
+    return cleaned.replace("出現了！", "出现了！")
 
 
 def measure_keyword_interval(

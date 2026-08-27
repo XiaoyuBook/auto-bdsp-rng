@@ -109,6 +109,8 @@ def test_measure_dialog_interval_ignores_dialog_visible_at_start_until_clear():
 def test_normalize_ocr_text_canonicalizes_exclamation_for_shiny_keyword():
     assert normalize_ocr_text("谢 米 出 现 了 !") == "谢米出现了！"
     assert normalize_ocr_text("谢 米 出 现 了 ！") == "谢米出现了！"
+    assert normalize_ocr_text("謝 米 出 現 了 !") == "謝米出现了！"
+    assert normalize_ocr_text("謝 米 出 現 了 ！") == "謝米出现了！"
     assert normalize_ocr_text("去吧！ 图图犬！") == "去吧！图图犬！"
 
 
@@ -190,6 +192,22 @@ def test_measure_keyword_interval_accepts_halfwidth_and_fullwidth_exclamation(fi
     assert result.interval_seconds == pytest.approx(0.1)
 
 
+def test_measure_keyword_interval_accepts_traditional_first_keyword_in_order():
+    clock = _FakeClock()
+
+    result = measure_keyword_interval(
+        object,
+        _timed_reader(clock, ["選單", "謝米出現了！", "去吧！圖圖犬！"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        timeout_seconds=1.0,
+    )
+
+    assert result.interval_seconds == pytest.approx(0.1)
+    assert result.events[1].keyword == "出现了！"
+    assert result.events[2].keyword == "去吧"
+
+
 def test_measure_keyword_interval_gives_second_keyword_an_independent_window():
     done = threading.Event()
     done.set()
@@ -211,13 +229,14 @@ def test_measure_keyword_interval_gives_second_keyword_an_independent_window():
     assert result.interval_seconds == pytest.approx(29.9)
 
 
-def test_measure_keyword_interval_requires_exclamation_for_first_keyword():
+@pytest.mark.parametrize("first_text", ["谢米出现了", "謝米出現了"])
+def test_measure_keyword_interval_requires_exclamation_for_first_keyword(first_text):
     clock = _FakeClock()
 
     with pytest.raises(DialogKeywordTimeoutError) as exc_info:
         measure_keyword_interval(
             object,
-            lambda _frame: "谢米出现了",
+            lambda _frame: first_text,
             monotonic=clock.monotonic,
             sleep=clock.sleep,
             timeout_seconds=0.3,

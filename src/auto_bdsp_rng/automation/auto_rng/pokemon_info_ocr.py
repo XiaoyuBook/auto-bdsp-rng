@@ -213,9 +213,69 @@ def _parse_ocr_result(item: dict[str, object]) -> list[dict[str, object]]:
     return rows
 
 
+# Covers the BDSP nature/characteristic vocabulary and related page labels.
+_OCR_TRADITIONAL_TO_SIMPLIFIED = str.maketrans(
+    {
+        "奮": "奋",
+        "執": "执",
+        "頑": "顽",
+        "膽": "胆",
+        "閒": "闲",
+        "閑": "闲",
+        "氣": "气",
+        "樂": "乐",
+        "認": "认",
+        "內": "内",
+        "斂": "敛",
+        "靜": "静",
+        "馬": "马",
+        "溫": "温",
+        "順": "顺",
+        "歡": "欢",
+        "東": "东",
+        "經": "经",
+        "覺": "觉",
+        "亂": "乱",
+        "為": "为",
+        "鬧": "闹",
+        "點": "点",
+        "剛": "刚",
+        "體": "体",
+        "強": "强",
+        "壯": "壮",
+        "勞": "劳",
+        "於": "于",
+        "惡": "恶",
+        "劇": "剧",
+        "萬": "万",
+        "無": "无",
+        "絲": "丝",
+        "勢": "势",
+        "愛": "爱",
+        "虛": "虚",
+        "榮": "荣",
+        "爭": "争",
+        "勝": "胜",
+        "輸": "输",
+        "誰": "谁",
+        "對": "对",
+        "聲": "声",
+        "擊": "击",
+        "禦": "御",
+        "訓": "训",
+        "練": "练",
+        "筆": "笔",
+        "記": "记",
+        "見": "见",
+        "註": "注",
+    }
+)
+
+
 def _norm(text: str) -> str:
-    """文本规范化：去空格、换行、标点。"""
-    return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE)
+    """先转换支持的繁体 OCR 字符，再删除空格、标点等符号。"""
+    simplified = text.translate(_OCR_TRADITIONAL_TO_SIMPLIFIED)
+    return re.sub(r"[\s\W_]+", "", simplified, flags=re.UNICODE)
 
 
 # ── 页面类型判断 ──────────────────────────────────────────────────
@@ -360,15 +420,10 @@ _NATURES_ZH = (
     "浮躁",
 )
 
-# 性格清洗：去掉 "的性格" "性格" "。" 等后缀
-_NATURE_CLEAN = re.compile(r"的性格[。.]?$|性格[。.]?$|[。.]+$")
-
-
 def _clean_nature(text: str) -> str:
-    cleaned = _NATURE_CLEAN.sub("", text).strip()
-    norm_text = _norm(cleaned).replace("的性格", "").replace("性格", "")
+    norm_text = _norm(text).replace("的性格", "").replace("性格", "")
     if not norm_text:
-        return cleaned
+        return ""
     for item in _NATURES_ZH:
         norm_item = _norm(item)
         if norm_text == norm_item:
@@ -378,11 +433,11 @@ def _clean_nature(text: str) -> str:
             norm_item = _norm(item)
             if norm_item in norm_text or norm_text in norm_item:
                 return item
-    return cleaned
+    return norm_text
 
 
 def _clean_characteristic(text: str) -> str:
-    return text.rstrip("。.").strip()
+    return _norm(text)
 
 
 def _is_pixel_red(r: int, g: int, b: int) -> bool:

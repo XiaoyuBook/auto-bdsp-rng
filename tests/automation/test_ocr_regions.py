@@ -135,7 +135,19 @@ def test_recognize_ocr_field_formats_result_for_preview(monkeypatch):
     monkeypatch.setattr(
         pokemon_info_ocr,
         "_ocr_rows",
-        lambda *_args, **_kwargs: [{"text": "胆小的性格。", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]], "confidence": 0.99}],
+        lambda *_args, **_kwargs: [{"text": "【膽 小】的性格？！", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]], "confidence": 0.99}],
     )
 
     assert pokemon_info_ocr.recognize_ocr_field(image, "nature", OcrRegion(10, 20, 30, 40)) == "胆小"
+
+
+def test_recognize_characteristic_field_normalizes_traditional_text(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(
+        pokemon_info_ocr,
+        "_ocr_rows",
+        lambda *_args, **_kwargs: [{"text": "《喜歡惡作劇》？！", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]], "confidence": 0.99}],
+    )
+
+    assert pokemon_info_ocr.recognize_ocr_field(image, "characteristic", OcrRegion(10, 20, 30, 40)) == "喜欢恶作剧"

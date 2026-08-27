@@ -10,6 +10,7 @@ from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     _detect_page_type,
     _extract_nature_and_characteristic,
     _extract_stats,
+    _match_characteristic_text,
     _stats_have_obvious_digit_drop,
     _is_pixel_red,
     compute_characteristic,
@@ -25,6 +26,7 @@ def test_norm_removes_whitespace_and_punctuation():
     assert _norm("攻击 67") == "攻击67"
     assert _norm("HP 109 / 109") == "HP109109"
     assert _norm("自 大 的 性 格。") == "自大的性格"
+    assert _norm("【溫 順】_？！") == "温顺"
 
 
 def test_warm_up_pokemon_info_ocr_primes_full_frame(monkeypatch):
@@ -74,12 +76,101 @@ def test_clean_nature_matches_partial_or_extra_ocr_text(raw, expected):
     assert _clean_nature(raw) == expected
 
 
+@pytest.mark.parametrize(
+    "traditional,simplified",
+    [
+        ("勤奮", "勤奋"),
+        ("怕寂寞", "怕寂寞"),
+        ("勇敢", "勇敢"),
+        ("固執", "固执"),
+        ("頑皮", "顽皮"),
+        ("大膽", "大胆"),
+        ("坦率", "坦率"),
+        ("悠閒", "悠闲"),
+        ("淘氣", "淘气"),
+        ("樂天", "乐天"),
+        ("膽小", "胆小"),
+        ("急躁", "急躁"),
+        ("認真", "认真"),
+        ("爽朗", "爽朗"),
+        ("天真", "天真"),
+        ("內斂", "内敛"),
+        ("慢吞吞", "慢吞吞"),
+        ("冷靜", "冷静"),
+        ("害羞", "害羞"),
+        ("馬虎", "马虎"),
+        ("溫和", "温和"),
+        ("溫順", "温顺"),
+        ("自大", "自大"),
+        ("慎重", "慎重"),
+        ("浮躁", "浮躁"),
+    ],
+)
+def test_clean_nature_maps_every_traditional_name(traditional, simplified):
+    assert _clean_nature(f"【{traditional}】的 性 格？！") == simplified
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("溫顺", "温顺"),
+        ("內・斂性格", "内敛"),
+        ("悠閑的性格", "悠闲"),
+        ("勤奮的", "勤奋"),
+    ],
+)
+def test_clean_nature_accepts_mixed_spacing_and_variant_forms(raw, expected):
+    assert _clean_nature(raw) == expected
+
+
 # ── _clean_characteristic ─────────────────────────────────────────
 
 def test_clean_characteristic_removes_trailing_punctuation():
     assert _clean_characteristic("经常睡午觉。") == "经常睡午觉"
     assert _clean_characteristic("经常睡午觉") == "经常睡午觉"
     assert _clean_characteristic("喜欢干味。") == "喜欢干味"
+    assert _clean_characteristic("【經 常 睡 午 覺】？！") == "经常睡午觉"
+
+
+@pytest.mark.parametrize(
+    "traditional,simplified",
+    [
+        ("非常喜歡吃東西", "非常喜欢吃东西"),
+        ("經常睡午覺", "经常睡午觉"),
+        ("常常打瞌睡", "常常打瞌睡"),
+        ("經常亂扔東西", "经常乱扔东西"),
+        ("喜歡悠然自在", "喜欢悠然自在"),
+        ("以力氣大為傲", "以力气大为傲"),
+        ("喜歡胡鬧", "喜欢胡闹"),
+        ("有點容易生氣", "有点容易生气"),
+        ("喜歡打架", "喜欢打架"),
+        ("血氣方剛", "血气方刚"),
+        ("身體強壯", "身体强壮"),
+        ("抗打能力強", "抗打能力强"),
+        ("頑強不屈", "顽强不屈"),
+        ("能吃苦耐勞", "能吃苦耐劳"),
+        ("善於忍耐", "善于忍耐"),
+        ("好奇心強", "好奇心强"),
+        ("喜歡惡作劇", "喜欢恶作剧"),
+        ("做事萬無一失", "做事万无一失"),
+        ("經常思考", "经常思考"),
+        ("一絲不苟", "一丝不苟"),
+        ("性格強勢", "性格强势"),
+        ("有一點點愛慕虛榮", "有一点点爱慕虚荣"),
+        ("爭強好勝", "争强好胜"),
+        ("不服輸", "不服输"),
+        ("有一點點固執", "有一点点固执"),
+        ("喜歡比誰跑得快", "喜欢比谁跑得快"),
+        ("對聲音敏感", "对声音敏感"),
+        ("冒冒失失", "冒冒失失"),
+        ("有點容易得意忘形", "有点容易得意忘形"),
+        ("逃得快", "逃得快"),
+    ],
+)
+def test_characteristic_maps_every_traditional_phrase(traditional, simplified):
+    raw = f"《{traditional}》？！"
+    assert _clean_characteristic(raw) == simplified
+    assert _match_characteristic_text(raw) == simplified
 
 
 # ── _detect_page_type ─────────────────────────────────────────────
@@ -102,8 +193,18 @@ def test_detect_stats_page_with_fewer_keywords():
     assert _detect_page_type(rows) == "stats"
 
 
+def test_detect_traditional_stats_page():
+    rows = [_row("HP 109"), _row("攻擊 67"), _row("防禦 69")]
+    assert _detect_page_type(rows) == "stats"
+
+
 def test_detect_notes_page():
     rows = [_row("训练家笔记"), _row("自大的性格。"), _row("喜欢苦味。")]
+    assert _detect_page_type(rows) == "notes"
+
+
+def test_detect_traditional_notes_page():
+    rows = [_row("訓練家筆記"), _row("冷靜的性格。"), _row("喜歡苦味。")]
     assert _detect_page_type(rows) == "notes"
 
 
@@ -289,6 +390,22 @@ class TestNatureAndCharacteristic:
         nature, characteristic = _extract_nature_and_characteristic(img, rows)
         assert nature == "自大"
         assert characteristic == "经常睡午觉"
+
+    def test_fallback_normalizes_traditional_nature_and_characteristic(self):
+        rows = [
+            _make_row("【冷 靜】的性格？！", 10),
+            _make_row("2026年05月12日", 30),
+            _make_row("在花之樂園，", 50),
+            _make_row("命中注定般地遇見了它。", 70),
+            _make_row("《經常亂扔東西》？！", 90),
+            _make_row("喜歡苦味。", 110),
+        ]
+        img = np.full((200, 100, 3), 255, dtype=np.uint8)
+
+        nature, characteristic = _extract_nature_and_characteristic(img, rows)
+
+        assert nature == "冷静"
+        assert characteristic == "经常乱扔东西"
 
     def test_single_red_row(self, monkeypatch):
         """只有一行红字时，个性无法提取。"""
