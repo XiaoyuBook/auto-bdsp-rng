@@ -49,6 +49,9 @@ DEFAULT_WIDTH = 1920
 DEFAULT_HEIGHT = 1080
 DEFAULT_FPS = 30.0
 DEFAULT_FOURCC = "MJPG"
+CAPTURE_API_DIRECTSHOW = 700
+CAPTURE_API_MSMF = 1400
+DEFAULT_CAPTURE_API = CAPTURE_API_MSMF
 DEFAULT_SLOT_COUNT = 4
 DEFAULT_FIRST_FRAME_TIMEOUT = 5.0
 DEFAULT_FRAME_TIMEOUT = 1.0
@@ -166,7 +169,7 @@ class OpenCVCapture:
     protocol/client usable in environments that only need shared-memory reads.
     """
 
-    def __init__(self, device_index: int = 0, capture_api: int = 0) -> None:
+    def __init__(self, device_index: int = 0, capture_api: int = DEFAULT_CAPTURE_API) -> None:
         try:
             import cv2  # type: ignore
         except Exception as exc:  # pragma: no cover - depends on installation
@@ -984,7 +987,7 @@ class CaptureBroker:
     def __init__(
         self,
         device_index: int,
-        capture_api: int = 0,
+        capture_api: int = DEFAULT_CAPTURE_API,
         *,
         manifest_path: str | os.PathLike[str] | None = None,
         capture_factory: CaptureFactory | None = None,
@@ -1221,7 +1224,8 @@ class CaptureBroker:
                         self._first_frame_event.set()
                     else:
                         self._ring.heartbeat()
-                time.sleep(self.poll_interval)
+                else:
+                    time.sleep(self.poll_interval)
         except BaseException as exc:
             self._fail(exc)
             return
@@ -1362,6 +1366,9 @@ __all__ = [
     "CaptureDevice",
     "CaptureFactory",
     "CaptureOpenError",
+    "CAPTURE_API_DIRECTSHOW",
+    "CAPTURE_API_MSMF",
+    "DEFAULT_CAPTURE_API",
     "DEFAULT_FIRST_FRAME_TIMEOUT",
     "DEFAULT_FOURCC",
     "DEFAULT_FPS",

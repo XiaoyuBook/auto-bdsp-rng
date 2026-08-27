@@ -11,6 +11,8 @@ import numpy as np
 import pytest
 
 from auto_bdsp_rng.capture_broker import (
+    CAPTURE_API_MSMF,
+    DEFAULT_CAPTURE_API,
     GLOBAL_HEADER_SIZE,
     LEGACY_MANIFEST_ENVIRONMENT_VARIABLE,
     MANIFEST_ENVIRONMENT_VARIABLE,
@@ -54,6 +56,20 @@ def _broker(
         frame_timeout=frame_timeout,
         poll_interval=0.001,
     )
+
+
+def test_capture_broker_defaults_to_media_foundation(tmp_path: Path):
+    capture = FakeCapture([_frame(1)])
+    broker = CaptureBroker(
+        0,
+        manifest_path=tmp_path / "capture_broker.json",
+        capture_factory=lambda _index, _api: capture,
+        width=4,
+        height=2,
+    )
+
+    assert DEFAULT_CAPTURE_API == CAPTURE_API_MSMF == 1400
+    assert broker.capture_api == CAPTURE_API_MSMF
 
 
 def test_wire_layout_and_manifest_are_cross_language_json(tmp_path: Path):
@@ -251,6 +267,33 @@ def test_static_pixels_are_new_frames_not_a_health_failure(tmp_path: Path):
         time.sleep(0.06)
         assert broker.state is BrokerState.RUNNING
         assert broker.ring.latest_sequence > initial_sequence
+    finally:
+        broker.stop()
+
+
+def test_successful_capture_reads_are_not_limited_by_failure_poll_interval(tmp_path: Path):
+    capture = FakeCapture([_frame(9)], repeat=True)
+    broker = CaptureBroker(
+        3,
+        1400,
+        manifest_path=tmp_path / "capture_broker.json",
+        capture_factory=lambda _index, _api: capture,
+        width=4,
+        height=2,
+        slot_count=3,
+        first_frame_timeout=0.2,
+        frame_timeout=0.2,
+        poll_interval=0.1,
+    )
+    try:
+        assert broker.start()
+        assert broker.ring is not None
+        first_sequence = broker.ring.latest_sequence
+        deadline = time.perf_counter() + 0.05
+        while broker.ring.latest_sequence < first_sequence + 3 and time.perf_counter() < deadline:
+            time.sleep(0.002)
+
+        assert broker.ring.latest_sequence >= first_sequence + 3
     finally:
         broker.stop()
 

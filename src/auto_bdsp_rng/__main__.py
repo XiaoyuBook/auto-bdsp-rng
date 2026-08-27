@@ -24,6 +24,7 @@ from auto_bdsp_rng.blink_detection import (
     plan_timeline,
     track_advances,
 )
+from auto_bdsp_rng.capture_broker import DEFAULT_CAPTURE_API
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 
 
@@ -50,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run the standalone shared capture-card Broker.",
     )
     capture_broker.add_argument("--device-index", type=int, required=True)
-    capture_broker.add_argument("--capture-api", type=int, default=700)
+    capture_broker.add_argument("--capture-api", type=int, default=DEFAULT_CAPTURE_API)
     capture_broker.add_argument("--manifest", default=None)
     capture_broker.add_argument("--first-frame-timeout", type=float, default=5.0)
     capture_broker.add_argument("--frame-timeout", type=float, default=1.0)

@@ -120,6 +120,7 @@ from auto_bdsp_rng.app_settings import (
     should_show_startup_notice,
 )
 from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
+from auto_bdsp_rng.capture_broker import CAPTURE_API_DIRECTSHOW, CAPTURE_API_MSMF
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_id import IDFilter, generate_ids
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
@@ -156,6 +157,10 @@ AUTO_CAPTURE_WARMUP_DISCARD_SECONDS = 1.0
 REIDENTIFY_HINT_BEFORE_FRAMES = 10_000
 REIDENTIFY_HINT_AFTER_FRAMES = 20_000
 NOISY_REIDENTIFY_MAX_SEARCH_FRAMES = 100_000
+PREVIEW_REFRESH_FPS = 30
+PREVIEW_REFRESH_INTERVAL_MS = round(1000 / PREVIEW_REFRESH_FPS)
+CAPTURE_API_SETTINGS_VERSION = 1
+CAPTURE_API_SETTINGS_VERSION_KEY = "video_source/capture_api_settings_version"
 
 
 def _status_dot_icon(color: str) -> QIcon:
@@ -1175,7 +1180,8 @@ class MainWindow(QMainWindow):
         self._resume_preview_after_selection = False
         self._resume_preview_after_capture = False
         self._preview_timer = QTimer(self)
-        self._preview_timer.setInterval(100)
+        self._preview_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._preview_timer.setInterval(PREVIEW_REFRESH_INTERVAL_MS)
         self._preview_timer.timeout.connect(self._update_preview_frame)
         self._preview_capture: PreviewFrameCapture | None = None
         self._capture_timer = QTimer(self)
@@ -2186,14 +2192,11 @@ class MainWindow(QMainWindow):
         self.capture_api_label = QLabel("采集方式")
         self.capture_api_combo = _MenuPopupComboBox()
         self.capture_api_combo.setObjectName("CaptureApiCombo")
-        self.capture_api_combo.addItem("DirectShow（推荐）", 700)
-        self.capture_api_combo.addItem("Media Foundation（兼容）", 1400)
+        self.capture_api_combo.addItem("Media Foundation（推荐）", CAPTURE_API_MSMF)
+        self.capture_api_combo.addItem("DirectShow（兼容）", CAPTURE_API_DIRECTSHOW)
         self.capture_api_combo.addItem("自动选择", 0)
         self.capture_api_combo.setMinimumWidth(240)
-        saved_api = self._profile_settings_int(
-            self._profile_settings.value("video_source/capture_api", 700),
-            700,
-        )
+        saved_api = self._restore_capture_api_setting()
         api_index = self.capture_api_combo.findData(saved_api)
         self.capture_api_combo.setCurrentIndex(max(0, api_index))
         self.capture_api_combo.currentIndexChanged.connect(
@@ -2905,6 +2908,23 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             return default
         return max(0, min(65535, number))
+
+    def _restore_capture_api_setting(self) -> int:
+        settings = self._profile_settings
+        saved_api = self._profile_settings_int(
+            settings.value("video_source/capture_api", CAPTURE_API_MSMF),
+            CAPTURE_API_MSMF,
+        )
+        settings_version = self._profile_settings_int(
+            settings.value(CAPTURE_API_SETTINGS_VERSION_KEY, 0),
+            0,
+        )
+        if settings_version < CAPTURE_API_SETTINGS_VERSION:
+            if saved_api == CAPTURE_API_DIRECTSHOW:
+                saved_api = CAPTURE_API_MSMF
+            settings.setValue("video_source/capture_api", saved_api)
+            settings.setValue(CAPTURE_API_SETTINGS_VERSION_KEY, CAPTURE_API_SETTINGS_VERSION)
+        return saved_api
 
     def _restore_profile_settings(self) -> None:
         settings = self._profile_settings

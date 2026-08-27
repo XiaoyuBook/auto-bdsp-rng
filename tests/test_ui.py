@@ -188,7 +188,7 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
     assert [
         window.capture_api_combo.itemText(row)
         for row in range(window.capture_api_combo.count())
-    ] == ["DirectShow（推荐）", "Media Foundation（兼容）", "自动选择"]
+    ] == ["Media Foundation（推荐）", "DirectShow（兼容）", "自动选择"]
     assert not window.capture_device_combo.isEditable()
     assert not hasattr(window, "video_source_combo")
     assert window.video_source_status_dot.property("state") == "disconnected"
@@ -259,6 +259,13 @@ def test_preview_scaling_does_not_enlarge_low_resolution_source(app):
     assert logical_size == QSize(520, 307)
 
 
+def test_main_preview_targets_30_fps(app):
+    window = MainWindow()
+
+    assert window._preview_timer.interval() == round(1000 / 30)
+    assert window._preview_timer.timerType() == Qt.TimerType.PreciseTimer
+
+
 def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(app):
     class Client:
         def close(self):
@@ -294,7 +301,7 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
         QTest.qWait(5)
     config = window._config_from_form().capture
 
-    assert process.started == (0, 700)
+    assert process.started == (0, 1400)
     assert config.uses_shared_video_source
     assert callable(config.frame_source_factory)
     assert window._preview_timer.isActive()
@@ -763,6 +770,7 @@ def test_capture_devices_use_selected_backend_and_real_indices(app, monkeypatch)
         enumerate_devices,
     )
     window = MainWindow()
+    window.capture_api_combo.setCurrentIndex(window.capture_api_combo.findData(700))
     window.capture_device_combo.setCurrentIndex(1)
 
     window.refresh_capture_devices()
@@ -800,6 +808,53 @@ def test_capture_device_restores_saved_backend_domain_index(app, monkeypatch, tm
     assert window.capture_api_combo.currentData() == 0
     assert window._capture_device_index() == 1400
     assert window.capture_device_combo.currentText() == "1400 - USB Video"
+
+
+def test_capture_api_defaults_to_media_foundation_and_marks_settings_migrated(app, tmp_path):
+    settings = _profile_settings(tmp_path)
+
+    window = MainWindow(profile_settings=settings)
+
+    assert window.capture_api_combo.currentData() == 1400
+    assert int(settings.value("video_source/capture_api")) == 1400
+    assert int(settings.value(main_window_module.CAPTURE_API_SETTINGS_VERSION_KEY)) == 1
+
+
+def test_capture_api_migrates_unmarked_directshow_default_to_media_foundation(app, tmp_path):
+    settings = _profile_settings(tmp_path)
+    settings.setValue("video_source/capture_api", 700)
+
+    window = MainWindow(profile_settings=settings)
+
+    assert window.capture_api_combo.currentData() == 1400
+    assert int(settings.value("video_source/capture_api")) == 1400
+    assert int(settings.value(main_window_module.CAPTURE_API_SETTINGS_VERSION_KEY)) == 1
+
+
+def test_capture_api_preserves_explicit_directshow_after_migration(app, tmp_path):
+    settings = _profile_settings(tmp_path)
+    settings.setValue("video_source/capture_api", 700)
+    settings.setValue(
+        main_window_module.CAPTURE_API_SETTINGS_VERSION_KEY,
+        main_window_module.CAPTURE_API_SETTINGS_VERSION,
+    )
+
+    window = MainWindow(profile_settings=settings)
+
+    assert window.capture_api_combo.currentData() == 700
+    assert int(settings.value("video_source/capture_api")) == 700
+
+
+@pytest.mark.parametrize("saved_api", [0, 1400])
+def test_capture_api_migration_preserves_non_directshow_choices(app, tmp_path, saved_api):
+    settings = _profile_settings(tmp_path)
+    settings.setValue("video_source/capture_api", saved_api)
+
+    window = MainWindow(profile_settings=settings)
+
+    assert window.capture_api_combo.currentData() == saved_api
+    assert int(settings.value("video_source/capture_api")) == saved_api
+    assert int(settings.value(main_window_module.CAPTURE_API_SETTINGS_VERSION_KEY)) == 1
 
 
 def test_video_source_combo_uses_opaque_menu_popup(app):

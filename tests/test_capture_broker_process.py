@@ -60,6 +60,14 @@ def test_capture_broker_process_starts_child_and_waits_for_running_manifest(monk
     assert child.returncode == 0
 
 
+def test_capture_broker_process_defaults_to_media_foundation(tmp_path):
+    controller = CaptureBrokerProcess(manifest_path=tmp_path / "broker.json")
+    command = controller._command()
+
+    assert controller.capture_api == 1400
+    assert command[command.index("--capture-api") + 1] == "1400"
+
+
 def test_capture_broker_process_uses_hidden_frozen_child_argument(monkeypatch, tmp_path):
     controller = CaptureBrokerProcess(manifest_path=tmp_path / "broker.json")
     monkeypatch.setattr(process_module.sys, "frozen", True, raising=False)

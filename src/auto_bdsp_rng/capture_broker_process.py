@@ -14,6 +14,7 @@ from auto_bdsp_rng.capture_broker import (
     BrokerManifest,
     BrokerState,
     CaptureBrokerClient,
+    DEFAULT_CAPTURE_API,
     default_manifest_path,
     discover_manifest,
 )
@@ -35,7 +36,7 @@ class CaptureBrokerProcess:
     def __init__(
         self,
         device_index: int = 0,
-        capture_api: int = 700,
+        capture_api: int = DEFAULT_CAPTURE_API,
         *,
         manifest_path: str | Path | None = None,
         first_frame_timeout: float = 5.0,

@@ -40,6 +40,24 @@ def test_capture_broker_hidden_command_runs_standalone_service(monkeypatch, tmp_
     assert calls[0][2]["manifest_path"] == str(manifest)
 
 
+def test_capture_broker_hidden_command_defaults_to_media_foundation(monkeypatch):
+    import auto_bdsp_rng.capture_broker as broker_module
+
+    calls = []
+
+    class FakeBroker:
+        def __init__(self, device_index, capture_api, **_kwargs):
+            calls.append((device_index, capture_api))
+
+        def serve_forever(self):
+            return True
+
+    monkeypatch.setattr(broker_module, "CaptureBroker", FakeBroker)
+
+    assert main(["capture-broker", "--device-index", "0"]) == 0
+    assert calls == [(0, 1400)]
+
+
 def test_blink_config_command_prints_project_xs_config(capsys):
     assert main(["blink-config", "--project-xs-config", "config_cave.json"]) == 0
 
