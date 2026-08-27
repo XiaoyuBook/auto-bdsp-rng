@@ -2468,6 +2468,16 @@ def test_auto_rng_target_summary_uses_chinese_compact_rows_and_scroll(app):
     assert panel.target_summary_scroll.maximumHeight() <= 150
 
 
+def test_auto_rng_target_summary_describes_shiny_only_without_repetition(app):
+    panel = AutoRngPanel()
+    from auto_bdsp_rng.data import get_static_encounters
+
+    record = next(r for r in get_static_encounters() if r.description == "Shaymin")
+    panel.set_targets([(record, StateFilter(shiny=3), "shiny")])
+
+    assert panel.target_summary_labels[0].text() == "1. 异色：仅异色"
+
+
 def test_auto_rng_target_summary_scrolls_when_many_conditions(app):
     panel = AutoRngPanel()
     from auto_bdsp_rng.data import get_static_encounters
@@ -4217,8 +4227,31 @@ def test_preview_selection_cancel_keeps_previous_eye_path(app, monkeypatch, tmp_
     window = MainWindow()
     old_eye = tmp_path / "old_eye.png"
     window._eye_image_path = old_eye
-    window._selection_mode = "eye"
-    window.preview_label.set_selection_enabled(True)
+    initial_frame = np.full((12, 16, 3), 20, dtype=np.uint8)
+    live_frame = np.full((12, 16, 3), 220, dtype=np.uint8)
+    rendered_frames = []
+    monkeypatch.setattr(
+        window,
+        "_frame_to_pixmap",
+        lambda frame: rendered_frames.append(frame) or QPixmap(16, 12),
+    )
+    window._latest_preview_frame = initial_frame
+    window._latest_annotated_preview_frame = initial_frame
+    window._video_source_connected = True
+    window.preview_button.setText("预览常驻")
+    window._preview_timer.start()
+    window.start_eye_capture_selection()
+
+    frozen_frame = window._selection_preview_frame
+    assert frozen_frame is not initial_frame
+    assert np.array_equal(frozen_frame, initial_frame)
+    assert window._preview_timer.isActive()
+
+    window._latest_preview_frame = live_frame
+    window._latest_annotated_preview_frame = live_frame
+    window._display_frame(live_frame)
+    assert rendered_frames[-1] is frozen_frame
+
     called = []
     monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: False)
     monkeypatch.setattr(window, "apply_selected_eye", lambda _roi: called.append(_roi))
@@ -4228,6 +4261,38 @@ def test_preview_selection_cancel_keeps_previous_eye_path(app, monkeypatch, tmp_
     assert window._eye_image_path == old_eye
     assert called == []
     assert window._selection_mode is None
+    assert window._selection_preview_frame is None
+    assert rendered_frames[-1] is live_frame
+    assert window._preview_timer.isActive()
+    assert window.preview_button.text() == "预览常驻"
+
+
+def test_eye_capture_uses_frozen_selection_frame(app, monkeypatch, tmp_path):
+    window = MainWindow()
+    frozen_frame = np.full((12, 16, 3), 40, dtype=np.uint8)
+    window._selection_preview_frame = frozen_frame
+    window._latest_preview_frame = np.full((12, 16, 3), 200, dtype=np.uint8)
+    window._selection_mode = "eye"
+    written_images = []
+
+    import cv2
+
+    monkeypatch.setattr(main_window_module, "resource_path", lambda *_parts: tmp_path)
+    monkeypatch.setattr(window, "_selected_config_path", lambda: "profile.json")
+    monkeypatch.setattr(
+        cv2,
+        "imwrite",
+        lambda _path, image: written_images.append(image.copy()) or True,
+    )
+
+    window.apply_selected_eye((2, 3, 4, 5))
+
+    assert len(written_images) == 1
+    assert written_images[0].shape == (5, 4)
+    assert np.all(written_images[0] == 40)
+    assert window._selection_mode == "roi"
+    assert window._selection_preview_frame is frozen_frame
+    assert window.preview_label._selection_enabled
 
 
 def test_preview_label_stores_ocr_overlay_region(app):
@@ -4277,9 +4342,13 @@ def test_ocr_region_selection_confirm_emits_field_and_roi(app, monkeypatch):
     window = MainWindow()
     emitted = []
     window.ocrRegionSelected.connect(lambda field, roi: emitted.append((field, roi)))
-    window._selection_mode = "ocr_region"
-    window._ocr_selection_field = "characteristic"
-    window.preview_label.set_selection_enabled(True)
+    frame = np.zeros((12, 16, 3), dtype=np.uint8)
+    window._latest_preview_frame = frame
+    window._latest_annotated_preview_frame = frame
+    window._video_source_connected = True
+    window.preview_button.setText("预览常驻")
+    window._preview_timer.start()
+    window.start_ocr_region_selection("characteristic")
     monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: True)
 
     window._handle_preview_selection((10, 20, 30, 40))
@@ -4287,6 +4356,9 @@ def test_ocr_region_selection_confirm_emits_field_and_roi(app, monkeypatch):
     assert emitted == [("characteristic", (10, 20, 30, 40))]
     assert window._selection_mode is None
     assert window._ocr_selection_field is None
+    assert window._selection_preview_frame is None
+    assert window._preview_timer.isActive()
+    assert window.preview_button.text() == "预览常驻"
     assert window.preview_label._ocr_overlay_region == OcrRegion(10, 20, 30, 40)
 
 

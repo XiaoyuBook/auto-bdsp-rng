@@ -971,7 +971,7 @@ class AutoRngPanel(QWidget):
 def _target_condition_text(state_filter: StateFilter, shiny_mode: str) -> str:
     parts: list[str] = []
     shiny_label = {
-        "shiny": "异色",
+        "shiny": "仅异色",
         "star": "星闪",
         "square": "方闪",
         "none": "非异色",

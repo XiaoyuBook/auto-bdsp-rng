@@ -1171,6 +1171,7 @@ class MainWindow(QMainWindow):
         self._is_closing = False
         self._ocr_full_test_running = False
         self._selection_mode: str | None = None
+        self._selection_preview_frame: object | None = None
         self._resume_preview_after_selection = False
         self._resume_preview_after_capture = False
         self._preview_timer = QTimer(self)
@@ -4213,9 +4214,16 @@ class MainWindow(QMainWindow):
                 self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
             except Exception as exc:
                 self._selection_mode = None
+                self._ocr_selection_field = None
+                self._roi_before_selection = None
+                self._restore_preview_after_selection()
                 self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
                 return
-        self._display_frame(self._latest_preview_frame)
+        frame_copy = getattr(self._latest_preview_frame, "copy", None)
+        self._selection_preview_frame = (
+            frame_copy() if callable(frame_copy) else self._latest_preview_frame
+        )
+        self._display_frame(self._selection_preview_frame)
         self.preview_label.set_selection_enabled(True)
 
     def _handle_preview_selection(self, roi: object) -> None:
@@ -4262,11 +4270,20 @@ class MainWindow(QMainWindow):
         self._roi_before_selection = None
         self._ocr_selection_field = None
         self._selection_mode = None
-        if self._resume_preview_after_selection:
-            self._preview_timer.start()
-            self.preview_button.setText(self._text("stop_preview"))
-        self._resume_preview_after_selection = False
+        self._restore_preview_after_selection()
         self.statusBar().showMessage("已取消框选，继续使用之前的设置")
+
+    def _restore_preview_after_selection(self) -> None:
+        self._selection_preview_frame = None
+        resume_preview = self._resume_preview_after_selection
+        self._resume_preview_after_selection = False
+        if resume_preview and not self._preview_timer.isActive():
+            self._preview_timer.start()
+        if self._video_source_connected:
+            self.preview_button.setText("预览常驻")
+        elif resume_preview:
+            self.preview_button.setText(self._text("stop_preview"))
+        self._refresh_preview_presentation()
 
     def apply_selected_ocr_region(self, roi: object) -> None:
         field = self._ocr_selection_field
@@ -4279,10 +4296,7 @@ class MainWindow(QMainWindow):
         self.preview_label.set_selection_enabled(False)
         self._selection_mode = None
         self._ocr_selection_field = None
-        if self._resume_preview_after_selection:
-            self._preview_timer.start()
-            self.preview_button.setText(self._text("stop_preview"))
-        self._resume_preview_after_selection = False
+        self._restore_preview_after_selection()
         self.ocrRegionSelected.emit(field, region.as_tuple())
         label = OCR_REGION_LABELS.get(field, field)
         self.statusBar().showMessage(f"OCR 区域已保存：{label} X={x}, Y={y}, W={width}, H={height}")
@@ -4293,10 +4307,7 @@ class MainWindow(QMainWindow):
         self.preview_label.set_ocr_overlay("tid", region)
         self.preview_label.set_selection_enabled(False)
         self._selection_mode = None
-        if self._resume_preview_after_selection:
-            self._preview_timer.start()
-            self.preview_button.setText(self._text("stop_preview"))
-        self._resume_preview_after_selection = False
+        self._restore_preview_after_selection()
         self.tidOcrRegionSelected.emit(region.as_tuple())
         self.statusBar().showMessage(f"TID OCR 区域已保存：X={x}, Y={y}, W={width}, H={height}")
 
@@ -4314,16 +4325,16 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._set_roi_values(old_roi)
             self.preview_label.set_selection_enabled(False)
+            self._roi_before_selection = None
             self._selection_mode = None
+            self._restore_preview_after_selection()
             self._show_error("ROI failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
         self._set_roi_values((x, y, width, height))
         self.preview_label.set_selection_enabled(False)
         self._roi_before_selection = None
         self._selection_mode = None
-        if self._resume_preview_after_selection:
-            self._preview_timer.start()
-            self.preview_button.setText(self._text("stop_preview"))
+        self._restore_preview_after_selection()
         if self._latest_preview_frame is not None:
             try:
                 annotated, _preview = render_eye_preview(self._config_from_form().capture, self._latest_preview_frame)
@@ -4337,7 +4348,9 @@ class MainWindow(QMainWindow):
         try:
             import cv2
 
-            frame = self._latest_preview_frame
+            frame = self._selection_preview_frame
+            if frame is None:
+                frame = self._latest_preview_frame
             if frame is None:
                 frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
             frame_height, frame_width = frame.shape[:2]
@@ -4357,12 +4370,13 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.preview_label.set_selection_enabled(False)
             self._selection_mode = None
+            self._restore_preview_after_selection()
             self._show_error("Eye capture failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
         self._eye_image_path = output_path
         self._selection_mode = "roi"
         self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
-        self._display_frame(self._latest_preview_frame if self._latest_preview_frame is not None else frame)
+        self._display_frame(self._selection_preview_frame if self._selection_preview_frame is not None else frame)
         self.preview_label.set_selection_enabled(True)
         self.statusBar().showMessage(f"{self._text('eye_captured_select_roi')}: {output_path}")
 
@@ -4909,6 +4923,8 @@ class MainWindow(QMainWindow):
         )
 
     def _display_frame(self, frame: object) -> None:
+        if self._selection_preview_frame is not None:
+            frame = self._selection_preview_frame
         pixmap = self._frame_to_pixmap(frame)
         target = self.preview_label.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
