@@ -4267,12 +4267,24 @@ def test_preview_selection_cancel_keeps_previous_eye_path(app, monkeypatch, tmp_
     assert window.preview_button.text() == "预览常驻"
 
 
-def test_eye_capture_uses_frozen_selection_frame(app, monkeypatch, tmp_path):
+def test_eye_capture_uses_frozen_frame_then_restores_live_preview(app, monkeypatch, tmp_path):
     window = MainWindow()
     frozen_frame = np.full((12, 16, 3), 40, dtype=np.uint8)
+    live_frame = np.full((12, 16, 3), 200, dtype=np.uint8)
+    rendered_frames = []
+    monkeypatch.setattr(
+        window,
+        "_frame_to_pixmap",
+        lambda frame: rendered_frames.append(frame) or QPixmap(16, 12),
+    )
     window._selection_preview_frame = frozen_frame
-    window._latest_preview_frame = np.full((12, 16, 3), 200, dtype=np.uint8)
+    window._latest_preview_frame = live_frame
+    window._latest_annotated_preview_frame = live_frame
     window._selection_mode = "eye"
+    window._resume_preview_after_selection = True
+    window._video_source_connected = True
+    window.preview_button.setText("预览常驻")
+    window._preview_timer.start()
     written_images = []
 
     import cv2
@@ -4291,8 +4303,11 @@ def test_eye_capture_uses_frozen_selection_frame(app, monkeypatch, tmp_path):
     assert written_images[0].shape == (5, 4)
     assert np.all(written_images[0] == 40)
     assert window._selection_mode == "roi"
-    assert window._selection_preview_frame is frozen_frame
+    assert window._selection_preview_frame is None
     assert window.preview_label._selection_enabled
+    assert rendered_frames[-1] is live_frame
+    assert window._preview_timer.isActive()
+    assert window.preview_button.text() == "预览常驻"
 
 
 def test_preview_label_stores_ocr_overlay_region(app):

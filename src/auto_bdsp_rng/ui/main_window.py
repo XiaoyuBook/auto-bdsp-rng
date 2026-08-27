@@ -4376,7 +4376,8 @@ class MainWindow(QMainWindow):
         self._eye_image_path = output_path
         self._selection_mode = "roi"
         self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
-        self._display_frame(self._selection_preview_frame if self._selection_preview_frame is not None else frame)
+        self._restore_preview_after_selection()
+        self._display_frame(self._latest_preview_frame if self._latest_preview_frame is not None else frame)
         self.preview_label.set_selection_enabled(True)
         self.statusBar().showMessage(f"{self._text('eye_captured_select_roi')}: {output_path}")
 
