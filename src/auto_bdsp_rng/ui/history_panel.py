@@ -207,28 +207,27 @@ class HistoryPanel(QWidget):
 
     def candidates_found(
         self, candidates: list[object], locked_index: int,
-        sync_flags: list[str] | None = None, candidate_delay: int | None = None,
+        sync_flags: list[str] | None = None,
     ) -> None:
         self._pid_ec_seen.clear()
         self._ts(f"搜索到 {len(candidates)} 个候选")
         for i, state in enumerate(candidates):
-            self._write_candidate(i, state, locked_index, sync_flags, candidate_delay)
+            self._write_candidate(i, state, locked_index, sync_flags)
 
     def candidates_refiltered(
         self, candidates: list[object], locked_index: int,
-        sync_flags: list[str] | None = None, candidate_delay: int | None = None,
+        sync_flags: list[str] | None = None,
     ) -> None:
         self._pid_ec_seen.clear()
         self._ts(f"剩余 {len(candidates)} 个候选")
         for i, state in enumerate(candidates):
-            self._write_candidate(i, state, locked_index, sync_flags, candidate_delay)
+            self._write_candidate(i, state, locked_index, sync_flags)
 
     def _write_candidate(
         self, i: int, state: object, locked_index: int,
-        sync_flags: list[str] | None, candidate_delay: int | None,
+        sync_flags: list[str] | None,
     ) -> None:
         adv = _get_int(state, "advances")
-        delay = candidate_delay if candidate_delay is not None else adv
         key = _pid_ec_key(state)
         dup = self._pid_ec_seen.get(key)
         self._pid_ec_seen[key] = i + 1
@@ -243,7 +242,7 @@ class HistoryPanel(QWidget):
         tag_str = f"({', '.join(tags)}) " if tags else ""
 
         line = (
-            f"  候选{i + 1} {tag_str}adv={adv} delay={delay} "
+            f"  候选{i + 1} {tag_str}adv={adv} "
             f"EC={_state_ec(state)} PID={_state_pid(state)} "
             f"{_state_iv_text(getattr(state, 'ivs', None))} "
             f"性格={_nature_text(state)} 异色={_shiny_text(state)} "

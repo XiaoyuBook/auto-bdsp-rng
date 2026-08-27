@@ -2653,7 +2653,7 @@ def test_history_panel_reverse_lookup_candidates_are_single_line(app):
     assert not any(line.strip().startswith("EC:") for line in lines)
 
 
-def test_history_panel_candidates_use_configured_delay(app):
+def test_history_panel_candidates_do_not_show_global_delay(app):
     panel = HistoryPanel()
     state = SimpleNamespace(
         advances=1234,
@@ -2668,12 +2668,11 @@ def test_history_panel_candidates_use_configured_delay(app):
         weight=12,
     )
 
-    panel.candidates_found([state], locked_index=0, candidate_delay=321)
+    panel.candidates_found([state], locked_index=0)
 
     text = panel.text_view.toPlainText()
     assert "adv=1234" in text
-    assert "delay=321" in text
-    assert "delay=1234" not in text
+    assert "delay=" not in text
 
 
 def test_auto_rng_escape_attempt_history_includes_loop_and_attempt(app, monkeypatch):

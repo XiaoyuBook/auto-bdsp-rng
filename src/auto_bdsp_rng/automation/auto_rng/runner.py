@@ -712,9 +712,9 @@ class AutoRngRunner:
                 sync_nature=nature_idx if selected_source == "sync" else None,
             )
         if was_missed:
-            self._history("candidates_refiltered", reachable, locked_idx, reachable_flags, self.config.fixed_delay)
+            self._history("candidates_refiltered", reachable, locked_idx, reachable_flags)
         else:
-            self._history("candidates_found", reachable, locked_idx, reachable_flags, self.config.fixed_delay)
+            self._history("candidates_found", reachable, locked_idx, reachable_flags)
         flash = self._fixed_flash_frames()
         trigger = decision.raw_target_advances - self.config.fixed_delay - flash
         next_attempt_label = self._next_attempt_label()

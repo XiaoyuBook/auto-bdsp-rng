@@ -5533,10 +5533,9 @@ class MainWindow(QMainWindow):
             h.auto_tid_log(str(values[0]))
         elif event == "candidates_found" and len(values) >= 2:
             flags = list(values[2]) if len(values) >= 3 else None
-            delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
             candidates = list(values[0])
             locked_index = int(values[1])
-            h.candidates_found(candidates, locked_index, flags, delay)  # type: ignore[arg-type]
+            h.candidates_found(candidates, locked_index, flags)  # type: ignore[arg-type]
             locked_adv = (
                 getattr(candidates[locked_index], "advances", "-")
                 if 0 <= locked_index < len(candidates)
@@ -5545,10 +5544,9 @@ class MainWindow(QMainWindow):
             self._write_run_log("历史记录", f"搜索到 {len(candidates)} 个候选；锁定 Adv {locked_adv}")
         elif event == "candidates_refiltered" and len(values) >= 2:
             flags = list(values[2]) if len(values) >= 3 else None
-            delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
             candidates = list(values[0])
             locked_index = int(values[1])
-            h.candidates_refiltered(candidates, locked_index, flags, delay)  # type: ignore[arg-type]
+            h.candidates_refiltered(candidates, locked_index, flags)  # type: ignore[arg-type]
             locked_adv = (
                 getattr(candidates[locked_index], "advances", "-")
                 if 0 <= locked_index < len(candidates)

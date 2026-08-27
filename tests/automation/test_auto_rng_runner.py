@@ -725,7 +725,7 @@ def test_runner_preserves_sync_candidate_source_and_nature(tmp_path):
 
     assert calls == [(0, 0)]
     candidates_event = next(args for event, args in history if event == "candidates_found")
-    candidates, locked_index, sync_flags, _delay = candidates_event
+    candidates, locked_index, sync_flags = candidates_event
     assert locked_index == 0
     assert sync_flags == ["sync"]
     assert candidates[0].nature == 0
@@ -768,7 +768,7 @@ def test_runner_does_not_label_secondary_no_sync_candidate_as_sync(tmp_path):
     runner.run(max_steps=2)
 
     candidates_event = next(args for event, args in history if event == "candidates_found")
-    candidates, _locked_index, sync_flags, _delay = candidates_event
+    candidates, _locked_index, sync_flags = candidates_event
     assert sync_flags == ["no_sync"]
     assert candidates[0].nature == 18
     assert runner.progress.locked_target is not None
