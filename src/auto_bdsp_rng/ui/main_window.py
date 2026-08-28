@@ -528,6 +528,91 @@ NATURES_ZH = (
     "慎重",
     "浮躁",
 )
+
+
+class _LeadMenuComboBox(_MenuPopupComboBox):
+    """Combo box whose Synchronize choices live in a hover submenu."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._lang = "zh"
+        self._populate_items()
+
+    def set_language(self, lang: str) -> None:
+        selected = self.currentData()
+        self._lang = "zh" if lang == "zh" else "en"
+        blocked = self.blockSignals(True)
+        try:
+            self._populate_items()
+            index = self.findData(selected)
+            self.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            self.blockSignals(blocked)
+
+    def showPopup(self) -> None:  # noqa: N802
+        if not self.isEnabled() or self.count() == 0:
+            return
+        if self._popup_menu is not None:
+            self._popup_menu.close()
+
+        menu = self._new_menu(self)
+        menu.setMinimumWidth(self.width())
+        self._add_choice(menu, "无" if self._lang == "zh" else "None", int(Lead.NONE))
+
+        sync_menu = self._new_menu(menu)
+        sync_menu.setTitle("同步" if self._lang == "zh" else "Synchronize")
+        nature_names = NATURES_ZH if self._lang == "zh" else NATURES
+        for value, nature in enumerate(nature_names):
+            self._add_choice(sync_menu, nature, value)
+        menu.addMenu(sync_menu)
+
+        menu.addSeparator()
+        cute_charm = "迷人之躯" if self._lang == "zh" else "Cute Charm"
+        self._add_choice(menu, f"{cute_charm} ♀", int(Lead.CUTE_CHARM_F))
+        self._add_choice(menu, f"{cute_charm} ♂", int(Lead.CUTE_CHARM_M))
+
+        self._popup_menu = menu
+        menu.aboutToHide.connect(lambda current_menu=menu: self._dispose_popup(current_menu))
+        menu.popup(self.mapToGlobal(QPoint(0, self.height())))
+        QTimer.singleShot(0, menu.repaint)
+
+    def _populate_items(self) -> None:
+        self.clear()
+        if self._lang == "zh":
+            none_text = "无"
+            sync_prefix = "同步"
+            nature_names = NATURES_ZH
+            cute_charm = "迷人之躯"
+        else:
+            none_text = "None"
+            sync_prefix = "Synchronize"
+            nature_names = NATURES
+            cute_charm = "Cute Charm"
+        self.addItem(none_text, int(Lead.NONE))
+        for value, nature in enumerate(nature_names):
+            text = f"{sync_prefix}：{nature}" if self._lang == "zh" else f"{sync_prefix}: {nature}"
+            self.addItem(text, value)
+        self.addItem(f"{cute_charm} ♀", int(Lead.CUTE_CHARM_F))
+        self.addItem(f"{cute_charm} ♂", int(Lead.CUTE_CHARM_M))
+
+    @staticmethod
+    def _new_menu(parent: QWidget) -> QMenu:
+        menu = QMenu(parent)
+        menu.setObjectName("LeadComboMenu")
+        menu.setAutoFillBackground(True)
+        menu.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        return menu
+
+    def _add_choice(self, menu: QMenu, text: str, value: int) -> None:
+        action = menu.addAction(text)
+        action.setData(value)
+        action.setCheckable(True)
+        action.setChecked(self.currentData() == value)
+        action.triggered.connect(
+            lambda _checked=False, selected=value: self.setCurrentIndex(self.findData(selected))
+        )
+
+
 CATEGORY_LABELS_ZH = {
     None: "全部",
     "starters": "御三家",
@@ -1856,11 +1941,7 @@ class MainWindow(QMainWindow):
 
         self.lead_label = QLabel("队首")
         self.lead_label.setFixedWidth(64)
-        self.lead_combo = QComboBox()
-        self.lead_combo.addItem("无", int(Lead.NONE))
-        self.lead_combo.addItem("同步：勤奋", int(Lead.SYNCHRONIZE_START))
-        self.lead_combo.addItem("迷人之躯 ♀", int(Lead.CUTE_CHARM_F))
-        self.lead_combo.addItem("迷人之躯 ♂", int(Lead.CUTE_CHARM_M))
+        self.lead_combo = _LeadMenuComboBox()
         self.lead_combo.setFixedHeight(30)
 
         self.bdsp_seed64_inputs = [QLineEdit() for _ in range(2)]
@@ -2492,22 +2573,26 @@ class MainWindow(QMainWindow):
                 width: 26px;
                 border-left: 1px solid #E5E7EB;
             }
-            QMenu#VideoSourceComboMenu {
+            QMenu#VideoSourceComboMenu,
+            QMenu#LeadComboMenu {
                 background: #FFFFFF;
                 color: #111827;
                 border: 1px solid #D1D5DB;
                 padding: 4px;
             }
-            QMenu#VideoSourceComboMenu::item {
+            QMenu#VideoSourceComboMenu::item,
+            QMenu#LeadComboMenu::item {
                 min-height: 28px;
                 padding: 4px 28px 4px 10px;
                 border-radius: 4px;
             }
-            QMenu#VideoSourceComboMenu::item:selected {
+            QMenu#VideoSourceComboMenu::item:selected,
+            QMenu#LeadComboMenu::item:selected {
                 background: #F3F4F6;
                 color: #111827;
             }
-            QMenu#VideoSourceComboMenu::item:checked {
+            QMenu#VideoSourceComboMenu::item:checked,
+            QMenu#LeadComboMenu::item:checked {
                 background: #E6F6F0;
                 color: #0E8F70;
                 font-weight: 600;
@@ -3347,6 +3432,8 @@ class MainWindow(QMainWindow):
         self.capture_group.setTitle(self._text("capture"))
         self.seed_group.setTitle(self._text("seed"))
         self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
+        self.lead_label.setText("队首" if self.lang == "zh" else "Lead")
+        self.lead_combo.set_language(self.lang)
         self.static_group.setTitle("设置" if self.lang == "zh" else "Settings")
         self.profile_group.setTitle("存档信息" if self.lang == "zh" else "Profile")
         self.filter_group.setTitle("筛选项" if self.lang == "zh" else "Filters")

@@ -109,6 +109,86 @@ def test_main_window_generates_static_results(app):
     assert window.table.item(0, 1).text()
 
 
+def test_bdsp_lead_menu_exposes_all_synchronize_natures(app):
+    window = MainWindow()
+    combo = window.lead_combo
+
+    assert [combo.itemData(row) for row in range(combo.count())] == [
+        int(main_window_module.Lead.NONE),
+        *range(25),
+        int(main_window_module.Lead.CUTE_CHARM_F),
+        int(main_window_module.Lead.CUTE_CHARM_M),
+    ]
+
+    combo.showPopup()
+    menu = combo._popup_menu
+    assert menu is not None
+    root_actions = [action for action in menu.actions() if not action.isSeparator()]
+    assert [action.text() for action in root_actions] == [
+        "无",
+        "同步",
+        "迷人之躯 ♀",
+        "迷人之躯 ♂",
+    ]
+    sync_menu = root_actions[1].menu()
+    assert sync_menu is not None
+    assert [action.text() for action in sync_menu.actions()] == list(NATURES_ZH)
+    assert [action.data() for action in sync_menu.actions()] == list(range(25))
+
+    sync_menu.actions()[3].trigger()
+    app.processEvents()
+
+    assert combo.currentData() == 3
+    assert combo.currentText() == "同步：固执"
+
+    combo.showPopup()
+    reopened = combo._popup_menu
+    assert reopened is not None
+    reopened_sync = [action for action in reopened.actions() if action.text() == "同步"][0].menu()
+    assert reopened_sync is not None
+    assert reopened_sync.actions()[3].isChecked()
+    combo.hidePopup()
+
+
+def test_bdsp_lead_menu_keeps_value_when_language_changes(app):
+    window = MainWindow()
+    combo = window.lead_combo
+    combo.setCurrentIndex(combo.findData(3))
+
+    window.lang = "en"
+    window._apply_language()
+
+    assert window.lead_label.text() == "Lead"
+    assert combo.currentData() == 3
+    assert combo.currentText() == "Synchronize: Adamant"
+
+    window.lang = "zh"
+    window._apply_language()
+
+    assert window.lead_label.text() == "队首"
+    assert combo.currentData() == 3
+    assert combo.currentText() == "同步：固执"
+
+
+def test_bdsp_generation_uses_selected_synchronize_nature(app, monkeypatch):
+    window = MainWindow()
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
+    window.lead_combo.setCurrentIndex(window.lead_combo.findData(13))
+    received = []
+
+    def capture_criteria(criteria):
+        received.append(criteria)
+        return []
+
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", capture_criteria)
+
+    window.generate_results()
+
+    assert len(received) == 1
+    assert received[0].lead == 13
+
+
 def test_main_window_does_not_warm_ocr_until_requested(app, monkeypatch):
     started = []
 
