@@ -326,6 +326,10 @@ def test_easycon_panel_native_script_requires_broker_and_preserves_source_dir(ea
     assert script_name == "玫瑰公园.txt"
     assert script_dir == easycon_panel.current_script_path.parent
     assert "_闪帧 = 123" in script_text
+    assert easycon_panel.task_state_label.text() == "任务: 已完成"
+    assert easycon_panel.status_controller_label.text() == "单片机已连接"
+    assert easycon_panel.connect_button.text() == "断开连接"
+    assert easycon_panel.connect_button.isEnabled() is True
 
 
 def test_easycon_panel_native_controls_and_keep_awake_share_backend(easycon_panel):
@@ -340,6 +344,120 @@ def test_easycon_panel_native_controls_and_keep_awake_share_backend(easycon_pane
 
     assert backend.presses == [("A", 120), ("L", 100)]
     assert backend.sticks == [("left", "RESET", 100)]
+
+
+def test_easycon_panel_keeps_connection_display_while_native_script_is_reserved(easycon_panel):
+    assert easycon_panel.connect_native()
+    easycon_panel.task_state_text = "执行中"
+
+    assert easycon_panel.reserve_native_script_run()
+
+    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.task_state_label.text() == "任务: 执行中"
+    assert easycon_panel.status_controller_label.text() == "单片机已连接"
+    assert easycon_panel.backend_label.text() == "单片机: 已长期连接"
+    assert easycon_panel.connect_button.text() == "断开连接"
+    assert easycon_panel.connect_button.isEnabled() is False
+    assert easycon_panel.port_combo.isEnabled() is False
+
+    easycon_panel.task_state_text = "已完成"
+    easycon_panel.release_native_script_run()
+
+    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.task_state_label.text() == "任务: 已完成"
+    assert easycon_panel.status_controller_label.text() == "单片机已连接"
+    assert easycon_panel.connect_button.text() == "断开连接"
+    assert easycon_panel.connect_button.isEnabled() is True
+    assert easycon_panel.port_combo.isEnabled() is False
+
+
+def test_easycon_panel_persists_native_connection_failure(monkeypatch, easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+
+    def fail_connect(_port):
+        raise RuntimeError("serial unavailable")
+
+    monkeypatch.setattr(backend, "connect", fail_connect)
+
+    assert easycon_panel.connect_native() is False
+    easycon_panel._poll_native_connection_status()
+
+    assert easycon_panel.connection_state_label.text() == "连接: 连接失败"
+    assert easycon_panel.task_state_label.text() == "任务: 连接失败"
+    assert easycon_panel.status_controller_label.text() == "单片机连接失败"
+    assert easycon_panel.connect_button.text() == "连接伊机控"
+
+
+def test_easycon_panel_refreshes_native_state_after_disconnect_failure(monkeypatch, easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    assert easycon_panel.connect_native()
+
+    def fail_disconnect():
+        backend.connected_port = None
+        raise RuntimeError("release failed")
+
+    monkeypatch.setattr(backend, "disconnect", fail_disconnect)
+
+    assert easycon_panel.disconnect_native() is False
+    assert easycon_panel.connection_state_label.text() == "连接: 未连接"
+    assert easycon_panel.task_state_label.text() == "任务: 断开失败"
+    assert easycon_panel.status_controller_label.text() == "单片机未连接"
+    assert easycon_panel.connect_button.text() == "连接伊机控"
+
+
+def test_easycon_panel_disconnect_failure_preserves_actual_connection(monkeypatch, easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    assert easycon_panel.connect_native()
+
+    def fail_disconnect():
+        raise RuntimeError("device busy")
+
+    monkeypatch.setattr(backend, "disconnect", fail_disconnect)
+
+    assert easycon_panel.disconnect_native() is False
+    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.task_state_label.text() == "任务: 断开失败"
+    assert easycon_panel.status_controller_label.text() == "单片机已连接"
+    assert easycon_panel.connect_button.text() == "断开连接"
+
+
+def test_easycon_panel_polls_native_physical_disconnect(easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    assert easycon_panel.connect_native()
+    backend.connected_port = None
+
+    easycon_panel._poll_native_connection_status()
+
+    assert easycon_panel.connection_state_label.text() == "连接: 未连接"
+    assert easycon_panel.status_controller_label.text() == "单片机未连接"
+    assert easycon_panel.connect_button.text() == "连接伊机控"
+    assert easycon_panel.port_combo.isEnabled() is True
+    assert easycon_panel.easycon_status.currentMessage() == "连接已断开"
+
+
+def test_easycon_panel_polls_native_disconnect_while_script_runs(easycon_panel):
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    assert easycon_panel.connect_native()
+    easycon_panel.task_state_text = "执行中"
+    assert easycon_panel.reserve_native_script_run()
+    backend.connected_port = None
+
+    easycon_panel._poll_native_connection_status()
+
+    assert easycon_panel.connection_state_label.text() == "连接: 未连接"
+    assert easycon_panel.task_state_label.text() == "任务: 执行中"
+    assert easycon_panel.status_controller_label.text() == "单片机未连接"
+    assert easycon_panel.connect_button.text() == "连接伊机控"
+    assert easycon_panel.connect_button.isEnabled() is False
+    assert easycon_panel.port_combo.isEnabled() is False
+    assert easycon_panel.easycon_status.currentMessage() == "连接已断开"
+
+    easycon_panel.release_native_script_run()
 
 
 def test_easycon_panel_releases_reservation_when_worker_setup_fails(easycon_panel, monkeypatch):
@@ -363,6 +481,9 @@ def test_easycon_panel_releases_reservation_when_worker_setup_fails(easycon_pane
     assert easycon_panel.native_run_worker is None
     assert not easycon_panel.run_timer.isActive()
     assert "worker setup failed" in easycon_panel.log_view.toPlainText()
+    assert easycon_panel.task_state_label.text() == "任务: 失败"
+    assert easycon_panel.status_controller_label.text() == "单片机已连接"
+    assert easycon_panel.connect_button.text() == "断开连接"
 
 
 def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_path, app):
@@ -569,6 +690,21 @@ def test_easycon_panel_bridge_mode_requires_connection(easycon_panel):
     assert easycon_panel.backend_mode.currentData() == "bridge"
     assert easycon_panel.run_button.isEnabled() is False
     assert easycon_panel.backend_label.text() == "单片机: 未连接"
+
+
+def test_easycon_panel_keeps_connection_display_while_bridge_script_runs(easycon_panel):
+    select_bridge_mode(easycon_panel)
+    easycon_panel.bridge_status = EasyConStatus.RUNNING
+    easycon_panel.task_state_text = "执行中"
+
+    easycon_panel._update_bridge_controls()
+
+    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.task_state_label.text() == "任务: 执行中"
+    assert easycon_panel.status_controller_label.text() == "单片机已连接"
+    assert easycon_panel.backend_label.text() == "单片机: 已长期连接"
+    assert easycon_panel.connect_button.text() == "断开连接"
+    assert easycon_panel.connect_button.isEnabled() is False
 
 
 def test_easycon_panel_cli_mode_is_not_reported_as_connected(easycon_panel):

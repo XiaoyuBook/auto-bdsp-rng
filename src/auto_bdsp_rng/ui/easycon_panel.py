@@ -445,6 +445,8 @@ class EasyConPanel(QWidget):
         self.native_run_worker: NativeScriptWorker | None = None
         self._native_run_reserved = False
         self.native_connecting = False
+        self._native_connection_failed = False
+        self._last_native_display_status: tuple[EasyConStatus, bool, bool] | None = None
         self.config = load_config()
         self._preferred_last_port = self.config.last_port
         self.installation = EasyConInstallation(path=None, error="未检测")
@@ -491,6 +493,9 @@ class EasyConPanel(QWidget):
         self.run_timer = QTimer(self)
         self.run_timer.setInterval(1000)
         self.run_timer.timeout.connect(self._tick_run_timer)
+        self._native_status_timer = QTimer(self)
+        self._native_status_timer.setInterval(1000)
+        self._native_status_timer.timeout.connect(self._poll_native_connection_status)
         self._capture_keep_awake_cli_timer = QTimer(self)
         self._capture_keep_awake_cli_timer.setSingleShot(True)
         self._capture_keep_awake_cli_timer.timeout.connect(self._capture_keep_awake_cli_timeout)
@@ -506,6 +511,7 @@ class EasyConPanel(QWidget):
         self._refresh_script_list()
         self.refresh_ports()
         self._update_run_enabled()
+        self._native_status_timer.start()
 
     # ── 浅色主题颜色常量 ──────────────────────────────────
     CLR_BG = "#f2f1ee"
@@ -1050,6 +1056,32 @@ class EasyConPanel(QWidget):
             return EasyConStatus(str(status))
         except ValueError:
             return EasyConStatus.FAILED
+
+    def _native_connection_active(self, status: EasyConStatus | None = None) -> bool:
+        backend = self.native_backend
+        if backend is not None:
+            marker = object()
+            try:
+                connected_port = getattr(backend, "connected_port", marker)
+            except Exception:
+                return False
+            if connected_port is not marker:
+                return bool(connected_port)
+        effective_status = status if status is not None else self._native_status()
+        return effective_status in (EasyConStatus.BRIDGE_CONNECTED, EasyConStatus.RUNNING)
+
+    def _poll_native_connection_status(self) -> None:
+        if self._shutting_down or not self._is_native_mode() or self.native_connecting:
+            return
+        status = self._native_status()
+        connected = self._native_connection_active(status)
+        signature = (status, connected, self._native_connection_failed)
+        if signature != self._last_native_display_status:
+            previous = self._last_native_display_status
+            if previous is not None and previous[1] and not connected:
+                self.easycon_status.showMessage("连接已断开", 5000)
+                self._append_log("warn", "伊机控连接已断开")
+            self._update_run_enabled()
 
     def reserve_native_script_run(self) -> bool:
         """Atomically reserve the shared native backend from the UI thread."""
@@ -1878,7 +1910,7 @@ class EasyConPanel(QWidget):
         port = port or self.current_run_port
         self.run_timer.stop()
         self.run_button.setText("运行脚本")
-        self.easycon_status.showMessage(status)
+        self.easycon_status.showMessage(status, 5000)
         self.task_state_text = "已完成" if status.startswith("已完成") else status
         log_level = "error" if status.startswith("失败") else "warn" if status.startswith("已中止") else "info"
         self._append_log(log_level, status)
@@ -2106,6 +2138,8 @@ class EasyConPanel(QWidget):
         if not port:
             self._append_log("warn", "请先选择串口")
             return False
+        self.easycon_status.clearMessage()
+        self._native_connection_failed = False
         self.native_connecting = True
         self.task_state_text = "正在连接"
         self._update_native_controls()
@@ -2113,17 +2147,20 @@ class EasyConPanel(QWidget):
             self._ensure_native_backend().connect(port)  # type: ignore[attr-defined]
         except Exception as exc:
             self.native_connecting = False
+            self._native_connection_failed = True
             self.task_state_text = "连接失败"
             self._append_log("error", f"连接伊机控失败: {exc}")
+            self.easycon_status.showMessage("连接失败", 5000)
             self._show_failure_toast(str(exc))
             self._update_native_controls()
             return False
         self.native_connecting = False
+        self._native_connection_failed = False
         self.task_state_text = "已完成"
         self._preferred_last_port = port
         self._save_config_from_ui()
         self._append_log("info", f"Python 原生伊机控已连接: {port}")
-        self.easycon_status.showMessage("已长期连接")
+        self.easycon_status.showMessage("已长期连接", 3000)
         self._show_connection_toast(port)
         self._update_native_controls()
         self._update_run_enabled()
@@ -2135,12 +2172,17 @@ class EasyConPanel(QWidget):
         try:
             self._ensure_native_backend().disconnect()  # type: ignore[attr-defined]
         except Exception as exc:
+            self.task_state_text = "断开失败"
             self._append_log("error", f"断开伊机控失败: {exc}")
+            self.easycon_status.showMessage("断开失败", 5000)
+            self._show_failure_toast(str(exc))
+            self._update_run_enabled()
             return False
+        self._native_connection_failed = False
         self.stop_requested = False
         self.task_state_text = "未运行"
         self._append_log("info", "已断开伊机控")
-        self.easycon_status.showMessage("已断开")
+        self.easycon_status.showMessage("已断开", 3000)
         self._update_native_controls()
         self._update_run_enabled()
         return True
@@ -2159,6 +2201,7 @@ class EasyConPanel(QWidget):
         if not port:
             self._append_log("warn", "请先选择串口")
             return
+        self.easycon_status.clearMessage()
         self.bridge_connecting = True
         self.task_state_text = "正在连接"
         self._update_bridge_controls()
@@ -2176,7 +2219,7 @@ class EasyConPanel(QWidget):
         self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
         self.task_state_text = "已完成"
         self._append_log("info", f"已连接伊机控: {port}")
-        self.easycon_status.showMessage("已长期连接")
+        self.easycon_status.showMessage("已长期连接", 3000)
         self._show_connection_toast(port)
         self._update_bridge_controls()
         self._update_run_enabled()
@@ -2191,7 +2234,7 @@ class EasyConPanel(QWidget):
             return
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self._append_log("info", "已断开伊机控")
-        self.easycon_status.showMessage("已断开")
+        self.easycon_status.showMessage("已断开", 3000)
         self._update_bridge_controls()
         self._update_run_enabled()
 
@@ -2439,6 +2482,7 @@ class EasyConPanel(QWidget):
     def shutdown(self, *, wait_ms: int = 2000) -> bool:
         if not self._shutting_down:
             self.run_timer.stop()
+            self._native_status_timer.stop()
             self._release_virtual_controller_keys()
             self._shutting_down = True
         self.release_native_script_run()
@@ -2983,11 +3027,13 @@ class EasyConPanel(QWidget):
         if not hasattr(self, "connect_button"):
             return
         status = self._native_status()
-        connected = status == EasyConStatus.BRIDGE_CONNECTED
+        connected = self._native_connection_active(status)
+        self._last_native_display_status = (status, connected, self._native_connection_failed)
         running = status == EasyConStatus.RUNNING
         self.connect_button.setEnabled(not self.native_connecting and not running)
         self.toolbar_connect_button.setEnabled(not self.native_connecting and not running)
-        self.disconnect_button.setEnabled(not self.native_connecting and not running)
+        self.port_combo.setEnabled(not self.native_connecting and not connected and not running)
+        self.disconnect_button.setEnabled(not self.native_connecting and not connected and not running)
         self.bridge_path.setEnabled(False)
         self.browse_bridge_button.setEnabled(False)
         self.mock_check.setEnabled(False)
@@ -2995,13 +3041,16 @@ class EasyConPanel(QWidget):
         if self.native_connecting:
             button_text = "正在连接"
             backend_text = "单片机: 正在连接"
+        elif running and connected:
+            button_text = "断开连接"
+            backend_text = "单片机: 已长期连接"
         elif running:
             button_text = "连接伊机控"
-            backend_text = "单片机: 执行中"
+            backend_text = "单片机: 未连接"
         elif connected:
             button_text = "断开连接"
             backend_text = "单片机: 已长期连接"
-        elif status == EasyConStatus.FAILED:
+        elif self._native_connection_failed or status == EasyConStatus.FAILED:
             button_text = "连接伊机控"
             backend_text = "单片机: 连接失败"
         else:
@@ -3012,14 +3061,15 @@ class EasyConPanel(QWidget):
         self.toolbar_connect_button.setText(button_text)
         self.backend_label.setText(backend_text)
         self._update_controller_controls()
-        self._update_status_labels()
+        self._update_status_labels(native_status=status, native_connected=connected)
 
     def _update_bridge_controls(self) -> None:
         if not hasattr(self, "connect_button"):
             return
         is_bridge = self._is_bridge_mode()
-        self.connect_button.setEnabled(is_bridge)
-        self.toolbar_connect_button.setEnabled(is_bridge)
+        connection_busy = self.bridge_connecting or self.bridge_status == EasyConStatus.RUNNING
+        self.connect_button.setEnabled(is_bridge and not connection_busy)
+        self.toolbar_connect_button.setEnabled(is_bridge and not connection_busy)
         self.bridge_path.setEnabled(is_bridge)
         self.browse_bridge_button.setEnabled(is_bridge)
         self.mock_check.setEnabled(not is_bridge)
@@ -3035,10 +3085,10 @@ class EasyConPanel(QWidget):
             self.disconnect_button.setEnabled(False)
             self.backend_label.setText("单片机: 正在连接")
         elif self.bridge_status == EasyConStatus.RUNNING:
-            self.connect_button.setText("连接伊机控")
-            self.toolbar_connect_button.setText("连接伊机控")
+            self.connect_button.setText("断开连接")
+            self.toolbar_connect_button.setText("断开连接")
             self.disconnect_button.setEnabled(False)
-            self.backend_label.setText("单片机: 执行中")
+            self.backend_label.setText("单片机: 已长期连接")
         elif self.bridge_status == EasyConStatus.FAILED:
             self.connect_button.setText("连接伊机控")
             self.toolbar_connect_button.setText("连接伊机控")
@@ -3088,28 +3138,66 @@ class EasyConPanel(QWidget):
             and not (self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning)
         )
 
-    def _update_status_labels(self) -> None:
+    def _update_status_labels(
+        self,
+        *,
+        native_status: EasyConStatus | None = None,
+        native_connected: bool | None = None,
+    ) -> None:
         if not hasattr(self, "connection_state_label"):
             return
-        connection_text = self._connection_state_text()
+        if self._is_native_mode():
+            status = native_status if native_status is not None else self._native_status()
+            connected = (
+                native_connected
+                if native_connected is not None
+                else self._native_connection_active(status)
+            )
+            connection_text = self._connection_state_text(
+                native_status=status,
+                native_connected=connected,
+            )
+            controller_connected = connected
+        else:
+            connection_text = self._connection_state_text()
+            controller_connected = self._is_bridge_mode() and self.bridge_status in (
+                EasyConStatus.BRIDGE_CONNECTED,
+                EasyConStatus.RUNNING,
+            )
         backend_text = "Python 原生" if self._is_native_mode() else "常驻连接" if self._is_bridge_mode() else "CLI 过渡"
         easycon_text = "LOG"
         self.connection_state_label.setText(f"连接: {connection_text}")
         self.task_state_label.setText(f"任务: {self.task_state_text}")
         self.status_easycon_label.setText(easycon_text)
-        self.status_controller_label.setText(f"单片机{'已连接' if connection_text == '已长期连接' else '未连接'}")
+        if controller_connected:
+            controller_text = "单片机已连接"
+        elif connection_text == "正在连接":
+            controller_text = "单片机正在连接"
+        elif connection_text == "连接失败":
+            controller_text = "单片机连接失败"
+        else:
+            controller_text = "单片机未连接"
+        self.status_controller_label.setText(controller_text)
         self.status_backend_label.setText(f"后端: {backend_text}")
 
-    def _connection_state_text(self) -> str:
+    def _connection_state_text(
+        self,
+        *,
+        native_status: EasyConStatus | None = None,
+        native_connected: bool | None = None,
+    ) -> str:
         if self._is_native_mode():
             if self.native_connecting:
                 return "正在连接"
-            status = self._native_status()
-            if status == EasyConStatus.RUNNING:
-                return "执行中"
-            if status == EasyConStatus.BRIDGE_CONNECTED:
+            status = native_status if native_status is not None else self._native_status()
+            connected = (
+                native_connected
+                if native_connected is not None
+                else self._native_connection_active(status)
+            )
+            if connected:
                 return "已长期连接"
-            if status == EasyConStatus.FAILED:
+            if self._native_connection_failed or status == EasyConStatus.FAILED:
                 return "连接失败"
             if not self.port_combo.currentText():
                 return "未选择串口"
@@ -3117,9 +3205,7 @@ class EasyConPanel(QWidget):
         if self._is_bridge_mode():
             if self.bridge_connecting:
                 return "正在连接"
-            if self.bridge_status == EasyConStatus.RUNNING:
-                return "执行中"
-            if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
+            if self.bridge_status in (EasyConStatus.RUNNING, EasyConStatus.BRIDGE_CONNECTED):
                 return "已长期连接"
             if self.bridge_status == EasyConStatus.FAILED:
                 return "连接失败"
