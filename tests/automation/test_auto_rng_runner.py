@@ -615,6 +615,7 @@ def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
     hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
     calls: list[str] = []
     scripts: list[tuple[str, str]] = []
+    history: list[tuple[str, tuple[object, ...]]] = []
     services = AutoRngServices(
         capture_seed=lambda: calls.append("capture") or AutoRngSeedResult(seed="seed-1", current_advances=0),
         search_candidates=lambda _seed: [],
@@ -628,6 +629,7 @@ def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
             hit_script_path=hit_script,
         ),
         services=services,
+        history_callback=lambda event, args: history.append((event, args)),
     )
 
     runner.run(max_steps=3)
@@ -635,6 +637,8 @@ def test_runner_runs_seed_script_when_search_has_no_candidates(tmp_path):
     assert calls == ["capture"]
     assert scripts == [("BDSP测种.txt", "A 100\n")]
     assert runner.progress.phase == AutoRngPhase.COMPLETED
+    assert ("cycle_no_candidate", ()) in history
+    assert all(event != "cycle_result" for event, _args in history)
 
 
 def test_runner_stops_infinite_loop_when_same_seed_repeatedly_has_no_candidates(tmp_path):

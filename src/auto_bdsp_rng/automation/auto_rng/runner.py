@@ -670,7 +670,7 @@ class AutoRngRunner:
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._record_no_candidate_seed(seed)
             self._last_search_was_missed = was_missed
-            self._history("cycle_result", False, None, None, None)
+            self._history("cycle_no_candidate")
             self._cycle_started = False
             exhausted_message = decision.message
             if self._attempt_index > 0:

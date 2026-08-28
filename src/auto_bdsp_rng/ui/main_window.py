@@ -5695,16 +5695,22 @@ class MainWindow(QMainWindow):
                 f"错过目标；目标 Adv {target_adv}；当前 Adv {current_adv}",
                 level="WARNING",
             )
+        elif event == "cycle_no_candidate":
+            h.cycle_no_candidate()
+            self._write_run_log("历史记录", "本轮结果：无候选")
         elif event == "cycle_result" and len(values) >= 3:
             is_shiny = bool(values[0])
             interval = float(values[1]) if values[1] is not None else None
+            trigger = int(values[2]) if values[2] is not None else None
             used_delay = int(values[3]) if len(values) >= 4 and values[3] is not None else None
-            h.cycle_result(is_shiny, interval, used_delay)
+            h.cycle_result(is_shiny, interval, trigger, used_delay)
             interval_text = interval if interval is not None else "-"
+            trigger_text = trigger if trigger is not None else "-"
             delay_text = used_delay if used_delay is not None else "-"
             self._write_run_log(
                 "历史记录",
-                f"本轮结果：{'出闪' if is_shiny else '未出闪'}；间隔 {interval_text}；delay {delay_text}",
+                f"本轮结果：{'出闪' if is_shiny else '未出闪'}；间隔 {interval_text}；"
+                f"启动 Adv {trigger_text}；delay {delay_text}",
             )
         elif event == "attempt_result" and len(values) >= 6:
             loop_index = int(values[0])
@@ -5712,7 +5718,7 @@ class MainWindow(QMainWindow):
             interval = float(values[3]) if values[3] is not None else None
             trigger = int(values[4]) if values[4] is not None else None
             used_delay = int(values[5]) if values[5] is not None else None
-            h.attempt_result(loop_index, attempt_index, interval, used_delay)
+            h.attempt_result(loop_index, attempt_index, interval, trigger, used_delay)
             self._write_run_log(
                 "历史记录",
                 f"第 {loop_index} 轮 / 第 {attempt_index} 次撞闪未出闪；"

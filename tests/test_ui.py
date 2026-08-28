@@ -22,7 +22,7 @@ from auto_bdsp_rng.blink_detection import (
 from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, QThread, QTimer, Qt
 from PySide6.QtGui import QPaintEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTableWidget
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import DialogTimingResult
@@ -2802,7 +2802,7 @@ def test_advance_tick_catches_up_from_elapsed_time(app, monkeypatch):
     assert window.auto_advance_badge.text() == "advance 1000"
 
 
-def test_history_panel_reverse_lookup_candidates_are_single_line(app):
+def test_history_panel_reverse_lookup_candidates_use_table(app):
     panel = HistoryPanel()
     state = SimpleNamespace(
         advances=1234,
@@ -2818,6 +2818,27 @@ def test_history_panel_reverse_lookup_candidates_are_single_line(app):
     )
 
     panel.reverse_lookup_results([state], characteristic="喜欢吃东西", delays=[99])
+
+    tables = panel.findChildren(QTableWidget)
+    assert len(tables) == 1
+    table = tables[0]
+    headers = [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
+    assert headers == [
+        "#", "状态", "Adv", "实际 delay", "异色", "性格", "个性",
+        "HP", "攻", "防", "特攻", "特防", "速",
+        "特性", "性别", "EC", "PID", "身高", "体重",
+    ]
+    assert table.accessibleName() == "反查候选表"
+    assert table.rowCount() == 1
+    assert table.item(0, headers.index("Adv")).text() == "1234"
+    assert table.item(0, headers.index("实际 delay")).text() == "99"
+    assert table.item(0, headers.index("个性")).text() == "喜欢吃东西"
+    assert table.item(0, headers.index("HP")).text() == "31"
+    assert table.item(0, headers.index("EC")).text() == "AABBCCDD"
+    assert table.item(0, headers.index("PID")).text() == "11223344"
+    assert table.item(0, headers.index("身高")).text() == "255"
+    assert table.item(0, headers.index("体重")).text() == "12"
+    assert table.item(0, headers.index("异色")).background().color().name() == "#fef3c7"
 
     lines = [line for line in panel.text_view.toPlainText().splitlines() if line.strip()]
     reverse_lines = [line for line in lines if "反查候选" in line]
@@ -2846,12 +2867,100 @@ def test_history_panel_candidates_do_not_show_global_delay(app):
         height=255,
         weight=12,
     )
+    sync_state = SimpleNamespace(
+        advances=1500,
+        ec=0xDEADBEEF,
+        pid=0x55667788,
+        ivs=(31, 31, 31, 0, 31, 31),
+        ability=2,
+        gender=1,
+        nature=13,
+        shiny=0,
+        height=88,
+        weight=104,
+    )
 
-    panel.candidates_found([state], locked_index=0)
+    panel.resize(900, 500)
+    panel.show()
+    panel.candidates_found([state, sync_state], locked_index=0, sync_flags=["", "sync"])
+    app.processEvents()
 
     text = panel.text_view.toPlainText()
     assert "adv=1234" in text
     assert "delay=" not in text
+
+    tables = panel.findChildren(QTableWidget)
+    assert len(tables) == 1
+    table = tables[0]
+    headers = [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
+    assert headers == [
+        "#", "状态", "Adv", "异色", "性格",
+        "HP", "攻", "防", "特攻", "特防", "速",
+        "特性", "性别", "EC", "PID", "身高", "体重",
+    ]
+    assert table.rowCount() == 2
+    assert table.item(0, headers.index("状态")).text() == "锁定"
+    assert table.item(1, headers.index("状态")).text() == "同步"
+    assert table.item(0, headers.index("Adv")).text() == "1234"
+    assert table.item(0, headers.index("HP")).text() == "31"
+    assert table.item(0, headers.index("特性")).text() == "1"
+    assert table.item(0, headers.index("性别")).text() == "雄"
+    assert table.item(0, 0).background().color().name() == "#dcfce7"
+    assert table.item(1, headers.index("状态")).background().color().name() == "#cffafe"
+    assert table.item(0, headers.index("异色")).background().color().name() == "#fef3c7"
+    assert table.wordWrap() is False
+    assert table.horizontalScrollBar().maximum() > 0
+
+
+def test_history_panel_keeps_scroll_position_when_reviewing_old_records(app):
+    panel = HistoryPanel()
+    panel.resize(800, 260)
+    panel.show()
+    for index in range(30):
+        panel.auto_tid_log(f"记录 {index}")
+    app.processEvents()
+
+    scroll_bar = panel.history_scroll.verticalScrollBar()
+    assert scroll_bar.maximum() > 0
+    scroll_bar.setValue(0)
+    panel.auto_tid_log("查看旧记录时追加")
+    app.processEvents()
+    assert scroll_bar.value() == 0
+
+    scroll_bar.setValue(scroll_bar.maximum())
+    panel.auto_tid_log("跟随最新记录")
+    app.processEvents()
+    assert scroll_bar.value() == scroll_bar.maximum()
+
+    panel.clear()
+    app.processEvents()
+    assert panel.text_view.toPlainText() == ""
+    assert panel._feed_layout.count() == 0
+    assert panel.summary_label.text() == "0 轮 · 0 条候选"
+    assert panel.copy_button.isEnabled() is False
+
+
+def test_history_panel_distinguishes_no_candidate_and_preserves_trigger(app, monkeypatch):
+    window = MainWindow()
+    run_logs: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda _source, message, **_kwargs: run_logs.append(str(message)),
+    )
+
+    window._handle_auto_history_event("cycle_no_candidate", ())
+    no_candidate_text = window.history_tab.text_view.toPlainText()
+    assert "本轮结果: 无候选" in no_candidate_text
+    assert "未出闪" not in no_candidate_text
+    assert run_logs == ["本轮结果：无候选"]
+
+    window._handle_auto_history_event("cycle_result", (False, 2.345, 1234, 100))
+    result_text = window.history_tab.text_view.toPlainText()
+    assert "本轮结果: 未出闪" in result_text
+    assert "脚本启动 Adv: 1234" in result_text
+    assert "使用 delay: 100" in result_text
+    assert run_logs[-1] == "本轮结果：未出闪；间隔 2.345；启动 Adv 1234；delay 100"
 
 
 def test_auto_rng_escape_attempt_history_includes_loop_and_attempt(app, monkeypatch):
