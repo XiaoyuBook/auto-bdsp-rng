@@ -778,6 +778,33 @@ class FrameRing:
                 return FramePacket(sequence, timestamp, width, height, stride, raw)
         return None
 
+    def _read_slot_metadata(self, slot_index: int) -> tuple[int, int] | None:
+        """Return committed ``(sequence, timestamp_ns)`` without copying payload."""
+
+        if slot_index < 0 or slot_index >= self.slot_count:
+            return None
+        offset = GLOBAL_HEADER_SIZE + slot_index * self.slot_size
+        for _ in range(4):
+            begin = struct.unpack_from("<Q", self._buf, offset)[0]
+            if begin == 0 or begin & 1:
+                continue
+            fields = SLOT_HEADER_STRUCT.unpack_from(self._buf, offset)
+            sequence = int(fields[1])
+            timestamp = int(fields[2])
+            payload_size = int(fields[3])
+            width = int(fields[4])
+            height = int(fields[5])
+            stride = int(fields[6])
+            end = struct.unpack_from("<Q", self._buf, offset + 40)[0]
+            begin_after = struct.unpack_from("<Q", self._buf, offset)[0]
+            if begin == end == begin_after and not (end & 1) and end == sequence << 1:
+                if width != self.width or height != self.height or stride != self.stride:
+                    return None
+                if payload_size != self.payload_size:
+                    return None
+                return sequence, timestamp
+        return None
+
     def read_latest(self) -> FramePacket | None:
         """Return the newest complete frame, or ``None`` before first frame."""
 
@@ -797,6 +824,24 @@ class FrameRing:
         candidates = [self._read_slot(index) for index in range(self.slot_count)]
         valid = [candidate for candidate in candidates if candidate is not None]
         return max(valid, key=lambda item: item.sequence, default=None)
+
+    def read_latest_metadata(self) -> tuple[int, int] | None:
+        """Return newest committed sequence/timestamp without copying frame bytes."""
+
+        try:
+            values = self._read_global()
+            latest = int(values[9])
+            latest_slot = int(values[10])
+        except (struct.error, ValueError):
+            return None
+        if latest <= 0:
+            return None
+        metadata = self._read_slot_metadata(latest_slot)
+        if metadata is not None and metadata[0] == latest:
+            return metadata
+        candidates = [self._read_slot_metadata(index) for index in range(self.slot_count)]
+        valid = [candidate for candidate in candidates if candidate is not None]
+        return max(valid, key=lambda item: item[0], default=None)
 
     def snapshot_header(self) -> dict[str, int]:
         values = self._read_global()
@@ -906,9 +951,14 @@ class CaptureBrokerClient:
 
     def read_latest(self, *, allow_unavailable: bool = False) -> FramePacket | None:
         self._ensure_open()
+        sampled_at_ns = time.monotonic_ns()
+        packet = self._ring.read_latest()
         if not allow_unavailable:
-            self._ensure_available()
-        return self._ring.read_latest()
+            self._ensure_available(
+                None if packet is None else packet.timestamp_ns,
+                sampled_at_ns=sampled_at_ns,
+            )
+        return packet
 
     def read(self, *, allow_unavailable: bool = False) -> FramePacket | None:
         return self.read_latest(allow_unavailable=allow_unavailable)
@@ -927,10 +977,17 @@ class CaptureBrokerClient:
         deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
         while True:
             self._ensure_open()
-            self._ensure_available()
-            packet = self._ring.read_latest()
-            if packet is not None and packet.sequence > after_sequence:
-                return packet
+            metadata = self._ring.read_latest_metadata()
+            self._ensure_available(None if metadata is None else metadata[1])
+            if metadata is not None and metadata[0] > after_sequence:
+                sampled_at_ns = time.monotonic_ns()
+                packet = self._ring.read_latest()
+                self._ensure_available(
+                    None if packet is None else packet.timestamp_ns,
+                    sampled_at_ns=sampled_at_ns,
+                )
+                if packet is not None and packet.sequence > after_sequence:
+                    return packet
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("等待共享视频源新帧超时")
             time.sleep(max(0.0005, poll_interval))
@@ -954,16 +1011,25 @@ class CaptureBrokerClient:
         if self._closed:
             raise BrokerError("共享视频源 client 已关闭")
 
-    def _ensure_available(self) -> None:
+    def _ensure_available(
+        self,
+        frame_timestamp_ns: int | None = None,
+        *,
+        sampled_at_ns: int | None = None,
+    ) -> None:
         state = self._ring.state
         if state in (BrokerState.FAILED, BrokerState.STOPPED):
             raise BrokerUnavailableError(f"共享视频源当前状态为 {state.wire_name}")
-        if state is not BrokerState.RUNNING:
+        if state is not BrokerState.RUNNING or frame_timestamp_ns is None:
             return
-        heartbeat_ns = self._ring.heartbeat_ns
         timeout_ns = max(1, int(self.manifest.frame_timeout_seconds * 1_000_000_000))
-        age_ns = time.monotonic_ns() - heartbeat_ns
-        if heartbeat_ns <= 0 or age_ns < 0 or age_ns >= timeout_ns:
+        # Slot timestamps are protected by the frame commit tokens; the global
+        # heartbeat can be observed while its scalar update is still in flight.
+        timestamp_ns = int(frame_timestamp_ns)
+        observed_at_ns = time.monotonic_ns() if sampled_at_ns is None else int(sampled_at_ns)
+        age_ns = observed_at_ns - timestamp_ns
+        timestamp_is_future = age_ns < 0 and timestamp_ns > time.monotonic_ns()
+        if timestamp_ns <= 0 or timestamp_is_future or age_ns >= timeout_ns:
             raise BrokerUnavailableError(
                 f"共享视频源连续 {self.manifest.frame_timeout_seconds:g} 秒没有新帧"
             )

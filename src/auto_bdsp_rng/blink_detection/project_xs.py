@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 PROJECT_XS_ROOT = resource_path("third_party", "Project_Xs_CHN")
 PROJECT_XS_SRC = PROJECT_XS_ROOT / "src"
+BROKER_NEW_FRAME_WAIT_SECONDS = 0.1
 
 
 class ProjectXsIntegrationError(RuntimeError):
@@ -124,11 +125,13 @@ def _open_capture_source(
     *,
     cv2: ModuleType | None = None,
     prefer_v4l: bool = False,
+    wait_for_new_frame: bool = False,
 ) -> Any:
     if config.uses_shared_video_source:
         return BrokerFrameCapture(
             config.frame_source_factory,
             session=config.broker_session,
+            wait_for_new_frame=wait_for_new_frame,
         )
     cv2 = cv2 or _load_cv2()
     if config.monitor_window:
@@ -194,9 +197,17 @@ class BrokerFrameCapture:
 
     keep_open_for_preview = True
 
-    def __init__(self, factory: Callable[[], Any] | None = None, *, session: str | None = None) -> None:
+    def __init__(
+        self,
+        factory: Callable[[], Any] | None = None,
+        *,
+        session: str | None = None,
+        wait_for_new_frame: bool = False,
+    ) -> None:
         self._client = factory() if factory is not None else _default_broker_client(session)
         self._released = False
+        self._wait_for_new_frame = bool(wait_for_new_frame)
+        self._last_sequence = 0
 
     @staticmethod
     def _frame_from_result(result: Any) -> Any:
@@ -211,30 +222,51 @@ class BrokerFrameCapture:
                 return frame
         as_array = getattr(result, "as_array", None)
         if callable(as_array):
-            return as_array()
+            try:
+                return as_array(copy=False)
+            except TypeError:
+                return as_array()
         return result
 
     def read(self) -> tuple[bool, Any]:
         if self._released:
             raise ProjectXsIntegrationError("共享视频源客户端已经关闭")
-        reader = None
-        for name in ("read_array", "read_latest", "read", "get_latest_frame", "read_frame"):
-            candidate = getattr(self._client, name, None)
-            if callable(candidate):
-                reader = candidate
-                break
-        if reader is None:
-            raise ProjectXsIntegrationError("共享视频源客户端不支持读取帧")
         try:
-            result = self._frame_from_result(reader())
+            waiter = getattr(self._client, "wait_for_frame", None)
+            if self._wait_for_new_frame and callable(waiter):
+                try:
+                    result = waiter(
+                        after_sequence=self._last_sequence,
+                        timeout=BROKER_NEW_FRAME_WAIT_SECONDS,
+                    )
+                except TimeoutError:
+                    return False, None
+                sequence = getattr(result, "sequence", None)
+                if sequence is not None and int(sequence) <= self._last_sequence:
+                    return False, None
+            else:
+                reader = None
+                for name in ("read_latest", "read_array", "read", "get_latest_frame", "read_frame"):
+                    candidate = getattr(self._client, name, None)
+                    if callable(candidate):
+                        reader = candidate
+                        break
+                if reader is None:
+                    raise ProjectXsIntegrationError("共享视频源客户端不支持读取帧")
+                result = reader()
+                sequence = getattr(result, "sequence", None)
+            frame = self._frame_from_result(result)
+            if frame is None:
+                return False, None
+            # Consumers must never annotate the broker's backing memory.  Only
+            # commit the sequence after the private frame is ready to return.
+            copier = getattr(frame, "copy", None)
+            private_frame = copier() if callable(copier) else frame
+            if sequence is not None:
+                self._last_sequence = int(sequence)
         except Exception as exc:
             raise ProjectXsIntegrationError(f"共享视频源读取失败: {exc}") from exc
-        if result is None:
-            return False, None
-        # Consumers must never annotate the broker's backing memory.  Numpy
-        # frames are copied here; immutable/test frames pass through unchanged.
-        copier = getattr(result, "copy", None)
-        return True, copier() if callable(copier) else result
+        return True, private_frame
 
     def release(self) -> None:
         if self._released:
@@ -463,7 +495,12 @@ def _tracking_blink_controlled(
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
         return [], [], 0.0
-    video = _open_capture_source(config, cv2=cv2, prefer_v4l=True)
+    video = _open_capture_source(
+        config,
+        cv2=cv2,
+        prefer_v4l=True,
+        wait_for_new_frame=True,
+    )
 
     state_idle = 0xFF
     state_single = 0xF0
@@ -566,7 +603,12 @@ def _tracking_poke_blink_controlled(
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
         return []
-    video = _open_capture_source(config, cv2=cv2, prefer_v4l=True)
+    video = _open_capture_source(
+        config,
+        cv2=cv2,
+        prefer_v4l=True,
+        wait_for_new_frame=True,
+    )
 
     state_idle = 0xFF
     state_single = 0xF0

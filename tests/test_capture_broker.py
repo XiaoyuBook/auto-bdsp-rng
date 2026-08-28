@@ -58,6 +58,36 @@ def _broker(
     )
 
 
+def _client_for_ring(
+    tmp_path: Path,
+    ring: FrameRing,
+    *,
+    frame_timeout: float,
+) -> CaptureBrokerClient:
+    manifest_path = tmp_path / "capture_broker.json"
+    manifest = BrokerManifest(
+        schema_version=PROTOCOL_VERSION,
+        protocol=PROTOCOL_NAME,
+        session_id="test-session",
+        pid=123,
+        state=BrokerState.RUNNING,
+        mapping_name=ring._shm.name,
+        manifest_path=str(manifest_path),
+        control_path=str(tmp_path / "capture_broker.stop.json"),
+        header_size=GLOBAL_HEADER_SIZE,
+        slot_header_size=SLOT_HEADER_SIZE,
+        slot_count=ring.slot_count,
+        slot_size=ring.slot_size,
+        width=ring.width,
+        height=ring.height,
+        stride=ring.stride,
+        pixel_format="BGR24",
+        capture={"device_index": 3, "api": 700, "fourcc": "MJPG", "fps": 30.0},
+        frame_timeout_seconds=frame_timeout,
+    )
+    return CaptureBrokerClient(manifest, FrameRing.open_from_manifest(manifest), manifest_path)
+
+
 def test_capture_broker_defaults_to_media_foundation(tmp_path: Path):
     capture = FakeCapture([_frame(1)])
     broker = CaptureBroker(
@@ -296,6 +326,145 @@ def test_successful_capture_reads_are_not_limited_by_failure_poll_interval(tmp_p
         assert broker.ring.latest_sequence >= first_sequence + 3
     finally:
         broker.stop()
+
+
+def test_client_uses_committed_packet_when_global_heartbeat_is_invalid(tmp_path: Path):
+    ring = FrameRing.create(width=4, height=2, slot_count=3, state=BrokerState.RUNNING)
+    client: CaptureBrokerClient | None = None
+    try:
+        expected = ring.write(_frame(17), timestamp_ns=time.monotonic_ns())
+        ring.heartbeat(0)
+        client = _client_for_ring(tmp_path, ring, frame_timeout=1.0)
+
+        packet = client.read_latest()
+        waited = client.wait_for_frame(after_sequence=0, timeout=0.05)
+
+        assert packet is not None
+        assert packet.sequence == waited.sequence == expected.sequence
+        np.testing.assert_array_equal(packet.as_array(), _frame(17))
+    finally:
+        if client is not None:
+            client.close()
+        ring.close(unlink=True)
+
+
+def test_client_rejects_stale_packet_even_when_global_heartbeat_is_fresh(tmp_path: Path):
+    ring = FrameRing.create(width=4, height=2, slot_count=3, state=BrokerState.RUNNING)
+    client: CaptureBrokerClient | None = None
+    try:
+        ring.write(_frame(18), timestamp_ns=time.monotonic_ns() - 1_000_000_000)
+        ring.heartbeat(time.monotonic_ns())
+        client = _client_for_ring(tmp_path, ring, frame_timeout=0.05)
+
+        with pytest.raises(BrokerUnavailableError, match="没有新帧"):
+            client.read_latest()
+        with pytest.raises(BrokerUnavailableError, match="没有新帧"):
+            client.wait_for_frame(after_sequence=0, timeout=0.05)
+        assert client.read_latest(allow_unavailable=True) is not None
+    finally:
+        if client is not None:
+            client.close()
+        ring.close(unlink=True)
+
+
+def test_wait_for_frame_does_not_copy_payload_while_sequence_is_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ring = FrameRing.create(width=4, height=2, slot_count=3, state=BrokerState.RUNNING)
+    client: CaptureBrokerClient | None = None
+    try:
+        expected = ring.write(_frame(19), timestamp_ns=time.monotonic_ns())
+        client = _client_for_ring(tmp_path, ring, frame_timeout=1.0)
+        payload_read_calls = 0
+        original_read_latest = client._ring.read_latest
+
+        def counted_read_latest():
+            nonlocal payload_read_calls
+            payload_read_calls += 1
+            return original_read_latest()
+
+        monkeypatch.setattr(client._ring, "read_latest", counted_read_latest)
+
+        with pytest.raises(TimeoutError, match="等待共享视频源新帧超时"):
+            client.wait_for_frame(
+                after_sequence=expected.sequence,
+                timeout=0.02,
+                poll_interval=0.001,
+            )
+
+        assert payload_read_calls == 0
+    finally:
+        if client is not None:
+            client.close()
+        ring.close(unlink=True)
+
+
+def test_wait_for_frame_reports_stale_packet_while_waiting_for_next_sequence(tmp_path: Path):
+    ring = FrameRing.create(width=4, height=2, slot_count=3, state=BrokerState.RUNNING)
+    client: CaptureBrokerClient | None = None
+    try:
+        expected = ring.write(_frame(20), timestamp_ns=time.monotonic_ns())
+        client = _client_for_ring(tmp_path, ring, frame_timeout=0.03)
+
+        initial = client.read_latest()
+        assert initial is not None
+        assert initial.sequence == expected.sequence
+        with pytest.raises(BrokerUnavailableError, match="没有新帧"):
+            client.wait_for_frame(
+                after_sequence=expected.sequence,
+                timeout=0.2,
+                poll_interval=0.001,
+            )
+    finally:
+        if client is not None:
+            client.close()
+        ring.close(unlink=True)
+
+
+def test_client_does_not_report_stale_when_payload_read_is_delayed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    capture = FakeCapture([_frame(22)], repeat=True, read_delay=0.002)
+    broker = _broker(tmp_path, capture, frame_timeout=0.03)
+    client: CaptureBrokerClient | None = None
+    try:
+        assert broker.start()
+        client = CaptureBrokerClient.connect(broker.manifest_path, require_running=True)
+        original_read_latest = client._ring.read_latest
+
+        def delayed_read_latest():
+            packet = original_read_latest()
+            time.sleep(0.06)
+            return packet
+
+        monkeypatch.setattr(client._ring, "read_latest", delayed_read_latest)
+
+        packet = client.read_latest()
+        waited = client.wait_for_frame(after_sequence=0, timeout=0.2)
+
+        assert packet is not None
+        assert waited.sequence > 0
+        assert broker.state is BrokerState.RUNNING
+    finally:
+        if client is not None:
+            client.close()
+        broker.stop()
+
+
+def test_client_rejects_committed_packet_with_future_timestamp(tmp_path: Path):
+    ring = FrameRing.create(width=4, height=2, slot_count=3, state=BrokerState.RUNNING)
+    client: CaptureBrokerClient | None = None
+    try:
+        ring.write(_frame(21), timestamp_ns=time.monotonic_ns() + 1_000_000_000)
+        client = _client_for_ring(tmp_path, ring, frame_timeout=1.0)
+
+        with pytest.raises(BrokerUnavailableError, match="没有新帧"):
+            client.read_latest()
+        with pytest.raises(BrokerUnavailableError, match="没有新帧"):
+            client.wait_for_frame(after_sequence=0, timeout=0.05)
+    finally:
+        if client is not None:
+            client.close()
+        ring.close(unlink=True)
 
 
 def test_first_frame_deadline_fails_and_releases_capture(tmp_path: Path):
