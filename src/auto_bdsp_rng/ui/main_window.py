@@ -6240,7 +6240,9 @@ class MainWindow(QMainWindow):
                 observed = wall_clock(event.observed_at)
                 if event.event == "monitor_started":
                     self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 开始监控：{observed}；第一/第二阶段各等待 30.000s"
+                        f"[OCR判闪] 开始监控：{observed}；"
+                        "首关键词：撞闪脚本运行期间持续监控，脚本结束后宽限 30.000s；"
+                        "次关键词：识别首关键词后等待 30.000s；脚本硬超时 300.000s"
                     )
                 elif event.event == "first_seen":
                     first_event = event

@@ -4076,6 +4076,12 @@ def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times
 
     assert result == main_window_module.ShinyCheckResult(is_shiny=True, interval_seconds=3.5)
     assert slices == [(slice(50, 100, None), slice(0, 200, None))]
+    assert any(
+        "首关键词：撞闪脚本运行期间持续监控，脚本结束后宽限 30.000s" in message
+        and "次关键词：识别首关键词后等待 30.000s" in message
+        and "脚本硬超时 300.000s" in message
+        for message in logs
+    )
     assert any("有效 ROI" in message and "Y=50" in message and "H=50" in message for message in logs)
     assert any("识别到「出现了! / 出现了！」" in message and "监控累计 1.250s" in message for message in logs)
     assert any("识别到「上吧」" in message and "关键词间隔 3.500s" in message for message in logs)
