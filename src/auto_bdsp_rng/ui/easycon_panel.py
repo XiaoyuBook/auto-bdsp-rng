@@ -60,6 +60,7 @@ from auto_bdsp_rng.automation.easycon import (
     scan_builtin_scripts,
 )
 from auto_bdsp_rng.resources import bundled_easycon_bridge_path, resource_path
+from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 
 
 SCRIPT_DIR = resource_path("script")
@@ -919,6 +920,7 @@ class EasyConPanel(QWidget):
         self.save_log_button.clicked.connect(self.save_logs_dialog)
         self.log_keep_lines = QSpinBox()
         self.log_keep_lines.setValue(self.config.keep_log_lines)
+        set_c_locale(self.log_keep_lines)
         self.log_keep_lines.valueChanged.connect(self._log_retention_changed)
 
         # 脚本列表（保留，通过菜单访问）
@@ -980,6 +982,7 @@ class EasyConPanel(QWidget):
         self.controller_duration = QSpinBox()
         self.controller_duration.setRange(20, 5000)
         self.controller_duration.setValue(100)
+        set_c_locale(self.controller_duration)
         self.test_a_button = QPushButton("A")
         self.test_a_button.clicked.connect(lambda: self.send_controller_press("A"))
         self.test_b_button = QPushButton("B")
@@ -1315,6 +1318,7 @@ class EasyConPanel(QWidget):
                 widget = QSpinBox()
                 widget.setRange(0, 1_000_000_000)
                 widget.setValue(int(parameter.value) if parameter.value.isdigit() else int(default_value))
+                set_c_locale(widget)
                 widget.valueChanged.connect(lambda _value, name=parameter.name: self._parameter_value_changed(name))
             else:
                 widget = QLineEdit(parameter.value)

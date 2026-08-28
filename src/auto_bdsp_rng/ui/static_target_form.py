@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Shiny, StateFilter
+from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 
 
 NATURES_ZH = (
@@ -363,6 +364,7 @@ class StaticTargetForm(QWidget):
         spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         spin.setFixedHeight(36)
+        set_c_locale(spin)
         return spin
 
 

@@ -44,6 +44,7 @@ from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPh
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
 
@@ -970,4 +971,5 @@ class AutoTidRngPanel(QWidget):
         spin.setValue(value)
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spin.setFixedHeight(34)
+        set_c_locale(spin)
         return spin

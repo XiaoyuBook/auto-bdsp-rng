@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui.main_window import PokeFinderTableWidget
+from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 
 
 ID_HEADERS = ("Adv", "TID", "SID", "TSV", "Display TID")
@@ -126,6 +127,7 @@ class IdPanel(QWidget):
         spin.setRange(minimum, maximum)
         spin.setValue(value)
         spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        set_c_locale(spin)
         return spin
 
     def set_seed_pair(self, seed: SeedPair64) -> None:

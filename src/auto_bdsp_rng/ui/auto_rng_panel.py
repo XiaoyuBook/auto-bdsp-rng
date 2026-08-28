@@ -45,6 +45,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
 from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
 
@@ -283,6 +284,7 @@ class AutoRngPanel(QWidget):
         self.shiny_threshold_seconds.setDecimals(3)
         self.shiny_threshold_seconds.setSingleStep(0.1)
         self.shiny_threshold_seconds.setValue(DEFAULT_SHINY_THRESHOLD_SECONDS)
+        set_c_locale(self.shiny_threshold_seconds)
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames, self.reseeding_threshold):
             spin.setFixedWidth(215)
         self.shiny_threshold_seconds.setFixedWidth(215)
@@ -360,6 +362,7 @@ class AutoRngPanel(QWidget):
         self.reverse_lookup_window.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.reverse_lookup_window.setFixedHeight(34)
         self.reverse_lookup_window.setFixedWidth(100)
+        set_c_locale(self.reverse_lookup_window)
         reverse_row = QHBoxLayout()
         reverse_row.addWidget(self.auto_reverse_combo)
         reverse_row.addWidget(self.reverse_lookup_window)
@@ -965,6 +968,7 @@ class AutoRngPanel(QWidget):
         spin.setValue(value)
         spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         spin.setFixedHeight(34)
+        set_c_locale(spin)
         return spin
 
 

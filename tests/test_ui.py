@@ -1294,8 +1294,11 @@ def test_picture_in_picture_preview_controls_are_independent(app):
     window = MainWindow()
     picture_in_picture = PictureInPicturePreview(window)
 
+    assert window.picture_in_picture_button.text() == "独立预览"
+    assert picture_in_picture.windowTitle() == "独立预览"
     assert window.main_preview_overlay_check.isChecked()
     assert picture_in_picture.overlay_enabled()
+    assert picture_in_picture.frame_label.overlay_enabled()
     assert not picture_in_picture.always_on_top()
 
     picture_in_picture.set_overlay_enabled(False)
@@ -1303,6 +1306,7 @@ def test_picture_in_picture_preview_controls_are_independent(app):
 
     assert window.main_preview_overlay_check.isChecked()
     assert not picture_in_picture.overlay_enabled()
+    assert not picture_in_picture.frame_label.overlay_enabled()
     assert picture_in_picture.always_on_top()
 
     window.main_preview_overlay_check.setChecked(False)
@@ -1310,6 +1314,112 @@ def test_picture_in_picture_preview_controls_are_independent(app):
 
     assert not window.main_preview_overlay_check.isChecked()
     assert picture_in_picture.overlay_enabled()
+    assert picture_in_picture.frame_label.overlay_enabled()
+
+
+def test_picture_in_picture_right_drag_emits_source_frame_roi(app):
+    picture_in_picture = PictureInPicturePreview()
+    selected = []
+    picture_in_picture.roiSelected.connect(selected.append)
+    picture_in_picture.show()
+    picture_in_picture.set_frames(np.zeros((100, 200, 3), dtype=np.uint8))
+    picture_in_picture.set_selection_enabled(True)
+    app.processEvents()
+
+    frame_rect = picture_in_picture.frame_label._pixmap_rect
+    assert not frame_rect.isNull()
+    assert picture_in_picture.frame_label._image_width == 200
+    assert picture_in_picture.frame_label._image_height == 100
+
+    QTest.mousePress(
+        picture_in_picture.frame_label,
+        Qt.MouseButton.RightButton,
+        pos=frame_rect.topLeft(),
+    )
+    QTest.mouseRelease(
+        picture_in_picture.frame_label,
+        Qt.MouseButton.RightButton,
+        pos=frame_rect.bottomRight(),
+    )
+
+    assert selected == [(0, 0, 200, 100)]
+
+
+def test_picture_in_picture_confirms_ocr_selection_and_restores_live_frame(app, monkeypatch):
+    window = MainWindow()
+    initial_frame = np.full((120, 160, 3), 20, dtype=np.uint8)
+    live_frame = np.full((120, 160, 3), 220, dtype=np.uint8)
+    window._latest_preview_frame = initial_frame
+    window._latest_annotated_preview_frame = initial_frame
+    window._video_source_connected = True
+    window.preview_button.setText("预览常驻")
+    window._preview_timer.start()
+    emitted = []
+    window.ocrRegionSelected.connect(lambda field, roi: emitted.append((field, roi)))
+
+    window.start_ocr_region_selection("characteristic")
+    frozen_frame = window._selection_preview_frame
+    window._latest_preview_frame = live_frame
+    window._latest_annotated_preview_frame = live_frame
+    window.show_picture_in_picture()
+    app.processEvents()
+    picture_in_picture = window._picture_in_picture
+
+    assert picture_in_picture is not None
+    assert frozen_frame is not None
+    assert window.preview_label._selection_enabled
+    assert picture_in_picture.selection_enabled()
+    assert np.array_equal(picture_in_picture._raw_frame, frozen_frame)
+    monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: True)
+
+    picture_in_picture.roiSelected.emit((10, 20, 30, 40))
+
+    assert emitted == [("characteristic", (10, 20, 30, 40))]
+    assert window._selection_mode is None
+    assert window._ocr_selection_field is None
+    assert window._selection_preview_frame is None
+    assert not window.preview_label._selection_enabled
+    assert not picture_in_picture.selection_enabled()
+    assert window.preview_label._ocr_overlay_region == OcrRegion(10, 20, 30, 40)
+    assert picture_in_picture.frame_label._ocr_overlay_region == OcrRegion(10, 20, 30, 40)
+    assert picture_in_picture.isVisible()
+    assert picture_in_picture._raw_frame is live_frame
+    assert window._preview_timer.isActive()
+
+
+def test_picture_in_picture_cancel_keeps_previous_ocr_region(app, monkeypatch):
+    window = MainWindow()
+    initial_frame = np.full((120, 160, 3), 20, dtype=np.uint8)
+    live_frame = np.full((120, 160, 3), 220, dtype=np.uint8)
+    old_region = OcrRegion(1, 2, 30, 40)
+    window._latest_preview_frame = initial_frame
+    window._latest_annotated_preview_frame = initial_frame
+    window._video_source_connected = True
+    window._preview_timer.start()
+    window.show_picture_in_picture()
+    picture_in_picture = window._picture_in_picture
+    assert picture_in_picture is not None
+    window._set_preview_ocr_overlay("nature", old_region)
+    emitted = []
+    window.ocrRegionSelected.connect(lambda field, roi: emitted.append((field, roi)))
+
+    window.start_ocr_region_selection("nature")
+    window._latest_preview_frame = live_frame
+    window._latest_annotated_preview_frame = live_frame
+    window._sync_picture_in_picture_frame()
+    monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: False)
+    picture_in_picture.roiSelected.emit((10, 20, 50, 60))
+
+    assert emitted == []
+    assert window._selection_mode is None
+    assert window._ocr_selection_field is None
+    assert window._selection_preview_frame is None
+    assert not window.preview_label._selection_enabled
+    assert not picture_in_picture.selection_enabled()
+    assert window.preview_label._ocr_overlay_region == old_region
+    assert picture_in_picture.frame_label._ocr_overlay_region == old_region
+    assert picture_in_picture._raw_frame is live_frame
+    assert window._preview_timer.isActive()
 
 
 def test_picture_in_picture_topmost_toggle_keeps_independent_window_visible(app):

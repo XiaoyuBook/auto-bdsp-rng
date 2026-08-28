@@ -133,6 +133,7 @@ from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
 from auto_bdsp_rng.ui.easycon_panel import CAPTURE_KEEP_AWAKE_BUTTON, EasyConPanel
 from auto_bdsp_rng.ui.help_menu import HelpMenuController
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
+from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
@@ -841,6 +842,9 @@ class RoiPreviewLabel(QLabel):
         self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
         self.update()
 
+    def selection_enabled(self) -> bool:
+        return self._selection_enabled
+
     def set_ocr_overlay(self, field: str, region: OcrRegion | tuple[int, int, int, int]) -> None:
         self._ocr_overlay_field = field
         self._ocr_overlay_region = region if isinstance(region, OcrRegion) else OcrRegion(*(int(value) for value in region))
@@ -913,7 +917,7 @@ class RoiPreviewLabel(QLabel):
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(QRect(self._drag_start, self._drag_current).normalized().intersected(self._pixmap_rect))
-        if self._ocr_overlay_region is not None:
+        if self._overlay_enabled and self._ocr_overlay_region is not None:
             pen = QPen(QColor("#00A88B"))
             pen.setWidth(3)
             painter.setPen(pen)
@@ -933,13 +937,14 @@ class PictureInPicturePreview(QDialog):
 
     overlayChanged = Signal(bool)
     alwaysOnTopChanged = Signal(bool)
+    roiSelected = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(None)
         if parent is not None:
             self.setStyleSheet(parent.styleSheet())
             parent.destroyed.connect(self.deleteLater)
-        self.setWindowTitle("画中画预览")
+        self.setWindowTitle("独立预览")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.setMinimumSize(320, 220)
@@ -950,11 +955,12 @@ class PictureInPicturePreview(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
-        self.frame_label = QLabel()
+        self.frame_label = RoiPreviewLabel()
         self.frame_label.setObjectName("Preview")
         self.frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.frame_label.setMinimumSize(300, 180)
         self.frame_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.frame_label.roiSelected.connect(self.roiSelected.emit)
         layout.addWidget(self.frame_label, 1)
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
@@ -969,6 +975,7 @@ class PictureInPicturePreview(QDialog):
         layout.addLayout(controls)
 
     def _handle_overlay_toggled(self, enabled: bool) -> None:
+        self.frame_label.set_overlay_enabled(bool(enabled))
         self.overlayChanged.emit(bool(enabled))
         self._refresh_frame()
 
@@ -987,6 +994,18 @@ class PictureInPicturePreview(QDialog):
 
     def overlay_enabled(self) -> bool:
         return self.overlay_check.isChecked()
+
+    def set_selection_enabled(self, enabled: bool) -> None:
+        self.frame_label.set_selection_enabled(bool(enabled))
+
+    def selection_enabled(self) -> bool:
+        return self.frame_label.selection_enabled()
+
+    def set_ocr_overlay(self, field: str, region: OcrRegion | tuple[int, int, int, int]) -> None:
+        self.frame_label.set_ocr_overlay(field, region)
+
+    def clear_ocr_overlay(self) -> None:
+        self.frame_label.clear_ocr_overlay()
 
     def set_always_on_top(self, enabled: bool) -> None:
         self.always_on_top_check.setChecked(bool(enabled))
@@ -1015,7 +1034,19 @@ class PictureInPicturePreview(QDialog):
         target = self.frame_label.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
             return
-        scaled = pixmap.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        scaled, logical_size = _scale_preview_pixmap(
+            pixmap,
+            target,
+            self.frame_label.devicePixelRatioF(),
+        )
+        contents = self.frame_label.contentsRect()
+        left = contents.left() + (contents.width() - logical_size.width()) // 2
+        top = contents.top() + (contents.height() - logical_size.height()) // 2
+        self.frame_label.set_image_geometry(
+            pixmap.width(),
+            pixmap.height(),
+            QRect(left, top, logical_size.width(), logical_size.height()),
+        )
         self.frame_label.setPixmap(scaled)
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
@@ -2341,7 +2372,7 @@ class MainWindow(QMainWindow):
         self.main_preview_overlay_check = QCheckBox("显示识别框")
         self.main_preview_overlay_check.setChecked(True)
         self.main_preview_overlay_check.toggled.connect(self._refresh_preview_presentation)
-        self.picture_in_picture_button = QPushButton("弹出画中画")
+        self.picture_in_picture_button = QPushButton("独立预览")
         self.picture_in_picture_button.clicked.connect(self.show_picture_in_picture)
         preview_controls.addWidget(self.main_preview_overlay_check)
         preview_controls.addWidget(self.picture_in_picture_button)
@@ -2942,6 +2973,7 @@ class MainWindow(QMainWindow):
     def _spin(self, minimum: int, maximum: int, value: int) -> QLineEdit:
         w = QLineEdit(str(value))
         w.setValidator(QIntValidator(minimum, maximum))
+        set_c_locale(w)
         w.setAlignment(Qt.AlignmentFlag.AlignRight)
         w.setFixedHeight(36)
         return w
@@ -2951,6 +2983,7 @@ class MainWindow(QMainWindow):
         spin.setRange(minimum, maximum)
         spin.setDecimals(decimals)
         spin.setSingleStep(0.1)
+        set_c_locale(spin)
         spin.setValue(value)
         spin.setFixedHeight(36)
         return spin
@@ -4154,13 +4187,46 @@ class MainWindow(QMainWindow):
     def show_picture_in_picture(self) -> None:
         if self._picture_in_picture is None:
             self._picture_in_picture = PictureInPicturePreview(self)
+            self._picture_in_picture.roiSelected.connect(self._handle_preview_selection)
+            overlay_region = self.preview_label._ocr_overlay_region
+            if overlay_region is not None:
+                self._picture_in_picture.set_ocr_overlay(
+                    self.preview_label._ocr_overlay_field or "ocr",
+                    overlay_region,
+                )
+        self._picture_in_picture.set_selection_enabled(self._selection_mode is not None)
+        self._sync_picture_in_picture_frame()
+        self._picture_in_picture.show()
+        self._picture_in_picture.raise_()
+
+    def _sync_picture_in_picture_frame(self) -> None:
+        if self._picture_in_picture is None:
+            return
+        if self._selection_preview_frame is not None:
+            self._picture_in_picture.set_frames(
+                self._selection_preview_frame,
+                self._selection_preview_frame,
+            )
+            return
         if self._latest_preview_frame is not None:
             self._picture_in_picture.set_frames(
                 self._latest_preview_frame,
                 self._latest_annotated_preview_frame,
             )
-        self._picture_in_picture.show()
-        self._picture_in_picture.raise_()
+
+    def _set_preview_selection_enabled(self, enabled: bool) -> None:
+        self.preview_label.set_selection_enabled(bool(enabled))
+        if self._picture_in_picture is not None:
+            self._picture_in_picture.set_selection_enabled(bool(enabled))
+
+    def _set_preview_ocr_overlay(
+        self,
+        field: str,
+        region: OcrRegion | tuple[int, int, int, int],
+    ) -> None:
+        self.preview_label.set_ocr_overlay(field, region)
+        if self._picture_in_picture is not None:
+            self._picture_in_picture.set_ocr_overlay(field, region)
 
     def show_video_source_dialog(self) -> None:
         self.video_source_dialog.adjustSize()
@@ -4231,7 +4297,7 @@ class MainWindow(QMainWindow):
             self._preview_timer.stop()
             self._release_preview_capture()
             self.preview_button.setText(self._text("preview_button"))
-            self.preview_label.set_selection_enabled(False)
+            self._set_preview_selection_enabled(False)
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
             return
@@ -4340,9 +4406,12 @@ class MainWindow(QMainWindow):
             frame_copy() if callable(frame_copy) else self._latest_preview_frame
         )
         self._display_frame(self._selection_preview_frame)
-        self.preview_label.set_selection_enabled(True)
+        self._set_preview_selection_enabled(True)
+        self._sync_picture_in_picture_frame()
 
     def _handle_preview_selection(self, roi: object) -> None:
+        if self._selection_mode not in {"eye", "roi", "ocr_region", "tid_ocr_region"}:
+            return
         if not self._confirm_preview_selection(roi):
             self._cancel_preview_selection()
             return
@@ -4352,7 +4421,7 @@ class MainWindow(QMainWindow):
             self.apply_selected_ocr_region(roi)
         elif self._selection_mode == "tid_ocr_region":
             self.apply_selected_tid_ocr_region(roi)
-        else:
+        elif self._selection_mode == "roi":
             self.apply_selected_roi(roi)
 
     def _confirm_preview_selection(self, roi: object) -> bool:
@@ -4373,8 +4442,13 @@ class MainWindow(QMainWindow):
         else:
             title = "确认眼睛区域"
             message = f"是否使用当前框选区域作为眼睛 ROI？\n区域: X={x}, Y={y}, W={width}, H={height}"
+        dialog_parent = (
+            self._picture_in_picture
+            if self._picture_in_picture is not None and self._picture_in_picture.isVisible()
+            else self
+        )
         return QMessageBox.question(
-            self,
+            dialog_parent,
             title,
             message,
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
@@ -4382,7 +4456,7 @@ class MainWindow(QMainWindow):
         ) == QMessageBox.StandardButton.Ok
 
     def _cancel_preview_selection(self) -> None:
-        self.preview_label.set_selection_enabled(False)
+        self._set_preview_selection_enabled(False)
         self._roi_before_selection = None
         self._ocr_selection_field = None
         self._selection_mode = None
@@ -4400,6 +4474,7 @@ class MainWindow(QMainWindow):
         elif resume_preview:
             self.preview_button.setText(self._text("stop_preview"))
         self._refresh_preview_presentation()
+        self._sync_picture_in_picture_frame()
 
     def apply_selected_ocr_region(self, roi: object) -> None:
         field = self._ocr_selection_field
@@ -4408,8 +4483,8 @@ class MainWindow(QMainWindow):
             return
         x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
         region = OcrRegion(x, y, width, height)
-        self.preview_label.set_ocr_overlay(field, region)
-        self.preview_label.set_selection_enabled(False)
+        self._set_preview_ocr_overlay(field, region)
+        self._set_preview_selection_enabled(False)
         self._selection_mode = None
         self._ocr_selection_field = None
         self._restore_preview_after_selection()
@@ -4420,8 +4495,8 @@ class MainWindow(QMainWindow):
     def apply_selected_tid_ocr_region(self, roi: object) -> None:
         x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
         region = OcrRegion(x, y, width, height)
-        self.preview_label.set_ocr_overlay("tid", region)
-        self.preview_label.set_selection_enabled(False)
+        self._set_preview_ocr_overlay("tid", region)
+        self._set_preview_selection_enabled(False)
         self._selection_mode = None
         self._restore_preview_after_selection()
         self.tidOcrRegionSelected.emit(region.as_tuple())
@@ -4440,14 +4515,14 @@ class MainWindow(QMainWindow):
                 raise ValueError(self._text("roi_too_small"))
         except Exception as exc:
             self._set_roi_values(old_roi)
-            self.preview_label.set_selection_enabled(False)
+            self._set_preview_selection_enabled(False)
             self._roi_before_selection = None
             self._selection_mode = None
             self._restore_preview_after_selection()
             self._show_error("ROI failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
         self._set_roi_values((x, y, width, height))
-        self.preview_label.set_selection_enabled(False)
+        self._set_preview_selection_enabled(False)
         self._roi_before_selection = None
         self._selection_mode = None
         self._restore_preview_after_selection()
@@ -4484,7 +4559,7 @@ class MainWindow(QMainWindow):
             if not cv2.imwrite(str(output_path), eye):
                 raise ProjectXsIntegrationError(f"Cannot save eye template: {output_path}")
         except Exception as exc:
-            self.preview_label.set_selection_enabled(False)
+            self._set_preview_selection_enabled(False)
             self._selection_mode = None
             self._restore_preview_after_selection()
             self._show_error("Eye capture failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
@@ -4494,7 +4569,7 @@ class MainWindow(QMainWindow):
         self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         self._restore_preview_after_selection()
         self._display_frame(self._latest_preview_frame if self._latest_preview_frame is not None else frame)
-        self.preview_label.set_selection_enabled(True)
+        self._set_preview_selection_enabled(True)
         self.statusBar().showMessage(f"{self._text('eye_captured_select_roi')}: {output_path}")
 
     def _set_roi_values(self, roi: tuple[int, int, int, int]) -> None:
@@ -4566,7 +4641,7 @@ class MainWindow(QMainWindow):
                         f"{OCR_REGION_LABELS.get(field, field)}自定义 ROI 在当前画面中无效，已使用默认范围",
                         level="WARNING",
                     )
-            self.preview_label.set_ocr_overlay(field, effective_region)
+            self._set_preview_ocr_overlay(field, effective_region)
             self._display_frame(frame)
             if self._ocr_settings_dialog is not None:
                 self._ocr_settings_dialog.set_preview_frame_shape(image_shape)
@@ -4583,7 +4658,7 @@ class MainWindow(QMainWindow):
     def _show_tid_ocr_region_overlay(self, region: object) -> None:
         if not isinstance(region, OcrRegion):
             region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
-        self.preview_label.set_ocr_overlay("tid", region)
+        self._set_preview_ocr_overlay("tid", region)
         try:
             self._display_frame(self._current_preview_frame_for_ocr())
         except Exception:
@@ -5020,10 +5095,7 @@ class MainWindow(QMainWindow):
         self._latest_annotated_preview_frame = annotated_copy() if callable(annotated_copy) else annotated
         self._refresh_preview_presentation()
         if self._picture_in_picture is not None and self._picture_in_picture.isVisible():
-            self._picture_in_picture.set_frames(
-                self._latest_preview_frame,
-                self._latest_annotated_preview_frame,
-            )
+            self._sync_picture_in_picture_frame()
         resolution = ""
         if self._preview_capture is not None and self._preview_capture.keep_open_for_preview:
             frame_height, frame_width = frame.shape[:2]
@@ -5291,6 +5363,7 @@ class MainWindow(QMainWindow):
         threshold.setRange(0.0, 999.0)
         threshold.setDecimals(3)
         threshold.setSingleStep(0.1)
+        set_c_locale(threshold)
         threshold.setValue(suggested)
         form = QFormLayout()
         form.addRow("闪光判定阈值(秒)", threshold)
@@ -6865,7 +6938,7 @@ class MainWindow(QMainWindow):
 
         self._pause_preview_for_capture()
         self.preview_button.setEnabled(False)
-        self.preview_label.set_selection_enabled(False)
+        self._set_preview_selection_enabled(False)
         self._stop_advance_tracking()
         self._capture_cancel.clear()
         self._capture_result = None
@@ -6943,7 +7016,7 @@ class MainWindow(QMainWindow):
         self._pause_preview_for_capture()
         self.preview_button.setEnabled(False)
         self.reidentify_button.setEnabled(False)
-        self.preview_label.set_selection_enabled(False)
+        self._set_preview_selection_enabled(False)
         tracked_advances = self._tracked_advances
         self._stop_advance_tracking()
         self._capture_cancel.clear()
@@ -7025,7 +7098,7 @@ class MainWindow(QMainWindow):
         self.preview_button.setEnabled(False)
         self.reidentify_button.setEnabled(False)
         self.tidsid_button.setEnabled(False)
-        self.preview_label.set_selection_enabled(False)
+        self._set_preview_selection_enabled(False)
         self._stop_advance_tracking()
         self._capture_cancel.clear()
         self._capture_result = None
@@ -7720,6 +7793,7 @@ class _IVCalculatorDialog(QDialog):
             wgt.setFixedWidth(w)
             wgt.setAlignment(Qt.AlignmentFlag.AlignCenter)
             wgt.setValidator(QIntValidator(0, 999 if col == 0 else 9999))
+            set_c_locale(wgt)
             self._entry_grid.addWidget(wgt, r, col)
 
     def eventFilter(self, obj, event):
