@@ -61,7 +61,9 @@ from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
     PreviewFrameCapture,
+    ProjectXsCaptureConfigError,
     ProjectXsIntegrationError,
+    ProjectXsNoFrameError,
     ProjectXsReidentifyResult,
     ProjectXsTrackingConfig,
     advance_seed_state,
@@ -384,6 +386,69 @@ def _auto_script_failure_message(result: object, name: str) -> str | None:
     if not detail:
         detail = f"exit code: {result.exit_code if result.exit_code is not None else '无'}"
     return f"伊机控脚本执行失败——{name}: {detail}"
+
+
+def _project_xs_capture_error_dialog(
+    error: object,
+    *,
+    fallback_title: str = "捕捉失败",
+) -> tuple[str, str]:
+    """Return a user-facing title and detail without hiding the failure kind."""
+
+    details: list[str] = []
+    chain_errors: list[object] = []
+    current = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain_errors.append(current)
+        details.append(str(current))
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    combined = "\n".join(details).lower()
+
+    # The explicit subclasses are used by current Project_Xs adapters.  The
+    # text fallback keeps dialogs useful with an older packaged adapter whose
+    # errors were wrapped as a plain ProjectXsIntegrationError.
+    has_config_error = any(isinstance(item, ProjectXsCaptureConfigError) for item in chain_errors)
+    if has_config_error or any(
+        marker in combined
+        for marker in (
+            "matchtemplate",
+            "templmatch.cpp",
+            "_img.size",
+            "_templ.size",
+            "eye template",
+            "cannot read eye template",
+            "roi is smaller",
+            "眼睛模板",
+            "眼睛 roi",
+            "眼睛 roi 必须",
+            "捕捉配置",
+            "config field 'view'",
+            "required field: image",
+            "required field: view",
+        )
+    ):
+        return (
+            "眼睛配置无效",
+            "未找到可用的眼睛模板，或眼睛 ROI 与模板尺寸不匹配。\n"
+            "请在 Seed 捕捉预览中重新框选眼睛模板和眼睛 ROI，"
+            "点击“保存配置”后再重试。",
+        )
+
+    has_no_frame_error = any(isinstance(item, ProjectXsNoFrameError) for item in chain_errors)
+    if has_no_frame_error or any(
+        marker in combined
+        for marker in ("未检测到捕捉画面", "empty frame", "首帧")
+    ):
+        return (
+            "捕捉失败",
+            "未检测到捕捉画面，请确认 Project_Xs 捕捉窗口已打开且未被最小化，然后重新开始。",
+        )
+
+    # Keep unexpected integration failures visible; they often contain the
+    # broker/device detail needed to diagnose a hardware or packaging issue.
+    return fallback_title, str(error)
 
 
 NATURES = (
@@ -6125,12 +6190,12 @@ class MainWindow(QMainWindow):
                     show_window=False,
                     discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
                 )
-            except ProjectXsIntegrationError:
+            except ProjectXsIntegrationError as exc:
                 if not self._capture_cancel.is_set():
+                    title, message = _project_xs_capture_error_dialog(exc)
                     self._call_on_ui_thread(
-                        lambda: QMessageBox.warning(
-                            self, "捕捉失败",
-                            "未检测到捕捉画面，请确认 Project_Xs 捕捉窗口已打开且未被最小化，然后重新开始。"
+                        lambda title=title, message=message: QMessageBox.warning(
+                            self, title, message
                         )
                     )
                 raise
@@ -7408,8 +7473,15 @@ class MainWindow(QMainWindow):
 
     def _show_error(self, title: str, error: object, *, source: str = "应用") -> None:
         self._write_run_log(source, f"{title}: {error}", level="ERROR")
-        QMessageBox.critical(self, title, str(error))
-        self.statusBar().showMessage(str(error))
+        if isinstance(error, ProjectXsIntegrationError):
+            display_title, display_message = _project_xs_capture_error_dialog(
+                error,
+                fallback_title=title,
+            )
+        else:
+            display_title, display_message = title, str(error)
+        QMessageBox.critical(self, display_title, display_message)
+        self.statusBar().showMessage(display_message)
 
 
 

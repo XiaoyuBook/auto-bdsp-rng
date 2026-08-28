@@ -40,6 +40,145 @@ class ProjectXsIntegrationError(RuntimeError):
     """Raised when Project_Xs cannot capture or recover a seed."""
 
 
+class ProjectXsCaptureConfigError(ProjectXsIntegrationError):
+    """Raised when the eye template or capture ROI cannot be used for tracking."""
+
+
+class ProjectXsNoFrameError(ProjectXsIntegrationError):
+    """Raised when a capture source repeatedly returns no frame."""
+
+
+def _template_shape(eye_image: Any) -> tuple[int, int] | None:
+    """Return a grayscale template's ``(width, height)`` when available."""
+
+    shape = getattr(eye_image, "shape", None)
+    if shape is None:
+        # Lightweight test doubles and legacy integrations may not expose a
+        # NumPy shape.  OpenCV will provide the authoritative validation there.
+        return None
+    try:
+        dimensions = tuple(int(value) for value in shape)
+    except (TypeError, ValueError) as exc:
+        raise ProjectXsCaptureConfigError("眼睛模板尺寸无法读取，请重新框选并保存眼睛模板") from exc
+    if len(dimensions) < 2:
+        raise ProjectXsCaptureConfigError("眼睛模板必须是至少包含宽高的图像")
+    height, width = dimensions[:2]
+    if width <= 0 or height <= 0:
+        raise ProjectXsCaptureConfigError("眼睛模板尺寸无效，请重新框选眼睛模板")
+    return width, height
+
+
+def _validate_eye_template_config(
+    eye_image: Any,
+    config: BlinkCaptureConfig,
+) -> tuple[int, int] | None:
+    """Validate the static part of a template/ROI pair before opening capture."""
+
+    template_size = _template_shape(eye_image)
+    if template_size is None:
+        return None
+    template_width, template_height = template_size
+    try:
+        roi_x, roi_y, roi_width, roi_height = (int(value) for value in config.roi)
+    except (TypeError, ValueError):
+        raise ProjectXsCaptureConfigError("眼睛 ROI 必须包含四个整数值") from None
+    if roi_x < 0 or roi_y < 0 or roi_width <= 0 or roi_height <= 0:
+        raise ProjectXsCaptureConfigError(
+            f"眼睛 ROI 无效：X={roi_x}, Y={roi_y}, W={roi_width}, H={roi_height}"
+        )
+    if roi_width < template_width or roi_height < template_height:
+        raise ProjectXsCaptureConfigError(
+            "ROI is smaller than the configured eye template；眼睛模板尺寸 "
+            f"{template_width}x{template_height} 大于眼睛 ROI 尺寸 "
+            f"{roi_width}x{roi_height}；请重新框选眼睛模板和 ROI，并保存配置"
+        )
+    return template_size
+
+
+def _validate_frame_roi(
+    frame: Any,
+    config: BlinkCaptureConfig,
+    *,
+    template_size: tuple[int, int] | None = None,
+) -> None:
+    """Reject an ROI that falls outside the current captured frame."""
+
+    shape = getattr(frame, "shape", None)
+    if shape is None:
+        return
+    try:
+        dimensions = tuple(int(value) for value in shape)
+        roi_x, roi_y, roi_width, roi_height = (int(value) for value in config.roi)
+    except (TypeError, ValueError) as exc:
+        raise ProjectXsCaptureConfigError("眼睛 ROI 或捕捉画面尺寸无效，请重新框选并保存配置") from exc
+    if len(dimensions) < 2:
+        raise ProjectXsCaptureConfigError("捕捉画面没有有效的宽高，无法应用眼睛 ROI")
+    frame_height, frame_width = dimensions[:2]
+    template_width, template_height = template_size or (0, 0)
+    if (
+        frame_width <= 0
+        or frame_height <= 0
+        or roi_x < 0
+        or roi_y < 0
+        or roi_width <= 0
+        or roi_height <= 0
+        or roi_x + roi_width > frame_width
+        or roi_y + roi_height > frame_height
+        or roi_width < template_width
+        or roi_height < template_height
+    ):
+        size_detail = ""
+        if template_size is not None:
+            size_detail = f"，模板为 {template_width}x{template_height}"
+        raise ProjectXsCaptureConfigError(
+            "眼睛 ROI 超出当前捕捉画面范围；"
+            f"画面为 {frame_width}x{frame_height}，ROI 为 "
+            f"X={roi_x}, Y={roi_y}, W={roi_width}, H={roi_height}；"
+            f"请重新框选眼睛 ROI 并保存配置{size_detail}"
+        )
+
+
+def _is_match_template_size_error(error: BaseException) -> bool:
+    """Recognize OpenCV's assertion raised when a template exceeds its image."""
+
+    details: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        details.append(str(current).lower())
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    detail = "\n".join(details)
+    has_match_template = "matchtemplate" in detail or "templmatch.cpp" in detail
+    has_size_assertion = (
+        "_img.size" in detail
+        or "_templ.size" in detail
+        or "assertion failed" in detail
+    )
+    # Some OpenCV builds omit the function name from ``cv2.error``; the
+    # private ``_img.size``/``_templ.size`` identifiers are specific enough to
+    # recognize the same template-dimension assertion on their own.
+    return has_size_assertion and (
+        has_match_template or "_img.size" in detail or "_templ.size" in detail
+    )
+
+
+def _tracking_failure(prefix: str, error: BaseException) -> ProjectXsIntegrationError:
+    """Convert low-level template-size assertions into an actionable error."""
+
+    if _is_match_template_size_error(error):
+        # Keep the exception single-line so automatic run logs retain their
+        # timestamped format even when OpenCV emits a multi-line assertion.
+        technical_detail = " ".join(str(error).split())
+        detail_suffix = f"；底层错误：{technical_detail}" if technical_detail else ""
+        return ProjectXsCaptureConfigError(
+            "ROI is smaller than the configured eye template；眼睛模板或 ROI 配置无效，"
+            "眼睛模板不能大于 ROI；"
+            f"请重新框选眼睛模板和 ROI，并保存配置{detail_suffix}"
+        )
+    return ProjectXsIntegrationError(f"{prefix}: {error}")
+
+
 @contextmanager
 def _project_xs_import_path() -> Iterator[None]:
     src = str(PROJECT_XS_SRC)
@@ -102,9 +241,14 @@ def _read_grayscale_image(path: Path) -> Any:
         data = np.fromfile(str(path), dtype=np.uint8)
         image = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
     except Exception:
-        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        try:
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        except Exception:
+            image = None
     if image is None:
-        raise ProjectXsIntegrationError(f"Cannot read eye template image: {path}")
+        raise ProjectXsCaptureConfigError(
+            f"Cannot read eye template image: {path}；请先在预览中框选并保存眼睛模板"
+        )
     return image
 
 
@@ -440,6 +584,7 @@ def capture_player_blinks(
     """Capture player blink observations through Project_Xs tracking logic."""
 
     eye_image = _read_grayscale_image(config.eye_image_path)
+    _validate_eye_template_config(eye_image, config)
 
     try:
         if (
@@ -474,8 +619,10 @@ def capture_player_blinks(
                     camera=config.camera,
                     tk_window=None,
                 )
+    except ProjectXsIntegrationError:
+        raise
     except Exception as exc:  # Project_Xs raises broad UI/capture exceptions.
-        raise ProjectXsIntegrationError(f"Project_Xs blink tracking failed: {exc}") from exc
+        raise _tracking_failure("Project_Xs blink tracking failed", exc) from exc
     if should_stop is not None and should_stop():
         raise ProjectXsIntegrationError("Blink capture stopped")
 
@@ -495,6 +642,7 @@ def _tracking_blink_controlled(
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
         return [], [], 0.0
+    template_size = _validate_eye_template_config(eye_image, config)
     video = _open_capture_source(
         config,
         cv2=cv2,
@@ -514,7 +662,13 @@ def _tracking_blink_controlled(
     capture_started_at = time.perf_counter()
     skipped_current_blink = False
     roi_x, roi_y, roi_w, roi_h = config.roi
-    eye_width, eye_height = eye_image.shape[::-1]
+    if template_size is None:
+        try:
+            eye_width, eye_height = eye_image.shape[::-1]
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ProjectXsCaptureConfigError("眼睛模板尺寸无法读取，请重新框选并保存眼睛模板") from exc
+    else:
+        eye_width, eye_height = template_size
 
     try:
         consecutive_failures = 0
@@ -525,18 +679,22 @@ def _tracking_blink_controlled(
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures > 30:  # 约3秒无画面则判定窗口未打开
-                    raise ProjectXsIntegrationError(
+                    raise ProjectXsNoFrameError(
                         "未检测到捕捉画面，请确认捕捉窗口已打开且未被最小化"
                     )
                 time.sleep(0.1)
                 continue
             consecutive_failures = 0
             time_counter = time.perf_counter()
+            _validate_frame_roi(frame, config, template_size=template_size)
             roi = cv2.cvtColor(frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w], cv2.COLOR_RGB2GRAY)
             if prev_roi is not None and (roi == prev_roi).all():
                 continue
             prev_roi = roi
-            result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
+            try:
+                result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
+            except Exception as exc:
+                raise _tracking_failure("Project_Xs blink tracking failed", exc) from exc
             _, match, _, max_loc = cv2.minMaxLoc(result)
 
             # Draw detection helpers on a private copy. Broker consumers must
@@ -603,6 +761,7 @@ def _tracking_poke_blink_controlled(
     cv2 = _load_cv2()
     if should_stop is not None and should_stop():
         return []
+    template_size = _validate_eye_template_config(eye_image, config)
     video = _open_capture_source(
         config,
         cv2=cv2,
@@ -618,7 +777,13 @@ def _tracking_poke_blink_controlled(
     prev_time = capture_started_at
     prev_roi = None
     roi_x, roi_y, roi_w, roi_h = config.roi
-    eye_width, eye_height = eye_image.shape[::-1]
+    if template_size is None:
+        try:
+            eye_width, eye_height = eye_image.shape[::-1]
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ProjectXsCaptureConfigError("眼睛模板尺寸无法读取，请重新框选并保存眼睛模板") from exc
+    else:
+        eye_width, eye_height = template_size
 
     try:
         consecutive_failures = 0
@@ -629,18 +794,22 @@ def _tracking_poke_blink_controlled(
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures > 30:
-                    raise ProjectXsIntegrationError(
+                    raise ProjectXsNoFrameError(
                         "未检测到捕捉画面，请确认捕捉窗口已打开且未被最小化"
                     )
                 time.sleep(0.1)
                 continue
             consecutive_failures = 0
             time_counter = time.perf_counter()
+            _validate_frame_roi(frame, config, template_size=template_size)
             roi = cv2.cvtColor(frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w], cv2.COLOR_RGB2GRAY)
             if prev_roi is not None and (roi == prev_roi).all():
                 continue
             prev_roi = roi
-            result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
+            try:
+                result = cv2.matchTemplate(roi, eye_image, cv2.TM_CCOEFF_NORMED)
+            except Exception as exc:
+                raise _tracking_failure("Project_Xs Pokemon blink tracking failed", exc) from exc
             _, match, _, max_loc = cv2.minMaxLoc(result)
 
             display_frame = frame.copy() if callable(getattr(frame, "copy", None)) else frame
@@ -693,6 +862,7 @@ def capture_pokemon_blinks(
     """Capture Pokemon blink intervals through Project_Xs tracking logic."""
 
     eye_image = _read_grayscale_image(config.eye_image_path)
+    _validate_eye_template_config(eye_image, config)
 
     try:
         if (
@@ -727,8 +897,10 @@ def capture_pokemon_blinks(
                     camera=config.camera,
                     tk_window=None,
                 )
+    except ProjectXsIntegrationError:
+        raise
     except Exception as exc:
-        raise ProjectXsIntegrationError(f"Project_Xs Pokemon blink tracking failed: {exc}") from exc
+        raise _tracking_failure("Project_Xs Pokemon blink tracking failed", exc) from exc
     if should_stop is not None and should_stop():
         raise ProjectXsIntegrationError("Pokemon blink capture stopped")
 
@@ -770,19 +942,27 @@ def render_eye_preview(config: BlinkCaptureConfig, frame: Any) -> tuple[Any, Eye
 
     cv2 = _load_cv2()
     eye_image = _load_eye_template(config)
+    template_size = _validate_eye_template_config(eye_image, config)
     roi_x, roi_y, roi_w, roi_h = config.roi
-    eye_width, eye_height = eye_image.shape[::-1]
-    if roi_w < eye_width or roi_h < eye_height:
-        raise ProjectXsIntegrationError("ROI is smaller than the configured eye template")
+    if template_size is None:
+        try:
+            eye_width, eye_height = eye_image.shape[::-1]
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ProjectXsCaptureConfigError("眼睛模板尺寸无法读取，请重新框选并保存眼睛模板") from exc
+    else:
+        eye_width, eye_height = template_size
 
     try:
         annotated = frame.copy()
+        _validate_frame_roi(frame, config, template_size=template_size)
         roi = frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w]
         roi_gray = roi if len(roi.shape) == 2 else cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
         result = cv2.matchTemplate(roi_gray, eye_image, cv2.TM_CCOEFF_NORMED)
         _, match_score, _, max_loc = cv2.minMaxLoc(result)
+    except ProjectXsIntegrationError:
+        raise
     except Exception as exc:
-        raise ProjectXsIntegrationError("Eye template preview matching failed") from exc
+        raise _tracking_failure("Eye template preview matching failed", exc) from exc
 
     roi_bottom_right = (roi_x + roi_w, roi_y + roi_h)
     cv2.rectangle(annotated, (roi_x, roi_y), roi_bottom_right, (0, 0, 255), 2)
