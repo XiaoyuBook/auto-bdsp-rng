@@ -1232,6 +1232,40 @@ def test_picture_in_picture_preview_controls_are_independent(app):
     assert picture_in_picture.overlay_enabled()
 
 
+def test_picture_in_picture_topmost_toggle_keeps_independent_window_visible(app):
+    window = MainWindow()
+    window.show()
+    window.show_picture_in_picture()
+    app.processEvents()
+    picture_in_picture = window._picture_in_picture
+
+    assert picture_in_picture is not None
+    assert picture_in_picture.isVisible()
+    assert picture_in_picture.parentWidget() is None
+    assert picture_in_picture.windowHandle() is not None
+    assert picture_in_picture.windowHandle().transientParent() is None
+    assert not (picture_in_picture.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    original_geometry = picture_in_picture.geometry()
+
+    picture_in_picture.always_on_top_check.click()
+    app.processEvents()
+
+    assert picture_in_picture.isVisible()
+    assert picture_in_picture.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert picture_in_picture.geometry() == original_geometry
+
+    picture_in_picture.always_on_top_check.click()
+    app.processEvents()
+
+    assert picture_in_picture.isVisible()
+    assert not (picture_in_picture.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    assert picture_in_picture.geometry() == original_geometry
+
+    assert window.close()
+    app.processEvents()
+    assert not picture_in_picture.isVisible()
+
+
 def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)

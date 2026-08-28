@@ -850,7 +850,10 @@ class PictureInPicturePreview(QDialog):
     alwaysOnTopChanged = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+        super().__init__(None)
+        if parent is not None:
+            self.setStyleSheet(parent.styleSheet())
+            parent.destroyed.connect(self.deleteLater)
         self.setWindowTitle("画中画预览")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Window, True)
@@ -885,10 +888,14 @@ class PictureInPicturePreview(QDialog):
         self._refresh_frame()
 
     def _handle_always_on_top_toggled(self, enabled: bool) -> None:
+        was_visible = self.isVisible()
+        window_geometry = self.geometry()
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(enabled))
-        self.alwaysOnTopChanged.emit(bool(enabled))
-        if self.isVisible():
+        if was_visible:
+            self.setGeometry(window_geometry)
             self.show()
+            self.raise_()
+        self.alwaysOnTopChanged.emit(bool(enabled))
 
     def set_overlay_enabled(self, enabled: bool) -> None:
         self.overlay_check.setChecked(bool(enabled))
@@ -3086,6 +3093,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._save_profile_settings()
+        if self._picture_in_picture is not None:
+            self._picture_in_picture.hide()
         super().closeEvent(event)
 
     def _confirm_unsaved_easycon_script(self) -> bool:
