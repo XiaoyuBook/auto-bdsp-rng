@@ -15,6 +15,7 @@ from auto_bdsp_rng.automation.easycon.native.device import (
     COMMAND_CHANGE_AMIIBO_INDEX,
     READY,
     MemoryTransport,
+    SwitchReport,
 )
 from auto_bdsp_rng.automation.easycon.native_backend import (
     NativeEasyConBackend,
@@ -103,6 +104,40 @@ def test_native_backend_keeps_serial_connected_and_requires_broker_for_every_scr
         backend.close()
 
 
+def test_native_backend_releases_controller_after_successful_script() -> None:
+    client = FakeFrameClient(np.zeros((12, 16, 3), dtype=np.uint8))
+    backend = _backend(client, waiter=RecordingWaiter())
+    try:
+        backend.stick_direction("left", "up", True)
+        result = backend.run_script_text("A DOWN\nLS RIGHT", "legacy-recording.ecs")
+
+        assert result.status is EasyConStatus.COMPLETED
+        assert backend._device.report_history[-2] != SwitchReport()
+        assert backend._device.get_report() == SwitchReport()
+        assert backend._device.report_history[-1] == SwitchReport()
+        assert backend._stick_directions == {"LS": set(), "RS": set()}
+        assert backend.connected_port == "mock"
+    finally:
+        backend.close()
+
+
+def test_native_backend_releases_controller_after_runtime_failure() -> None:
+    client = FakeFrameClient(np.zeros((12, 16, 3), dtype=np.uint8))
+    backend = _backend(client, waiter=RecordingWaiter())
+    try:
+        result = backend.run_script_text(
+            "A DOWN\nLS RIGHT\n$value = 1 / 0",
+            "failed-recording.ecs",
+        )
+
+        assert result.status is EasyConStatus.FAILED
+        assert backend._device.get_report() == SwitchReport()
+        assert backend._device.report_history[-1] == SwitchReport()
+        assert backend.connected_port == "mock"
+    finally:
+        backend.close()
+
+
 def test_native_backend_loads_original_il_from_script_directory(tmp_path: Path) -> None:
     rng = np.random.default_rng(20260825)
     frame = rng.integers(0, 256, size=(12, 16, 3), dtype=np.uint8)
@@ -145,7 +180,7 @@ def test_native_backend_cancels_one_script_and_rejects_a_second() -> None:
     backend = _backend(client)
     results = []
     thread = threading.Thread(
-        target=lambda: results.append(backend.run_script_text("FOR\nWAIT 10000\nNEXT", "long.ecs"))
+        target=lambda: results.append(backend.run_script_text("A DOWN\nFOR\nWAIT 10000\nNEXT", "long.ecs"))
     )
     try:
         thread.start()
@@ -158,6 +193,8 @@ def test_native_backend_cancels_one_script_and_rejects_a_second() -> None:
         assert not thread.is_alive()
         assert results[0].status is EasyConStatus.CANCELLED
         assert results[0].exit_code == 130
+        assert backend._device.get_report() == SwitchReport()
+        assert backend._device.report_history[-1] == SwitchReport()
         assert backend.connected_port == "mock"
     finally:
         if thread.is_alive():

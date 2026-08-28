@@ -300,7 +300,6 @@ class NativeEasyConBackend(EasyConBackend):
                 "",
             )
         except (ScriptCancelled, DeviceCancelledError) as exc:
-            self._reset_after_interruption()
             self._emit("WARNING", "原生伊机控脚本已停止")
             return self._result(
                 EasyConStatus.CANCELLED,
@@ -322,7 +321,6 @@ class NativeEasyConBackend(EasyConBackend):
                 message,
             )
         except Exception as exc:
-            self._reset_after_interruption()
             message = str(exc)
             self._emit("ERROR", f"原生伊机控脚本运行失败: {message}")
             return self._result(
@@ -334,6 +332,7 @@ class NativeEasyConBackend(EasyConBackend):
                 message,
             )
         finally:
+            self._reset_after_script()
             if client is not None:
                 with suppress(Exception):
                     client.close()
@@ -427,7 +426,10 @@ class NativeEasyConBackend(EasyConBackend):
             raise BrokerUnavailableError("共享视频源没有返回 BGR24 画面")
         return array.copy()
 
-    def _reset_after_interruption(self) -> None:
+    def _reset_after_script(self) -> None:
+        with self._state_lock:
+            for directions in self._stick_directions.values():
+                directions.clear()
         if self._device.is_connected:
             with suppress(Exception):
                 self._gamepad.reset()
