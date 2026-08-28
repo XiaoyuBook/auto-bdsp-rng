@@ -5,6 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPixmap, QTextCursor, QTextFormat
@@ -474,8 +475,10 @@ class EasyConPanel(QWidget):
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
         self.key_mapping: dict[str, int] = {**DEFAULT_KEY_MAPPING, **self.config.key_mapping}
         self._recording = False
+        self._recording_paused = False
         self._recorded_lines: list[str] = []
         self._last_record_ts: float = 0.0
+        self._recorded_hat_direction = "RESET"
         self.process: QProcess | None = None
         self.current_run_started_at: datetime | None = None
         self.current_run_script_path: Path | None = None
@@ -2701,9 +2704,7 @@ class EasyConPanel(QWidget):
         if not down and key not in self.virtual_controller_keys:
             return True
         kind, value, direction = action
-        # 录制：生成 EasyCon 脚本命令
-        if self._recording and down:
-            self._append_recorded_action(action)
+        recorded_at = monotonic() if self._recording and not self._recording_paused else None
         backend = self._ensure_native_backend() if self._is_native_mode() else self._ensure_bridge_backend()
         try:
             if kind == "button":
@@ -2713,20 +2714,14 @@ class EasyConPanel(QWidget):
                 else:
                     backend.key_up(value)  # type: ignore[attr-defined]
                     self.virtual_controller_keys.pop(key, None)
-                    # 录制按键释放
-                    if self._recording:
-                        now = datetime.now().timestamp()
-                        wait_ms = int((now - self._last_record_ts) * 1000) if self._last_record_ts else 0
-                        if wait_ms > 0:
-                            self._recorded_lines.append(f"WAIT {wait_ms}")
-                        self._recorded_lines.append(f"{value.upper()} UP")
-                        self._last_record_ts = now
             elif direction is not None:
                 backend.stick_direction(value, direction, down)  # type: ignore[attr-defined]
                 if down:
                     self.virtual_controller_keys[key] = action
                 else:
                     self.virtual_controller_keys.pop(key, None)
+            if recorded_at is not None:
+                self._append_recorded_action(action, down=down, observed_at=recorded_at)
         except Exception as exc:
             if not self._is_native_mode():
                 self.bridge_status = EasyConStatus.FAILED
@@ -2734,23 +2729,86 @@ class EasyConPanel(QWidget):
             self.keyboard_controller_check.setChecked(False)
         return True
 
-    def _append_recorded_action(self, action: tuple[str, str, str | None]) -> None:
-        kind, value, direction = action
-        now = datetime.now().timestamp()
-        wait_ms = int((now - self._last_record_ts) * 1000) if self._last_record_ts else 0
+    def _append_recorded_commands(self, commands: list[str], observed_at: float) -> None:
+        if not commands:
+            return
+        wait_ms = (
+            max(0, int((observed_at - self._last_record_ts) * 1000))
+            if self._last_record_ts
+            else 0
+        )
         if wait_ms > 0:
             self._recorded_lines.append(f"WAIT {wait_ms}")
-        self._last_record_ts = now
+        self._recorded_lines.extend(commands)
+        self._last_record_ts = observed_at
+
+    @staticmethod
+    def _combined_recorded_direction(directions: set[str]) -> str:
+        up = bool(directions & {"UP", "UPLEFT", "UPRIGHT"})
+        down = bool(directions & {"DOWN", "DOWNLEFT", "DOWNRIGHT"})
+        left = bool(directions & {"LEFT", "UPLEFT", "DOWNLEFT"})
+        right = bool(directions & {"RIGHT", "UPRIGHT", "DOWNRIGHT"})
+        vertical = "UP" if up and not down else "DOWN" if down and not up else ""
+        horizontal = "LEFT" if left and not right else "RIGHT" if right and not left else ""
+        return f"{vertical}{horizontal}" or "RESET"
+
+    def _active_recorded_direction(self, side: str) -> str:
+        directions = {
+            direction.upper().replace("_", "")
+            for kind, active_side, direction in self.virtual_controller_keys.values()
+            if kind == "stick" and active_side == side and direction is not None
+        }
+        return self._combined_recorded_direction(directions)
+
+    def _append_recorded_action(
+        self,
+        action: tuple[str, str, str | None],
+        *,
+        down: bool,
+        observed_at: float,
+    ) -> None:
+        kind, value, direction = action
+        state = "DOWN" if down else "UP"
         if kind == "button":
-            self._recorded_lines.append(f"{value.upper()} DOWN")
-        elif kind == "stick":
-            # EasyCon 脚本语法: LS UP / RS DOWN / UP (hat)
-            if value == "left":
-                self._recorded_lines.append(f"LS {direction}")
-            elif value == "right":
-                self._recorded_lines.append(f"RS {direction}")
-            elif value == "hat":
-                self._recorded_lines.append(direction)
+            command = f"{value.upper()} {state}"
+        elif kind != "stick" or direction is None:
+            return
+        elif value == "hat":
+            next_direction = self._active_recorded_direction("hat")
+            if next_direction == self._recorded_hat_direction:
+                return
+            commands: list[str] = []
+            if self._recorded_hat_direction != "RESET":
+                commands.append(f"{self._recorded_hat_direction} UP")
+            if next_direction != "RESET":
+                commands.append(f"{next_direction} DOWN")
+            self._recorded_hat_direction = next_direction
+            self._append_recorded_commands(commands, observed_at)
+            return
+        elif value in {"left", "right"}:
+            side = "LS" if value == "left" else "RS"
+            command = f"{side} {self._active_recorded_direction(value)}"
+        else:
+            return
+        self._append_recorded_commands([command], observed_at)
+
+    def _append_recorded_forced_releases(
+        self,
+        actions: list[tuple[str, str, str | None]],
+        observed_at: float,
+    ) -> None:
+        commands: list[str] = []
+        reset_sides: set[str] = set()
+        for kind, value, direction in actions:
+            if kind == "button":
+                commands.append(f"{value.upper()} UP")
+            elif kind == "stick" and value in {"left", "right"}:
+                reset_sides.add("LS" if value == "left" else "RS")
+        if self._recorded_hat_direction != "RESET":
+            commands.append(f"{self._recorded_hat_direction} UP")
+            self._recorded_hat_direction = "RESET"
+        commands.extend(f"{side} RESET" for side in ("LS", "RS") if side in reset_sides)
+        self._append_recorded_commands(commands, observed_at)
 
     def _start_recording(self) -> None:
         if self._recording:
@@ -2762,18 +2820,24 @@ class EasyConPanel(QWidget):
         if not self.virtual_controller_enabled:
             self._append_log("warn", "请先启用键盘虚拟手柄（勾选连接）再开始录制")
             return
+        self._release_virtual_controller_keys()
         self._recording = True
+        self._recording_paused = False
         self._recorded_lines = []
-        self._last_record_ts = datetime.now().timestamp()
+        self._last_record_ts = 0.0
+        self._recorded_hat_direction = "RESET"
         self.record_btn.setText("停止录制")
         self.record_btn.setStyleSheet(self.record_btn.styleSheet() + "QPushButton { color: #DC2626; }")
         self.pause_btn.setEnabled(True)
         self._append_log("info", "开始录制脚本，在键盘虚拟手柄上操作即可...")
 
     def _stop_recording(self) -> None:
+        self._release_virtual_controller_keys()
         self._recording = False
+        self._recording_paused = False
         self.record_btn.setText("录制脚本")
         self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("暂停录制")
         if self._recorded_lines:
             script = "\n".join(self._recorded_lines) + "\n"
             editor = self.editor
@@ -2789,40 +2853,38 @@ class EasyConPanel(QWidget):
     def _toggle_pause_recording(self) -> None:
         if not self._recording:
             return
-        self._recording = False
+        if self._recording_paused:
+            self._resume_recording()
+            return
+        self._release_virtual_controller_keys()
+        self._recording_paused = True
         self.pause_btn.setText("继续录制")
         self.pause_btn.setStyleSheet(self.pause_btn.styleSheet() + "QPushButton { color: #10A37F; }")
         self._append_log("info", "录制已暂停")
-        # 重新点击时恢复
-        try:
-            self.pause_btn.clicked.disconnect()
-        except Exception:
-            pass
-        self.pause_btn.clicked.connect(self._resume_recording)
 
     def _resume_recording(self) -> None:
-        self._recording = True
-        self._last_record_ts = datetime.now().timestamp()
+        if not self._recording or not self._recording_paused:
+            return
+        self._release_virtual_controller_keys()
+        self._recording_paused = False
+        self._last_record_ts = 0.0
         self.pause_btn.setText("暂停录制")
         self.pause_btn.setEnabled(True)
         self._append_log("info", "录制已恢复")
-        try:
-            self.pause_btn.clicked.disconnect()
-        except Exception:
-            pass
-        self.pause_btn.clicked.connect(self._toggle_pause_recording)
 
     def _release_virtual_controller_keys(self) -> None:
         if not self.virtual_controller_keys:
             return
         backend = self.native_backend if self._is_native_mode() else self.bridge_backend
-        if backend is None:
-            self.virtual_controller_keys.clear()
-            return
-        for key, action in list(self.virtual_controller_keys.items()):
+        actions = list(self.virtual_controller_keys.items())
+        record_releases = self._recording and not self._recording_paused
+        observed_at = monotonic() if record_releases else 0.0
+        for key, action in actions:
             kind, value, direction = action
             try:
-                if kind == "button":
+                if backend is None:
+                    pass
+                elif kind == "button":
                     backend.key_up(value)  # type: ignore[attr-defined]
                 elif direction is not None:
                     backend.stick_direction(value, direction, False)  # type: ignore[attr-defined]
@@ -2830,6 +2892,11 @@ class EasyConPanel(QWidget):
                 self._append_log("error", f"释放键盘虚拟手柄按键失败: {exc}")
             finally:
                 self.virtual_controller_keys.pop(key, None)
+        if record_releases:
+            self._append_recorded_forced_releases(
+                [action for _key, action in actions],
+                observed_at,
+            )
 
     def run_cli_smoke_test(self) -> None:
         self._append_log("warn", "测试 CLI 运行会触发一次 CLI 连接，不代表常驻连接验收。")

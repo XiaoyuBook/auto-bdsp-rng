@@ -951,6 +951,247 @@ def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch,
     assert "键盘虚拟手柄已启用" in easycon_panel.log_view.toPlainText()
 
 
+def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monkeypatch, easycon_panel):
+    timestamps = iter((101.0, 103.0, 104.0, 107.0, 109.0, 110.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
+    easycon_panel.virtual_controller_enabled = True
+    easycon_panel.editor.clear()
+
+    easycon_panel._start_recording()
+    for key in (Qt.Key.Key_H, Qt.Key.Key_D, Qt.Key.Key_Right):
+        easycon_panel._handle_virtual_controller_key(key, True)
+        easycon_panel._handle_virtual_controller_key(key, False)
+    easycon_panel._stop_recording()
+
+    assert easycon_panel.editor.toPlainText() == (
+        "RIGHT DOWN\n"
+        "WAIT 2000\n"
+        "RIGHT UP\n"
+        "WAIT 1000\n"
+        "LS RIGHT\n"
+        "WAIT 3000\n"
+        "LS RESET\n"
+        "WAIT 2000\n"
+        "RS RIGHT\n"
+        "WAIT 1000\n"
+        "RS RESET\n"
+    )
+
+
+def test_easycon_panel_records_composite_hat_and_stick_directions(monkeypatch, easycon_panel):
+    timestamps = iter((101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
+    easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
+    easycon_panel.virtual_controller_enabled = True
+    easycon_panel.editor.clear()
+
+    easycon_panel._start_recording()
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_U, True)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_H, True)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_U, False)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_H, False)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_D, True)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_W, False)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_D, False)
+    easycon_panel._stop_recording()
+
+    assert easycon_panel.editor.toPlainText() == (
+        "UP DOWN\n"
+        "WAIT 1000\n"
+        "UP UP\n"
+        "UPRIGHT DOWN\n"
+        "WAIT 1000\n"
+        "UPRIGHT UP\n"
+        "RIGHT DOWN\n"
+        "WAIT 1000\n"
+        "RIGHT UP\n"
+        "WAIT 1000\n"
+        "LS UP\n"
+        "WAIT 1000\n"
+        "LS UPRIGHT\n"
+        "WAIT 1000\n"
+        "LS RIGHT\n"
+        "WAIT 1000\n"
+        "LS RESET\n"
+    )
+
+
+def test_easycon_panel_skips_unchanged_composite_hat_direction(monkeypatch, easycon_panel):
+    timestamps = iter((101.0, 102.0, 103.0, 104.0, 105.0, 106.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
+    easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
+    easycon_panel.key_mapping["UpRight"] = int(Qt.Key.Key_Y)
+    easycon_panel.virtual_controller_enabled = True
+    easycon_panel.editor.clear()
+
+    easycon_panel._start_recording()
+    for key, down in (
+        (Qt.Key.Key_U, True),
+        (Qt.Key.Key_H, True),
+        (Qt.Key.Key_Y, True),
+        (Qt.Key.Key_Y, False),
+        (Qt.Key.Key_U, False),
+        (Qt.Key.Key_H, False),
+    ):
+        easycon_panel._handle_virtual_controller_key(key, down)
+    easycon_panel._stop_recording()
+
+    assert easycon_panel.editor.toPlainText() == (
+        "UP DOWN\n"
+        "WAIT 1000\n"
+        "UP UP\n"
+        "UPRIGHT DOWN\n"
+        "WAIT 3000\n"
+        "UPRIGHT UP\n"
+        "RIGHT DOWN\n"
+        "WAIT 1000\n"
+        "RIGHT UP\n"
+    )
+
+
+def test_easycon_panel_recording_ignores_auto_repeat_events(monkeypatch, easycon_panel):
+    timestamps = iter((101.0, 104.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    backend = easycon_panel.native_backend
+    assert isinstance(backend, FakeNativeBackend)
+    assert easycon_panel.connect_native()
+    easycon_panel.keyboard_controller_check.setChecked(True)
+    easycon_panel.editor.clear()
+
+    easycon_panel._start_recording()
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_D, Qt.KeyboardModifier.NoModifier),
+    )
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(
+            QEvent.Type.KeyRelease,
+            Qt.Key.Key_D,
+            Qt.KeyboardModifier.NoModifier,
+            "",
+            True,
+            1,
+        ),
+    )
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_D,
+            Qt.KeyboardModifier.NoModifier,
+            "",
+            True,
+            1,
+        ),
+    )
+    QApplication.sendEvent(
+        easycon_panel,
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_D, Qt.KeyboardModifier.NoModifier),
+    )
+    easycon_panel._stop_recording()
+
+    assert backend.stick_events == [
+        ("left", "Right", True),
+        ("left", "Right", False),
+    ]
+    assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 3000\nLS RESET\n"
+
+
+def test_easycon_panel_records_opposite_directions_as_neutral(monkeypatch, easycon_panel):
+    timestamps = iter((101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
+    easycon_panel.key_mapping["Down"] = int(Qt.Key.Key_H)
+    easycon_panel.virtual_controller_enabled = True
+    easycon_panel.editor.clear()
+
+    easycon_panel._start_recording()
+    for key, down in (
+        (Qt.Key.Key_U, True),
+        (Qt.Key.Key_H, True),
+        (Qt.Key.Key_U, False),
+        (Qt.Key.Key_H, False),
+        (Qt.Key.Key_W, True),
+        (Qt.Key.Key_S, True),
+        (Qt.Key.Key_W, False),
+        (Qt.Key.Key_S, False),
+    ):
+        easycon_panel._handle_virtual_controller_key(key, down)
+    easycon_panel._stop_recording()
+
+    assert easycon_panel.editor.toPlainText() == (
+        "UP DOWN\n"
+        "WAIT 1000\n"
+        "UP UP\n"
+        "WAIT 1000\n"
+        "DOWN DOWN\n"
+        "WAIT 1000\n"
+        "DOWN UP\n"
+        "WAIT 1000\n"
+        "LS UP\n"
+        "WAIT 1000\n"
+        "LS RESET\n"
+        "WAIT 1000\n"
+        "LS DOWN\n"
+        "WAIT 1000\n"
+        "LS RESET\n"
+    )
+
+
+def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypatch, easycon_panel):
+    timestamps = iter((101.0, 102.0, 1001.0, 1003.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    easycon_panel.virtual_controller_enabled = True
+    easycon_panel.editor.clear()
+
+    easycon_panel._start_recording()
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_D, True)
+    easycon_panel._toggle_pause_recording()
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
+    easycon_panel._resume_recording()
+
+    assert easycon_panel.virtual_controller_keys == {}
+
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_Right, True)
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_Right, False)
+    easycon_panel._stop_recording()
+
+    assert easycon_panel.editor.toPlainText() == (
+        "LS RIGHT\n"
+        "WAIT 1000\n"
+        "LS RESET\n"
+        "RS RIGHT\n"
+        "WAIT 2000\n"
+        "RS RESET\n"
+    )
+
+
+def test_easycon_panel_stop_while_paused_preserves_closed_recording(monkeypatch, easycon_panel):
+    timestamps = iter((101.0, 104.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    easycon_panel.virtual_controller_enabled = True
+    easycon_panel.editor.clear()
+
+    easycon_panel._start_recording()
+    easycon_panel._handle_virtual_controller_key(Qt.Key.Key_D, True)
+    easycon_panel._toggle_pause_recording()
+
+    assert easycon_panel._recording
+    assert easycon_panel._recording_paused
+    assert easycon_panel.virtual_controller_keys == {}
+
+    easycon_panel._start_recording()
+
+    assert not easycon_panel._recording
+    assert not easycon_panel._recording_paused
+    assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 3000\nLS RESET\n"
+
+
 def test_easycon_panel_escape_disables_keyboard_virtual_controller(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)

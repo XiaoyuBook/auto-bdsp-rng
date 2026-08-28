@@ -265,6 +265,36 @@ AMIIBO 2
     assert waiter.milliseconds == [333]
 
 
+def test_recorded_direction_sequence_compiles_and_replays_releases(engine: EasyConScriptEngine) -> None:
+    gamepad = RecordingGamepad()
+    waiter = RecordingWaiter()
+    program = engine.compile(
+        """
+RIGHT DOWN
+WAIT 200
+RIGHT UP
+LS RIGHT
+WAIT 300
+LS RESET
+RS RIGHT
+WAIT 400
+RS RESET
+"""
+    )
+
+    program.run(gamepad=gamepad, waiter=waiter)
+
+    assert gamepad.events == [
+        ("down", "RIGHT"),
+        ("up", "RIGHT"),
+        ("stick", "LS", 255, 128),
+        ("stick", "LS", 128, 128),
+        ("stick", "RS", 255, 128),
+        ("stick", "RS", 128, 128),
+    ]
+    assert waiter.milliseconds == [200, 300, 400]
+
+
 def test_amiibo_only_script_is_gamepad_action_and_invokes_gamepad(engine: EasyConScriptEngine) -> None:
     gamepad = RecordingGamepad()
     program = engine.compile("AMIIBO 4")
