@@ -4,89 +4,99 @@
   <img src="docs/assets/app-icon.png" alt="auto_bdsp_rng 图标" width="220">
 </p>
 
-## 下载与使用
+`auto_bdsp_rng` 是面向《宝可梦 晶灿钻石 / 明亮珍珠》（BDSP）的 Windows 桌面乱数辅助工具。它把 Project_Xs 的眨眼测种、PokeFinder 口径的 Gen 8 BDSP 定点搜索、伊机控脚本执行、自动定点和自动 TID 流程整合到同一个 PySide6 应用中。
 
-普通用户请不要下载 GitHub 绿色 `Code` 按钮里的源码压缩包。请到 [GitHub Releases](https://github.com/XiaoyuBook/auto-bdsp-rng/releases) 下载：
+## 下载与安装
+
+当前正式版为 [v3.0.0](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.0.0)。普通用户请不要下载 GitHub 绿色 `Code` 按钮中的源码压缩包，请下载 Windows x64 绿色版：
 
 ```text
-auto-bdsp-rng-v1.0.0-windows-x64.zip
+auto-bdsp-rng-v3.0.0-windows-x64.zip
 ```
 
-下载后解压 zip，进入 `auto-bdsp-rng` 文件夹，双击：
+完整解压 zip 后，进入 `auto-bdsp-rng` 文件夹并双击：
 
 ```text
 珍钻复刻自动乱数.exe
 ```
 
-目标电脑不需要安装 Python、EasyCon、EasyConBridge 或 `ezcon.exe`。请保留 exe 旁边的 `_internal`、`script`、`docs` 等目录，不要只复制单独的 exe。
+目标电脑不需要安装 Python、EasyCon、EasyConBridge 或 `ezcon.exe`。请保留 exe 同级的 `_internal`、`script`、`docs` 等目录，不要只复制单独的 exe。实际自动流程还需要采集卡和可用的伊机控串口设备。
 
-从首个内置升级器的 Windows 正式版开始，后续可在软件右上角“帮助 -> 检查更新…”中升级。软件会优先下载只包含变化文件的增量包，校验完成后自动退出、替换并重启；独立升级器会再次校验 Release SHA-256，并在新版确认启动前保留旧文件，替换失败或新版启动失败时自动恢复。首次安装、较老版本没有连续升级链或需要修复程序文件时，仍使用完整 Release zip。旧版因为本身没有升级器，需要最后完整下载一次带升级器的新版本。
+`v3.0.0` 是首个内置升级器的正式版。`v2.1.7` 及更早版本需要完整下载一次上述 zip；安装 `v3.0.0` 后，后续版本可直接在软件中检查更新。
 
-升级不会强行覆盖用户修改过的 `script` 脚本、运行日志、Project_Xs 配置和自定义眼图；新版默认文件会以 `.new-v<版本>` 副本保留在原文件旁边，同名副本已存在时会追加编号而不会覆盖。应用默认在启动后静默检查更新，仅发现新版本时提示；可在“帮助 -> 启动时自动检查更新”中关闭，手动“检查更新…”入口不受影响。
+## 首次使用
 
-`auto_bdsp_rng` 是一个面向《宝可梦 晶灿钻石 / 明亮珍珠》（BDSP）的 Windows 桌面乱数辅助工具。它把 Project_Xs 的眨眼测种、PokeFinder 的 Gen 8 BDSP 定点生成逻辑、EasyCon / 伊机控脚本执行和自动定点乱数流程整合到同一个 PySide6 应用里，目标是减少在多个工具之间复制 Seed、手动过帧和人工判断撞闪时机的成本。
+1. 点击主窗口顶部的视频源状态（如“视频源 未连接”），在“视频源设置”中选择采集卡和采集方式后连接。优先使用“Media Foundation（推荐）”，遇到设备兼容问题时再尝试“DirectShow（兼容）”。软件会记住选择，但下次启动仍需手动连接。
+2. 在“Seed 捕捉”页确认预览正常，框选并保存眼睛模板和眼睛 ROI，再完成一次普通 Seed 捕捉或 TID/SID 测种测试。
+3. 在“伊机控”页选择串口并连接单片机，先用短脚本或虚拟手柄确认按键能够正常发送。页面脚本当前也要求先连接共享视频源。
+4. 打开 OCR 区域设置并运行“测试全部”，检查性格、个性和六项能力值；判闪对话区域需单独识别或校准。九项默认区域会在首次使用时自动加载，1920x1080 标准画面通常无需手动导入；画面比例、语言或 UI 位置不同则应重新框选。
+5. 确认游戏站位、队伍、脚本参数和 `fixed_delay` 后，再启动自动流程。内置脚本不是对所有设备都通用的零校准配置。
 
-当前项目已经从最初的“Seed 捕捉 + 定点搜索”规划，演进为一个包含以下工作区的桌面应用：
+## 工作区
 
-- 自动定点乱数：串联测种、目标搜索、过帧脚本、reidentify / 重新测种、最终撞闪脚本和 OCR 闪光判定。
-- Seed 捕捉：复用 Project_Xs 的画面捕获、眼部模板、眨眼识别、Seed 恢复、重新识别和时间线能力。
-- 定点数据区：在本仓库内实现 BDSP Gen 8 Static 生成、筛选、结果表格、存档信息和个体值计算器。
-- 伊机控：由 Python 原生后端长期连接串口，直接运行 EasyCon 风格脚本、`.IL` 搜图和 `TesserDetect`，并提供虚拟手柄和按键映射。
-- 历史记录：按轮次记录测种、候选、锁定、错过、反查和最终结果，便于复盘实机流程。
-- 软件更新：从 GitHub Releases 检查正式版，下载并校验文件级增量包，由独立升级器在主程序退出后以持久事务完成替换、启动确认、回滚和重启。
+| 工作区 | 用途 |
+| --- | --- |
+| 自动定点乱数 | 串联测种、目标搜索、过帧、校正、撞闪、OCR 判闪和反查。 |
+| 自动 TID 乱数 | 串联 TID/SID 测种、Display TID 搜索、目标帧等待和取名脚本。 |
+| Seed 捕捉 | 预览、眼图/ROI、普通 Seed、TID/SID Seed、校正和活帧时间线。 |
+| 定点数据区 | 按 PokeFinder 口径生成和筛选定点/游走候选，并提供个体值计算。 |
+| 伊机控 | 编辑、运行和录制 EasyCon 风格脚本，连接串口并使用虚拟手柄。 |
+| 历史记录 | 查看自动流程轮次、候选、锁定、错过、反查和最终结果。 |
 
-## 适用范围
+界面会记忆主要设置和窗口位置，并为窄屏、短屏和高 DPI 环境提供滚动与紧凑布局。数值输入固定使用 ASCII 数字和 `.` 小数点，避免受 Windows 区域格式影响。
 
-本项目优先服务 Windows 64-bit 环境，默认使用 Python 3.12、PySide6、OpenCV、Project_Xs_CHN、PokeFinder 参考实现，以及项目内维护的 Python 原生 EasyCon 运行时。仓库内的 `third_party` 目录用于固定上游版本和对照实现，项目自身代码位于 `src/auto_bdsp_rng`。
+## 视频源与预览
 
-> 这不是通用的宝可梦乱数工具，而是围绕 BDSP 定点 / 游走定点、眨眼测种、EasyCon 自动执行流程做的集成工作台。
+`v3.0.0` 的采集卡主路径使用独立 Capture Broker 独占设备，并把同一份最新原始画面提供给主预览、独立预览、Seed/TID 捕捉、OCR 和伊机控搜图。各消费者可以同时读帧，识别框只绘制在显示副本上，不会污染后续识别画面。
 
-## 功能概览
+- Broker 默认按 1920x1080、MJPG、30fps 请求采集卡画面；主预览常驻刷新。
+- 顶部“视频源设置”提供 Media Foundation、DirectShow 和自动选择三种采集方式。
+- 主预览和独立预览都可切换识别框；独立预览还可单独设置始终置顶。
+- 眼睛模板/ROI 配置错误与视频源无帧会分别提示，便于判断应重新框选还是检查设备连接。
+- 软件同一时间只维护一个共享视频源/Broker；连接期间所选采集卡由它独占，关闭程序时会一并释放。
 
-### Seed 捕捉
+Project_Xs 的窗口捕获兼容路径仍支持 OBS 投影窗口，并通过 Windows Graphics Capture 读取画面。OBS 窗口不需要置顶，但必须保持打开且不能最小化。OBS 窗口捕获不属于共享采集卡 Broker，二者不要混为同一种视频源。
 
-- 连接一个由独立 Capture Broker 独占的采集卡视频源，同时供常驻预览、眨眼识别、OCR 和伊机控搜图读取最新帧。
-- 读取 Project_Xs 配置，支持窗口捕获和摄像头捕获。
-- 预览画面、截取眼睛模板、拖拽框选 ROI。
-- 捕捉玩家眨眼并恢复 `Seed[0-3]`。
-- 自动转换为 PokeFinder / Gen 8 定点使用的 `Seed[0-1]`。
-- 支持 reidentify、手动推进、TID/SID 流程、眨眼监控和 timeline 规划。
+## Seed 捕捉与校正
 
-### BDSP 定点搜索
+- 复用 Project_Xs_CHN 的玩家眨眼、宝可梦眨眼、Seed 恢复、活帧计数和 timeline 逻辑。
+- 普通 Seed 捕捉得到 `Seed[0-3]`，并自动转换为 BDSP 定点搜索使用的 `Seed[0-1]`。
+- TID/SID 测种固定按 Project_Xs 原版流程捕捉 64 次宝可梦眨眼，并启用对应的 Munchlax 活帧模型。
+- 支持普通校正和 `1 PK NPC` noisy 校正。计算优先使用 C++ 原生实现；原生不可用、输入不支持或未命中时回退到 Python 实现。
+- 捕捉前后会协调预览和 ROI 状态，框选确认或捕捉结束后自动恢复实时预览。
 
-- 支持初始帧、最大帧数、Offset、队首特性、版本、TID/SID/TSV、闪符等输入。
-- 支持定点目标、游走目标、固定 IV、性格、特性、性别、身高、体重、异色筛选。
-- 结果表格支持复制、导出 CSV / TXT、列展示和中文化显示。
-- 个体值计算器参考 PokeFinder IVChecker 逻辑，支持中文宝可梦名搜索。
+捕捉亮屏保活的范围是明确受限的：仅在 20、40、64 次眨眼捕捉过程中，每完成 10 次且捕捉尚未结束时，通过已连接的伊机控短按一次 `L`。发送失败不会中断测种。过帧脚本运行期间以及自动 TID 等待目标 Adv 期间不会持续发送保活按键。
 
-### 伊机控 / EasyCon
+## BDSP 定点数据
 
-- 提供浅色桌面风格的脚本编辑界面。
-- 支持 `.txt` / `.ecs` 脚本加载、编辑、保存、未保存标记和 `Ctrl+S`。
-- 支持脚本参数扫描、内存文本执行、日志保留和文本选择。
-- Python 原生后端复刻 EasyCon 串口握手并长期保持连接，脚本结束不会主动断开。
-- 支持 `.IL` 模板搜图、XY/Laplacian 边缘匹配、`TesserDetect`、`IMPORT` 和脚本目录下的 `lib/`；第一版不支持 `.ILX`。
-- 所有脚本复用 Seed 页连接的共享视频源，搜图框只叠加到主预览或独立预览副本，不会污染 OCR、眨眼识别或其他消费者的原始帧。
-- 支持按键映射对话框、手柄背景图定位、键盘虚拟手柄、按键按下/释放与摇杆方向事件。
+- 支持初始帧、搜索范围、Offset、队首特性、游戏版本、TID/SID/TSV、闪符等参数。
+- 支持定点与游走目标、固定 IV、性格、特性、性别、体型和异色类型筛选。
+- “同步”队首可从子菜单直接选择 25 种性格，也支持迷人之躯。
+- 候选表可复制并导出 CSV/TXT，支持列显示控制和中文化结果。
+- 个体值计算器使用 PokeFinder 公式，支持中文宝可梦名和未知性格的多倍率反算。
+- 定点生成和搜索优先使用 C++ 原生扩展，并保留 Python 回退路径。
 
-### 自动定点乱数
+## 自动定点乱数
 
-- 自动执行“测 seed -> 搜索目标 -> 过帧 -> 重新识别 / 重新测 seed -> 最终撞闪”的状态机。
-- 默认作为主工作区显示，顶部状态区会同步展示循环次数、当前阶段和实时 advance。
-- 支持单次、循环 N 次和无限循环。
-- 支持从测种脚本开始，也支持从捕获 Seed 直接进入后续搜索流程。
-- 可选择测种脚本、过帧脚本、撞闪脚本。
-- 支持多个目标精灵筛选条件，并会记忆最近使用的多目标配置。
-- 兼容两种撞闪时序：声明整数 `_闪帧` 的旧脚本继续在脚本内等待；未声明时由软件等待到启动点后直接运行脚本。
-- 最终等待阶段通过计时和实时 advances 修正，避免重复扣除闪帧或错过目标。
-- 支持过帧过头后的跳过防死循环逻辑。
-- 支持自动反查范围设置、能力页 OCR 重试和个性 / IV 范围匹配。
-- 可选 OCR 闪光判定间隔校准和并行监测。
-- 艾姆利多和克雷色利亚会先等待游走脚本以 `宝可表 < 95` 确认进入战斗，再启动现有关键词间隔 OCR；寻找位置期间不计 OCR 的 300 秒时限，战斗事件缺失或 OCR 结果未知时停止并等待人工确认。
-- 判定出闪后可自动向伊机控发送 Capture 录像指令。
-- 自动面板会保存最近设置，并可在连接成功后自动连接伊机控。
+自动定点将实机步骤组织为一个可停止、可循环的状态机：
 
-核心公式：
+```text
+测种 -> 搜索候选 -> 过帧/过场 -> 校正或重新测种 -> 撞闪
+     -> OCR 判闪 -> 录像/反查/逃跑续搜 -> 完成本轮或进入下一轮
+```
+
+- 支持单次、循环 N 次和无限循环，可从“测种”“捕获 Seed”或“校正”三个起点开始。
+- 支持多个目标及各自筛选条件，并记忆最近使用的目标组合。
+- 测种、过帧、撞闪、过场、反查和逃跑脚本均可独立选择；展开下拉框时会重新扫描外层 `script` 目录。
+- “预留帧数”用于决定何时执行过场脚本。过场完成后会校正位置；过头或目标已不可达时回到测种，而不是在错误状态中循环。
+- 后续自动轮次可在测种脚本前识别缩放/锁定提示，并通过双 HOME 尝试恢复正常画面。
+- 可选“逃跑续搜”：明确未出闪且仍有后续候选时运行逃跑脚本，回到可校正位置后继续本轮搜索。
+- OCR 可识别判闪对话、能力值、性格和个性，用于闪光判断与自动反查；闪光判定间隔可先单独校准。
+- 艾姆利多和克雷色利亚的游走流程会先确认进入战斗，再开始判闪 OCR 计时。
+- 判定出闪后可向伊机控发送 Capture 录像指令；候选和实际 delay 会写入历史记录。
+- 主动停止会尝试结束当前脚本并记录停止阶段。普通或过场校正连续两次失败后会进入下一轮测种；连续三次捕获到相同 Seed 且搜索零候选时会停止，并提示重新框选眼睛模板和 ROI。
+
+脚本时序口径如下。撞闪脚本声明整数 `_闪帧` 时，该帧数由脚本内部等待；未声明时由软件等待到启动点后直接运行脚本：
 
 ```text
 script_wait_frames = integer _闪帧 when declared, otherwise 0
@@ -94,9 +104,83 @@ trigger_advances = raw_target_advances - fixed_delay - script_wait_frames
 remaining_to_trigger = trigger_advances - current_advances
 ```
 
-## 安装
+## 自动 TID 乱数
 
-首次克隆后先初始化子模块：
+自动 TID 的完整流程为：
+
+```text
+运行 id 测种脚本 -> 捕获 TID/SID Seed -> 生成 ID 数据
+-> 搜索目标 Display TID -> 等待 target Adv - delay -> 运行取名脚本
+```
+
+- 支持“从测种脚本开始”和“从捕获 Seed 开始”两种入口，捕获结果会回填到页面。
+- 目标池可同时保存多个 0-999999 的 Display TID；同一轮命中多个目标时选择 Adv 最早的一项。
+- 内嵌 ID 表显示 `Adv / TID / SID / TSV / Display TID`，支持复制和导出 CSV。
+- 未在搜索范围内命中、delay 大于目标 Adv 或已错过启动帧时，可重新运行测种脚本进入下一轮。
+- 后续轮次运行测种脚本前也会检测缩放/锁定提示，并通过双 HOME 尝试恢复正常画面。
+- 取名脚本在 `目标 Adv - delay` 触发；等待阶段使用 Project_Xs 的 TID/SID 活帧模型，不会主动发送控制器保活按键。
+- 停止和异常记录会保留轮次、阶段、Seed、目标 Adv、实际等待和停止来源，便于区分用户停止、系统关闭、脚本问题和画面中断。
+
+## OCR
+
+Windows 绿色包已内置 PaddleOCR/PaddlePaddle 和项目固定的模型，普通用户无需另行安装。OCR 模型按第一次识别、测试或自动流程的实际需要预热，不会在每次启动时无条件占用资源。
+
+OCR 区域设置包含九项内置默认区域：性格、个性、六项能力值和判闪对话区域。每项都可以单独框选、显示、识别和重置；“测试全部”会自动翻页测试前八项精灵信息，判闪对话区域需单独识别或使用闪光判定校准。默认区域按 1920x1080 画面校准；自定义区域无效时，判闪区域会回退到画面下半部。
+
+识别流程兼容简体和繁体中文常见文本差异，并统一复用共享 OCR 实例，避免自动流程、手动测试和闪光判定同时创建模型。
+
+## 伊机控与脚本
+
+产品主路径使用项目内置的 Python 原生 EasyCon 运行时：连接后长期保持同一串口，脚本页面、自动定点、自动 TID、OCR 翻页、虚拟手柄和捕捉亮屏保活共享该连接。脚本直接从编辑器内存执行，不会生成 `script/.generated` 运行副本。
+
+- 支持 `.txt` / `.ecs` 文件加载、编辑、保存、未保存提示、参数扫描和 `Ctrl+S`。
+- 支持键盘虚拟手柄、按键映射、按下/释放和摇杆输入；连接伊机控并启用键盘虚拟手柄后，可录制这些操作和等待时间，支持暂停/继续并把结果插入编辑器。
+- 支持 `.IL` 模板搜图、XY/Laplacian 边缘匹配、`TesserDetect`、`IMPORT` 和脚本目录下的 `lib/`。
+- `v3.0.0` 暂不支持 `.ILX`。
+- 同一时间只运行一个脚本；停止、异常或断开时会释放残留按键和摇杆状态。
+- 旧 CLI/Bridge 源码仅作为兼容与回归参考保留，不是正式包的默认运行路径。
+
+正式包只使用 exe 同级的 `script` 目录，不再使用 `_internal/script`。启动时会清理旧内部目录：与外层脚本内容相同的副本直接删除，独有或内容不同的文件备份到 `script/.legacy-internal-backup`，不会自动参与执行；需要恢复时请对比后手动复制到外层 `script`。
+
+### 内置脚本
+
+| 类别 | 主要文件 |
+| --- | --- |
+| 普通/TID 测种 | `BDSP测种.txt`、`BDSP地下测种.txt`、`id测种.txt` |
+| 过帧与过场 | `bdsp过帧.txt`、`神奥图鉴过帧.txt`、`达克莱伊过场.txt` |
+| TID 取名 | `取名.txt` |
+| 定点撞闪 | `阿尔宙斯.txt`、`谢米.txt`、`达克莱伊.txt`、`冥王龙.txt`、`玫瑰公园.txt` |
+| 游走目标 | `红圣菇.txt`、`美梦神.txt` |
+| 捕捉/反查/录像 | `捕捉反查脚本.txt`、`捕捉反查脚本 游走.txt`、`玫瑰公园捕捉反查脚本.txt`、`达克莱伊捕捉反查.txt`、`录屏.txt` |
+| 搜图标签 | `ImgLabel/*.IL` |
+
+脚本会随版本继续调整。运行前请阅读文件头参数，并根据站位、队伍、主机响应和串口时序做小范围验证。
+
+## 历史记录与运行日志
+
+“历史记录”页按轮次展示普通搜索、重新筛选和反查候选。候选使用可滚动表格显示状态、Adv、异色、性格、六项 IV、特性、性别、EC、PID 和体型；锁定目标、同步来源和异色单元格会分别标记。历史内容可复制和导出，且会区分“无候选”与“未出闪”。
+
+运行日志默认开启，按自然日写入：
+
+```text
+logs/run_YYYY-MM-DD.log
+```
+
+同一天多次启动会追加到同一个文件，只保留最近七个自然日。可在“帮助 -> 运行日志”中关闭“自动保存运行日志（保留 7 天）”或打开日志目录。日志记录关键 UI、视频源、Seed 捕捉、伊机控、自动定点、自动 TID、更新和未处理异常；它与“历史记录”页用途不同。
+
+## 自动更新
+
+应用默认在每次启动后静默检查正式版更新，仅发现新版本时提示。可在“帮助 -> 启动时自动检查更新”中关闭；“帮助 -> 检查更新…”始终可以手动使用。
+
+- 优先下载只包含变化文件的增量包，并校验 Release 中的 SHA-256。
+- 主程序退出后由独立升级器替换文件并重新启动；新版未确认成功或替换失败时自动恢复旧版。
+- 没有连续增量链或需要修复安装时，软件会引导前往 Release 页面手动下载完整 zip。
+- 用户修改过的 `script`、运行日志、Project_Xs 配置和自定义眼图不会被强行覆盖。
+- 新版默认文件需要与用户修改并存时，会写为 `.new-v<版本>`；同名副本已存在时继续追加编号。
+
+## 从源码运行
+
+推荐在 Windows PowerShell 中操作。首次克隆后初始化子模块：
 
 ```powershell
 git submodule update --init --recursive
@@ -111,26 +195,16 @@ python -m pip install --upgrade pip
 python -m pip install -e .[dev]
 ```
 
-如果需要 OCR 闪光判定能力，再安装可选依赖：
+需要从源码使用 OCR 时安装可选依赖：
 
 ```powershell
 python -m pip install -e .[ocr]
 ```
 
-Windows Release green packages starting with `v1.0.0` include PaddleOCR/PaddlePaddle in the zip, so normal users do not need to install OCR dependencies separately.
-
-## 运行
-
-启动图形界面：
+启动 GUI：
 
 ```powershell
 python -m auto_bdsp_rng gui
-```
-
-安装为 editable 后，也可以运行脚本入口：
-
-```powershell
-auto-bdsp-rng gui
 ```
 
 常用 CLI：
@@ -145,147 +219,75 @@ python -m auto_bdsp_rng blink-config --project-xs-config config_camera.json
 # 转换 Seed[0-3] / Seed[0-1]
 python -m auto_bdsp_rng convert-seed --seed 12345678 9ABCDEF0 11111111 22222222
 
-# 从当前配置捕获一帧预览图
-python -m auto_bdsp_rng capture-frame --project-xs-config config_camera.json --output preview.png
-
-# 捕捉眨眼并恢复 seed
+# 捕捉眨眼并恢复 Seed
 python -m auto_bdsp_rng capture-blinks --project-xs-config config_camera.json --blink-count 40
 
-# 对已有 seed 做重新识别
+# 对已有 Seed 做校正
 python -m auto_bdsp_rng reidentify --project-xs-config config_camera.json --seed 12345678 9ABCDEF0 11111111 22222222
 ```
 
-## Python 原生 EasyCon
-
-产品主路径完全由 `src/auto_bdsp_rng/automation/easycon/native/` 和 `native_backend.py` 实现，不启动 EasyCon GUI、CLI、Bridge 或 `ezcon.exe`，也不读取 `EASYCON_ROOT`。用户先在 Seed 捕捉页连接采集卡，再在伊机控页连接串口，之后脚本、自动定点、自动 TID、RIGHT 按键和捕捉亮屏保活都复用同一后端。原生运行直接执行内存中的脚本文本，不会生成 `script/.generated` ECS 快照。
-
-仓库仍保留旧 CLI/Bridge 源码和协议测试，供兼容回归与上游实现对照；它们不会被默认界面选择，也不会进入正式包的主执行路径。旧 Bridge 的开发资料见：
-
-- `docs/easycon_bridge_protocol.md`（旧兼容协议）
-- `bridge/EasyConBridge/README.md`（旧 Bridge 开发说明）
+安装项目时会构建 C++17 + pybind11 原生扩展，编译失败会导致安装失败；安装成功后，如果运行时原生模块不可用、输入不受支持或校正未命中，相关路径会回退到 Python 实现。
 
 ## 目录结构
 
 ```text
 auto_bdsp_rng/
-  bridge/EasyConBridge/             保留的旧 EasyCon Bridge 兼容源码
-  docs/                             设计文档、协议说明和验证记录
-    assets/                         README 图标等展示资源
-  script/                           内置测种、过帧、撞闪脚本
+  bridge/EasyConBridge/             保留的旧 Bridge 兼容源码
+  docs/                             设计、协议和验证文档
+  packaging/                        Windows 绿色包和升级器配置
+  script/                           唯一的内置/用户脚本目录
+  scripts/                          发布说明、更新包和构建辅助脚本
   src/auto_bdsp_rng/
-    automation/
-      auto_rng/                     自动定点乱数状态机、脚本处理、搜索封装
-      easycon/                      Python 原生 EasyCon、旧兼容后端和脚本工具
-    blink_detection/                Project_Xs 捕获、眨眼、reidentify 适配
-    data/                           BDSP 定点数据加载
-    gen8_static/                    Gen 8 BDSP 定点生成器
-    rng_core/                       Seed、Xorshift、Xoroshiro 等 RNG 基础
-    ui/                             PySide6 主窗口、自动页、伊机控页、目标表单
-  tests/                            pytest 测试
-  third_party/
-    Project_Xs_CHN/                 上游 Project_Xs_CHN 子模块
-    PokeFinder/                     上游 PokeFinder 子模块
+    automation/auto_rng/            自动定点状态机、搜索、OCR 和脚本处理
+    automation/auto_tid_rng.py      自动 TID 状态机与 Display TID 搜索
+    automation/easycon/             Python 原生 EasyCon 和兼容后端
+    blink_detection/                Project_Xs 捕捉、Seed 恢复与校正适配
+    capture_broker*.py              共享视频帧与独立 Broker 进程管理
+    gen8_id/                         Gen 8 ID 数据生成与筛选
+    gen8_static/                     Gen 8 BDSP 定点生成与筛选
+    rng_core/                        RNG 基础和 C++ 原生扩展
+    ui/                              PySide6 主窗口、页面与对话框
+    run_log.py                       每日运行日志
+    update_core.py                   更新事务、文件保留与回滚
+    update_service.py                Release 检查、下载与升级启动
+  tests/                             pytest 测试
+  third_party/                       固定版本的上游参考实现
 ```
 
 ## 测试
-
-运行全部 Python 测试：
 
 ```powershell
 python -m pytest
 ```
 
-测试覆盖重点包括：
+测试覆盖 Seed/RNG、PokeFinder 对齐、Project_Xs、自动定点、自动 TID、OCR、原生 EasyCon、Capture Broker、更新回滚、每日运行日志、打包资源和 PySide6 界面。发布流程还会检查版本号、CHANGELOG、升级包协议、绿色包目录和 SHA-256 清单。
 
-- Seed 数据模型和转换。
-- RNG 核心与 BDSP Static 生成器。
-- Project_Xs 适配层。
-- BDSP 数据表加载校验。
-- EasyCon 原生脚本引擎、串口设备、`.IL` 搜图、Tesseract、Broker 接入及旧后端兼容。
-- 自动定点乱数状态机、脚本参数和最终等待逻辑。
-- PySide6 界面启动、布局和信号层。
+## 版本演进
 
-## 开发脉络
+下表依据完整提交历史归并，并重点补齐上一次系统性 README 同步后的变化。详细条目见 [CHANGELOG.md](CHANGELOG.md)。
 
-README 依据当前仓库完整提交历史整理。项目大致经历了以下阶段：
-
-| 时间 | 重点变化 |
+| 时间 | 主要变化 |
 | --- | --- |
-| 2026-05-04 | 建立项目规划，引入 Project_Xs_CHN 和 PokeFinder 子模块。 |
-| 2026-05-05 | 接入 Project_Xs 画面捕获、眼部预览、眨眼捕获、reidentify、TID/SID、眨眼监控、配置保存和 timeline。 |
-| 2026-05-05 | 增加 Seed 模型、RNG 核心、BDSP Static 生成器、数据表加载校验和初版 UI 整合。 |
-| 2026-05-05 | 完善捕捉界面、ROI 选择、结果表格、筛选、闪光验证、存档管理和定点页面布局。 |
-| 2026-05-05 至 2026-05-06 | 规划并实现伊机控后端、常驻 Bridge 协议、CLI 诊断、串口选择、日志和脚本体验。 |
-| 2026-05-07 | 大幅重做桌面 UI：窗口自由缩放、浅色原生风格、EasyCon 风格脚本面板、按键映射和虚拟手柄。 |
-| 2026-05-07 | 重构定点数据区、修复多处中文布局问题，并恢复 PokeFinder 原版个体值计算器逻辑。 |
-| 2026-05-08 | 新增自动定点乱数基础流程、状态机、UI 信号层、真实流程接入和目标锁定展示。 |
-| 2026-05-08 至 2026-05-09 | 调整过帧、reidentify、最终撞闪校准、脚本闪帧口径和 OCR 闪光判定。 |
-| 2026-05-10 | 集中修正自动撞闪触发时机、FINAL_WAIT、Bridge 执行时序、CLI 模式、诊断日志和 RNG 细节。 |
-| 2026-05-12 | C++ 原生 RNG 扩展，搜索性能提升 ~200 倍；修复 early rejection RNG 序列错误；反查 IV 公式修正并接入 C++ PokeFinder 公式；delay 三处修正；文本复制支持；CLI 默认模式；历史记录单行紧凑格式；单次模式死循环修复。 |
-| 2026-05-13 | 继续打磨自动定点乱数实机体验：增加多目标筛选弹窗和多条件记忆、从捕获 Seed 开始的入口、顶部自动流程状态、自动反查范围与文本复制；修复无候选循环停止、跨线程更新 Qt 界面、反查性格 / 个性口径、日志与策略栏布局；调整标签页顺序，并让开始按钮以主按钮样式显示。 |
-
-最近的修正重点集中在自动流程的实机时序：保持 reidentify 后原始 seed 基准、修正非游走定点 SID/TID RNG 序列、使用 EC 计算个性、避免 FINAL_WAIT 双重扣除闪帧、在 CLI / Bridge 路径上减少额外延迟，并修复定点结果个性显示偏差。
-
-## C++ 原生 RNG 扩展
-
-BDSP 定点搜索和 Project_Xs reidentify 的核心 RNG 计算已从纯 Python 移植为 C++17 + pybind11 扩展模块（`src/auto_bdsp_rng/rng_core/native/`）。模块包含 Xorshift / Xoroshiro / RNGList 环形缓冲区 / StaticGenerator8，以及普通 reidentify 与 `Reidentify 1 PK NPC` noisy reidentify；原生结果按 Project_Xs 逻辑对齐。Python 侧在 import 成功时优先走 C++ 路径，未编译、输入不支持或原生搜索无匹配时回退到 Python 实现。
-
-构建依赖 `pybind11>=2.12` 和 `/utf-8` MSVC 编译选项已加入 `setup.py` 与 `pyproject.toml`。安装项目时自动编译：
-
-```powershell
-pip install -e .
-```
-
-### RNG 序列修正
-
-早期版本在非游走定点生成器中使用了“提前拒绝”优化：当异色不匹配时直接 `continue` 跳过 IV 等后续 RNG 消耗。这导致 RNGList 环形缓冲区位点偏移，后续帧读取的 height / weight / nature 等值与 PokeFinder 不一致。现已改为每帧完整计算所有属性、末尾统一过滤，与 PokeFinder 行为完全一致。
-
-### 反查 IV 反算
-
-反查流程中的“能力值 → 个体值范围”反算，之前 Python 实现缺少 Gen 8 非 HP 公式中的 `+ 5` 项，导致推算出的 IV 范围与实际不符，反查搜索始终零候选。修复后改用 C++ 内置的 `compute_iv_ranges`（基于 PokeFinder `Nature::computeStat` 公式），带 Python fallback。
-
-### IV 计算器
-
-定点数据区的个体值计算器同样接入 C++ 公式，支持未知性格时尝试全部三种修正（1.0 / 0.9 / 1.1）。
-
-### delay 定义
-
-三处 delay 含义全部修正：
-- **周期结果显示**：改为用户填入的 `fixed_delay`（之前错误地使用 `remaining_to_trigger`）
-- **反查日志**：`actual_delay = 实际帧数 - 目标帧数 + fixed_delay`
-- **历史面板反查候选**：由调用方传入计算好的 delay 值
-
-### 文本复制
-
-所有只读文本视图（自动定点日志、历史记录、当前目标列表、伊机控输出）统一添加右键上下文菜单，`createStandardContextMenu` 返回空时显式添加「复制 Ctrl+C」「全选 Ctrl+A」菜单项。
-
-### 历史记录候选格式
-
-普通搜索和重新筛选得到的候选使用可横向滚动的表格显示，按列展示状态、Adv、异色、性格、六项个体值、特性、性别、EC、PID、身高和体重。锁定候选使用浅绿色行背景，同步来源保留文字状态，异色单元格单独突出，便于直接比较多个候选。
-
-普通搜索候选不显示全局 `fixed_delay`，因为它不是候选本身的属性；反查候选使用相同的表格结构，并额外显示逐项计算得到的实际 `delay` 和 OCR 个性。历史结果同时记录脚本启动 Adv，并明确区分“无候选”和“未出闪”。
-
-### 历史：CLI 默认模式
-
-旧版本曾默认选中「CLI 模式」。当前版本已由 Python 原生后端取代该产品路径；这段仅保留为版本演进记录。
-
-### 单次模式死循环修复
-
-单次模式下无候选时直接结束（`COMPLETED`），不再重新跑测种脚本死循环。
+| 2026-05-04 至 05-13 | 完成 Project_Xs、PokeFinder 口径定点生成、初版伊机控、自动定点、多目标、自动反查、历史记录和 Windows 绿色包。 |
+| 2026-05-14 至 05-17 | 重做现代桌面 UI 与紧凑布局，加入脚本录制、主动触发撞闪、活帧推进、录像和更完整的历史输出。 |
+| 2026-05-19 至 05-22 | 加入八项精灵信息 OCR 区域、完整翻页测试、过场/预留帧流程，以及自动 TID、Display TID 目标池和 ID 脚本。 |
+| 2026-05-23 至 05-31 | 发布 2.x 系列并集中修正 OCR 判闪、停止处理、TID 推进、反查、游戏版本与异常眼图死循环。 |
+| 2026-06-14 至 07-11 | 调整自动策略默认值，并让普通及 `1 PK NPC` 校正优先使用 C++ 原生计算。 |
+| 2026-08-05 至 08-13 | 加入捕捉期间 `L` 键保活、后续轮次放大模式恢复、OCR 生命周期优化和首次默认 OCR 区域。 |
+| 2026-08-22 至 08-23 | 加入七天运行日志、OBS 投影窗口捕获、校正术语、逃跑续搜、`神奥图鉴过帧.txt` 和文件级升级器。 |
+| 2026-08-25 至 08-28 | 加入第九项判闪对话区域，并重做可配置判闪 OCR、共享 Capture Broker、全局视频源、原生伊机控、繁体 OCR、候选表和响应式预览。 |
+| 2026-08-30 | 统一 exe 同级 `script` 目录和脚本迁移，默认启用每日日志与启动更新检查，正式发布 `v3.0.0`。 |
 
 ## 上游依赖与许可
 
-- Project_Xs_CHN: https://github.com/HaKu76/Project_Xs_CHN
-  - 当前子模块版本：`b6cfaaeca8aa6a95e2f07ccaef606e301fa8ad7a`
-  - 许可：MIT License
-- PokeFinder: https://github.com/Admiral-Fish/PokeFinder
-  - 当前子模块版本：`2d5c6afed9240f2bdb98634b5b8b1fab352aefa5`（v4.3.2）
-  - 许可：GPL-3.0 License
+- [Project_Xs_CHN](https://github.com/HaKu76/Project_Xs_CHN)：子模块 `b6cfaaeca8aa6a95e2f07ccaef606e301fa8ad7a`，MIT License。
+- [PokeFinder](https://github.com/Admiral-Fish/PokeFinder)：子模块 `2d5c6afed9240f2bdb98634b5b8b1fab352aefa5`（v4.3.2），GPL-3.0 License。
 
-本项目 `pyproject.toml` 声明为 `GPL-3.0-or-later`。如果分发包含或移植自 PokeFinder 的实现，需要遵守 GPL-3.0 及相关源代码开放要求。
+本项目按 [GPL-3.0-or-later](LICENSE.txt) 发布。分发包含或移植自 PokeFinder 的实现时，需要遵守 GPL-3.0 及相关源代码开放要求。
 
-## 当前注意事项
+## 使用注意
 
-- 该工具强依赖 Windows 桌面环境、游戏画面捕获、脚本执行时序和本机串口状态，实机运行前请先用小脚本确认伊机控连接正常。
-- 自动定点乱数流程对 `fixed_delay`、脚本内 `_闪帧`、OCR 阈值和实际画面响应时间敏感，建议先做少量目标校准。
-- `third_party` 目录主要用于上游参考和对照，不建议直接在子模块内改业务逻辑。
+- 工具依赖 Windows 桌面环境、采集卡、游戏画面、串口状态和脚本时序；实机运行前请先分别验证视频源、眼图和短按键脚本。
+- 系统休眠会中断视频和自动流程；关闭显示器也可能受采集驱动或 OBS 状态影响。捕捉保活只负责有限的眨眼捕捉阶段，不是全程防休眠机制。
+- `fixed_delay`、脚本 `_闪帧`、判闪阈值和画面响应时间需要按设备校准，尤其不要直接把其他设备的参数当成最终值。
+- 更新器会保留用户脚本，但重要自定义脚本仍建议自行备份；`third_party` 目录用于上游参考，不建议直接修改业务逻辑。
