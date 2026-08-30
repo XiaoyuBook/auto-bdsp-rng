@@ -19,6 +19,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_HIT_PARAMETER,
     ROAMER_SPECIES,
+    STARTER_SPECIES,
     prepare_advance_script_text,
     prepare_hit_script_text,
     prepare_teleport_slot_script_text,
@@ -1257,7 +1258,11 @@ class AutoRngRunner:
         return None
 
     def _handle_shiny_check_result(self, result: ShinyCheckResult, path: object) -> None:
-        if result.interval_seconds is None and self.config.target_species in ROAMER_SPECIES:
+        requires_manual_confirmation = (
+            self.config.target_species in ROAMER_SPECIES
+            or self.config.target_species in STARTER_SPECIES
+        )
+        if result.interval_seconds is None and requires_manual_confirmation:
             self._stop_for_unknown_shiny_result(path)
             return
         interval_text = "-" if result.interval_seconds is None else f"{result.interval_seconds:.3f}s"

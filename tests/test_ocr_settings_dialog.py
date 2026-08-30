@@ -13,6 +13,7 @@ from PySide6.QtTest import QTest
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
     OCR_REGION_FIELDS,
     SHINY_DIALOG_REGION_FIELD,
+    STARTER_BATTLE_REGION_FIELD,
     OcrRegion,
 )
 from auto_bdsp_rng.ui import MainWindow
@@ -35,6 +36,7 @@ _EXPECTED_DEFAULT_OCR_REGIONS = {
     "sp_defense": OcrRegion(218, 487, 85, 42),
     "speed": OcrRegion(475, 596, 85, 39),
     SHINY_DIALOG_REGION_FIELD: OcrRegion(6, 895, 1914, 175),
+    STARTER_BATTLE_REGION_FIELD: OcrRegion(1540, 620, 170, 95),
 }
 
 
@@ -80,7 +82,7 @@ def test_ocr_settings_dialog_is_non_modal_and_lists_all_fields(app, tmp_path):
 
     assert not dialog.isModal()
     assert dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
-    assert dialog.table.rowCount() == 9
+    assert dialog.table.rowCount() == 10
     assert [dialog.table.item(row, 0).text() for row in range(dialog.table.rowCount())] == [
         "性格",
         "个性",
@@ -91,6 +93,7 @@ def test_ocr_settings_dialog_is_non_modal_and_lists_all_fields(app, tmp_path):
         "特防",
         "速度",
         "判闪对话区域",
+        "御三家战斗区域",
     ]
     assert dialog.table.verticalHeader().defaultSectionSize() >= 52
     assert dialog.table.minimumHeight() >= 470
@@ -135,6 +138,52 @@ def test_ocr_settings_dialog_marks_malformed_shiny_dialog_config(app, tmp_path):
     assert dialog.region_config.has_invalid_custom(SHINY_DIALOG_REGION_FIELD)
     assert dialog.resolve_region(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == OcrRegion(0, 360, 1280, 360)
     assert dialog.table.item(row, 2).text() == "配置无效，使用默认"
+
+
+def test_starter_battle_region_uses_calibrated_default_and_dynamic_fallback(app, tmp_path):
+    dialog = OcrSettingsDialog(settings=_settings(tmp_path))
+    row = dialog._field_rows[STARTER_BATTLE_REGION_FIELD]
+    default_region = _EXPECTED_DEFAULT_OCR_REGIONS[STARTER_BATTLE_REGION_FIELD]
+
+    assert dialog.region_config.get(STARTER_BATTLE_REGION_FIELD) == default_region
+    assert dialog.table.item(row, 1).text() == "1540, 620, 170, 95"
+    assert dialog.table.item(row, 2).text() == "已设置"
+    assert dialog.resolve_region(STARTER_BATTLE_REGION_FIELD, (1080, 1920, 3)) == default_region
+    assert dialog.resolve_region(STARTER_BATTLE_REGION_FIELD, (720, 1280, 3)) == OcrRegion(1027, 413, 113, 64)
+
+
+def test_starter_battle_actions_persist_and_reset_to_dynamic_default(app, tmp_path):
+    settings = _settings(tmp_path)
+    dialog = OcrSettingsDialog(settings=settings)
+    custom_region = OcrRegion(1000, 420, 180, 90)
+    selections = []
+    displays = []
+    recognitions = []
+    dialog.regionSelectionRequested.connect(selections.append)
+    dialog.regionDisplayRequested.connect(lambda field, region: displays.append((field, region)))
+    dialog.recognitionRequested.connect(lambda field, region: recognitions.append((field, region)))
+
+    dialog.set_region(STARTER_BATTLE_REGION_FIELD, custom_region)
+    dialog.request_selection(STARTER_BATTLE_REGION_FIELD)
+    dialog.show_region(STARTER_BATTLE_REGION_FIELD)
+    dialog.recognize_field(STARTER_BATTLE_REGION_FIELD)
+
+    assert selections == [STARTER_BATTLE_REGION_FIELD]
+    assert displays == [(STARTER_BATTLE_REGION_FIELD, custom_region)]
+    assert recognitions == [(STARTER_BATTLE_REGION_FIELD, custom_region)]
+    assert settings.value(f"regions/{STARTER_BATTLE_REGION_FIELD}") == "[1000, 420, 180, 90]"
+    dialog.finish_recognition(STARTER_BATTLE_REGION_FIELD, "战斗")
+
+    restored = OcrSettingsDialog(settings=settings)
+    assert restored.region_config.get(STARTER_BATTLE_REGION_FIELD) == custom_region
+    restored.reset_region(STARTER_BATTLE_REGION_FIELD)
+
+    row = restored._field_rows[STARTER_BATTLE_REGION_FIELD]
+    assert restored.region_config.get(STARTER_BATTLE_REGION_FIELD) is None
+    assert restored.resolve_region(STARTER_BATTLE_REGION_FIELD, (720, 1280, 3)) == OcrRegion(1027, 413, 113, 64)
+    assert "按当前帧比例" in restored.table.item(row, 1).text()
+    assert restored.table.item(row, 2).text() == "默认"
+    assert settings.value(f"regions/{STARTER_BATTLE_REGION_FIELD}") == ""
 
 
 def test_ocr_settings_dialog_preserves_legacy_partial_regions(app, tmp_path):
@@ -237,17 +286,18 @@ def test_shiny_dialog_custom_region_persists_and_reset_restores_dynamic_default(
     assert settings.value(f"regions/{SHINY_DIALOG_REGION_FIELD}") == ""
 
 
-def test_ocr_settings_dialog_test_all_excludes_shiny_dialog_region(app, tmp_path):
+def test_ocr_settings_dialog_test_all_excludes_timing_regions(app, tmp_path):
     dialog = OcrSettingsDialog(settings=_settings(tmp_path))
     emitted = []
-    row = dialog._field_rows[SHINY_DIALOG_REGION_FIELD]
+    timing_fields = (SHINY_DIALOG_REGION_FIELD, STARTER_BATTLE_REGION_FIELD)
     dialog.fullTestRequested.connect(lambda: emitted.append(True))
-    dialog.set_recognition_result(SHINY_DIALOG_REGION_FIELD, "保留结果")
+    for field in timing_fields:
+        dialog.set_recognition_result(field, "保留结果")
 
     dialog.test_all()
 
     assert emitted == [True]
-    assert dialog.table.item(row, 4).text() == "保留结果"
+    assert all(dialog.table.item(dialog._field_rows[field], 4).text() == "保留结果" for field in timing_fields)
     dialog.finish_full_test(True, "测试全部完成")
 
 

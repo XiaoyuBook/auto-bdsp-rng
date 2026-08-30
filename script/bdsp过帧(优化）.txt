@@ -1,0 +1,194 @@
+_目标帧数 = 8000000
+_翻全国图鉴 = 7500
+_翻神奥图鉴 = 2500
+_翻页 = 180
+# 0关，1开，用于切换精灵到队首（同步放第二位）
+$精灵切换开关 = 0
+$地下过帧 = 0 # 0是不地下过帧，1是地下过帧
+$目标帧数 = _目标帧数 - 300 #预留5分钟
+IF $精灵切换开关 == 1
+$目标帧数 -= 300
+ENDIF
+$剩余帧数 = $目标帧数
+$翻全国图鉴时间 = 4000# 全国图鉴大概4000ms
+$翻神奥图鉴时间 = 2000# 神奥图鉴大概2000ms
+$重置图鉴 = 0#防止过帧时间太长，导致卡顿
+
+# 自动计算操作次数：先用大单位，最后用翻页补剩余
+$翻全国图鉴次数 = $剩余帧数 / _翻全国图鉴
+$剩余帧数 = $剩余帧数 % _翻全国图鉴
+$翻神奥图鉴次数 = $剩余帧数 / _翻神奥图鉴
+$剩余帧数 = $剩余帧数 % _翻神奥图鉴
+$翻页次数 = $剩余帧数 / _翻页
+$剩余帧数 = $剩余帧数 % _翻页
+PRINT 全国图鉴 & $翻全国图鉴次数 & 次
+PRINT 神奥图鉴 & $翻神奥图鉴次数 & 次
+PRINT 翻页 & $翻页次数 & 次
+
+WAIT 1000
+IF $地下过帧 == 1
+B 200
+WAIT 200
+LS DOWN
+WAIT 2000
+LS RESET
+WAIT 3500#出去洞窟需根据设备情况修改时间
+ELSE
+WAIT 1000
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 50
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 1000
+A
+WAIT 1000
+ENDIF
+IF $精灵切换开关 == 1
+CALL 切换宝可梦
+WAIT 1000
+ENDIF
+X# 打开菜单
+WAIT 1500
+A# 打开图鉴
+WAIT 1500
+# 开始翻图鉴
+IF $翻全国图鉴次数 >=50
+$翻全国图鉴次数 -= 1
+FOR $翻全国图鉴次数
+        RS RIGHT
+        LS RIGHT
+        WAIT 2200  #翻不完一页就改这里参数
+        DOWN
+        WAIT 150
+        $重置图鉴 += 1
+        IF $重置图鉴 == 50
+            $重置图鉴 = 0
+            RS RESET
+            LS RESET
+            LS DOWN,200
+            WAIT 200
+            B 200
+            WAIT 1000
+            A 500
+        ENDIF
+NEXT
+$翻全国图鉴次数 += 1
+    RS RESET
+    LS RESET
+ENDIF
+IF $翻全国图鉴次数 < 50
+    FOR $翻全国图鉴次数
+        RIGHT $翻全国图鉴时间#根据需求修改时间
+        WAIT 200
+        $重置图鉴 += 1
+        IF $重置图鉴 == 50# 每过100次图鉴需要重置一下
+            $重置图鉴 = 0
+            B
+            WAIT 5000
+            A
+            WAIT 1000
+        ENDIF
+    NEXT
+    RIGHT
+    WAIT 100
+ENDIF
+IF $翻神奥图鉴次数 != 0
+    L
+    WAIT 1000
+    FOR $翻神奥图鉴次数
+        RIGHT $翻神奥图鉴时间
+        WAIT 200
+    NEXT
+    RIGHT
+    WAIT 1000
+    L
+    WAIT 1000
+ENDIF
+IF $翻页次数 != 0
+    $右翻页次数 = $翻页次数 + 1
+    $右翻页次数 = $右翻页次数 / 2# 奇数时右边多翻1次
+    $左翻页次数 = $翻页次数 / 2
+    FOR $右翻页次数
+        RIGHT
+        WAIT 300
+    NEXT
+    FOR $左翻页次数
+        LEFT
+        WAIT 300
+    NEXT
+ENDIF
+
+WAIT 2000
+#关闭图鉴
+B
+WAIT 2000
+#关闭菜单
+B
+WAIT 1000
+IF $地下过帧 == 1
+#回到洞穴最深处
+LS UP
+WAIT 500#移动到洞穴口
+LS RESET
+WAIT 100
+A# 打开进入洞穴确认框
+WAIT 2000
+A# 确认进入洞穴
+LS UP
+WAIT 6500# 可根据设备情况修改时间
+LS RESET
+WAIT 1000
+Y
+ELSE
+PLUS DOWN #打开道具栏
+WAIT 1000
+PLUS UP
+WAIT 1000
+RIGHT  # 根据个人情况修改，使用钓鱼竿
+WAIT 1000
+A
+WAIT 1000
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 50
+HOME DOWN
+WAIT 100
+HOME UP
+WAIT 1000
+ENDIF
+WAIT 1000
+
+
+FUNC 切换宝可梦
+X # 打开菜单
+WAIT 1500
+RIGHT
+WAIT 2000
+A  # 进入宝可梦
+WAIT 1000
+DOWN # 将同步宝可梦放在第二位
+WAIT 1000
+A
+WAIT 1000
+FOR 4 # 选择替换按钮，防止有特殊技能，使用上选择
+UP
+WAIT 400
+NEXT
+WAIT 400
+A
+WAIT 400
+UP  # 和第一只精灵交换
+WAIT 400
+A # 确认交换
+WAIT 400
+B
+WAIT 1000
+LEFT
+WAIT 1000
+B
+WAIT 1000
+ENDFUNC

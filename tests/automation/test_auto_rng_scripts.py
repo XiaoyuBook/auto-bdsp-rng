@@ -9,6 +9,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_HIT_PARAMETER,
     AUTO_TELEPORT_SLOT_PARAMETER,
     ROAMER_SPECIES,
+    STARTER_SPECIES,
     TELEPORT_SLOT_SPECIES,
     AutoScriptError,
     list_auto_scripts,
@@ -49,6 +50,10 @@ def test_prepare_hit_script_replaces_flash_frames_and_preserves_format():
 
 def test_teleport_slot_species_are_mesprit_and_cresselia():
     assert ROAMER_SPECIES == TELEPORT_SLOT_SPECIES == {481, 488}
+
+
+def test_starter_species_are_turtwig_chimchar_and_piplup():
+    assert STARTER_SPECIES == {387, 390, 393}
 
 
 @pytest.mark.parametrize("target_species", [481, 488])

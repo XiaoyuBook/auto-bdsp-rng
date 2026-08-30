@@ -1674,7 +1674,7 @@ def test_runner_keeps_old_non_shiny_behavior_without_escape_candidate(
     assert "未出闪" in runner.progress.log_message
 
 
-def test_runner_escape_continue_treats_shiny_timeout_as_non_shiny(tmp_path):
+def test_runner_ordinary_species_treats_shiny_timeout_as_non_shiny(tmp_path):
     hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
     scripts: list[str] = []
     progress_messages: list[str] = []
@@ -1688,6 +1688,7 @@ def test_runner_escape_continue_treats_shiny_timeout_as_non_shiny(tmp_path):
             hit_script_path=hit_script,
             escape_script_path=escape_script,
             escape_continue=True,
+            target_species=492,
             start_phase=AutoRngPhase.CAPTURE_SEED,
             fixed_delay=1200,
             max_wait_frames=300,
@@ -1713,8 +1714,8 @@ def test_runner_escape_continue_treats_shiny_timeout_as_non_shiny(tmp_path):
     assert any("OCR 超时，按未出闪继续" in message for message in progress_messages)
 
 
-@pytest.mark.parametrize("target_species", [481, 488])
-def test_runner_roamer_unknown_shiny_result_stops_for_manual_confirmation(
+@pytest.mark.parametrize("target_species", [481, 488, 387, 390, 393])
+def test_runner_special_species_unknown_shiny_result_stops_for_manual_confirmation(
     tmp_path,
     target_species,
 ):

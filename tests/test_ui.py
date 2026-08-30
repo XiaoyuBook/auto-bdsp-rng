@@ -2717,6 +2717,54 @@ def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app,
     assert window.calibrate_shiny_threshold_button.text() == "校准闪光判定"
 
 
+def test_starter_shiny_threshold_calibration_uses_two_stage_regions(app, monkeypatch):
+    window = MainWindow()
+    record = next(
+        item for item in main_window_module.get_static_encounters()
+        if item.template.species == 387
+    )
+    window.auto_rng_tab.set_targets([(record, StateFilter(), "any")])
+    slices: list[object] = []
+    calls: list[dict[str, object]] = []
+    shown: list[float] = []
+
+    class FakeFrame:
+        shape = (1080, 1920, 3)
+
+        def __getitem__(self, key):
+            slices.append(key)
+            return key
+
+    def fake_measure_keyword_interval(capture_frame, _read_text, **kwargs):
+        capture_frame()
+        kwargs["second_capture_frame"]()
+        calls.append(kwargs)
+        return SimpleNamespace(interval_seconds=2.5)
+
+    monkeypatch.setattr(window, "_ocr_region_config", OcrRegionConfig)
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: FakeFrame())
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure_keyword_interval)
+    monkeypatch.setattr(window, "_show_shiny_threshold_dialog", lambda interval: shown.append(interval))
+
+    window.calibrate_shiny_threshold()
+
+    for _ in range(20):
+        if shown:
+            break
+        QTest.qWait(50)
+
+    assert shown == [2.5]
+    assert len(calls) == 1
+    assert calls[0]["first_keyword"] == "上吧"
+    assert calls[0]["second_keyword"] == ("战斗", "戰鬥")
+    assert callable(calls[0]["second_capture_frame"])
+    assert slices == [
+        (slice(540, 1080, None), slice(0, 1920, None)),
+        (slice(620, 715, None), slice(1540, 1710, None)),
+    ]
+    assert "开始监控 上吧 -> 战斗按钮出现" in window.auto_rng_tab.log_view.toPlainText()
+
+
 def test_auto_rng_panel_includes_editable_shiny_threshold_in_config(app, tmp_path):
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
@@ -4660,7 +4708,98 @@ def test_non_roamer_shiny_ocr_starts_while_script_is_running(app, tmp_path, monk
     window._video_source_connected = False
 
 
-def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("target_species", [387, 390, 393])
+def test_starter_shiny_check_uses_shangba_then_independent_battle_roi(
+    app,
+    tmp_path,
+    monkeypatch,
+    target_species,
+):
+    window = MainWindow()
+    logs: list[str] = []
+    slices: list[object] = []
+    measure_calls: list[dict[str, object]] = []
+
+    class FakeFrame:
+        shape = (1080, 1920, 3)
+
+        def __getitem__(self, key):
+            slices.append(key)
+            return key
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            return "ok"
+
+        def stop_current_script(self) -> None:
+            return None
+
+    def fake_measure(capture_frame, _read_text, **kwargs):
+        assert capture_frame() == (slice(540, 1080, None), slice(0, 1920, None))
+        second_capture = kwargs["second_capture_frame"]
+        assert second_capture() == (slice(620, 715, None), slice(1540, 1710, None))
+        callback = kwargs["event_callback"]
+        first = main_window_module.DialogTimingEvent("first_seen", 101.25, 1.25, keyword="上吧")
+        second = main_window_module.DialogTimingEvent("second_seen", 104.75, 4.75, 3.5, "战斗")
+        callback(main_window_module.DialogTimingEvent("monitor_started", 100.0, 0.0))
+        callback(first)
+        callback(second)
+        measure_calls.append(kwargs)
+        return DialogTimingResult(101.25, 104.75, 3.5, (first, second))
+
+    window.auto_rng_tab.captureLog.connect(logs.append)
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
+    monkeypatch.setattr(window, "_ocr_region_config", OcrRegionConfig)
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: FakeFrame())
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure)
+
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            target_species=target_species,
+            shiny_threshold_seconds=3.0,
+        )
+    )
+    result = services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0)
+
+    assert result == main_window_module.ShinyCheckResult(
+        is_shiny=True,
+        interval_seconds=3.5,
+        first_event_text="上吧",
+        second_event_text="战斗",
+    )
+    assert len(measure_calls) == 1
+    assert measure_calls[0]["first_keyword"] == "上吧"
+    assert measure_calls[0]["second_keyword"] == ("战斗", "戰鬥")
+    assert callable(measure_calls[0]["second_capture_frame"])
+    assert slices == [
+        (slice(540, 1080, None), slice(0, 1920, None)),
+        (slice(620, 715, None), slice(1540, 1710, None)),
+    ]
+    assert any("御三家战斗区域有效 ROI" in message for message in logs)
+    assert any("识别到「上吧」" in message for message in logs)
+    assert any("识别到「战斗」" in message and "关键词间隔 3.500s" in message for message in logs)
+
+
+@pytest.mark.parametrize(
+    ("target_species", "expected_stage", "expected_action", "first_event_text", "second_event_text"),
+    [
+        (492, "出现了", "按未出闪继续自动流程", "出现了", "去吧"),
+        (387, "上吧", "停止自动流程并等待人工确认", "上吧", "战斗"),
+    ],
+)
+def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(
+    app,
+    tmp_path,
+    monkeypatch,
+    target_species,
+    expected_stage,
+    expected_action,
+    first_event_text,
+    second_event_text,
+):
     window = MainWindow()
     stops: list[bool] = []
     logs: list[str] = []
@@ -4691,16 +4830,23 @@ def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(app, tmp_path
 
     monkeypatch.setattr(main_window_module, "measure_keyword_interval", raise_timeout)
     services = window._build_auto_rng_services(
-        AutoRngConfig(script_dir=tmp_path, escape_continue=True, shiny_threshold_seconds=2.8)
+        AutoRngConfig(
+            script_dir=tmp_path,
+            escape_continue=True,
+            target_species=target_species,
+            shiny_threshold_seconds=2.8,
+        )
     )
 
     result = services.run_hit_script_with_shiny_check("A 100", "hit.txt", 2.8)
 
     assert result.is_shiny is False
     assert result.interval_seconds is None
+    assert result.first_event_text == first_event_text
+    assert result.second_event_text == second_event_text
     assert stops == []
-    assert any("阶段=等待" in message and "出现了" in message for message in logs)
-    assert any("按未出闪继续自动流程" in message for message in logs)
+    assert any("阶段=等待" in message and expected_stage in message for message in logs)
+    assert any(expected_action in message for message in logs)
 
 
 def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times(app, tmp_path, monkeypatch):
@@ -4721,6 +4867,9 @@ def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times
 
     def fake_measure(capture_frame, _read_text, **kwargs):
         assert capture_frame() == "dialog-roi"
+        assert kwargs["first_keyword"] == "出现了！"
+        assert kwargs["second_keyword"] == ("去吧", "上吧")
+        assert kwargs["second_capture_frame"] is None
         callback = kwargs["event_callback"]
         callback(main_window_module.DialogTimingEvent("monitor_started", 100.0, 0.0))
         first = main_window_module.DialogTimingEvent("first_seen", 101.25, 1.25, keyword="出现了！")
@@ -4736,7 +4885,9 @@ def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times
     monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: FakeFrame())
     monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure)
 
-    services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path, shiny_threshold_seconds=3.0))
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, target_species=492, shiny_threshold_seconds=3.0)
+    )
     result = services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0)
 
     assert result == main_window_module.ShinyCheckResult(is_shiny=True, interval_seconds=3.5)
@@ -4750,6 +4901,7 @@ def test_main_window_auto_rng_shiny_check_crops_default_roi_and_logs_event_times
     assert any("有效 ROI" in message and "Y=50" in message and "H=50" in message for message in logs)
     assert any("识别到「出现了! / 出现了！」" in message and "监控累计 1.250s" in message for message in logs)
     assert any("识别到「上吧」" in message and "关键词间隔 3.500s" in message for message in logs)
+    assert not any("御三家战斗区域" in message for message in logs)
 
 
 def test_main_window_auto_rng_shiny_check_propagates_script_error_before_ocr_result(app, tmp_path, monkeypatch):

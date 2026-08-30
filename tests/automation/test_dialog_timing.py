@@ -177,6 +177,94 @@ def test_measure_keyword_interval_accepts_shangba_as_second_keyword():
     assert result.events[-1].keyword == "上吧"
 
 
+@pytest.mark.parametrize("battle_text", ["战斗", "戰鬥"])
+def test_measure_keyword_interval_switches_callbacks_after_shangba(battle_text):
+    clock = _FakeClock()
+    first_frames = iter(["dialog-before", "dialog-shangba"])
+    second_frames = iter(["battle-hud"])
+    calls: list[tuple[str, object]] = []
+
+    def capture_first():
+        frame = next(first_frames)
+        calls.append(("capture:first", frame))
+        return frame
+
+    def read_first(frame):
+        calls.append(("read:first", frame))
+        return "战斗" if frame == "dialog-before" else "上吧！草苗龟！"
+
+    def capture_second():
+        frame = next(second_frames)
+        calls.append(("capture:second", frame))
+        return frame
+
+    def read_second(frame):
+        calls.append(("read:second", frame))
+        return battle_text
+
+    result = measure_keyword_interval(
+        capture_first,
+        read_first,
+        first_keyword="上吧",
+        second_keyword=("战斗", "戰鬥"),
+        second_capture_frame=capture_second,
+        second_read_text=read_second,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        timeout_seconds=1.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result.interval_seconds == pytest.approx(0.1)
+    assert result.events[1].keyword == "上吧"
+    assert result.events[2].keyword == battle_text
+    assert calls == [
+        ("capture:first", "dialog-before"),
+        ("read:first", "dialog-before"),
+        ("capture:first", "dialog-shangba"),
+        ("read:first", "dialog-shangba"),
+        ("capture:second", "battle-hud"),
+        ("read:second", "battle-hud"),
+    ]
+
+
+def test_measure_keyword_interval_defaults_to_primary_callbacks_for_both_stages():
+    clock = _FakeClock()
+    frames = iter(["appeared-frame", "go-frame"])
+    texts = {
+        "appeared-frame": "谢米出现了！",
+        "go-frame": "去吧！图图犬！",
+    }
+    calls: list[tuple[str, object]] = []
+
+    def capture():
+        frame = next(frames)
+        calls.append(("capture", frame))
+        return frame
+
+    def read(frame):
+        calls.append(("read", frame))
+        return texts[frame]
+
+    result = measure_keyword_interval(
+        capture,
+        read,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        timeout_seconds=1.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result.interval_seconds == pytest.approx(0.1)
+    assert result.events[-1].keyword == "去吧"
+    assert calls == [
+        ("capture", "appeared-frame"),
+        ("read", "appeared-frame"),
+        ("capture", "go-frame"),
+        ("read", "go-frame"),
+    ]
+
+
 @pytest.mark.parametrize("first_text", ["谢米出现了!", "谢米出现了！"])
 def test_measure_keyword_interval_accepts_halfwidth_and_fullwidth_exclamation(first_text):
     clock = _FakeClock()

@@ -13,6 +13,7 @@ from auto_bdsp_rng.automation.easycon.scripts import (
 AUTO_ADVANCE_PARAMETER = "_目标帧数"
 AUTO_HIT_PARAMETER = "_闪帧"
 AUTO_TELEPORT_SLOT_PARAMETER = "_瞬移精灵槽位"
+STARTER_SPECIES = frozenset({387, 390, 393})
 ROAMER_SPECIES = frozenset({481, 488})
 TELEPORT_SLOT_SPECIES = ROAMER_SPECIES
 DEFAULT_SEED_SCRIPT_NAME = "BDSP测种.txt"

@@ -96,9 +96,11 @@ from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
 )
 from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
+    DYNAMIC_DEFAULT_REGION_FIELDS,
     NOTE_REGION_FIELDS,
     OCR_REGION_LABELS,
     SHINY_DIALOG_REGION_FIELD,
+    STARTER_BATTLE_REGION_FIELD,
     STAT_REGION_FIELDS,
     OcrRegion,
 )
@@ -108,7 +110,7 @@ from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     warm_up_pokemon_info_ocr,
 )
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices, ProjectXsAdvanceCounter
-from auto_bdsp_rng.automation.auto_rng.scripts import ROAMER_SPECIES
+from auto_bdsp_rng.automation.auto_rng.scripts import ROAMER_SPECIES, STARTER_SPECIES
 from auto_bdsp_rng.automation.auto_rng.search import (
     StaticSearchCriteria,
     StaticSearchTarget,
@@ -1330,9 +1332,19 @@ class ShinyThresholdCalibrationWorker(QObject):
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, capture_frame: Callable[[], object]) -> None:
+    def __init__(
+        self,
+        capture_frame: Callable[[], object],
+        *,
+        first_keyword: str = "出现了！",
+        second_keyword: str | tuple[str, ...] = ("去吧", "上吧"),
+        second_capture_frame: Callable[[], object] | None = None,
+    ) -> None:
         super().__init__()
         self._capture_frame = capture_frame
+        self._first_keyword = first_keyword
+        self._second_keyword = second_keyword
+        self._second_capture_frame = second_capture_frame
         self._cancel = threading.Event()
 
     def run(self) -> None:
@@ -1340,6 +1352,9 @@ class ShinyThresholdCalibrationWorker(QObject):
             result = measure_keyword_interval(
                 self._capture_frame,
                 read_ocr_text,
+                first_keyword=self._first_keyword,
+                second_keyword=self._second_keyword,
+                second_capture_frame=self._second_capture_frame,
                 should_stop=self._cancel.is_set,
                 timeout_seconds=45.0,
                 poll_interval_seconds=0.1,
@@ -5633,7 +5648,7 @@ class MainWindow(QMainWindow):
             if effective_region is None:
                 raise RuntimeError(f"{label} ROI 在当前画面中无效")
             used_fallback = regions.has_invalid_custom(field)
-            if field == SHINY_DIALOG_REGION_FIELD and configured_region is not None:
+            if field in DYNAMIC_DEFAULT_REGION_FIELDS and configured_region is not None:
                 image_height, image_width = image_shape[:2]
                 used_fallback = used_fallback or not configured_region.clip(image_width, image_height).is_valid()
             text = recognize_ocr_field(frame, field, effective_region)
@@ -5652,9 +5667,14 @@ class MainWindow(QMainWindow):
                 return
             frame, image_shape, effective_region, used_fallback, text = payload  # type: ignore[misc]
             if used_fallback:
+                fallback_label = (
+                    "画面下方 50%"
+                    if field == SHINY_DIALOG_REGION_FIELD
+                    else "当前画面的御三家战斗按钮默认范围"
+                )
                 self._write_run_log(
                     "OCR",
-                    f"{label}自定义 ROI 在当前画面中无效，已回退到画面下方 50%",
+                    f"{label}自定义 ROI 在当前画面中无效，已回退到{fallback_label}",
                     level="WARNING",
                 )
             self._write_run_log(
@@ -6169,31 +6189,42 @@ class MainWindow(QMainWindow):
 
         tracking_config = self._config_from_form()
         regions = self._ocr_region_config()
-        configured_region = regions.get(SHINY_DIALOG_REGION_FIELD)
-        roi_logged = False
+        try:
+            target_species = int(self.auto_rng_tab.targets()[0][0].template.species)
+        except (AttributeError, IndexError, TypeError, ValueError):
+            target_species = None
+        is_starter = target_species in STARTER_SPECIES
+        logged_fields: set[str] = set()
 
-        def capture_dialog_region() -> object:
-            nonlocal roi_logged
+        def capture_region(field: str) -> object:
             frame = self._capture_preview_frame_for_config(tracking_config.capture)
             image_shape = tuple(getattr(frame, "shape"))
-            region = regions.resolve(SHINY_DIALOG_REGION_FIELD, image_shape)
+            region = regions.resolve(field, image_shape)
+            label = OCR_REGION_LABELS[field]
             if region is None:
-                raise RuntimeError("判闪对话 ROI 在当前画面中无效")
-            if not roi_logged:
-                roi_logged = True
+                raise RuntimeError(f"{label} ROI 在当前画面中无效")
+            if field not in logged_fields:
+                logged_fields.add(field)
+                configured_region = regions.get(field)
                 image_height, image_width = image_shape[:2]
-                if regions.has_invalid_custom(SHINY_DIALOG_REGION_FIELD) or (
+                if regions.has_invalid_custom(field) or (
                     configured_region is not None
                     and not configured_region.clip(image_width, image_height).is_valid()
                 ):
+                    fallback_label = (
+                        "画面下方 50%"
+                        if field == SHINY_DIALOG_REGION_FIELD
+                        else "当前画面的御三家战斗按钮默认范围"
+                    )
                     self._write_run_log(
                         "OCR",
-                        "闪光判定校准的自定义 ROI 无效，已回退到画面下方 50%",
+                        f"闪光判定校准的{label}自定义 ROI 无效，已回退到{fallback_label}",
                         level="WARNING",
                     )
                 self._write_run_log(
                     "OCR",
-                    f"闪光判定校准有效 ROI: X={region.x}, Y={region.y}, W={region.width}, H={region.height}",
+                    f"闪光判定校准{label}有效 ROI: "
+                    f"X={region.x}, Y={region.y}, W={region.width}, H={region.height}",
                 )
                 dialog = self._ocr_settings_dialog
                 if dialog is not None:
@@ -6201,7 +6232,20 @@ class MainWindow(QMainWindow):
             x, y, width, height = region.as_tuple()
             return frame[y : y + height, x : x + width]
 
-        worker = ShinyThresholdCalibrationWorker(capture_dialog_region)
+        def capture_dialog_region() -> object:
+            return capture_region(SHINY_DIALOG_REGION_FIELD)
+
+        def capture_starter_battle_region() -> object:
+            return capture_region(STARTER_BATTLE_REGION_FIELD)
+
+        first_keyword = "上吧" if is_starter else "出现了！"
+        second_keyword: str | tuple[str, ...] = ("战斗", "戰鬥") if is_starter else ("去吧", "上吧")
+        worker = ShinyThresholdCalibrationWorker(
+            capture_dialog_region,
+            first_keyword=first_keyword,
+            second_keyword=second_keyword,
+            second_capture_frame=capture_starter_battle_region if is_starter else None,
+        )
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -6218,8 +6262,9 @@ class MainWindow(QMainWindow):
         if self._ocr_settings_dialog is not None:
             self._ocr_settings_dialog.set_automation_active(True)
         self.calibrate_shiny_threshold_button.setText("停止校准")
-        self.auto_rng_tab.captureLog.emit("[闪光判定校准] 开始监控 出现了！ -> 去吧")
-        self.statusBar().showMessage("正在后台监控 出现了 -> 去吧 对话框...")
+        event_text = "上吧 -> 战斗按钮出现" if is_starter else "出现了！ -> 去吧/上吧"
+        self.auto_rng_tab.captureLog.emit(f"[闪光判定校准] 开始监控 {event_text}")
+        self.statusBar().showMessage(f"正在后台监控 {event_text}...")
         thread.start()
 
     def _stop_shiny_threshold_calibration(self) -> None:
@@ -6904,6 +6949,7 @@ class MainWindow(QMainWindow):
         exit_tracking_config = replace(exit_tracking_config, reidentify_1_pk_npc=True)
         ocr_region_config = self._ocr_region_config()
         shiny_dialog_region = ocr_region_config.get(SHINY_DIALOG_REGION_FIELD)
+        starter_battle_region = ocr_region_config.get(STARTER_BATTLE_REGION_FIELD)
         self.auto_rng_tab.set_target_version(self._profile_version)
         target_entries = self.auto_rng_tab.targets()
         record, state_filter, shiny_mode = target_entries[0]
@@ -7292,12 +7338,17 @@ class MainWindow(QMainWindow):
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
             self._capture_cancel.clear()
             is_roamer = config.target_species in ROAMER_SPECIES
+            is_starter = config.target_species in STARTER_SPECIES
+            first_keyword = "上吧" if is_starter else "出现了！"
+            second_keywords: tuple[str, ...] = ("战斗", "戰鬥") if is_starter else ("去吧", "上吧")
+            first_event_label = "上吧" if is_starter else "出现了! / 出现了！"
+            second_event_label = "战斗" if is_starter else "去吧/上吧"
             errors: list[BaseException] = []
             script_done = threading.Event()
             roamer_battle_started = threading.Event()
             monitor_started_at = time.monotonic()
             wall_clock_offset = time.time() - time.monotonic()
-            roi_logged = False
+            logged_roi_fields: set[str] = set()
             first_event: DialogTimingEvent | None = None
 
             def observe_roamer_battle(result: object) -> None:
@@ -7322,7 +7373,7 @@ class MainWindow(QMainWindow):
                 finally:
                     script_done.set()
 
-            # 普通目标立即并行 OCR；游走目标先等待脚本确认进入战斗。
+            # 普通目标和御三家立即并行 OCR；游走目标先等待脚本确认进入战斗。
             script_thread = threading.Thread(target=run_script, daemon=True)
             try:
                 script_thread.start()
@@ -7355,27 +7406,37 @@ class MainWindow(QMainWindow):
                     script_thread.join(timeout=5.0)
                 raise
 
-            def capture_dialog_region() -> object:
-                nonlocal roi_logged
+            def capture_ocr_region(field: str) -> object:
                 frame = self._capture_preview_frame_for_config(tracking_config.capture)
                 image_shape = tuple(getattr(frame, "shape"))
-                effective_region = ocr_region_config.resolve(SHINY_DIALOG_REGION_FIELD, image_shape)
+                effective_region = ocr_region_config.resolve(field, image_shape)
+                label = OCR_REGION_LABELS[field]
                 if effective_region is None:
-                    raise RuntimeError("判闪对话 ROI 在当前画面中无效，且无法使用默认下方 50% 范围")
-                if not roi_logged:
-                    roi_logged = True
-                    if ocr_region_config.has_invalid_custom(SHINY_DIALOG_REGION_FIELD):
+                    raise RuntimeError(f"{label} ROI 在当前画面中无效，且无法使用默认范围")
+                if field not in logged_roi_fields:
+                    logged_roi_fields.add(field)
+                    configured_region = (
+                        shiny_dialog_region
+                        if field == SHINY_DIALOG_REGION_FIELD
+                        else starter_battle_region
+                    )
+                    fallback_label = (
+                        "当前画面下方 50%"
+                        if field == SHINY_DIALOG_REGION_FIELD
+                        else "当前画面的御三家战斗按钮默认范围"
+                    )
+                    if ocr_region_config.has_invalid_custom(field):
                         self.auto_rng_tab.captureLog.emit(
-                            "[OCR判闪] 判闪对话 ROI 配置无效，已回退到当前画面下方 50%"
+                            f"[OCR判闪] {label} ROI 配置无效，已回退到{fallback_label}"
                         )
-                    elif shiny_dialog_region is not None:
+                    elif configured_region is not None:
                         image_height, image_width = image_shape[:2]
-                        if not shiny_dialog_region.clip(image_width, image_height).is_valid():
+                        if not configured_region.clip(image_width, image_height).is_valid():
                             self.auto_rng_tab.captureLog.emit(
-                                "[OCR判闪] 自定义判闪对话 ROI 超出当前画面，已回退到下方 50%"
+                                f"[OCR判闪] 自定义{label} ROI 超出当前画面，已回退到{fallback_label}"
                             )
                     self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 有效 ROI：X={effective_region.x}, Y={effective_region.y}, "
+                        f"[OCR判闪] {label}有效 ROI：X={effective_region.x}, Y={effective_region.y}, "
                         f"W={effective_region.width}, H={effective_region.height}"
                     )
                     dialog = self._ocr_settings_dialog
@@ -7383,6 +7444,12 @@ class MainWindow(QMainWindow):
                         self._call_on_ui_thread(lambda: dialog.set_preview_frame_shape(image_shape))
                 x, y, width, height = effective_region.as_tuple()
                 return frame[y : y + height, x : x + width]
+
+            def capture_dialog_region() -> object:
+                return capture_ocr_region(SHINY_DIALOG_REGION_FIELD)
+
+            def capture_starter_battle_region() -> object:
+                return capture_ocr_region(STARTER_BATTLE_REGION_FIELD)
 
             def wall_clock(observed_at: float) -> str:
                 timestamp = observed_at + wall_clock_offset
@@ -7401,17 +7468,18 @@ class MainWindow(QMainWindow):
                     )
                     self.auto_rng_tab.captureLog.emit(
                         f"[OCR判闪] 开始监控：{observed}；"
+                        f"判定事件：「{first_event_label}」->「{second_event_label}」；"
                         f"{first_keyword_rule}"
                         "次关键词：识别首关键词后等待 30.000s；脚本硬超时 300.000s"
                     )
                 elif event.event == "first_seen":
                     first_event = event
                     self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 识别到「出现了! / 出现了！」：{observed}；"
+                        f"[OCR判闪] 识别到「{first_event_label}」：{observed}；"
                         f"监控累计 {event.elapsed_seconds:.3f}s"
                     )
                 elif event.event == "second_seen":
-                    keyword = event.keyword or "去吧/上吧"
+                    keyword = event.keyword or second_event_label
                     interval = event.interval_seconds or 0.0
                     self.auto_rng_tab.captureLog.emit(
                         f"[OCR判闪] 识别到「{keyword}」：{observed}；"
@@ -7419,7 +7487,7 @@ class MainWindow(QMainWindow):
                     )
                 elif event.event == "timeout_before_first":
                     self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 超时：阶段=等待「出现了! / 出现了！」；"
+                        f"[OCR判闪] 超时：阶段=等待「{first_event_label}」；"
                         f"原因=撞闪脚本完成后 30.000s 内未识别；超时时间={observed}；"
                         f"监控累计 {event.elapsed_seconds:.3f}s"
                     )
@@ -7427,7 +7495,7 @@ class MainWindow(QMainWindow):
                     first_time = "未知" if first_event is None else wall_clock(first_event.observed_at)
                     interval = event.interval_seconds or 0.0
                     self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 超时：阶段=等待「去吧/上吧」；"
+                        f"[OCR判闪] 超时：阶段=等待「{second_event_label}」；"
                         f"原因=识别首关键词后 30.000s 内未识别；首关键词时间={first_time}；"
                         f"超时时间={observed}；实际等待 {interval:.3f}s"
                     )
@@ -7459,6 +7527,9 @@ class MainWindow(QMainWindow):
                 timing = measure_keyword_interval(
                     capture_dialog_region,
                     read_ocr_text,
+                    first_keyword=first_keyword,
+                    second_keyword=second_keywords,
+                    second_capture_frame=(capture_starter_battle_region if is_starter else None),
                     should_stop=lambda: self._capture_cancel.is_set() or bool(errors),
                     poll_interval_seconds=0.1,
                     script_done=script_done,
@@ -7473,13 +7544,17 @@ class MainWindow(QMainWindow):
                     raise errors[0]
                 timeout_action = (
                     "停止自动流程并等待人工确认"
-                    if is_roamer
+                    if is_roamer or is_starter
                     else "按未出闪继续自动流程"
                 )
                 self.auto_rng_tab.captureLog.emit(
                     f"[OCR判闪] 关键词识别超时，判定结果未知；{timeout_action}"
                 )
-                return ShinyCheckResult(is_shiny=False)
+                return ShinyCheckResult(
+                    is_shiny=False,
+                    first_event_text="上吧" if is_starter else "出现了",
+                    second_event_text="战斗" if is_starter else "去吧",
+                )
             except DialogScriptTimeoutError as exc:
                 stop_current_script_service()
                 script_thread.join(timeout=5.0)
@@ -7519,7 +7594,12 @@ class MainWindow(QMainWindow):
                 f"[OCR判闪] 判定：关键词间隔 {timing.interval_seconds:.3f}s，"
                 f"阈值 {threshold_seconds:.3f}s，结果={'疑似出闪' if is_shiny else '未出闪'}"
             )
-            return ShinyCheckResult(is_shiny=is_shiny, interval_seconds=timing.interval_seconds)
+            return ShinyCheckResult(
+                is_shiny=is_shiny,
+                interval_seconds=timing.interval_seconds,
+                first_event_text="上吧" if is_starter else "出现了",
+                second_event_text="战斗" if is_starter else "去吧",
+            )
 
         def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> None:
             import time

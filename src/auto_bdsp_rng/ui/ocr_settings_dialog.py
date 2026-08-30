@@ -17,12 +17,14 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
+    DYNAMIC_DEFAULT_REGION_FIELDS,
     OCR_REGION_FIELDS,
     OCR_REGION_LABELS,
     NOTE_REGION_FIELDS,
     OcrRegion,
     OcrRegionConfig,
     SHINY_DIALOG_REGION_FIELD,
+    STARTER_BATTLE_REGION_FIELD,
     STAT_REGION_FIELDS,
 )
 
@@ -40,6 +42,7 @@ DEFAULT_OCR_REGIONS = {
     "sp_defense": OcrRegion(218, 487, 85, 42),
     "speed": OcrRegion(475, 596, 85, 39),
     SHINY_DIALOG_REGION_FIELD: OcrRegion(6, 895, 1914, 175),
+    STARTER_BATTLE_REGION_FIELD: OcrRegion(1540, 620, 170, 95),
 }
 
 
@@ -188,15 +191,19 @@ class OcrSettingsDialog(QDialog):
     def _refresh_row(self, field: str) -> None:
         row = self._field_rows[field]
         configured_region = self.region_config.get(field)
-        if field == SHINY_DIALOG_REGION_FIELD and configured_region is None:
+        if field in DYNAMIC_DEFAULT_REGION_FIELDS and configured_region is None:
             if self._preview_frame_shape is None:
-                region_text = "当前帧下方50%（X 0%-100%，Y 50%-100%）"
+                region_text = (
+                    "当前帧下方50%（X 0%-100%，Y 50%-100%）"
+                    if field == SHINY_DIALOG_REGION_FIELD
+                    else "按当前帧比例定位右侧战斗按钮"
+                )
             else:
                 effective_region = self.region_config.resolve(field, self._preview_frame_shape)
                 region_text = (
                     f"有效: {self._format_region(effective_region)}"
                     if effective_region is not None
-                    else "当前帧下方50%"
+                    else "动态默认区域无效"
                 )
             status = (
                 "配置无效，使用默认"
@@ -216,7 +223,7 @@ class OcrSettingsDialog(QDialog):
                 if effective_region is not None:
                     region_text = f"有效: {self._format_region(effective_region)}"
                 if not clipped.is_valid():
-                    status = "自定义无效，使用默认" if field == SHINY_DIALOG_REGION_FIELD else "超出当前帧"
+                    status = "自定义无效，使用默认" if field in DYNAMIC_DEFAULT_REGION_FIELDS else "超出当前帧"
                 elif clipped != configured_region:
                     status = "已按当前帧裁剪"
         self.table.item(row, 1).setText(region_text)
@@ -254,7 +261,7 @@ class OcrSettingsDialog(QDialog):
         if self.task_busy:
             return
         region = self.region_config.get(field)
-        if region is None and field != SHINY_DIALOG_REGION_FIELD:
+        if region is None and field not in DYNAMIC_DEFAULT_REGION_FIELDS:
             QMessageBox.information(self, "OCR区域未设置", f"请先框选“{OCR_REGION_LABELS[field]}”区域。")
             return
         self.regionDisplayRequested.emit(field, region)
@@ -269,7 +276,7 @@ class OcrSettingsDialog(QDialog):
         if self.interaction_busy:
             return
         region = self.region_config.get(field)
-        if region is None and field != SHINY_DIALOG_REGION_FIELD:
+        if region is None and field not in DYNAMIC_DEFAULT_REGION_FIELDS:
             self.table.item(self._field_rows[field], 4).setText("未设置")
             return
         self._recognition_active_field = field
@@ -385,7 +392,7 @@ class OcrSettingsDialog(QDialog):
         if self.interaction_busy:
             return
         for field in OCR_REGION_FIELDS:
-            if self.region_config.get(field) is not None or field == SHINY_DIALOG_REGION_FIELD:
+            if self.region_config.get(field) is not None or field in DYNAMIC_DEFAULT_REGION_FIELDS:
                 self.recognize_field(field)
                 return
 

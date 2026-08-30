@@ -4,6 +4,7 @@ import numpy as np
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
     SHINY_DIALOG_REGION_FIELD,
+    STARTER_BATTLE_REGION_FIELD,
     OcrRegion,
     OcrRegionConfig,
     default_ocr_region,
@@ -42,6 +43,29 @@ def test_shiny_dialog_region_prefers_absolute_custom_and_falls_back_when_invalid
     assert invalid.resolve(SHINY_DIALOG_REGION_FIELD, (720, 1280, 3)) == expected_default
     assert not empty.has_invalid_custom(SHINY_DIALOG_REGION_FIELD)
     assert invalid.has_invalid_custom(SHINY_DIALOG_REGION_FIELD)
+
+
+def test_starter_battle_region_scales_from_calibrated_1080p_default():
+    config = OcrRegionConfig()
+
+    assert default_ocr_region(STARTER_BATTLE_REGION_FIELD, (1080, 1920, 3)) == OcrRegion(1540, 620, 170, 95)
+    assert config.resolve(STARTER_BATTLE_REGION_FIELD, (720, 1280, 3)) == OcrRegion(1027, 413, 113, 64)
+
+
+def test_starter_battle_region_prefers_custom_and_falls_back_when_invalid():
+    custom = OcrRegion(900, 400, 200, 100)
+    config = OcrRegionConfig({STARTER_BATTLE_REGION_FIELD: custom})
+
+    assert config.resolve(STARTER_BATTLE_REGION_FIELD, (720, 1280, 3)) == custom
+    assert config.to_settings_dict()[STARTER_BATTLE_REGION_FIELD] == "[900, 400, 200, 100]"
+
+    off_frame = OcrRegionConfig({STARTER_BATTLE_REGION_FIELD: OcrRegion(2000, 1000, 20, 20)})
+    invalid = OcrRegionConfig.from_settings_dict({STARTER_BATTLE_REGION_FIELD: "not-a-region"})
+    expected_default = OcrRegion(1027, 413, 113, 64)
+
+    assert off_frame.resolve(STARTER_BATTLE_REGION_FIELD, (720, 1280, 3)) == expected_default
+    assert invalid.resolve(STARTER_BATTLE_REGION_FIELD, (720, 1280, 3)) == expected_default
+    assert invalid.has_invalid_custom(STARTER_BATTLE_REGION_FIELD)
 
 
 def test_extract_pokemon_info_prefers_configured_stat_regions(monkeypatch):

@@ -83,6 +83,8 @@ def measure_keyword_interval(
     *,
     first_keyword: str = "出现了！",
     second_keyword: str | Sequence[str] = ("去吧", "上吧"),
+    second_capture_frame: Callable[[], object] | None = None,
+    second_read_text: Callable[[object], str] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     should_stop: Callable[[], bool] | None = None,
@@ -94,6 +96,12 @@ def measure_keyword_interval(
     debug_callback: Callable[[str, float, float | None], None] | None = None,
     event_callback: Callable[[DialogTimingEvent], None] | None = None,
 ) -> DialogTimingResult:
+    """Measure ordered text events, optionally switching sources after the first.
+
+    The second-stage callbacks take effect on the iteration after the first
+    keyword is observed. Omitting either callback keeps using its first-stage
+    counterpart.
+    """
     first = normalize_ocr_text(first_keyword)
     second_keywords = (second_keyword,) if isinstance(second_keyword, str) else tuple(second_keyword)
     seconds = tuple(normalize_ocr_text(keyword) for keyword in second_keywords)
@@ -171,15 +179,25 @@ def measure_keyword_interval(
         check_stopped(iteration_started_at)
         update_script_deadline(iteration_started_at)
         check_timeout(iteration_started_at)
+        capture_current = (
+            second_capture_frame
+            if first_seen_at is not None and second_capture_frame is not None
+            else capture_frame
+        )
+        read_current = (
+            second_read_text
+            if first_seen_at is not None and second_read_text is not None
+            else read_text
+        )
         try:
-            frame = capture_frame()
+            frame = capture_current()
         except Exception as exc:
             failed_at = monotonic()
             record_event("capture_error", failed_at, emit_debug=False)
             raise DialogFrameCaptureError(f"Dialog frame capture failed: {exc}") from exc
         check_stopped(monotonic())
         try:
-            raw_text = read_text(frame)
+            raw_text = read_current(frame)
         except Exception as exc:
             failed_at = monotonic()
             record_event("ocr_error", failed_at, emit_debug=False)

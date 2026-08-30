@@ -8,7 +8,8 @@ from typing import Mapping
 NOTE_REGION_FIELDS = ("nature", "characteristic")
 STAT_REGION_FIELDS = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
 SHINY_DIALOG_REGION_FIELD = "shiny_dialog"
-DYNAMIC_DEFAULT_REGION_FIELDS = (SHINY_DIALOG_REGION_FIELD,)
+STARTER_BATTLE_REGION_FIELD = "starter_battle"
+DYNAMIC_DEFAULT_REGION_FIELDS = (SHINY_DIALOG_REGION_FIELD, STARTER_BATTLE_REGION_FIELD)
 OCR_REGION_FIELDS = NOTE_REGION_FIELDS + STAT_REGION_FIELDS + DYNAMIC_DEFAULT_REGION_FIELDS
 
 OCR_REGION_LABELS = {
@@ -21,7 +22,11 @@ OCR_REGION_LABELS = {
     "sp_defense": "特防",
     "speed": "速度",
     SHINY_DIALOG_REGION_FIELD: "判闪对话区域",
+    STARTER_BATTLE_REGION_FIELD: "御三家战斗区域",
 }
+
+_STARTER_BATTLE_REFERENCE_SIZE = (1920, 1080)
+_STARTER_BATTLE_REFERENCE_RECT = (1540, 620, 170, 95)
 
 STAT_FIELD_NAMES = {
     "hp": "HP",
@@ -103,14 +108,23 @@ def default_ocr_region(field: str, image_shape: tuple[int, ...]) -> OcrRegion | 
     """Resolve a field's frame-relative default into absolute pixels."""
     if field not in OCR_REGION_FIELDS:
         raise KeyError(f"Unknown OCR region field: {field}")
-    if field != SHINY_DIALOG_REGION_FIELD or len(image_shape) < 2:
+    if field not in DYNAMIC_DEFAULT_REGION_FIELDS or len(image_shape) < 2:
         return None
     image_height = max(0, int(image_shape[0]))
     image_width = max(0, int(image_shape[1]))
     if image_width <= 0 or image_height <= 0:
         return None
-    top = image_height // 2
-    return OcrRegion(0, top, image_width, image_height - top)
+    if field == SHINY_DIALOG_REGION_FIELD:
+        top = image_height // 2
+        return OcrRegion(0, top, image_width, image_height - top)
+
+    reference_width, reference_height = _STARTER_BATTLE_REFERENCE_SIZE
+    x, y, width, height = _STARTER_BATTLE_REFERENCE_RECT
+    left = min(image_width - 1, max(0, round(image_width * x / reference_width)))
+    top = min(image_height - 1, max(0, round(image_height * y / reference_height)))
+    right = min(image_width, max(left + 1, round(image_width * (x + width) / reference_width)))
+    bottom = min(image_height, max(top + 1, round(image_height * (y + height) / reference_height)))
+    return OcrRegion(left, top, right - left, bottom - top)
 
 
 class OcrRegionConfig:
