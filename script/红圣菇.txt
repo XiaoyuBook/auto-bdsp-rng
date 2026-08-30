@@ -1,0 +1,315 @@
+# 前言：首先感谢“黑侠聚聚”提示用搜宝可表判断草丛遇怪，再次感谢群友“赫拉利”提示不开宝可表搜游走，让时间又快了很多，然后自己又优化了搜图时间和走路时间等，目前平均不到4min一次，比之前的刷美梦的游走脚本快2min左右。
+# 准备：
+# 1．进出一次祝庆市pc,背包准备好黄金喷雾（喷雾要在物品的第一个位置）
+# 2．一只会瞬间移动的宝可梦和一只发光属性的宝可梦（同步凯西和海星），这两只濒死放在队首（凯西在前），一只等级在(40，49]之间的宝可梦在第三位
+
+
+# 公共函数间状态
+_瞬移精灵槽位 = 1
+$2 = 0
+$3 = 0
+$喷雾菜单右移后等待 = 0
+$喷雾关闭后等待 = 0
+$水域路线 = 0       # 1=右侧水域，2=巡回水域
+$已触发遭遇 = 0     # 0=尚未遭遇，1=已经进入战斗
+
+FUNC 撞帧
+	# 撞闪这里录制
+	HOME
+	WAIT 50
+	HOME
+	WAIT 300
+	A
+	WAIT 50
+	LS UP
+	WAIT 3900
+	LS RESET
+	LS LEFT
+	FOR 270
+	A
+	WAIT 20
+	NEXT
+	LS RESET
+	WAIT 600
+    WAIT 1000
+ENDFUNC
+
+FUNC 触发游走
+    CALL 撞帧
+    WAIT 1500
+    FOR 2
+        RIGHT 200
+        300
+    NEXT
+    LS DOWN,5000    # 出洞
+    WAIT 1000
+    R 100
+    800
+    X 100    # 回到祝庆市
+    WAIT 500
+    RIGHT  # 光标放到宝可梦上
+    WAIT 500
+    A 100
+    1000
+    IF _瞬移精灵槽位 == 2
+    DOWN
+    1000
+    ENDIF
+    A 100
+    500
+    LS DOWN,100
+    500
+    A 100
+    WAIT 12000
+    LEFT 200  # 左走1格
+    300
+ENDFUNC
+
+FUNC 使用黄金喷雾
+    X 200
+    500
+    RIGHT 200
+    WAIT $喷雾菜单右移后等待
+    A 200
+    1000
+    FOR 4
+        RIGHT 200
+        300
+    NEXT
+    A 200
+    500
+    A 200
+    500
+    A 200
+    500
+    B 200
+    1000
+    B 200
+    WAIT $喷雾关闭后等待
+ENDFUNC
+
+FUNC 检查并补喷雾
+    $3 = @喷雾消失了
+    IF $3 >= 95
+        PRINT 加喷雾
+        FOR 10
+            A 100
+            200
+        NEXT
+    ENDIF
+ENDFUNC
+
+FUNC 等待水域遭遇
+    FOR
+        FOR 2
+            IF $水域路线 == 1
+                LS LEFT,1300
+            ELSE
+                LS LEFT,1000
+            ENDIF
+            50
+            FOR 10
+                $2 = @宝可表
+                IF $2 >= 95
+                ELSE
+                    PRINT 已检测到进入战斗
+                    BREAK 3
+                ENDIF
+                WAIT 10
+            NEXT
+        NEXT
+        FOR 1
+            CALL 检查并补喷雾
+            IF $水域路线 == 1
+                WAIT 10
+            ELSE
+                WAIT 50
+            ENDIF
+        NEXT
+        FOR 2
+            IF $水域路线 == 1
+                LS RIGHT,1300
+            ELSE
+                LS RIGHT,1000
+            ENDIF
+            50
+            FOR 10
+                $2 = @宝可表
+                IF $2 >= 95
+                ELSE
+                    PRINT 已检测到进入战斗
+                    BREAK 3
+                ENDIF
+                WAIT 10
+            NEXT
+        NEXT
+    NEXT
+ENDFUNC
+
+FUNC 等待草丛遭遇
+    FOR
+        LS UP,550
+        50
+        FOR 10
+            $2 = @宝可表
+            IF $2 >= 95
+            ELSE
+                PRINT 已检测到进入战斗
+                BREAK 2
+            ENDIF
+            WAIT 10
+        NEXT
+        LS DOWN,550
+        50
+        FOR 10
+            $2 = @宝可表
+            IF $2 >= 95
+            ELSE
+                PRINT 已检测到进入战斗
+                BREAK 2
+            ENDIF
+            WAIT 10
+        NEXT
+        FOR 1
+            CALL 检查并补喷雾
+            WAIT 10
+        NEXT
+    NEXT
+ENDFUNC
+
+
+FUNC 尝试右侧水域
+    $已触发遭遇 = 0
+    FOR 50 # 先判定一次右边水域
+        $2 = @艾姆利多在水域
+        IF $2 >= 95
+            PRINT 艾姆利多在水域
+            FOR 4
+                LEFT 200  # 走路到水域
+                300
+            NEXT
+            LS UP,2600
+            WAIT 300
+            LS LEFT,26000
+            WAIT 300
+
+            # 开喷雾器
+            $喷雾菜单右移后等待 = 500
+            $喷雾关闭后等待 = 1000
+            CALL 使用黄金喷雾
+
+            # 下水后下2格
+            A 100
+            WAIT 800
+            A 100
+            WAIT 800
+            A 100
+            WAIT 800
+            A 100
+            WAIT 5000
+            LS DOWN,500
+            WAIT 300
+
+            # 循环:左右走判定进入战斗
+            $水域路线 = 1
+            CALL 等待水域遭遇
+            $已触发遭遇 = 1
+            RETURN
+        ENDIF
+        WAIT 10
+    NEXT
+ENDFUNC
+
+FUNC 前往游走位置轮询点
+    LS DOWN,2500    # 向下走到城市分界线
+    300
+    FOR 4
+        LEFT 200
+        300
+    NEXT
+    FOR 7
+        DOWN 200
+        300
+    NEXT
+    WAIT 500
+ENDFUNC
+
+FUNC 等待游走位置并触发遭遇
+    FOR    # 上下走判定水域和202路草丛是否出现
+        FOR 50
+            $2 = @艾姆利多在202路
+            IF $2 >= 95
+                PRINT 艾姆利多在202路
+                LS DOWN,1400
+                300
+
+                # 开喷雾器
+                $喷雾菜单右移后等待 = 300
+                $喷雾关闭后等待 = 1000
+                CALL 使用黄金喷雾
+
+                # 往右走4格,进入草丛
+                FOR 4
+                    RIGHT 200
+                    300
+                NEXT
+
+                # 循环:上下走判定进入战斗
+                CALL 等待草丛遭遇
+                $已触发遭遇 = 1
+                RETURN
+            ENDIF
+            WAIT 10
+        NEXT
+        UP 200
+        600
+        FOR 50
+            $2 = @艾姆利多在水域
+            IF $2 >= 95
+                PRINT 艾姆利多在水域
+                LS UP,5550    # 走路到水域
+                WAIT 100
+                PLUS DOWN
+                WAIT 100
+                PLUS UP
+                WAIT 1000
+                UP
+                WAIT 200
+                LS LEFT,13000
+                WAIT 100
+
+                # 开喷雾器
+                $喷雾菜单右移后等待 = 300
+                $喷雾关闭后等待 = 1200
+                CALL 使用黄金喷雾
+
+                # 下水后下2格
+                FOR 7
+                    A 200
+                    WAIT 400
+                NEXT
+                WAIT 4500
+                LS DOWN,500
+                WAIT 300
+
+                # 循环:左右走判定进入战斗
+                $水域路线 = 2
+                CALL 等待水域遭遇
+                $已触发遭遇 = 1
+                RETURN
+            ENDIF
+            WAIT 10
+        NEXT
+        DOWN 200
+        600
+    NEXT
+ENDFUNC
+# 主流程
+
+CALL 触发游走
+CALL 尝试右侧水域
+
+IF $已触发遭遇 == 0
+    CALL 前往游走位置轮询点
+    CALL 等待游走位置并触发遭遇
+ENDIF
