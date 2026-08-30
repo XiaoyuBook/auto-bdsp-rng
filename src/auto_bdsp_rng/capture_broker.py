@@ -16,6 +16,8 @@ client.
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import math
 import os
@@ -42,6 +44,7 @@ PROTOCOL_NAME = "auto-bdsp-rng.capture"
 PROTOCOL_VERSION = 1
 PROTOCOL_MAGIC = b"ABRNGFB1"  # exactly eight ASCII bytes
 PIXEL_FORMAT_BGR24 = 1
+BROKER_ALREADY_RUNNING_EXIT_CODE = 3
 MANIFEST_ENVIRONMENT_VARIABLE = "AUTO_BDSP_RNG_CAPTURE_BROKER_MANIFEST"
 LEGACY_MANIFEST_ENVIRONMENT_VARIABLE = "AUTO_BDSP_RNG_CAPTURE_MANIFEST"
 
@@ -56,6 +59,10 @@ DEFAULT_SLOT_COUNT = 4
 DEFAULT_FIRST_FRAME_TIMEOUT = 5.0
 DEFAULT_FRAME_TIMEOUT = 1.0
 DEFAULT_POLL_INTERVAL = 0.005
+DEFAULT_PARENT_POLL_INTERVAL = 0.1
+DEFAULT_PARENT_SHUTDOWN_TIMEOUT = 1.0
+_MANIFEST_WRITE_ATTEMPTS = 5
+_MANIFEST_WRITE_RETRY_INTERVAL = 0.02
 
 # 8s + 8 * I + Q + 2 * I + Q = 64 bytes.
 #
@@ -266,44 +273,265 @@ def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
             pass
 
 
-def _pid_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        # ``os.kill(pid, 0)`` is not a harmless existence probe on all
-        # supported CPython/Windows versions.  Query the process handle
-        # instead and avoid changing the target process in any way.
-        import ctypes
+class _ProcessStatus(StrEnum):
+    ALIVE = "alive"
+    DEAD = "dead"
+    UNKNOWN = "unknown"
 
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        STILL_ACTIVE = 259
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-        kernel32.GetExitCodeProcess.restype = ctypes.c_int
-        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-        kernel32.CloseHandle.restype = ctypes.c_int
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
-        if not handle:
-            # Access denied still proves that a process occupies the PID.
-            return ctypes.get_last_error() == 5
+
+def _open_windows_process_wait_handle(pid: int) -> tuple[Any | None, Any | None, _ProcessStatus]:
+    """Open an exact process identity using only the non-invasive wait right."""
+
+    import ctypes
+
+    SYNCHRONIZE = 0x00100000
+    ERROR_INVALID_PARAMETER = 87
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, int(pid))
+    if handle:
+        return handle, kernel32, _ProcessStatus.ALIVE
+    if ctypes.get_last_error() == ERROR_INVALID_PARAMETER:
+        return None, None, _ProcessStatus.DEAD
+    return None, None, _ProcessStatus.UNKNOWN
+
+
+def _wait_windows_process_handle(handle: Any, kernel32: Any) -> _ProcessStatus:
+    WAIT_OBJECT_0 = 0
+    WAIT_TIMEOUT = 258
+    result = int(kernel32.WaitForSingleObject(handle, 0))
+    if result == WAIT_OBJECT_0:
+        return _ProcessStatus.DEAD
+    if result == WAIT_TIMEOUT:
+        return _ProcessStatus.ALIVE
+    return _ProcessStatus.UNKNOWN
+
+
+def _process_status(pid: int) -> _ProcessStatus:
+    if pid <= 0:
+        return _ProcessStatus.DEAD
+    if os.name == "nt":
+        handle, kernel32, status = _open_windows_process_wait_handle(pid)
+        if handle is None or kernel32 is None:
+            return status
         try:
-            exit_code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                return False
-            return exit_code.value == STILL_ACTIVE
+            return _wait_windows_process_handle(handle, kernel32)
         finally:
             kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        return False
+        return _ProcessStatus.DEAD
     except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+        return _ProcessStatus.ALIVE
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return _ProcessStatus.DEAD
+        if exc.errno == errno.EPERM:
+            return _ProcessStatus.ALIVE
+        return _ProcessStatus.UNKNOWN
+    return _ProcessStatus.ALIVE
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Return false only when process death has been established."""
+
+    return _process_status(pid) is not _ProcessStatus.DEAD
+
+
+def _normalized_manifest_identity(manifest_path: Path) -> str:
+    expanded = Path(manifest_path).expanduser()
+    return os.path.normcase(os.path.normpath(os.path.abspath(str(expanded))))
+
+
+def _broker_mutex_name(manifest_path: Path) -> str:
+    identity = _normalized_manifest_identity(manifest_path).encode("utf-8", errors="surrogatepass")
+    digest = hashlib.sha256(identity).hexdigest()
+    return f"Local\\auto_bdsp_rng_capture_{digest}"
+
+
+_LOCAL_BROKER_MUTEX_LOCK = threading.Lock()
+_LOCAL_BROKER_MUTEX_NAMES: set[str] = set()
+
+
+class _BrokerLifetimeMutex:
+    """Serialize Broker owners for one discovery manifest on Windows."""
+
+    def __init__(self, manifest_path: Path) -> None:
+        self.name = _broker_mutex_name(manifest_path)
+        self._owned = False
+        self._locally_reserved = False
+        self._holder_thread: threading.Thread | None = None
+        self._ready_event = threading.Event()
+        self._release_event = threading.Event()
+        self._acquire_error: BaseException | None = None
+        self._release_error: BrokerError | None = None
+
+    def _reserve_local_name(self) -> None:
+        with _LOCAL_BROKER_MUTEX_LOCK:
+            if self.name in _LOCAL_BROKER_MUTEX_NAMES:
+                raise BrokerAlreadyRunningError("已有共享视频源正在启动或运行")
+            _LOCAL_BROKER_MUTEX_NAMES.add(self.name)
+            self._locally_reserved = True
+
+    def _release_local_name(self) -> None:
+        if not self._locally_reserved:
+            return
+        with _LOCAL_BROKER_MUTEX_LOCK:
+            _LOCAL_BROKER_MUTEX_NAMES.discard(self.name)
+            self._locally_reserved = False
+
+    def _hold_windows_mutex(self) -> None:
+        handle: Any | None = None
+        kernel32: Any | None = None
+        acquired = False
+        try:
+            import ctypes
+
+            WAIT_OBJECT_0 = 0
+            WAIT_ABANDONED = 128
+            WAIT_TIMEOUT = 258
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+            kernel32.CreateMutexW.restype = ctypes.c_void_p
+            kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+            kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+            kernel32.ReleaseMutex.restype = ctypes.c_int
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+
+            handle = kernel32.CreateMutexW(None, False, self.name)
+            if not handle:
+                raise BrokerError(
+                    f"无法创建共享视频源启动锁 (winerror={ctypes.get_last_error()})"
+                )
+            result = int(kernel32.WaitForSingleObject(handle, 0))
+            if result in (WAIT_OBJECT_0, WAIT_ABANDONED):
+                acquired = True
+                self._owned = True
+                self._ready_event.set()
+                self._release_event.wait()
+                if not kernel32.ReleaseMutex(handle):
+                    self._release_error = BrokerError(
+                        f"无法释放共享视频源启动锁 (winerror={ctypes.get_last_error()})"
+                    )
+                else:
+                    self._owned = False
+            elif result == WAIT_TIMEOUT:
+                raise BrokerAlreadyRunningError("已有共享视频源正在启动或运行")
+            else:
+                raise BrokerError(
+                    f"无法获取共享视频源启动锁 (wait={result}, winerror={ctypes.get_last_error()})"
+                )
+        except BaseException as exc:
+            self._acquire_error = exc
+        finally:
+            if (
+                handle is not None
+                and kernel32 is not None
+                and not kernel32.CloseHandle(handle)
+                and acquired
+            ):
+                if self._release_error is None:
+                    self._release_error = BrokerError(
+                        f"无法关闭共享视频源启动锁 (winerror={ctypes.get_last_error()})"
+                    )
+            self._ready_event.set()
+
+    def acquire(self) -> None:
+        if os.name != "nt":
+            return
+        if self._release_error is not None:
+            raise self._release_error
+        if self._owned:
+            raise BrokerError("共享视频源启动锁仍由上一生命周期持有")
+
+        self._reserve_local_name()
+        self._ready_event = threading.Event()
+        self._release_event = threading.Event()
+        self._acquire_error = None
+        self._release_error = None
+        self._holder_thread = threading.Thread(
+            target=self._hold_windows_mutex,
+            name="CaptureBrokerMutex",
+            daemon=True,
+        )
+        self._holder_thread.start()
+        self._ready_event.wait()
+        if self._acquire_error is not None:
+            error = self._acquire_error
+            self._holder_thread.join()
+            self._holder_thread = None
+            self._release_local_name()
+            raise error
+        if not self._owned:
+            self._holder_thread.join()
+            self._holder_thread = None
+            self._release_local_name()
+            raise BrokerError("共享视频源启动锁未确认获得所有权")
+
+    def release(self) -> None:
+        thread = self._holder_thread
+        if thread is None:
+            if self._release_error is not None:
+                raise self._release_error
+            self._release_local_name()
+            return
+        self._release_event.set()
+        thread.join()
+        self._holder_thread = None
+        if self._release_error is not None:
+            raise self._release_error
+        self._release_local_name()
+
+
+class _ParentProcessGuard:
+    """Track the exact GUI process that spawned a standalone Broker."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = max(0, int(pid))
+        self._handle: Any | None = None
+        self._kernel32: Any | None = None
+        self._initial_status = _ProcessStatus.ALIVE
+        if self.pid <= 0 or os.name != "nt":
+            return
+
+        self._handle, self._kernel32, self._initial_status = _open_windows_process_wait_handle(
+            self.pid
+        )
+
+    def status(self) -> _ProcessStatus:
+        if self.pid <= 0:
+            return _ProcessStatus.ALIVE
+        if self._handle is not None and self._kernel32 is not None:
+            return _wait_windows_process_handle(self._handle, self._kernel32)
+        if os.name == "nt":
+            if self._initial_status is _ProcessStatus.DEAD:
+                return _ProcessStatus.DEAD
+            handle, kernel32, status = _open_windows_process_wait_handle(self.pid)
+            if handle is not None and kernel32 is not None:
+                self._handle = handle
+                self._kernel32 = kernel32
+                return _wait_windows_process_handle(handle, kernel32)
+            return status
+        if os.name != "nt" and os.getppid() != self.pid:
+            return _ProcessStatus.DEAD
+        return _process_status(self.pid)
+
+    def is_alive(self) -> bool:
+        return self.status() is not _ProcessStatus.DEAD
+
+    def close(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is not None and self._kernel32 is not None:
+            self._kernel32.CloseHandle(handle)
+        self._kernel32 = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,6 +558,8 @@ class BrokerManifest:
     first_frame_timeout_seconds: float = DEFAULT_FIRST_FRAME_TIMEOUT
     frame_timeout_seconds: float = DEFAULT_FRAME_TIMEOUT
     updated_at_ns: int = 0
+    parent_pid: int = 0
+    failure_message: str = ""
 
     @property
     def state_code(self) -> int:
@@ -341,6 +571,7 @@ class BrokerManifest:
             "protocol": self.protocol,
             "session_id": self.session_id,
             "pid": int(self.pid),
+            "parent_pid": int(self.parent_pid),
             "state": self.state.wire_name,
             "state_code": int(self.state),
             "mapping_name": self.mapping_name,
@@ -362,6 +593,7 @@ class BrokerManifest:
             "first_frame_timeout_seconds": float(self.first_frame_timeout_seconds),
             "frame_timeout_seconds": float(self.frame_timeout_seconds),
             "updated_at_ns": int(self.updated_at_ns),
+            "failure_message": self.failure_message,
         }
 
     @classmethod
@@ -426,8 +658,12 @@ class BrokerManifest:
                     raw.get("frame_timeout_seconds", DEFAULT_FRAME_TIMEOUT)
                 )
             updated_at_ns = int(raw.get("updated_at_ns", 0))
+            parent_pid = int(raw.get("parent_pid", 0) or 0)
+            failure_message = str(raw.get("failure_message", "") or "")
         except (TypeError, ValueError, OverflowError) as exc:
             raise BrokerManifestError(f"共享视频源 manifest 字段无效: {exc}") from exc
+        if parent_pid < 0:
+            raise BrokerManifestError("共享视频源 manifest parent_pid 不能为负数")
         if (
             not math.isfinite(first_timeout)
             or not math.isfinite(frame_timeout)
@@ -456,6 +692,8 @@ class BrokerManifest:
             first_frame_timeout_seconds=first_timeout,
             frame_timeout_seconds=frame_timeout,
             updated_at_ns=updated_at_ns,
+            parent_pid=parent_pid,
+            failure_message=failure_message,
         )
 
     @classmethod
@@ -949,6 +1187,18 @@ class CaptureBrokerClient:
         self._ensure_open()
         return self._ring.heartbeat_ns
 
+    def snapshot_header(self) -> dict[str, int]:
+        """Return ring health metadata without copying the current frame."""
+
+        self._ensure_open()
+        return self._ring.snapshot_header()
+
+    def read_latest_metadata(self) -> tuple[int, int] | None:
+        """Return the newest ``(sequence, timestamp_ns)`` pair, if any."""
+
+        self._ensure_open()
+        return self._ring.read_latest_metadata()
+
     def read_latest(self, *, allow_unavailable: bool = False) -> FramePacket | None:
         self._ensure_open()
         sampled_at_ns = time.monotonic_ns()
@@ -1066,6 +1316,9 @@ class CaptureBroker:
         frame_timeout: float = DEFAULT_FRAME_TIMEOUT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         session_id: str | None = None,
+        parent_pid: int = 0,
+        parent_poll_interval: float = DEFAULT_PARENT_POLL_INTERVAL,
+        parent_shutdown_timeout: float = DEFAULT_PARENT_SHUTDOWN_TIMEOUT,
     ) -> None:
         self.device_index = int(device_index)
         self.capture_api = int(capture_api)
@@ -1077,7 +1330,11 @@ class CaptureBroker:
         self.first_frame_timeout = float(first_frame_timeout)
         self.frame_timeout = float(frame_timeout)
         self.poll_interval = max(0.0005, float(poll_interval))
+        self.parent_pid = max(0, int(parent_pid))
+        self.parent_poll_interval = max(0.025, float(parent_poll_interval))
+        self.parent_shutdown_timeout = max(0.0, float(parent_shutdown_timeout))
         self.manifest_path = Path(manifest_path) if manifest_path is not None else default_manifest_path()
+        self._lifecycle_mutex = _BrokerLifetimeMutex(self.manifest_path)
         self.capture_factory = capture_factory or (lambda index, api: OpenCVCapture(index, api))
         self.session_id = session_id or uuid.uuid4().hex
         self.control_path = _stop_command_path(self.manifest_path)
@@ -1087,6 +1344,7 @@ class CaptureBroker:
         self._stop_event = threading.Event()
         self._first_frame_event = threading.Event()
         self._done_event = threading.Event()
+        self._lifecycle_lock = threading.RLock()
         self._state_lock = threading.RLock()
         self._state = BrokerState.STOPPED
         self._failure: BaseException | None = None
@@ -1109,17 +1367,32 @@ class CaptureBroker:
     def ring(self) -> FrameRing | None:
         return self._ring
 
-    def _set_state(self, state: BrokerState, *, failure: BaseException | None = None) -> None:
+    def _set_state(self, state: BrokerState, *, failure: BaseException | None = None) -> bool:
         with self._state_lock:
+            current = self._state
+            if state is BrokerState.RUNNING and (
+                current is not BrokerState.STARTING or self._stop_event.is_set()
+            ):
+                return False
+            if state is BrokerState.FAILED and current not in (
+                BrokerState.STARTING,
+                BrokerState.RUNNING,
+                BrokerState.FAILED,
+            ):
+                return False
             self._state = state
             if failure is not None:
                 self._failure = failure
-        if self._ring is not None:
-            try:
-                self._ring.set_state(state)
-            except Exception:
-                pass
-        self._write_manifest(state)
+            if self._ring is not None:
+                try:
+                    self._ring.set_state(state)
+                except Exception:
+                    pass
+            self._write_manifest(
+                state,
+                strict=state in (BrokerState.RUNNING, BrokerState.FAILED),
+            )
+            return True
 
     def _build_manifest(self, state: BrokerState) -> BrokerManifest:
         assert self._ring is not None
@@ -1128,6 +1401,7 @@ class CaptureBroker:
             protocol=PROTOCOL_NAME,
             session_id=self.session_id,
             pid=os.getpid(),
+            parent_pid=self.parent_pid,
             state=state,
             mapping_name=self._ring._shm.name,
             manifest_path=str(self.manifest_path),
@@ -1149,20 +1423,29 @@ class CaptureBroker:
             first_frame_timeout_seconds=self.first_frame_timeout,
             frame_timeout_seconds=self.frame_timeout,
             updated_at_ns=time.monotonic_ns(),
+            failure_message=str(self._failure or ""),
         )
 
     def _write_manifest(self, state: BrokerState, *, strict: bool = False) -> None:
         if self._ring is None:
             return
         manifest = self._build_manifest(state)
-        try:
-            manifest.write(self.manifest_path)
+        last_error: OSError | None = None
+        for attempt in range(_MANIFEST_WRITE_ATTEMPTS):
+            try:
+                manifest.write(self.manifest_path)
+            except OSError as exc:
+                last_error = exc
+                if attempt + 1 < _MANIFEST_WRITE_ATTEMPTS:
+                    time.sleep(_MANIFEST_WRITE_RETRY_INTERVAL)
+                continue
             self._manifest = manifest
-        except OSError:
-            # A discovery file is useful but must never crash the capture loop.
-            self._manifest = manifest
-            if strict:
-                raise
+            return
+        # Preserve the intended state for local diagnostics even when Windows
+        # temporarily or permanently prevents replacing the discovery file.
+        self._manifest = manifest
+        if strict and last_error is not None:
+            raise last_error
 
     def _check_existing_manifest(self) -> None:
         try:
@@ -1180,41 +1463,63 @@ class CaptureBroker:
             pass
 
     def start(self, *, wait: bool = True, timeout: float | None = None) -> bool:
-        with self._state_lock:
-            if self._thread is not None and self._thread.is_alive():
-                raise BrokerError("共享视频源已经启动")
-            if self._ring is not None:
-                raise BrokerError("重新启动共享视频源前必须先调用 stop()")
-            self._check_existing_manifest()
-            self._stop_event.clear()
-            self._first_frame_event.clear()
-            self._done_event.clear()
-            self._failure = None
-            self._ring = FrameRing.create(
-                width=self.width,
-                height=self.height,
-                slot_count=self.slot_count,
-                state=BrokerState.STARTING,
-            )
-            self._state = BrokerState.STARTING
-            try:
-                self._write_manifest(BrokerState.STARTING, strict=True)
-            except Exception:
-                ring, self._ring = self._ring, None
-                if ring is not None:
-                    ring.close(unlink=True)
-                self._state = BrokerState.STOPPED
-                raise
-            self._thread = threading.Thread(target=self._run, name="CaptureBroker", daemon=True)
-            self._thread.start()
+        with self._lifecycle_lock:
+            with self._state_lock:
+                if self._thread is not None and self._thread.is_alive():
+                    raise BrokerError("共享视频源已经启动")
+                if self._ring is not None:
+                    raise BrokerError("重新启动共享视频源前必须先调用 stop()")
+                self._lifecycle_mutex.acquire()
+                try:
+                    self._check_existing_manifest()
+                    self._stop_event.clear()
+                    self._first_frame_event.clear()
+                    self._done_event.clear()
+                    self._failure = None
+                    self._ring = FrameRing.create(
+                        width=self.width,
+                        height=self.height,
+                        slot_count=self.slot_count,
+                        state=BrokerState.STARTING,
+                    )
+                    self._state = BrokerState.STARTING
+                    self._write_manifest(BrokerState.STARTING, strict=True)
+                    self._thread = threading.Thread(
+                        target=self._run,
+                        name="CaptureBroker",
+                        daemon=True,
+                    )
+                    self._thread.start()
+                except BaseException:
+                    ring, self._ring = self._ring, None
+                    try:
+                        if ring is not None:
+                            ring.close(unlink=True)
+                        self._thread = None
+                        self._state = BrokerState.STOPPED
+                        try:
+                            current = BrokerManifest.load(self.manifest_path)
+                            if current.session_id == self.session_id:
+                                self.manifest_path.unlink()
+                        except (BrokerError, OSError):
+                            pass
+                    finally:
+                        self._lifecycle_mutex.release()
+                    raise
         if not wait:
             return True
         wait_timeout = self.first_frame_timeout if timeout is None else max(0.0, timeout)
         if not self._first_frame_event.wait(wait_timeout):
-            # _run will mark FAILED if it is still waiting; request stop here so
-            # start() never leaves a failed capture thread behind.
-            self._fail(CaptureOpenError("共享视频源首帧等待超时"))
-            return False
+            # A RUNNING manifest publish can briefly outlive the event wait
+            # while Windows retries an atomic replace. Recheck under the same
+            # state lock before committing the timeout transition.
+            with self._state_lock:
+                if self._state is BrokerState.RUNNING:
+                    return True
+                if self._state is not BrokerState.STARTING:
+                    return False
+                self._fail(CaptureOpenError("共享视频源首帧等待超时"))
+                return False
         return self.state is BrokerState.RUNNING
 
     def start_async(self) -> None:
@@ -1225,7 +1530,7 @@ class CaptureBroker:
         try:
             opened = capture.open(self.device_index, self.capture_api)
             if not opened:
-                raise CaptureOpenError("采集卡打开失败")
+                raise CaptureOpenError("采集卡打开失败，设备可能正被其他程序占用，或当前设备/API不可用")
             capture.set_properties(self.width, self.height, self.fourcc, self.fps)
             return capture
         except Exception:
@@ -1266,6 +1571,8 @@ class CaptureBroker:
                         break
                     self._fail(exc)
                     return
+                if self._stop_event.is_set():
+                    break
                 now = time.monotonic()
                 if not self._first_frame_event.is_set() and now >= first_deadline:
                     self._fail(CaptureOpenError("共享视频源首帧等待超时"))
@@ -1286,7 +1593,8 @@ class CaptureBroker:
                         return
                     last_frame_time = now
                     if not self._first_frame_event.is_set():
-                        self._set_state(BrokerState.RUNNING)
+                        if not self._set_state(BrokerState.RUNNING):
+                            break
                         self._first_frame_event.set()
                     else:
                         self._ring.heartbeat()
@@ -1304,56 +1612,95 @@ class CaptureBroker:
                     pass
             if self._stop_event.is_set() and self.state is not BrokerState.FAILED:
                 self._set_state(BrokerState.STOPPED)
+            self._first_frame_event.set()
             self._done_event.set()
 
     def _fail(self, error: BaseException) -> None:
-        self._failure = error
         self._stop_event.set()
-        self._set_state(BrokerState.FAILED, failure=error)
-        self._first_frame_event.set()
+        try:
+            self._set_state(BrokerState.FAILED, failure=error)
+        except OSError:
+            # State and ring were already changed before manifest publication.
+            # The child now exits promptly so the controller cannot mistake a
+            # stale STARTING file for a live capture indefinitely.
+            pass
+        finally:
+            self._first_frame_event.set()
 
     def wait(self, timeout: float | None = None) -> bool:
         return self._done_event.wait(timeout)
 
-    def stop(self, *, timeout: float = 2.0, unlink: bool = True) -> bool:
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(max(0.0, timeout))
-            if thread.is_alive():
-                # Do not close the mapping underneath an in-flight writer.
-                # A subprocess owner may escalate to process termination after
-                # this bounded cooperative stop reports failure.
-                return False
-        if self.state is not BrokerState.FAILED:
-            self._set_state(BrokerState.STOPPED)
-        ring, self._ring = self._ring, None
-        if ring is not None:
-            ring.close(unlink=unlink)
-        self._thread = None
-        try:
-            self.control_path.unlink()
-        except OSError:
-            pass
-        try:
-            # Do not remove a newer session that reused the same manifest path.
-            current = BrokerManifest.load(self.manifest_path)
-            if current.session_id == self.session_id:
-                self.manifest_path.unlink()
-        except (BrokerError, OSError):
-            pass
-        return True
+    def stop(
+        self,
+        *,
+        timeout: float = 2.0,
+        unlink: bool = True,
+        remove_manifest: bool = True,
+    ) -> bool:
+        with self._lifecycle_lock:
+            self._stop_event.set()
+            thread = self._thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(max(0.0, timeout))
+                if thread.is_alive():
+                    # Do not close the mapping underneath an in-flight writer.
+                    # A subprocess owner may escalate to process termination after
+                    # this bounded cooperative stop reports failure.
+                    return False
+            try:
+                if self.state is not BrokerState.FAILED:
+                    self._set_state(BrokerState.STOPPED)
+                ring, self._ring = self._ring, None
+                if ring is not None:
+                    ring.close(unlink=unlink)
+                self._thread = None
+                try:
+                    self.control_path.unlink()
+                except OSError:
+                    pass
+                if remove_manifest:
+                    try:
+                        # Do not remove a newer session that reused the same manifest path.
+                        current = BrokerManifest.load(self.manifest_path)
+                        if current.session_id == self.session_id:
+                            self.manifest_path.unlink()
+                    except (BrokerError, OSError):
+                        pass
+                return True
+            finally:
+                self._lifecycle_mutex.release()
 
     def serve_forever(self) -> bool:
         """Start synchronously and keep serving until stop/failure."""
 
-        if not self.start(wait=True):
-            self.stop()
-            return False
-        self.wait()
-        succeeded = self.state is BrokerState.STOPPED
-        self.stop()
-        return succeeded
+        parent_guard = _ParentProcessGuard(self.parent_pid)
+        try:
+            if not self.start(wait=True):
+                # Keep the small JSON failure record long enough for the GUI
+                # controller to report the real device error. The controller
+                # removes it after observing this child exit.
+                self.stop(remove_manifest=False)
+                return False
+
+            parent_lost = False
+            while not self.wait(self.parent_poll_interval):
+                if parent_guard.status() is _ProcessStatus.DEAD:
+                    parent_lost = True
+                    break
+
+            if parent_lost:
+                # A blocked OpenCV read must not keep an orphan process alive.
+                # The capture thread is daemonized, so returning from this
+                # standalone child lets the OS close the device handle even if
+                # cooperative cleanup cannot finish within the grace period.
+                self.stop(timeout=self.parent_shutdown_timeout)
+                return True
+
+            succeeded = self.state is BrokerState.STOPPED
+            self.stop(remove_manifest=self.state is not BrokerState.FAILED)
+            return succeeded
+        finally:
+            parent_guard.close()
 
     def __enter__(self) -> Self:
         if not self.start(wait=True):
@@ -1420,6 +1767,7 @@ class FakeCapture:
 
 
 __all__ = [
+    "BROKER_ALREADY_RUNNING_EXIT_CODE",
     "BrokerAlreadyRunningError",
     "BrokerError",
     "BrokerManifest",

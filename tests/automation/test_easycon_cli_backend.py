@@ -5,6 +5,7 @@ import threading
 import time
 from pathlib import Path
 
+import auto_bdsp_rng.automation.easycon.cli_backend as cli_backend_module
 from auto_bdsp_rng.automation.easycon import (
     CliEasyConBackend,
     EasyConInstallation,
@@ -12,8 +13,8 @@ from auto_bdsp_rng.automation.easycon import (
     EasyConStatus,
     classify_cli_failure,
     cli_connection_notice,
+    create_temporary_cli_script,
     extract_compile_error_line,
-    generate_script_file,
 )
 
 
@@ -35,18 +36,32 @@ def test_cli_backend_runs_minimal_script_with_mock(tmp_path):
     assert str(script) in result.stdout
 
 
-def test_cli_backend_runs_generated_existing_script_with_mock(tmp_path):
+def test_cli_backend_run_script_text_removes_system_temporary_txt(monkeypatch, tmp_path):
     ezcon = _write_fake_ezcon(tmp_path)
     source = PROJECT_ROOT / "script" / "BDSP测种.txt"
-    generated = generate_script_file(source.read_text(encoding="utf-8"), source.name, tmp_path / ".generated")
     backend = CliEasyConBackend(EasyConInstallation(path=ezcon, version="fake", source="test"))
+    created: list[Path] = []
 
-    result = backend.run_script(EasyConRunTask(script_path=generated, port="COM7", mock=True))
+    def create_in_test_temp(script_text: str) -> Path:
+        temporary = create_temporary_cli_script(script_text, temp_dir=tmp_path)
+        created.append(temporary)
+        return temporary
+
+    monkeypatch.setattr(cli_backend_module, "create_temporary_cli_script", create_in_test_temp)
+
+    result = backend.run_script_text(
+        source.read_text(encoding="utf-8"),
+        source.name,
+        port="COM7",
+    )
 
     assert result.status == EasyConStatus.COMPLETED
-    assert result.port == "mock"
-    assert generated.suffix == ".ecs"
-    assert "port=mock" in result.stdout
+    assert result.port == "COM7"
+    assert len(created) == 1
+    assert created[0].suffix == ".txt"
+    assert created[0].name.startswith("auto-bdsp-rng-easycon-")
+    assert created[0].exists() is False
+    assert "port=COM7" in result.stdout
 
 
 def test_cli_backend_classifies_compile_failure_and_line(tmp_path):

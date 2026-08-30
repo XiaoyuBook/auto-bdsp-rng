@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +22,7 @@ class MutableClock:
 
 
 def test_default_directory_is_next_to_application_and_logging_starts_disabled():
-    manager = RunLogManager(now=lambda: datetime(2026, 8, 22, 10, 0), pid=12)
+    manager = RunLogManager(now=lambda: datetime(2026, 8, 22, 10, 0))
 
     assert manager.directory == app_path("logs")
     assert manager.enabled is False
@@ -32,7 +31,7 @@ def test_default_directory_is_next_to_application_and_logging_starts_disabled():
 
 def test_disabled_write_does_not_create_directory(tmp_path):
     directory = tmp_path / "logs"
-    manager = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 10, 0), pid=12)
+    manager = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 10, 0))
 
     manager.write("应用", "不会保存")
 
@@ -41,16 +40,13 @@ def test_disabled_write_does_not_create_directory(tmp_path):
 
 def test_enable_writes_utf8_timestamped_multiline_records(tmp_path):
     clock = MutableClock(datetime(2026, 8, 22, 15, 31, 8, 125999))
-    manager = RunLogManager(tmp_path / "logs", now=clock, pid=4321)
+    manager = RunLogManager(tmp_path / "logs", now=clock)
 
     path = manager.enable()
     manager.write("自动定点", "捕获 Seed 成功\n目标 Adv=123", level="info")
     manager.close()
 
-    assert re.fullmatch(
-        r"run_2026-08-22_session-20260822T153108125999_pid-4321\.log",
-        path.name,
-    )
+    assert path.name == "run_2026-08-22.log"
     assert path.read_text(encoding="utf-8").splitlines() == [
         "2026-08-22 15:31:08.125 [INFO] [自动定点] 捕获 Seed 成功",
         "2026-08-22 15:31:08.125 [INFO] [自动定点] 目标 Adv=123",
@@ -64,7 +60,6 @@ def test_log_records_redact_windows_user_profile(tmp_path, monkeypatch):
     manager = RunLogManager(
         tmp_path / "logs",
         now=lambda: datetime(2026, 8, 22, 15, 0),
-        pid=6,
     )
     path = manager.enable()
 
@@ -81,7 +76,6 @@ def test_log_records_redact_escaped_path_and_source(tmp_path, monkeypatch):
     manager = RunLogManager(
         tmp_path / "logs",
         now=lambda: datetime(2026, 8, 22, 15, 0),
-        pid=7,
     )
     path = manager.enable()
 
@@ -98,11 +92,10 @@ def test_log_records_redact_escaped_path_and_source(tmp_path, monkeypatch):
     assert r"'%USERPROFILE%\\scripts\\hit.txt'" in text
 
 
-def test_reenable_in_same_session_appends_to_same_file(tmp_path):
+def test_reenable_on_same_day_appends_to_same_file(tmp_path):
     manager = RunLogManager(
         tmp_path / "logs",
         now=lambda: datetime(2026, 8, 22, 15, 0),
-        pid=5,
     )
 
     first_path = manager.enable()
@@ -120,9 +113,27 @@ def test_reenable_in_same_session_appends_to_same_file(tmp_path):
     assert "ignored" not in text
 
 
+def test_separate_managers_on_same_day_append_to_same_file(tmp_path):
+    directory = tmp_path / "logs"
+    first = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 9, 0))
+    second = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 18, 0))
+
+    first_path = first.enable()
+    first.write("应用", "first launch")
+    first.close()
+    second_path = second.enable()
+    second.write("应用", "second launch")
+    second.close()
+
+    assert first_path == second_path == directory / "run_2026-08-22.log"
+    text = first_path.read_text(encoding="utf-8")
+    assert "first launch" in text
+    assert "second launch" in text
+
+
 def test_write_after_midnight_rotates_to_new_daily_file(tmp_path):
     clock = MutableClock(datetime(2026, 8, 22, 23, 59, 59, 999000))
-    manager = RunLogManager(tmp_path / "logs", now=clock, pid=8)
+    manager = RunLogManager(tmp_path / "logs", now=clock)
     first_path = manager.enable()
     manager.write("应用", "before midnight")
 
@@ -133,8 +144,8 @@ def test_write_after_midnight_rotates_to_new_daily_file(tmp_path):
 
     assert second_path is not None
     assert second_path != first_path
-    assert first_path.name.startswith("run_2026-08-22_")
-    assert second_path.name.startswith("run_2026-08-23_")
+    assert first_path.name == "run_2026-08-22.log"
+    assert second_path.name == "run_2026-08-23.log"
     assert "before midnight" in first_path.read_text(encoding="utf-8")
     assert "after midnight" not in first_path.read_text(encoding="utf-8")
     assert "after midnight" in second_path.read_text(encoding="utf-8")
@@ -143,21 +154,23 @@ def test_write_after_midnight_rotates_to_new_daily_file(tmp_path):
 def test_cleanup_keeps_today_and_previous_six_days_and_ignores_other_files(tmp_path):
     directory = tmp_path / "logs"
     directory.mkdir()
-    expired = directory / "run_2026-08-15_session-20260801T000000000000_pid-1.log"
-    boundary = directory / "run_2026-08-16_session-20260801T000000000000_pid-1.log"
-    today = directory / "run_2026-08-22_session-20260801T000000000000_pid-1.log"
-    future = directory / "run_2026-08-23_session-20260801T000000000000_pid-1.log"
+    expired = directory / "run_2026-08-15.log"
+    boundary = directory / "run_2026-08-16.log"
+    today = directory / "run_2026-08-22.log"
+    future = directory / "run_2026-08-23.log"
+    legacy_expired = directory / "run_2026-08-14_session-20260801T000000000000_pid-1.log"
     unrelated = directory / "notes.log"
-    matching_directory = directory / "run_2026-08-01_session-20260801T000000000000_pid-1.log"
-    for path in (expired, boundary, today, future, unrelated):
+    matching_directory = directory / "run_2026-08-01.log"
+    for path in (expired, boundary, today, future, legacy_expired, unrelated):
         path.write_text(path.name, encoding="utf-8")
     matching_directory.mkdir()
-    manager = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 12, 0), pid=2)
+    manager = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 12, 0))
 
     removed = manager.cleanup()
 
-    assert removed == (expired, future)
+    assert removed == tuple(sorted((expired, future, legacy_expired)))
     assert not expired.exists()
+    assert not legacy_expired.exists()
     assert boundary.exists()
     assert today.exists()
     assert not future.exists()
@@ -168,10 +181,10 @@ def test_cleanup_keeps_today_and_previous_six_days_and_ignores_other_files(tmp_p
 def test_cleanup_failure_does_not_notify_fatal_callback_or_prevent_enable(tmp_path, monkeypatch):
     directory = tmp_path / "logs"
     directory.mkdir()
-    expired = directory / "run_2026-08-01_session-20260801T000000000000_pid-1.log"
+    expired = directory / "run_2026-08-01.log"
     expired.write_text("old", encoding="utf-8")
     errors: list[str] = []
-    manager = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 12, 0), pid=2)
+    manager = RunLogManager(directory, now=lambda: datetime(2026, 8, 22, 12, 0))
     manager.set_error_callback(errors.append)
     original_unlink = Path.unlink
 
@@ -195,7 +208,6 @@ def test_concurrent_writes_are_complete_and_not_interleaved(tmp_path):
     manager = RunLogManager(
         tmp_path / "logs",
         now=lambda: datetime(2026, 8, 22, 12, 0, 0, 456000),
-        pid=9,
     )
     path = manager.enable()
 
@@ -223,7 +235,6 @@ def test_enable_failure_raises_run_log_error(tmp_path):
     manager = RunLogManager(
         blocker / "logs",
         now=lambda: datetime(2026, 8, 22, 12, 0),
-        pid=1,
     )
 
     with pytest.raises(RunLogError, match="无法启用运行日志"):
@@ -236,7 +247,7 @@ def test_enable_failure_raises_run_log_error(tmp_path):
 def test_runtime_write_failure_is_swallowed_disables_logging_and_notifies(tmp_path):
     clock = MutableClock(datetime(2026, 8, 22, 23, 59))
     errors: list[str] = []
-    manager = RunLogManager(tmp_path / "logs", now=clock, pid=3)
+    manager = RunLogManager(tmp_path / "logs", now=clock)
     manager.set_error_callback(errors.append)
     manager.enable()
     manager.write("应用", "works")
@@ -256,7 +267,6 @@ def test_exception_hook_guard_logs_and_restores_existing_hooks(tmp_path, monkeyp
     manager = RunLogManager(
         tmp_path / "logs",
         now=lambda: datetime(2026, 8, 22, 12, 0),
-        pid=4,
     )
     path = manager.enable()
     sys_calls: list[tuple[object, ...]] = []

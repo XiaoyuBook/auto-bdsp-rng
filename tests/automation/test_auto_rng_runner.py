@@ -738,6 +738,81 @@ def test_runner_preserves_sync_candidate_source_and_nature(tmp_path):
     assert runner.progress.locked_target.sync_nature == 0
 
 
+def test_runner_leaves_teleport_slot_unchanged_when_sync_is_disabled(tmp_path):
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            sync_mode=0,
+            target_species=481,
+        )
+    )
+    text = "_闪帧 = 60\n_瞬移精灵槽位 = 2\n"
+
+    assert runner._prepare_teleport_slot(text) == text
+
+
+def test_runner_updates_teleport_slot_after_switching_to_no_sync_table(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    advance_script = tmp_path / "bdsp过帧.txt"
+    hit_script = tmp_path / "红圣菇.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    advance_script.write_text(
+        "_目标帧数 = 0\n$精灵切换开关 = 0\n",
+        encoding="utf-8",
+    )
+    hit_script.write_text(
+        "_瞬移精灵槽位 = 1\n",
+        encoding="utf-8",
+    )
+    scripts: list[tuple[str, str]] = []
+    clock = [10.0]
+
+    def fake_sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    def search_sync(_seed: AutoRngSeedResult, lead: int, nature: int | None) -> list[FakeState]:
+        if lead == 0 and nature == 0:
+            return [FakeState(2200, ec=0x1001, pid=0x2001, nature=0)]
+        assert lead == 255
+        assert nature is None
+        return [FakeState(2000, ec=0x1002, pid=0x2002, nature=18)]
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            advance_script_path=advance_script,
+            hit_script_path=hit_script,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            min_final_flash_frames=5,
+            sync_mode=2,
+            sync_nature="勤奋",
+            target_species=481,
+            has_body_filters=True,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_sync=search_sync,
+            reidentify=lambda _seed: AutoRngSeedResult(seed="seed-1", current_advances=680, npc=0),
+            run_script_text=lambda text, name: scripts.append((name, text)),
+            monotonic=lambda: clock[0],
+            sleep=fake_sleep,
+        ),
+    )
+
+    runner.run(max_steps=9)
+
+    advance_text = next(text for name, text in scripts if name == advance_script.name)
+    hit_text = next(text for name, text in scripts if name == hit_script.name)
+    assert "$精灵切换开关 = 1" in advance_text
+    assert runner._is_sync_active is False
+    assert "_瞬移精灵槽位 = 2" in hit_text
+    assert "_闪帧" not in hit_text
+    assert hit_script.read_text(encoding="utf-8") == "_瞬移精灵槽位 = 1\n"
+    assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
+
+
 def test_runner_does_not_label_secondary_no_sync_candidate_as_sync(tmp_path):
     seed_script = tmp_path / "seed.txt"
     hit_script = tmp_path / "hit.txt"
@@ -1170,7 +1245,7 @@ def test_runner_final_calibrate_runs_fixed_hit_script(tmp_path):
     hit_script = tmp_path / "谢米.txt"
     seed_script.write_text("A 100\n", encoding="utf-8")
     advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
-    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 60\n_瞬移精灵槽位 = 2\n", encoding="utf-8")
     scripts: list[tuple[str, str]] = []
     calls: list[str] = []
     services = AutoRngServices(
@@ -1190,13 +1265,19 @@ def test_runner_final_calibrate_runs_fixed_hit_script(tmp_path):
             fixed_delay=1200,
             max_wait_frames=300,
             min_final_flash_frames=30,
+            sync_mode=2,
+            target_species=488,
         ),
         services=services,
     )
 
     runner.run(max_steps=6)
 
-    assert scripts == [("BDSP测种.txt", "A 100\n"), ("谢米.txt", "_闪帧 = 60\n")]
+    assert scripts == [
+        ("BDSP测种.txt", "A 100\n"),
+        ("谢米.txt", "_闪帧 = 60\n_瞬移精灵槽位 = 1\n"),
+    ]
+    assert hit_script.read_text(encoding="utf-8") == "_闪帧 = 60\n_瞬移精灵槽位 = 2\n"
     assert calls == []
     assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
     assert runner.progress.trigger_advances == 60
@@ -1494,6 +1575,7 @@ def test_runner_escape_continue_can_escape_twice_and_target_third_candidate_in_s
             hit_script_path=hit_script,
             escape_script_path=escape_script,
             escape_continue=True,
+            target_species=492,
             start_phase=AutoRngPhase.CAPTURE_SEED,
             fixed_delay=1200,
             max_wait_frames=300,
@@ -1629,6 +1711,51 @@ def test_runner_escape_continue_treats_shiny_timeout_as_non_shiny(tmp_path):
     assert scripts == [escape_script.name]
     assert runner.progress.phase == AutoRngPhase.REIDENTIFY
     assert any("OCR 超时，按未出闪继续" in message for message in progress_messages)
+
+
+@pytest.mark.parametrize("target_species", [481, 488])
+def test_runner_roamer_unknown_shiny_result_stops_for_manual_confirmation(
+    tmp_path,
+    target_species,
+):
+    hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
+    scripts: list[str] = []
+    progress_messages: list[str] = []
+    candidates = [
+        FakeState(1300, ec=0x1351, pid=0x2351),
+        FakeState(1500, ec=0x1352, pid=0x2352),
+    ]
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            hit_script_path=hit_script,
+            escape_script_path=escape_script,
+            escape_continue=True,
+            target_species=target_species,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=1200,
+            max_wait_frames=300,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: candidates,
+            run_script_text=lambda _text, name: scripts.append(name),
+            run_hit_script_with_shiny_check=lambda _text, _name, _threshold: ShinyCheckResult(
+                is_shiny=False,
+                interval_seconds=None,
+            ),
+            monotonic=lambda: 10.0,
+        ),
+        progress_callback=lambda progress: progress_messages.append(progress.log_message),
+    )
+
+    runner.run(max_steps=5)
+
+    assert scripts == []
+    assert runner.progress.phase == AutoRngPhase.FAILED
+    assert runner.progress.last_script_path == hit_script
+    assert any("人工确认" in message for message in progress_messages)
 
 
 def test_runner_user_stop_during_shiny_monitor_returns_idle(tmp_path):
@@ -2324,6 +2451,67 @@ def test_fixed_flash_zero_goes_directly_to_final_calibrate():
     assert decision.phase == AutoRngPhase.FINAL_CALIBRATE
 
 
+def test_missing_flash_parameter_uses_runner_wait_to_target_minus_delay():
+    target = AutoRngTarget(raw_target_advances=1000)
+
+    decision = decide_target_advance(
+        target,
+        current_advances=895,
+        fixed_delay=100,
+        fixed_flash_frames=None,
+        max_wait_frames=300,
+    )
+
+    assert decision.trigger_advances == 900
+    assert decision.remaining_to_trigger == 5
+    assert decision.kind == AutoRngDecisionKind.FINAL_WAIT
+    assert decision.phase == AutoRngPhase.FINAL_WAIT
+
+
+def test_runner_waits_before_running_hit_script_without_flash_parameter(tmp_path):
+    seed_script = tmp_path / "BDSP测种.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    hit_script.write_text("B 100\n", encoding="utf-8")
+    scripts: list[tuple[str, str]] = []
+    phases: list[AutoRngPhase] = []
+    clock = [10.0]
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            fixed_delay=100,
+            max_wait_frames=300,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: [FakeState(110)],
+            run_script_text=lambda text, name: scripts.append((name, text)),
+            monotonic=lambda: clock[0],
+            sleep=fake_sleep,
+        ),
+        progress_callback=lambda progress: phases.append(progress.phase),
+    )
+
+    runner.run(max_steps=6)
+
+    assert scripts == [(seed_script.name, "A 100\n"), (hit_script.name, "B 100\n")]
+    assert AutoRngPhase.FINAL_WAIT in phases
+    assert AutoRngPhase.FINAL_ADJUST not in phases
+    assert len(sleeps) == 10
+    assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
+    assert runner.progress.current_advances == 10
+    assert runner.progress.final_flash_frames is None
+    assert hit_script.read_text(encoding="utf-8") == "B 100\n"
+
+
 # ─── final_wait 流程集成测试 ──────────────────────────────────────
 
 def test_runner_final_wait_flows_directly_to_run_hit(tmp_path):
@@ -2717,7 +2905,7 @@ def test_runner_final_adjust_dynamic_flash(tmp_path):
     hit_script = tmp_path / "谢米.txt"
     seed_script.write_text("A 100\n", encoding="utf-8")
     advance_script.write_text("_目标帧数 = 填写目标帧数\n", encoding="utf-8")
-    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 60\n_瞬移精灵槽位 = 1\n", encoding="utf-8")
 
     scripts: list[tuple[str, str]] = []
     services = AutoRngServices(
@@ -2738,6 +2926,8 @@ def test_runner_final_adjust_dynamic_flash(tmp_path):
             fixed_delay=1452,
             max_wait_frames=500,
             min_final_flash_frames=5,
+            sync_mode=1,
+            target_species=481,
         ),
         services=services,
     )
@@ -2748,4 +2938,6 @@ def test_runner_final_adjust_dynamic_flash(tmp_path):
     hit_texts = [t for n, t in scripts if "谢米" in n]
     assert hit_texts, f"expected hit script call, got {scripts}"
     assert "_闪帧 = 19" in hit_texts[0], f"expected dynamic flash 19, got {hit_texts[0]}"
+    assert "_瞬移精灵槽位 = 2" in hit_texts[0]
+    assert hit_script.read_text(encoding="utf-8") == "_闪帧 = 60\n_瞬移精灵槽位 = 1\n"
     assert runner.progress.phase == AutoRngPhase.COMPLETED

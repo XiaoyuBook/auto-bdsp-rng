@@ -44,7 +44,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
 )
 from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import StateFilter
-from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
@@ -79,7 +79,7 @@ class _RefreshingScriptComboBox(QComboBox):
         super().showPopup()
 
 
-SCRIPT_DIR = resource_path("script")
+SCRIPT_DIR = script_directory()
 DEFAULT_SHINY_THRESHOLD_SECONDS = 4.0
 DEFAULT_RESEEDING_THRESHOLD_FRAMES = 500_000
 _TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
@@ -156,6 +156,7 @@ class AutoRngPanel(QWidget):
         layout.addWidget(self.toolbar)
 
         content = QWidget(self)
+        content.setObjectName("AutoRngContent")
         self.content_grid = QGridLayout(content)
         self.content_grid.setContentsMargins(0, 0, 0, 0)
         self.content_grid.setHorizontalSpacing(12)
@@ -169,7 +170,24 @@ class AutoRngPanel(QWidget):
         self.content_grid.setColumnStretch(1, 1)
         self.content_grid.setRowStretch(0, 0)
         self.content_grid.setRowStretch(1, 1)
-        layout.addWidget(content, 1)
+
+        # Keep the action toolbar visible while allowing the relatively tall
+        # strategy/script/log area to scroll on short displays.  The content
+        # widget retains its original layout and public attributes so callers
+        # and tests can continue to address ``content_grid`` directly.
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setObjectName("AutoRngContentScroll")
+        self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.content_scroll.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.content_scroll.setMinimumSize(0, 0)
+        self.content_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        content.setMinimumSize(0, 0)
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.content_scroll.setWidget(content)
+        layout.addWidget(self.content_scroll, 1)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_panel_state()
@@ -299,8 +317,9 @@ class AutoRngPanel(QWidget):
             (
                 "delay",
                 self.fixed_delay,
-                "表示撞闪脚本内 _闪帧等待结束后，到实际撞到目标之间经过的帧数。\n"
-                "软件按“脚本启动帧 = 目标帧 - delay - _闪帧”计算启动时机；delay 越大，撞闪脚本启动得越早。\n"
+                "表示脚本等待结束后（无 _闪帧时为脚本启动后）到实际撞到目标之间经过的帧数。\n"
+                "含 _闪帧的旧脚本按“目标帧 - delay - _闪帧”启动；无 _闪帧时由软件等待到“目标帧 - delay”再启动；"
+                "delay 越大，撞闪脚本启动得越早。\n"
                 "可开启自动反查，根据反查得到的实际 delay 校准此值。",
             ),
             (
@@ -324,6 +343,7 @@ class AutoRngPanel(QWidget):
                 self.shiny_threshold_seconds,
                 "使用 OCR 测量战斗文本“出现了！”到“去吧/上吧”之间的时间间隔。\n"
                 "测得的间隔大于或等于该值时，判定为疑似闪光并停止自动流程。\n"
+                "艾姆利多和克雷色利亚会先等待脚本检测到进入战斗，再启动 OCR。\n"
                 "可先在 Seed 捕获页面使用“校准闪光判定”测量合适的阈值。\n"
                 "设为 0 时关闭自动 OCR 判闪。",
             ),
@@ -635,6 +655,7 @@ class AutoRngPanel(QWidget):
                 escape_continue=config.escape_continue,
                 escape_script_path=config.escape_script_path,
                 shiny_threshold_seconds=config.shiny_threshold_seconds,
+                target_species=config.target_species,
             )
         except AutoScriptError as exc:
             self.set_phase_text("配置错误")
@@ -648,6 +669,7 @@ class AutoRngPanel(QWidget):
         self.stopRequested.emit()
 
     def build_config(self, *, start_phase: AutoRngPhase = AutoRngPhase.RUN_SEED_SCRIPT) -> AutoRngConfig:
+        targets = self.targets()
         return AutoRngConfig(
             script_dir=self.script_dir,
             seed_script_path=self._selected_path(self.seed_script_combo),
@@ -662,6 +684,7 @@ class AutoRngPanel(QWidget):
             reverse_lookup_window=self.reverse_lookup_window.value(),
             sync_mode=self.sync_combo.currentIndex(),
             sync_nature=self.sync_nature_input.text().strip(),
+            target_species=int(targets[0][0].template.species) if targets else None,
             fixed_delay=self.fixed_delay.value(),
             max_wait_frames=self.max_wait_frames.value(),
             reseeding_threshold=self.reseeding_threshold.value(),
@@ -674,7 +697,7 @@ class AutoRngPanel(QWidget):
             has_body_filters=any(
                 sf.height_min != 0 or sf.height_max != 255
                 or sf.weight_min != 0 or sf.weight_max != 255
-                for _record, sf, _mode in self.targets()
+                for _record, sf, _mode in targets
             ),
         )
 
@@ -890,18 +913,20 @@ class AutoRngPanel(QWidget):
         if s.contains("shiny_threshold"):
             self.shiny_threshold_seconds.setValue(float(s.value("shiny_threshold", 0.0)))
         # 恢复脚本选择（脚本列表已通过 refresh_scripts 加载）
-        if s.contains("seed_script"):
-            self._select_script_by_path(self.seed_script_combo, str(s.value("seed_script", "")))
-        if s.contains("advance_script"):
-            self._select_script_by_path(self.advance_script_combo, str(s.value("advance_script", "")))
-        if s.contains("hit_script"):
-            self._select_script_by_path(self.hit_script_combo, str(s.value("hit_script", "")))
-        if s.contains("escape_script"):
-            self._select_script_by_path(self.escape_script_combo, str(s.value("escape_script", "")))
-        if s.contains("exit_script"):
-            self._select_script_by_path(self.exit_script_combo, str(s.value("exit_script", "")))
-        if s.contains("reverse_script"):
-            self._select_script_by_path(self.reverse_script_combo, str(s.value("reverse_script", "")))
+        for key, combo in (
+            ("seed_script", self.seed_script_combo),
+            ("advance_script", self.advance_script_combo),
+            ("hit_script", self.hit_script_combo),
+            ("escape_script", self.escape_script_combo),
+            ("exit_script", self.exit_script_combo),
+            ("reverse_script", self.reverse_script_combo),
+        ):
+            if not s.contains(key):
+                continue
+            saved_path = str(s.value(key, ""))
+            selected_path = self._select_script_by_path(combo, saved_path)
+            if selected_path is not None and str(selected_path) != saved_path:
+                s.setValue(key, str(selected_path))
         if s.contains("sync_state"):
             idx = int(s.value("sync_state", 0))
             if 0 <= idx < self.sync_combo.count():
@@ -947,12 +972,24 @@ class AutoRngPanel(QWidget):
             tf.skip_filter.setChecked(s.value("target_skip_filter") == "true")
         self._refresh_target_summary()
 
-    def _select_script_by_path(self, combo: QComboBox, path_str: str) -> None:
+    def _select_script_by_path(self, combo: QComboBox, path_str: str) -> Path | None:
         if not path_str:
-            return
-        index = combo.findData(path_str)
+            return None
+        path = remap_legacy_script_path(path_str, script_dir=self.script_dir)
+        index = combo.findData(str(path))
+        if index < 0:
+            for candidate_index in range(combo.count()):
+                candidate = Path(str(combo.itemData(candidate_index)))
+                try:
+                    if candidate.samefile(path):
+                        index = candidate_index
+                        break
+                except OSError:
+                    continue
         if index >= 0:
             combo.setCurrentIndex(index)
+            return Path(str(combo.itemData(index)))
+        return None
 
     def _on_sync_changed(self, index: int) -> None:
         """同步状态改变时启用/禁用性格输入框。"""

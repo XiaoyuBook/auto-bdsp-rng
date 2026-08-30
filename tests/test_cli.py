@@ -34,10 +34,13 @@ def test_capture_broker_hidden_command_runs_standalone_service(monkeypatch, tmp_
             "700",
             "--manifest",
             str(manifest),
+            "--parent-pid",
+            "2468",
         ]
     ) == 0
     assert calls[0][0:2] == (3, 700)
     assert calls[0][2]["manifest_path"] == str(manifest)
+    assert calls[0][2]["parent_pid"] == 2468
 
 
 def test_capture_broker_hidden_command_defaults_to_media_foundation(monkeypatch):
@@ -46,8 +49,8 @@ def test_capture_broker_hidden_command_defaults_to_media_foundation(monkeypatch)
     calls = []
 
     class FakeBroker:
-        def __init__(self, device_index, capture_api, **_kwargs):
-            calls.append((device_index, capture_api))
+        def __init__(self, device_index, capture_api, **kwargs):
+            calls.append((device_index, capture_api, kwargs))
 
         def serve_forever(self):
             return True
@@ -55,7 +58,31 @@ def test_capture_broker_hidden_command_defaults_to_media_foundation(monkeypatch)
     monkeypatch.setattr(broker_module, "CaptureBroker", FakeBroker)
 
     assert main(["capture-broker", "--device-index", "0"]) == 0
-    assert calls == [(0, 1400)]
+    assert calls[0][0:2] == (0, 1400)
+    assert calls[0][2]["parent_pid"] == 0
+
+
+def test_capture_broker_hidden_command_has_distinct_already_running_exit_code(monkeypatch):
+    import auto_bdsp_rng.capture_broker as broker_module
+
+    stopped = []
+
+    class FakeBroker:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def serve_forever(self):
+            raise broker_module.BrokerAlreadyRunningError("already running")
+
+        def stop(self):
+            stopped.append(True)
+
+    monkeypatch.setattr(broker_module, "CaptureBroker", FakeBroker)
+
+    assert main(["capture-broker", "--device-index", "0"]) == (
+        broker_module.BROKER_ALREADY_RUNNING_EXIT_CODE
+    )
+    assert stopped == [True]
 
 
 def test_blink_config_command_prints_project_xs_config(capsys):

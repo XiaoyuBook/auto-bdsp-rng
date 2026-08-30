@@ -108,6 +108,7 @@ from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     warm_up_pokemon_info_ocr,
 )
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices, ProjectXsAdvanceCounter
+from auto_bdsp_rng.automation.auto_rng.scripts import ROAMER_SPECIES
 from auto_bdsp_rng.automation.auto_rng.search import (
     StaticSearchCriteria,
     StaticSearchTarget,
@@ -116,7 +117,9 @@ from auto_bdsp_rng.automation.auto_rng.search import (
 )
 from auto_bdsp_rng.automation.auto_rng.zoom_recovery import recover_zoom_overlay
 from auto_bdsp_rng.app_settings import (
+    is_auto_update_check_enabled,
     is_run_log_enabled,
+    set_auto_update_check_enabled,
     set_run_log_enabled,
     set_startup_notice_acknowledged,
     should_show_startup_notice,
@@ -127,7 +130,7 @@ from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncou
 from auto_bdsp_rng.gen8_id import IDFilter, generate_ids
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
-from auto_bdsp_rng.resources import app_icon_path, resource_path
+from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
@@ -139,6 +142,11 @@ from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
+from auto_bdsp_rng.update_core import (
+    UpdatePackageError,
+    has_uncommitted_update_transaction,
+    migrate_legacy_internal_scripts,
+)
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
@@ -156,14 +164,59 @@ CAPTURE_KEEP_AWAKE_BLINK_COUNTS = frozenset((
 ))
 CAPTURE_KEEP_AWAKE_INTERVAL = 10
 CAPTURE_KEEP_AWAKE_PRESS_MS = 100
+ROAMER_BATTLE_LABEL = "宝可表"
+ROAMER_BATTLE_MATCH_THRESHOLD = 95
 AUTO_CAPTURE_WARMUP_DISCARD_SECONDS = 1.0
 REIDENTIFY_HINT_BEFORE_FRAMES = 10_000
 REIDENTIFY_HINT_AFTER_FRAMES = 20_000
 NOISY_REIDENTIFY_MAX_SEARCH_FRAMES = 100_000
 PREVIEW_REFRESH_FPS = 30
 PREVIEW_REFRESH_INTERVAL_MS = round(1000 / PREVIEW_REFRESH_FPS)
+STARTUP_UPDATE_CHECK_DELAY_MS = 1000
+STARTUP_UPDATE_CHECK_MODAL_RETRY_MS = 500
 CAPTURE_API_SETTINGS_VERSION = 1
 CAPTURE_API_SETTINGS_VERSION_KEY = "video_source/capture_api_settings_version"
+
+# The original 1150x900 layout is comfortable on a desktop monitor, but its
+# hard minimum made the application impossible to fit on common 1366x768
+# displays.  Keep a readable compact floor and let page-level scroll areas
+# expose the controls that do not fit vertically.
+MAIN_WINDOW_DEFAULT_SIZE = QSize(1150, 900)
+MAIN_WINDOW_COMPACT_MIN_SIZE = QSize(900, 600)
+MAIN_WINDOW_SCREEN_MARGIN = 16
+MAIN_WINDOW_GEOMETRY_KEYS = (
+    "window/x",
+    "window/y",
+    "window/width",
+    "window/height",
+)
+# The Project_Xs controls and preview are both useful side by side on a
+# desktop, but the preview's minimum width leaves too little room on compact
+# displays.  The comparison is made against the splitter's logical width so
+# window decorations and high-DPI scaling do not affect the breakpoint.
+PROJECT_XS_VERTICAL_BREAKPOINT = 1100
+PROJECT_XS_HORIZONTAL_LEFT_WIDTH = 550
+PROJECT_XS_VERTICAL_LEFT_MIN_HEIGHT = 180
+PROJECT_XS_VERTICAL_LEFT_MAX_HEIGHT = 420
+PROJECT_XS_PREVIEW_MIN_HEIGHT = 260
+PROJECT_XS_COMPACT_PREVIEW_MIN_HEIGHT = 140
+
+
+def _exception_chain_text(error: BaseException) -> str:
+    """Render an exception and its direct causes without a full traceback."""
+
+    parts: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(parts) < 5:
+        seen.add(id(current))
+        detail = str(current).strip() or "-"
+        parts.append(f"{type(current).__name__}: {detail}")
+        next_error = current.__cause__
+        if next_error is None and not current.__suppress_context__:
+            next_error = current.__context__
+        current = next_error
+    return " <- ".join(parts)
 
 
 def _status_dot_icon(color: str) -> QIcon:
@@ -250,6 +303,103 @@ def _scale_preview_pixmap(pixmap: QPixmap, target: QSize, device_pixel_ratio: fl
     )
     scaled.setDevicePixelRatio(dpr)
     return scaled, scaled.deviceIndependentSize().toSize()
+
+
+def _fit_window_rect(
+    available: QRect,
+    desired: QSize = MAIN_WINDOW_DEFAULT_SIZE,
+    *,
+    minimum: QSize = MAIN_WINDOW_COMPACT_MIN_SIZE,
+    margin: int = MAIN_WINDOW_SCREEN_MARGIN,
+) -> QRect:
+    """Return a centered window rectangle that fits a screen work area.
+
+    ``QScreen.availableGeometry()`` is already expressed in Qt logical
+    pixels.  Keeping this helper independent of ``QScreen`` makes the
+    geometry policy easy to test with several monitor sizes and avoids a
+    second device-pixel-ratio conversion.
+    """
+
+    margin = max(0, int(margin))
+    work = available.adjusted(margin, margin, -margin, -margin)
+    if work.width() <= 0 or work.height() <= 0:
+        work = QRect(available)
+    max_width = max(1, work.width())
+    max_height = max(1, work.height())
+    min_width = min(max(1, int(minimum.width())), max_width)
+    min_height = min(max(1, int(minimum.height())), max_height)
+    width = max(min_width, min(max_width, int(desired.width())))
+    height = max(min_height, min(max_height, int(desired.height())))
+    x = work.left() + max(0, (work.width() - width) // 2)
+    y = work.top() + max(0, (work.height() - height) // 2)
+    return QRect(x, y, width, height)
+
+
+def _clamp_window_rect(
+    rect: QRect,
+    available: QRect,
+    *,
+    minimum: QSize = MAIN_WINDOW_COMPACT_MIN_SIZE,
+    margin: int = MAIN_WINDOW_SCREEN_MARGIN,
+) -> QRect:
+    """Keep a saved window rectangle visible on the current monitor."""
+
+    fitted = _fit_window_rect(
+        available,
+        rect.size(),
+        minimum=minimum,
+        margin=margin,
+    )
+    margin = max(0, int(margin))
+    work = available.adjusted(margin, margin, -margin, -margin)
+    if work.width() <= 0 or work.height() <= 0:
+        work = QRect(available)
+    x = min(max(rect.left(), work.left()), work.right() - fitted.width() + 1)
+    y = min(max(rect.top(), work.top()), work.bottom() - fitted.height() + 1)
+    fitted.moveTopLeft(QPoint(x, y))
+    return fitted
+
+
+def _scrollable_page(
+    content: QWidget,
+    *,
+    object_name: str = "ResponsivePageScroll",
+    horizontal: bool = False,
+) -> QScrollArea:
+    """Put a page body behind a compact, style-consistent scroll viewport."""
+
+    scroll = QScrollArea()
+    scroll.setObjectName(object_name)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setWidgetResizable(True)
+    scroll.setHorizontalScrollBarPolicy(
+        Qt.ScrollBarPolicy.ScrollBarAsNeeded if horizontal else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setWidget(content)
+    content.setMinimumSize(0, 0)
+    content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    return scroll
+
+
+class _ResponsiveTabWidget(QTabWidget):
+    """Keep page internals from forcing the main window beyond the screen."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, 0)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(960, 640)
+
+
+class _ResponsiveProjectSplitter(QSplitter):
+    """Splitter whose page hint remains compact until a page is displayed."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, 0)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(960, 640)
 
 
 def _enumerate_capture_devices(capture_api: int) -> list[tuple[int, str]]:
@@ -1321,13 +1471,18 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_DISPLAY_TITLE)
         if app_icon_path().exists():
             self.setWindowIcon(QIcon(str(app_icon_path())))
-        self.setMinimumSize(1150, 900)
-        self.resize(1150, 900)
+        # Set a compact floor before constructing the pages.  Page-level
+        # scroll areas below keep the layout usable when the screen is shorter
+        # than the desktop-oriented default size.
+        self.setMinimumSize(MAIN_WINDOW_COMPACT_MIN_SIZE)
+        self.resize(MAIN_WINDOW_DEFAULT_SIZE)
         self.lang = "zh"
         self._run_log_manager = run_log_manager or RunLogManager()
         self._run_log_manager.set_error_callback(self._queue_run_log_failure)
         self.runLogFailed.connect(self._handle_run_log_failure, Qt.ConnectionType.QueuedConnection)
         self._profile_settings = profile_settings or QSettings("auto-bdsp-rng", "MainWindowProfile")
+        self._window_geometry_restored = False
+        self._window_restore_maximized = False
         self._profile_version = GameVersion.BD
         self._active_record: StaticEncounterRecord | None = None
         self._records: tuple[StaticEncounterRecord, ...] = ()
@@ -1336,6 +1491,12 @@ class MainWindow(QMainWindow):
         self._latest_preview_frame: object | None = None
         self._latest_annotated_preview_frame: object | None = None
         self._latest_easycon_image_search_result: object | None = None
+        self._easycon_image_result_observer_serial = 0
+        self._easycon_image_result_observers: dict[
+            int,
+            tuple[int, int, Callable[[object], None]],
+        ] = {}
+        self._easycon_image_result_observers_lock = threading.Lock()
         self._capture_broker_process = capture_broker_process
         self._capture_broker_start_thread: CaptureBrokerStartThread | None = None
         self._capture_broker_attempt = 0
@@ -1362,6 +1523,8 @@ class MainWindow(QMainWindow):
         self._ocr_task_completed: Callable[[bool, object], None] | None = None
         self._ocr_shutdown_requested = False
         self._is_closing = False
+        self._startup_update_check_scheduled = False
+        self._startup_update_check_started = False
         self._ocr_full_test_running = False
         self._selection_mode: str | None = None
         self._selection_preview_frame: object | None = None
@@ -1411,6 +1574,7 @@ class MainWindow(QMainWindow):
         self._refresh_encounters()
         self._sync_seed64_from_state32()
         self._apply_language()
+        self._restore_window_geometry()
         self.statusBar().showMessage(self._text("ready"))
         QTimer.singleShot(0, self._maybe_show_startup_notice)
 
@@ -1503,7 +1667,7 @@ class MainWindow(QMainWindow):
             return matching_paths[0].name, matching_paths[0].parent
 
         configured_dir = getattr(config, "script_dir", None)
-        return supplied.name, Path(configured_dir) if configured_dir is not None else resource_path("script")
+        return supplied.name, Path(configured_dir) if configured_dir is not None else script_directory()
 
     def _handle_ui_call_requested(
         self,
@@ -1580,7 +1744,8 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
-        self.tabs = QTabWidget()
+        self.tabs = _ResponsiveTabWidget()
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel(
@@ -1617,6 +1782,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.history_tab, "历史记录")
+        self.tabs.currentChanged.connect(lambda _index: QTimer.singleShot(0, self._update_responsive_layout))
         root_layout.addWidget(self.tabs, 1)
         _make_labels_copyable(self.tabs)
 
@@ -1629,11 +1795,17 @@ class MainWindow(QMainWindow):
             set_run_log_enabled=self._set_run_log_enabled,
             open_run_log_dir=self._open_run_log_dir,
             check_updates=self.update_controller.check_for_updates,
+            auto_update_check_enabled=is_auto_update_check_enabled(),
+            set_auto_update_check_enabled=set_auto_update_check_enabled,
         )
         self.help_menu_controller.install(self.help_button)
         self.update_controller.busyChanged.connect(
             lambda busy: self.help_menu_controller.check_updates_action.setEnabled(not busy)
         )
+        self.update_controller.silentCheckCompleted.connect(
+            self._handle_silent_update_check_completed
+        )
+        self.update_controller.silentCheckFailed.connect(self._handle_silent_update_check_failed)
 
     def _run_log_sink(self, source: str) -> Callable[[str, str], None]:
         def write(level: str, message: str) -> None:
@@ -1643,6 +1815,22 @@ class MainWindow(QMainWindow):
 
     def _write_run_log(self, source: str, message: object, *, level: str = "INFO") -> None:
         self._run_log_manager.write(source, str(message), level=level)
+
+    def _handle_silent_update_check_completed(self, plan: object) -> None:
+        current_version = str(getattr(plan, "current_version", __version__))
+        latest_version = str(getattr(plan, "latest_version", "未知"))
+        result = "发现新版本" if bool(getattr(plan, "update_available", False)) else "无需更新"
+        self._write_run_log(
+            "软件更新",
+            f"启动自动检查完成；当前版本 {current_version}；线上版本 {latest_version}；结果：{result}",
+        )
+
+    def _handle_silent_update_check_failed(self, message: str) -> None:
+        self._write_run_log(
+            "软件更新",
+            f"启动自动检查失败：{message}",
+            level="WARNING",
+        )
 
     def _queue_run_log_failure(self, message: str) -> None:
         # The callback may run on a worker thread or after Qt starts shutting down.
@@ -1714,6 +1902,49 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "运行日志", f"上次启用了运行日志，但本次无法创建日志文件：\n{message}")
         self.statusBar().showMessage("运行日志启动失败", 5000)
 
+    def show_legacy_script_migration_result(self, backup_count: int) -> None:
+        backup_dir = script_directory() / ".legacy-internal-backup"
+        QMessageBox.information(
+            self,
+            "脚本目录已整理",
+            f"已移除旧版 _internal\\script。\n"
+            f"检测到 {backup_count} 个与外层脚本不同的文件，已备份到：\n{backup_dir}\n\n"
+            "软件现在只使用 exe 同级的 script 目录。备份目录不会被程序执行；"
+            "如需恢复，请先对比内容，再复制到外层 script 目录。",
+        )
+        self.statusBar().showMessage("旧版内部脚本已备份并清理", 5000)
+
+    def show_legacy_script_migration_error(self, message: str) -> None:
+        QMessageBox.warning(
+            self,
+            "脚本目录整理失败",
+            "无法完全清理旧版 _internal\\script。文件内容仍会保留，可能位于旧目录，"
+            "也可能位于外层 script\\.legacy-internal-backup 中的迁移暂存目录。"
+            f"下次启动会自动重试，请勿手动删除这些目录。\n\n{message}",
+        )
+        self.statusBar().showMessage("旧版内部脚本清理失败", 5000)
+
+    def schedule_startup_update_check(self) -> None:
+        if self._startup_update_check_scheduled or self._startup_update_check_started:
+            return
+        self._startup_update_check_scheduled = True
+        QTimer.singleShot(STARTUP_UPDATE_CHECK_DELAY_MS, self._start_startup_update_check)
+
+    def _start_startup_update_check(self) -> None:
+        if self._is_closing or self._startup_update_check_started:
+            return
+        if QApplication.activeModalWidget() is not None:
+            QTimer.singleShot(
+                STARTUP_UPDATE_CHECK_MODAL_RETRY_MS,
+                self._start_startup_update_check,
+            )
+            return
+        self._startup_update_check_started = True
+        if not is_auto_update_check_enabled():
+            return
+        self._write_run_log("软件更新", "开始启动自动检查")
+        self.update_controller.check_for_updates(silent=True)
+
     def _maybe_show_startup_notice(self) -> None:
         if not should_show_startup_notice():
             return
@@ -1729,7 +1960,8 @@ class MainWindow(QMainWindow):
         self._startup_notice_dialog = dialog
 
     def _build_project_xs_tab(self) -> QWidget:
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = _ResponsiveProjectSplitter(Qt.Orientation.Horizontal)
+        splitter.setObjectName("ProjectXsSplitter")
         splitter.setChildrenCollapsible(False)
 
         # Left side follows the compact single-column layout from 0940b1b.
@@ -1742,6 +1974,20 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.capture_group)
         left_layout.addWidget(self.seed_group)
         left_layout.addStretch(1)
+        self._project_xs_left_layout = left_layout
+        left.setMinimumSize(0, 0)
+        left_scroll = _scrollable_page(
+            left,
+            object_name="ProjectXsControlsScroll",
+            # The capture form contains a few deliberately fixed-width
+            # controls.  Keep a horizontal escape hatch when the splitter is
+            # narrower than their natural width instead of silently clipping
+            # the rightmost buttons.
+            horizontal=True,
+        )
+        left_scroll.setMinimumSize(0, 0)
+        left_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self.project_xs_controls_scroll = left_scroll
 
         # 右侧：状态条（紧凑） + 预览（下部）
         self.status_group = self._build_project_status_group()
@@ -1751,22 +1997,40 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(6)
         right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
+        self._project_xs_right_layout = right_layout
+        right.setMinimumSize(0, 0)
+        right.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
 
-        splitter.addWidget(left)
+        splitter.addWidget(left_scroll)
         splitter.addWidget(right)
-        splitter.setSizes([430, 1050])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([PROJECT_XS_HORIZONTAL_LEFT_WIDTH, 1050])
+        self._project_xs_vertical: bool | None = None
         return splitter
 
     def _build_bdsp_tab(self) -> QWidget:
         panel = QWidget()
+        panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
+        # Keep the profile/parameter/results structure intact inside one
+        # scroll viewport.  Several BDSP filter groups have fixed-width
+        # controls and a natural height larger than a compact monitor; a
+        # viewport lets users reach those controls without compressing rows
+        # until they overlap.
+        content = QWidget()
+        content.setObjectName("BdspContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+
         # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
         self.profile_group.setMaximumHeight(106)
-        layout.addWidget(self.profile_group)
+        content_layout.addWidget(self.profile_group)
 
         # 第 2 行：参数区（三列：乱数信息 + 设置 + 筛选项）
         params_widget = QWidget()
@@ -1781,11 +2045,22 @@ class MainWindow(QMainWindow):
         params_row.addWidget(self.rng_info_group)
         params_row.addWidget(self.static_group)
         params_row.addWidget(self.filter_group, 1)
-        layout.addWidget(params_widget)
+        content_layout.addWidget(params_widget)
 
         # 第 3 行 + 第 4 行：结果表格（工具栏 + 表格）
         self.results_panel = self._build_results()
-        layout.addWidget(self.results_panel, 1)
+        content_layout.addWidget(self.results_panel, 1)
+
+        self.bdsp_content_scroll = _scrollable_page(
+            content,
+            object_name="BdspContentScroll",
+            horizontal=True,
+        )
+        self.bdsp_content_scroll.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Expanding,
+        )
+        layout.addWidget(self.bdsp_content_scroll, 1)
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
@@ -2426,10 +2701,12 @@ class MainWindow(QMainWindow):
 
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(10)
         self.preview_group = QGroupBox()
+        self.preview_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         preview_layout = QVBoxLayout(self.preview_group)
 
         preview_controls = QHBoxLayout()
@@ -3149,6 +3426,208 @@ class MainWindow(QMainWindow):
         settings.setValue("oval_charm", self.oval_charm.isChecked())
         settings.sync()
 
+    @staticmethod
+    def _window_setting_int(value: object, default: int = 0) -> int:
+        """Parse a persisted geometry value without applying profile limits."""
+
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _screen_available_geometry(self) -> QRect:
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return QRect(0, 0, MAIN_WINDOW_DEFAULT_SIZE.width(), MAIN_WINDOW_DEFAULT_SIZE.height())
+        geometry = QRect(screen.availableGeometry())
+        if geometry.width() <= 0 or geometry.height() <= 0:
+            return QRect(0, 0, MAIN_WINDOW_DEFAULT_SIZE.width(), MAIN_WINDOW_DEFAULT_SIZE.height())
+        return geometry
+
+    def _screen_available_geometry_for_rect(self, rect: QRect) -> QRect:
+        """Choose the work area containing a persisted window position."""
+
+        fallback = self._screen_available_geometry()
+        if fallback.contains(rect.center()):
+            return fallback
+
+        # Before the window is shown ``self.screen()`` normally points at the
+        # primary monitor.  Looking up the saved position first preserves a
+        # normal window that was last used on a secondary monitor.
+        for point in (rect.center(), rect.topLeft()):
+            try:
+                screen = QGuiApplication.screenAt(point)
+            except (AttributeError, RuntimeError):
+                screen = None
+            if screen is None:
+                continue
+            geometry = QRect(screen.availableGeometry())
+            if geometry.width() > 0 and geometry.height() > 0:
+                return geometry
+        return fallback
+
+    def _restore_window_geometry(self) -> None:
+        """Restore a saved rect while keeping it inside the current work area."""
+
+        settings = self._profile_settings
+        values = [self._window_setting_int(settings.value(key), 0) for key in MAIN_WINDOW_GEOMETRY_KEYS]
+        x, y, width, height = values
+        saved = QRect(x, y, width, height) if width > 0 and height > 0 else None
+        available = (
+            self._screen_available_geometry_for_rect(saved)
+            if saved is not None
+            else self._screen_available_geometry()
+        )
+        minimum = QSize(
+            min(
+                MAIN_WINDOW_COMPACT_MIN_SIZE.width(),
+                max(1, available.width() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
+            ),
+            min(
+                MAIN_WINDOW_COMPACT_MIN_SIZE.height(),
+                max(1, available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
+            ),
+        )
+        self.setMinimumSize(minimum)
+
+        if saved is not None:
+            rect = _clamp_window_rect(saved, available, minimum=minimum)
+        else:
+            rect = _fit_window_rect(available, minimum=minimum)
+        self.setGeometry(rect)
+        self._window_restore_maximized = self._profile_settings_bool(
+            settings.value("window/maximized"),
+            False,
+        )
+        self._window_geometry_restored = True
+        self._update_responsive_layout()
+        if self._window_restore_maximized:
+            QTimer.singleShot(0, self._restore_maximized_window)
+
+    def _restore_maximized_window(self) -> None:
+        if self._window_restore_maximized and not self._is_closing:
+            self.showMaximized()
+
+    def _save_window_geometry(self) -> None:
+        """Persist normal geometry and maximized state for the next monitor."""
+
+        if not self._window_geometry_restored:
+            return
+        settings = self._profile_settings
+        normal = self.normalGeometry() if self.isMaximized() else self.geometry()
+        if normal.width() > 0 and normal.height() > 0:
+            settings.setValue("window/x", normal.x())
+            settings.setValue("window/y", normal.y())
+            settings.setValue("window/width", normal.width())
+            settings.setValue("window/height", normal.height())
+        settings.setValue("window/maximized", self.isMaximized())
+        settings.sync()
+
+    def _keep_window_on_screen(self) -> None:
+        if not self._window_geometry_restored or self.isFullScreen() or self.isMaximized():
+            return
+        available = self._screen_available_geometry()
+        minimum = QSize(
+            min(
+                MAIN_WINDOW_COMPACT_MIN_SIZE.width(),
+                max(1, available.width() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
+            ),
+            min(
+                MAIN_WINDOW_COMPACT_MIN_SIZE.height(),
+                max(1, available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
+            ),
+        )
+        self.setMinimumSize(minimum)
+        rect = _clamp_window_rect(self.geometry(), available, minimum=minimum)
+        if rect != self.geometry():
+            self.setGeometry(rect)
+
+    def _handle_screen_geometry_change(self) -> None:
+        self._keep_window_on_screen()
+        self._update_responsive_layout()
+
+    def _update_responsive_layout(self) -> None:
+        """Switch the Project_Xs split view when the available width changes.
+
+        The method is intentionally idempotent: a normal resize should leave a
+        user's splitter adjustment untouched.  Sizes are only initialized when
+        the orientation changes (or on the first usable layout pass).
+        """
+
+        splitter = getattr(self, "project_xs_tab", None)
+        if not isinstance(splitter, _ResponsiveProjectSplitter):
+            return
+        # A hidden tab keeps its last page geometry (often the Qt default
+        # 640x480).  Use the tab widget's current content size in that case so
+        # changing the window while another page is selected still prepares
+        # Project_Xs for the correct orientation before it is shown.
+        tabs = getattr(self, "tabs", None)
+        if tabs is not None and tabs.width() > 0 and tabs.height() > 0:
+            # During a top-level resize the tab layout can lag one event
+            # behind.  The client area is a conservative fallback for the
+            # breakpoint, while the tab's own width remains preferred once
+            # it has been laid out.
+            width = max(tabs.width(), self.width() - 40)
+            height = max(1, tabs.height() - tabs.tabBar().height())
+        else:
+            width = splitter.width()
+            height = splitter.height()
+        if width <= 0 or height <= 0:
+            return
+
+        vertical = width < PROJECT_XS_VERTICAL_BREAKPOINT
+        orientation = Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
+        previous = getattr(self, "_project_xs_vertical", None)
+        orientation_changed = splitter.orientation() != orientation
+        if previous is not None and previous == vertical and not orientation_changed:
+            return
+
+        preview_label = getattr(self, "preview_label", None)
+        if preview_label is not None:
+            # The desktop preview is intentionally large, but its minimum
+            # height should not consume the whole vertical splitter on a
+            # short display.  The image itself continues to use KeepAspectRatio
+            # and all source-space coordinates remain unchanged.
+            if vertical:
+                preview_label.setMinimumHeight(PROJECT_XS_COMPACT_PREVIEW_MIN_HEIGHT)
+            else:
+                preview_label.setMinimumHeight(PROJECT_XS_PREVIEW_MIN_HEIGHT)
+
+        splitter.setOrientation(orientation)
+        self._project_xs_vertical = vertical
+
+        left_layout = getattr(self, "_project_xs_left_layout", None)
+        right_layout = getattr(self, "_project_xs_right_layout", None)
+        status_group = getattr(self, "status_group", None)
+        if left_layout is not None and right_layout is not None and status_group is not None:
+            if vertical:
+                right_layout.removeWidget(status_group)
+                # Keep the capture controls at the top of the scroll view;
+                # status/config selectors follow them on a narrow screen.
+                left_layout.insertWidget(2, status_group)
+            else:
+                left_layout.removeWidget(status_group)
+                right_layout.insertWidget(0, status_group)
+
+        if vertical:
+            # Leave enough room for the preview while exposing the complete
+            # control column through its own vertical scroll bar.
+            usable = max(1, height - splitter.handleWidth())
+            desired_first = min(
+                PROJECT_XS_VERTICAL_LEFT_MAX_HEIGHT,
+                max(PROJECT_XS_VERTICAL_LEFT_MIN_HEIGHT, int(usable * 0.46)),
+            )
+            right = splitter.widget(1)
+            right_minimum = right.minimumSizeHint().height() if right is not None else 0
+            first = min(desired_first, max(1, usable - max(1, right_minimum)))
+            second = max(1, usable - first)
+            splitter.setSizes([first, second])
+        else:
+            usable = max(1, width - splitter.handleWidth())
+            first = min(PROJECT_XS_HORIZONTAL_LEFT_WIDTH, max(280, usable // 2))
+            second = max(1, usable - first)
+            splitter.setSizes([first, second])
+
     def _set_profile_version(self, version: GameVersion) -> None:
         self._profile_version = version
         self.profile_game_value.setText(self._game_label(version))
@@ -3214,8 +3693,16 @@ class MainWindow(QMainWindow):
             return
         self._capture_timer.stop()
         self._capture_cancel.set()
-        self._request_automation_runner_stop(self.auto_rng_tab, "自动定点")
-        self._request_automation_runner_stop(self.auto_tid_rng_tab, "自动 TID")
+        self._request_automation_runner_stop_with_reason(
+            self.auto_rng_tab,
+            "自动定点",
+            "主窗口关闭",
+        )
+        self._request_automation_runner_stop_with_reason(
+            self.auto_tid_rng_tab,
+            "自动 TID",
+            "主窗口关闭",
+        )
         self._ocr_shutdown_requested = True
         self._request_ocr_background_stop()
         broker_start_stopped = self._shutdown_capture_broker_start_thread()
@@ -3266,7 +3753,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, title, message)
             event.ignore()
             return
-        if not self.disconnect_video_source(force=True):
+        if not self.disconnect_video_source(force=True, reason="主窗口关闭"):
             self._is_closing = False
             QMessageBox.warning(
                 self,
@@ -3276,9 +3763,21 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._save_profile_settings()
+        self._save_window_geometry()
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
         super().closeEvent(event)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        self._update_responsive_layout()
+        self._keep_window_on_screen()
+
+    def event(self, event) -> bool:  # type: ignore[override]
+        handled = super().event(event)
+        if event.type() == QEvent.Type.ScreenChangeInternal:
+            QTimer.singleShot(0, self._handle_screen_geometry_change)
+        return handled
 
     def _confirm_unsaved_easycon_script(self) -> bool:
         if not self.easycon_tab.has_unsaved_script_changes():
@@ -3299,7 +3798,32 @@ class MainWindow(QMainWindow):
         return choice == QMessageBox.StandardButton.Discard
 
     def _request_automation_runner_stop(self, panel: object, label: str) -> None:
-        self._request_worker_stop(getattr(panel, "_runner_worker", None), label)
+        self._request_worker_stop(
+            getattr(panel, "_runner_worker", None),
+            label,
+            reason=getattr(self, "_automation_stop_reason", None),
+        )
+
+    def _request_automation_runner_stop_with_reason(
+        self,
+        panel: object,
+        label: str,
+        reason: str,
+    ) -> None:
+        """Invoke the legacy two-argument helper with temporary context.
+
+        Keeping the actual call at two positional arguments is important for
+        existing integrations and test doubles that replace the helper.  The
+        production helper reads this short-lived context and forwards it to
+        the TID worker.
+        """
+
+        previous = getattr(self, "_automation_stop_reason", None)
+        self._automation_stop_reason = str(reason)
+        try:
+            self._request_automation_runner_stop(panel, label)
+        finally:
+            self._automation_stop_reason = previous
 
     def _shutdown_capture_broker_start_thread(self, *, wait_ms: int = 3000) -> bool:
         thread = self._capture_broker_start_thread
@@ -3364,10 +3888,28 @@ class MainWindow(QMainWindow):
             wait_ms=wait_ms,
         )
 
-    def _request_worker_stop(self, worker: object, label: str) -> None:
+    def _request_worker_stop(
+        self,
+        worker: object,
+        label: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
         if worker is not None:
             try:
-                worker.stop()  # type: ignore[attr-defined]
+                request_stop = getattr(worker, "request_stop", None)
+                if reason and callable(request_stop):
+                    try:
+                        request_stop(reason)
+                    except TypeError:
+                        # A legacy worker may expose ``request_stop()``
+                        # without the optional reason argument.
+                        try:
+                            request_stop()
+                        except TypeError:
+                            worker.stop()  # type: ignore[attr-defined]
+                else:
+                    worker.stop()  # type: ignore[attr-defined]
             except Exception as exc:
                 self._write_run_log(label, f"关闭时停止流程失败: {exc}", level="WARNING")
 
@@ -3778,15 +4320,15 @@ class MainWindow(QMainWindow):
         backend = self.easycon_tab._ensure_native_backend()
         setter = getattr(backend, "set_image_result_callback", None)
         if callable(setter):
-            setter(
-                lambda result, source=int(source_generation), run=int(run_generation): (
-                    self.easyConImageSearchResultChanged.emit(
-                        source,
-                        run,
-                        result,
-                    )
-                )
-            )
+            def publish_result(
+                result: object,
+                source: int = int(source_generation),
+                run: int = int(run_generation),
+            ) -> None:
+                self._notify_easycon_image_result_observers(source, run, result)
+                self.easyConImageSearchResultChanged.emit(source, run, result)
+
+            setter(publish_result)
 
     def _invalidate_video_source_consumers(self) -> None:
         self._video_source_connected = False
@@ -3878,6 +4420,225 @@ class MainWindow(QMainWindow):
         self._set_video_source_config_enabled(False)
         self.preview_button.setEnabled(False)
         self._clear_video_source_preview()
+
+    def _video_source_diagnostic_snapshot(self) -> str:
+        try:
+            return self._video_source_diagnostic_snapshot_impl()
+        except Exception as exc:
+            # Diagnostics are strictly best-effort and must never prevent the
+            # release/disconnect path from running.
+            try:
+                generation = self._video_source_generation
+            except Exception:
+                generation = "-"
+            return (
+                f"source_generation={generation}；diagnostic_error="
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    def _video_source_diagnostic_snapshot_impl(self) -> str:
+        """Collect bounded Broker metadata for a video-source failure log.
+
+        This function is deliberately best-effort.  It never reads or writes
+        frame pixels and must not prevent the normal disconnect path when a
+        process, manifest, or test double has already disappeared.
+        """
+
+        fields: list[str] = [f"source_generation={self._video_source_generation}"]
+
+        def clean(value: object) -> str:
+            return " ".join(str(value).split()).replace("；", "/") or "-"
+
+        def append(name: str, value: object) -> None:
+            if value is not None and value != "":
+                fields.append(f"{name}={clean(value)}")
+
+        process = self._capture_broker_process
+        manifest = None
+        manifest_path = None
+        owned_pid: object | None = None
+        owned_session: object | None = None
+        manifest_verified = False
+        if process is None:
+            append("broker_process", "-")
+        else:
+            try:
+                status = getattr(process, "status", None)
+                if callable(status):
+                    status = status()
+                if status is not None:
+                    status_name = getattr(status, "wire_name", None) or getattr(status, "name", None) or status
+                    append("broker_state", status_name)
+            except Exception as exc:
+                append("broker_state_error", f"{type(exc).__name__}: {exc}")
+            try:
+                failure = getattr(process, "failure", None)
+                if callable(failure):
+                    failure = failure()
+                append("broker_failure", failure)
+            except Exception as exc:
+                append("broker_failure_error", f"{type(exc).__name__}: {exc}")
+            try:
+                child = getattr(process, "process", None)
+                owned_pid = getattr(child, "pid", None)
+                if owned_pid is None:
+                    owned_pid = getattr(process, "pid", None)
+                append("broker_pid", owned_pid)
+                poll = getattr(child, "poll", None)
+                append("broker_exit", poll() if callable(poll) else None)
+            except Exception as exc:
+                append("broker_exit_error", f"{type(exc).__name__}: {exc}")
+
+            try:
+                owned_session = getattr(process, "_session_id", None)
+                append("broker_session", owned_session)
+            except Exception as exc:
+                append("broker_session_error", f"{type(exc).__name__}: {exc}")
+
+            try:
+                manifest_path = getattr(process, "manifest_path", None)
+            except Exception as exc:
+                append("manifest_path_error", f"{type(exc).__name__}: {exc}")
+                manifest_path = None
+            append("manifest_path", manifest_path)
+            if manifest_path is not None:
+                try:
+                    from auto_bdsp_rng.capture_broker import BrokerManifest
+
+                    manifest = BrokerManifest.load(manifest_path)
+                except Exception:
+                    manifest = None
+            if manifest is None:
+                try:
+                    manifest = getattr(process, "manifest", None)
+                    if callable(manifest):
+                        manifest = manifest()
+                except Exception:
+                    manifest = None
+
+        if manifest is not None:
+            manifest_pid = getattr(manifest, "pid", None)
+            manifest_session = getattr(manifest, "session_id", None)
+            mismatch: list[str] = []
+            if owned_pid not in (None, "") and manifest_pid not in (None, ""):
+                try:
+                    if int(owned_pid) != int(manifest_pid):
+                        mismatch.append(f"pid:{owned_pid}!={manifest_pid}")
+                except (TypeError, ValueError, OverflowError):
+                    if str(owned_pid) != str(manifest_pid):
+                        mismatch.append(f"pid:{owned_pid}!={manifest_pid}")
+            if owned_session not in (None, "") and manifest_session not in (None, ""):
+                if str(owned_session) != str(manifest_session):
+                    mismatch.append(f"session:{owned_session}!={manifest_session}")
+            if mismatch:
+                append("manifest_identity", "mismatch/" + "/".join(mismatch))
+                append("manifest_pid", manifest_pid)
+                append("manifest_session", manifest_session)
+                manifest = None
+            else:
+                # A PID-only match is useful context but is not sufficient to
+                # open a replacement ring: PIDs can be reused after a child
+                # exits.  The controller normally records both values after
+                # startup; legacy/test doubles may expose neither.
+                manifest_verified = (
+                    owned_pid not in (None, "")
+                    and owned_session not in (None, "")
+                )
+                append(
+                    "manifest_identity",
+                    "verified" if manifest_verified else "unverified",
+                )
+                state = getattr(manifest, "state", None)
+                state_name = getattr(state, "wire_name", None) or getattr(state, "name", None) or state
+                append("manifest_state", state_name)
+                append("manifest_session", manifest_session)
+                append("manifest_pid", manifest_pid)
+                append("manifest_failure", getattr(manifest, "failure_message", None))
+                append("frame_timeout_s", getattr(manifest, "frame_timeout_seconds", None))
+                capture_info = getattr(manifest, "capture", None)
+                if isinstance(capture_info, dict):
+                    for key in ("device_index", "api", "fourcc", "fps"):
+                        append(f"capture_{key}", capture_info.get(key))
+
+        if manifest is None:
+            # A failed/removed manifest should not hide the controller's own
+            # configuration.  These are only fallback fields; a verified
+            # manifest remains the authoritative source above.
+            for attribute, field_name in (
+                ("device_index", "capture_device_index"),
+                ("capture_api", "capture_api"),
+            ):
+                try:
+                    append(field_name, getattr(process, attribute, None))
+                except Exception as exc:
+                    append(f"{field_name}_error", f"{type(exc).__name__}: {exc}")
+            try:
+                if process is None or getattr(process, "device_index", None) is None:
+                    append("capture_device_index", self._capture_device_index())
+            except Exception:
+                pass
+            try:
+                if process is None or getattr(process, "capture_api", None) is None:
+                    append("capture_api", self._capture_api())
+            except Exception:
+                pass
+
+        # The reusable preview adapter may still expose the ring client here.
+        # Include sequence/heartbeat ages when available, but tolerate the
+        # adapter having already released itself after a read failure.
+        preview = self._preview_capture
+        video = getattr(preview, "_video", None) if preview is not None else None
+        client = getattr(video, "_client", None)
+        temporary_client = None
+        if client is None and manifest_path is not None and manifest_verified:
+            try:
+                from auto_bdsp_rng.capture_broker import CaptureBrokerClient
+
+                temporary_client = CaptureBrokerClient.connect(
+                    manifest_path,
+                    require_running=False,
+                    require_live_pid=False,
+                )
+                client = temporary_client
+            except Exception:
+                temporary_client = None
+        if client is not None:
+            try:
+                append("preview_last_sequence", getattr(video, "_last_sequence", None))
+                header_reader = getattr(client, "snapshot_header", None)
+                header = header_reader() if callable(header_reader) else None
+                if not isinstance(header, dict):
+                    ring = getattr(client, "_ring", None)
+                    snapshot = getattr(ring, "snapshot_header", None)
+                    header = snapshot() if callable(snapshot) else None
+                if isinstance(header, dict):
+                    append("latest_sequence", header.get("latest_sequence"))
+                    heartbeat_ns = int(header.get("heartbeat_monotonic_ns", 0) or 0)
+                    if heartbeat_ns > 0:
+                        append("heartbeat_age_ms", f"{max(0, time.monotonic_ns() - heartbeat_ns) / 1_000_000:.1f}")
+                    append("ring_state_code", header.get("state_code"))
+                metadata_reader = getattr(client, "read_latest_metadata", None)
+                if callable(metadata_reader):
+                    metadata = metadata_reader()
+                else:
+                    ring = getattr(client, "_ring", None)
+                    metadata_reader = getattr(ring, "read_latest_metadata", None)
+                    metadata = metadata_reader() if callable(metadata_reader) else None
+                if metadata is not None and len(metadata) >= 2:
+                    append("latest_frame_sequence", metadata[0])
+                    timestamp_ns = int(metadata[1] or 0)
+                    if timestamp_ns > 0:
+                        append("latest_frame_age_ms", f"{max(0, time.monotonic_ns() - timestamp_ns) / 1_000_000:.1f}")
+            except Exception as exc:
+                append("preview_metadata_error", f"{type(exc).__name__}: {exc}")
+            finally:
+                if temporary_client is not None:
+                    try:
+                        temporary_client.close()
+                    except Exception:
+                        pass
+
+        return "；".join(fields)
 
     def _stop_capture_broker_process(
         self,
@@ -4008,7 +4769,12 @@ class MainWindow(QMainWindow):
         ):
             try:
                 result = start(**kwargs)
-                return result is not False
+                if result is False:
+                    failure = getattr(process, "failure", None)
+                    if failure:
+                        raise RuntimeError(str(failure))
+                    return False
+                return True
             except TypeError:
                 continue
         raise ProjectXsIntegrationError("共享视频源进程启动参数不兼容")
@@ -4169,7 +4935,12 @@ class MainWindow(QMainWindow):
         self._video_source_stop_error = None
         self._set_video_source_disconnected_ui(self._video_source_pending_status)
 
-    def disconnect_video_source(self, *, force: bool = False) -> bool:
+    def disconnect_video_source(
+        self,
+        *,
+        force: bool = False,
+        reason: str | None = None,
+    ) -> bool:
         start_thread = self._capture_broker_start_thread
         starter_pending = start_thread is not None
         starter_running = start_thread is not None and start_thread.isRunning()
@@ -4198,9 +4969,18 @@ class MainWindow(QMainWindow):
             if choice != QMessageBox.StandardButton.Yes:
                 return False
         if active:
+            stop_reason = reason or "用户断开/切换视频源"
             self._capture_cancel.set()
-            self._request_automation_runner_stop(self.auto_rng_tab, "自动定点")
-            self._request_automation_runner_stop(self.auto_tid_rng_tab, "自动 TID")
+            self._request_automation_runner_stop_with_reason(
+                self.auto_rng_tab,
+                "自动定点",
+                stop_reason,
+            )
+            self._request_automation_runner_stop_with_reason(
+                self.auto_tid_rng_tab,
+                "自动 TID",
+                stop_reason,
+            )
             if self.easycon_tab._native_status() == EasyConStatus.RUNNING:
                 self.easycon_tab.stop_native_script()
 
@@ -5066,6 +5846,49 @@ class MainWindow(QMainWindow):
             self._write_run_log("OCR", message, level="ERROR")
             self.ocrFullTestFinished.emit(False, message)
 
+    def _add_easycon_image_result_observer(
+        self,
+        observer: Callable[[object], None],
+        *,
+        source_generation: int,
+        run_generation: int,
+    ) -> int:
+        with self._easycon_image_result_observers_lock:
+            self._easycon_image_result_observer_serial += 1
+            token = self._easycon_image_result_observer_serial
+            self._easycon_image_result_observers[token] = (
+                int(source_generation),
+                int(run_generation),
+                observer,
+            )
+            return token
+
+    def _remove_easycon_image_result_observer(self, token: int) -> None:
+        with self._easycon_image_result_observers_lock:
+            self._easycon_image_result_observers.pop(int(token), None)
+
+    def _notify_easycon_image_result_observers(
+        self,
+        source_generation: int,
+        run_generation: int,
+        result: object,
+    ) -> None:
+        if not self._video_source_connected:
+            return
+        if source_generation != self._video_source_generation:
+            return
+        if run_generation != self._easycon_run_generation:
+            return
+        with self._easycon_image_result_observers_lock:
+            observers = tuple(self._easycon_image_result_observers.values())
+        for observer_source, observer_run, observer in observers:
+            if observer_source != source_generation or observer_run != run_generation:
+                continue
+            try:
+                observer(result)
+            except Exception:
+                continue
+
     def _handle_easycon_image_search_result(
         self,
         source_generation: int,
@@ -5110,14 +5933,33 @@ class MainWindow(QMainWindow):
             frame = self._read_live_preview_frame(config)
         except Exception as exc:
             shared_source_failed = self._video_source_connected
+            error = exc if isinstance(exc, BaseException) else Exception(str(exc))
+            error_detail = _exception_chain_text(error)
+            diagnostic = self._video_source_diagnostic_snapshot()
+            try:
+                self._write_run_log(
+                    "视频源",
+                    f"预览读帧失败，准备停止视频源；异常链={error_detail}；{diagnostic}",
+                    level="ERROR",
+                )
+            except Exception:
+                pass
             self._preview_timer.stop()
             self._release_preview_capture()
             stopped = True
             if shared_source_failed:
-                stopped = self.disconnect_video_source(force=True)
+                stopped = self.disconnect_video_source(
+                    force=True,
+                    reason=f"视频源读帧失败（{error_detail}）",
+                )
             else:
                 self.preview_button.setText(self._text("preview_button"))
-            self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            self._show_error(
+                "Preview failed",
+                error,
+                source="视频源",
+                write_log=not shared_source_failed,
+            )
             if shared_source_failed:
                 self._set_video_source_status(
                     "视频源故障" if stopped else "停止失败，请重试",
@@ -6392,21 +7234,49 @@ class MainWindow(QMainWindow):
             candidates = generate_static_candidates_multi(crit, sync_targets)
             return list(candidates)
 
-        def run_script_text_service(script_text: str, name: str) -> object:
+        def run_script_text_service(
+            script_text: str,
+            name: str,
+            *,
+            image_result_observer: Callable[[object], None] | None = None,
+        ) -> object:
             script_name, script_dir = self._native_script_context(config, script_text, name)
-            native_backend = self._call_on_ui_thread(
-                lambda: self._prepare_auto_easycon_script(script_name)
-            )
+
+            def prepare_script() -> tuple[object, int | None]:
+                backend = self._prepare_auto_easycon_script(script_name)
+                try:
+                    observer_token = (
+                        self._add_easycon_image_result_observer(
+                            image_result_observer,
+                            source_generation=self._video_source_generation,
+                            run_generation=self._easycon_run_generation,
+                        )
+                        if image_result_observer is not None
+                        else None
+                    )
+                except BaseException as exc:
+                    try:
+                        self.autoScriptFailed.emit(str(exc))
+                    finally:
+                        self.easycon_tab.release_native_script_run()
+                    raise
+                return backend, observer_token
+
+            native_backend, observer_token = self._call_on_ui_thread(prepare_script)
             try:
-                result = native_backend.run_script_text(
-                    script_text,
-                    script_name,
-                    script_dir=script_dir,
-                )
-            except BaseException as exc:
-                self._fail_auto_script(exc)
-                raise
-            return self._finalize_auto_script_result(result, script_name)
+                try:
+                    result = native_backend.run_script_text(
+                        script_text,
+                        script_name,
+                        script_dir=script_dir,
+                    )
+                except BaseException as exc:
+                    self._fail_auto_script(exc)
+                    raise
+                return self._finalize_auto_script_result(result, script_name)
+            finally:
+                if observer_token is not None:
+                    self._remove_easycon_image_result_observer(observer_token)
 
         def stop_current_script_service() -> None:
             self._capture_cancel.set()
@@ -6421,24 +7291,69 @@ class MainWindow(QMainWindow):
 
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
             self._capture_cancel.clear()
+            is_roamer = config.target_species in ROAMER_SPECIES
             errors: list[BaseException] = []
             script_done = threading.Event()
+            roamer_battle_started = threading.Event()
             monitor_started_at = time.monotonic()
             wall_clock_offset = time.time() - time.monotonic()
             roi_logged = False
             first_event: DialogTimingEvent | None = None
 
+            def observe_roamer_battle(result: object) -> None:
+                if getattr(result, "label_name", None) != ROAMER_BATTLE_LABEL:
+                    return
+                try:
+                    score = int(getattr(result, "script_value"))
+                except (AttributeError, TypeError, ValueError):
+                    return
+                if score < ROAMER_BATTLE_MATCH_THRESHOLD:
+                    roamer_battle_started.set()
+
             def run_script() -> None:
                 try:
-                    run_script_text_service(script_text, name)
+                    run_script_text_service(
+                        script_text,
+                        name,
+                        image_result_observer=(observe_roamer_battle if is_roamer else None),
+                    )
                 except BaseException as exc:
                     errors.append(exc)
                 finally:
                     script_done.set()
 
-            # 脚本和 OCR 并行：脚本线程运行撞闪，主线程监测闪符
+            # 普通目标立即并行 OCR；游走目标先等待脚本确认进入战斗。
             script_thread = threading.Thread(target=run_script, daemon=True)
-            script_thread.start()
+            try:
+                script_thread.start()
+                if is_roamer:
+                    self.auto_rng_tab.captureLog.emit(
+                        "[OCR判闪] 游走模式：等待脚本检测进入战斗，等待期间不运行 OCR"
+                    )
+                    while not roamer_battle_started.wait(timeout=0.1):
+                        if errors:
+                            raise errors[0]
+                        if self._capture_cancel.is_set():
+                            raise RuntimeError("自动流程已停止")
+                        if script_done.is_set():
+                            script_thread.join(timeout=0.1)
+                            if errors:
+                                raise errors[0]
+                            self.auto_rng_tab.captureLog.emit(
+                                "[OCR判闪] 游走脚本已结束，但未检测到进入战斗；判定结果未知"
+                            )
+                            return ShinyCheckResult(is_shiny=False)
+                    if errors:
+                        raise errors[0]
+                    monitor_started_at = time.monotonic()
+                    self.auto_rng_tab.captureLog.emit(
+                        "[OCR判闪] 已检测到进入战斗，开始监控战斗关键词"
+                    )
+            except BaseException:
+                stop_current_script_service()
+                if script_thread.is_alive():
+                    script_thread.join(timeout=5.0)
+                raise
 
             def capture_dialog_region() -> object:
                 nonlocal roi_logged
@@ -6479,9 +7394,14 @@ class MainWindow(QMainWindow):
                 nonlocal first_event
                 observed = wall_clock(event.observed_at)
                 if event.event == "monitor_started":
+                    first_keyword_rule = (
+                        "首关键词：确认进入战斗后开始监控，脚本结束后宽限 30.000s；"
+                        if is_roamer
+                        else "首关键词：撞闪脚本运行期间持续监控，脚本结束后宽限 30.000s；"
+                    )
                     self.auto_rng_tab.captureLog.emit(
                         f"[OCR判闪] 开始监控：{observed}；"
-                        "首关键词：撞闪脚本运行期间持续监控，脚本结束后宽限 30.000s；"
+                        f"{first_keyword_rule}"
                         "次关键词：识别首关键词后等待 30.000s；脚本硬超时 300.000s"
                     )
                 elif event.event == "first_seen":
@@ -6551,8 +7471,13 @@ class MainWindow(QMainWindow):
                 script_thread.join(timeout=0.1)
                 if errors:
                     raise errors[0]
+                timeout_action = (
+                    "停止自动流程并等待人工确认"
+                    if is_roamer
+                    else "按未出闪继续自动流程"
+                )
                 self.auto_rng_tab.captureLog.emit(
-                    "[OCR判闪] 关键词识别超时，判定结果未知；按未出闪继续自动流程"
+                    f"[OCR判闪] 关键词识别超时，判定结果未知；{timeout_action}"
                 )
                 return ShinyCheckResult(is_shiny=False)
             except DialogScriptTimeoutError as exc:
@@ -7471,8 +8396,16 @@ class MainWindow(QMainWindow):
         output.write_text(self._table_text(), encoding="utf-8")
         self.statusBar().showMessage(f"Exported {output}")
 
-    def _show_error(self, title: str, error: object, *, source: str = "应用") -> None:
-        self._write_run_log(source, f"{title}: {error}", level="ERROR")
+    def _show_error(
+        self,
+        title: str,
+        error: object,
+        *,
+        source: str = "应用",
+        write_log: bool = True,
+    ) -> None:
+        if write_log:
+            self._write_run_log(source, f"{title}: {error}", level="ERROR")
         if isinstance(error, ProjectXsIntegrationError):
             display_title, display_message = _project_xs_capture_error_dialog(
                 error,
@@ -7985,6 +8918,25 @@ def run() -> int:
         except OSError as exc:
             run_log_startup_error += f"\n同时无法保存关闭状态，下次启动可能再次尝试：{exc}"
 
+    legacy_script_backups: tuple[Path, ...] = ()
+    legacy_script_migration_error: str | None = None
+    packaged_install_dir = app_base_dir()
+    if getattr(sys, "frozen", False) and not has_uncommitted_update_transaction(
+        packaged_install_dir
+    ):
+        try:
+            legacy_script_backups = migrate_legacy_internal_scripts(
+                packaged_install_dir,
+                log=lambda message: run_log_manager.write("脚本目录迁移", message),
+            )
+        except UpdatePackageError as exc:
+            legacy_script_migration_error = str(exc)
+            run_log_manager.write(
+                "脚本目录迁移",
+                f"旧版内部脚本清理失败：{legacy_script_migration_error}",
+                level="ERROR",
+            )
+
     shutdown_run_log_errors: list[str] = []
     try:
         window = create_window(run_log_manager=run_log_manager)
@@ -7993,7 +8945,20 @@ def run() -> int:
                 0,
                 lambda message=run_log_startup_error: window.show_run_log_startup_error(message),
             )
+        if legacy_script_backups:
+            QTimer.singleShot(
+                0,
+                lambda count=len(legacy_script_backups): window.show_legacy_script_migration_result(count),
+            )
+        if legacy_script_migration_error is not None:
+            QTimer.singleShot(
+                0,
+                lambda message=legacy_script_migration_error: window.show_legacy_script_migration_error(message),
+            )
         window.show()
+        schedule_update_check = getattr(window, "schedule_startup_update_check", None)
+        if is_auto_update_check_enabled() and callable(schedule_update_check):
+            schedule_update_check()
         exit_code = app.exec()
         run_log_manager.set_error_callback(shutdown_run_log_errors.append)
         run_log_manager.write("应用", f"应用正常退出；退出码 {exit_code}")

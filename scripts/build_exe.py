@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -31,6 +32,7 @@ ICON_ICO = ROOT / "docs" / "assets" / "app-icon.ico"
 PROJECT_XS_ROOT = ROOT / "third_party" / "Project_Xs_CHN"
 PROJECT_XS_OVERRIDES = ROOT / "packaging" / "project_xs_overrides"
 PRIVATE_SPONSOR_ASSETS = ROOT / "private_assets" / "sponsor"
+SCRIPT_GENERATED_DIR_NAME = ".generated"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     verify_packaged_easycon_ocr()
     stage("Copy release files")
     copy_release_files()
+    stage("Verify script layout")
+    verify_script_layout()
     stage("Verify Project_Xs assets")
     verify_project_xs_assets()
     stage("Create release zip")
@@ -229,7 +233,11 @@ def verify_packaged_easycon_ocr() -> None:
 
 def copy_release_files() -> None:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
-    copy_optional_tree(ROOT / "script", DIST_DIR / "script")
+    copy_optional_tree(
+        ROOT / "script",
+        DIST_DIR / "script",
+        ignore=shutil.ignore_patterns(SCRIPT_GENERATED_DIR_NAME),
+    )
     copy_optional_tree(ROOT / "docs" / "assets", DIST_DIR / "docs" / "assets")
     copy_optional_tree(PROJECT_XS_ROOT / "configs", DIST_DIR / "third_party" / "Project_Xs_CHN" / "configs")
     copy_optional_tree(PROJECT_XS_ROOT / "images", DIST_DIR / "third_party" / "Project_Xs_CHN" / "images")
@@ -248,6 +256,29 @@ def copy_release_files() -> None:
         shutil.copy2(license_txt_source, DIST_DIR / "LICENSE.txt")
     else:
         (DIST_DIR / "LICENSE.txt").write_text("auto-bdsp-rng is licensed as GPL-3.0-or-later.\n", encoding="utf-8")
+
+
+def verify_script_layout() -> None:
+    canonical = DIST_DIR / "script"
+    if canonical.is_symlink() or not canonical.is_dir():
+        raise SystemExit(f"Release is missing the external script directory: {canonical}")
+    generated = canonical / SCRIPT_GENERATED_DIR_NAME
+    try:
+        generated.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise SystemExit(f"Cannot verify the generated script snapshot path: {generated}: {exc}") from exc
+    else:
+        raise SystemExit(f"Release must not contain generated script snapshots: {generated}")
+    legacy = DIST_DIR / "_internal" / "script"
+    try:
+        legacy.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise SystemExit(f"Cannot verify the legacy internal script path: {legacy}: {exc}") from exc
+    raise SystemExit(f"Release must not contain the legacy internal script directory: {legacy}")
 
 
 def write_user_readme(path: Path) -> None:
@@ -333,15 +364,25 @@ def clean_outputs() -> None:
         spec_cache.unlink()
 
 
-def copy_tree(source: Path, target: Path) -> None:
+def copy_tree(
+    source: Path,
+    target: Path,
+    *,
+    ignore: Callable[[str, list[str]], set[str]] | None = None,
+) -> None:
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(source, target)
+    shutil.copytree(source, target, ignore=ignore)
 
 
-def copy_optional_tree(source: Path, target: Path) -> None:
+def copy_optional_tree(
+    source: Path,
+    target: Path,
+    *,
+    ignore: Callable[[str, list[str]], set[str]] | None = None,
+) -> None:
     if source.exists():
-        copy_tree(source, target)
+        copy_tree(source, target, ignore=ignore)
 
 
 def overlay_optional_tree(source: Path, target: Path) -> None:

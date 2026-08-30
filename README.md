@@ -22,7 +22,7 @@ auto-bdsp-rng-v1.0.0-windows-x64.zip
 
 从首个内置升级器的 Windows 正式版开始，后续可在软件右上角“帮助 -> 检查更新…”中升级。软件会优先下载只包含变化文件的增量包，校验完成后自动退出、替换并重启；独立升级器会再次校验 Release SHA-256，并在新版确认启动前保留旧文件，替换失败或新版启动失败时自动恢复。首次安装、较老版本没有连续升级链或需要修复程序文件时，仍使用完整 Release zip。旧版因为本身没有升级器，需要最后完整下载一次带升级器的新版本。
 
-升级不会强行覆盖用户修改过的 `script` 脚本、运行日志、Project_Xs 配置和自定义眼图；新版默认文件会以 `.new-v<版本>` 副本保留在原文件旁边，同名副本已存在时会追加编号而不会覆盖。应用不会在启动时自动联网，只有用户主动点击“检查更新…”才会访问 GitHub Releases。
+升级不会强行覆盖用户修改过的 `script` 脚本、运行日志、Project_Xs 配置和自定义眼图；新版默认文件会以 `.new-v<版本>` 副本保留在原文件旁边，同名副本已存在时会追加编号而不会覆盖。应用默认在启动后静默检查更新，仅发现新版本时提示；可在“帮助 -> 启动时自动检查更新”中关闭，手动“检查更新…”入口不受影响。
 
 `auto_bdsp_rng` 是一个面向《宝可梦 晶灿钻石 / 明亮珍珠》（BDSP）的 Windows 桌面乱数辅助工具。它把 Project_Xs 的眨眼测种、PokeFinder 的 Gen 8 BDSP 定点生成逻辑、EasyCon / 伊机控脚本执行和自动定点乱数流程整合到同一个 PySide6 应用里，目标是减少在多个工具之间复制 Seed、手动过帧和人工判断撞闪时机的成本。
 
@@ -63,7 +63,7 @@ auto-bdsp-rng-v1.0.0-windows-x64.zip
 
 - 提供浅色桌面风格的脚本编辑界面。
 - 支持 `.txt` / `.ecs` 脚本加载、编辑、保存、未保存标记和 `Ctrl+S`。
-- 支持脚本参数扫描、生成临时脚本、日志保留和文本选择。
+- 支持脚本参数扫描、内存文本执行、日志保留和文本选择。
 - Python 原生后端复刻 EasyCon 串口握手并长期保持连接，脚本结束不会主动断开。
 - 支持 `.IL` 模板搜图、XY/Laplacian 边缘匹配、`TesserDetect`、`IMPORT` 和脚本目录下的 `lib/`；第一版不支持 `.ILX`。
 - 所有脚本复用 Seed 页连接的共享视频源，搜图框只叠加到主预览或独立预览副本，不会污染 OCR、眨眼识别或其他消费者的原始帧。
@@ -77,18 +77,20 @@ auto-bdsp-rng-v1.0.0-windows-x64.zip
 - 支持从测种脚本开始，也支持从捕获 Seed 直接进入后续搜索流程。
 - 可选择测种脚本、过帧脚本、撞闪脚本。
 - 支持多个目标精灵筛选条件，并会记忆最近使用的多目标配置。
-- 以 `fixed_delay`、脚本内固定 `_闪帧` 和目标帧计算撞闪脚本启动点。
+- 兼容两种撞闪时序：声明整数 `_闪帧` 的旧脚本继续在脚本内等待；未声明时由软件等待到启动点后直接运行脚本。
 - 最终等待阶段通过计时和实时 advances 修正，避免重复扣除闪帧或错过目标。
 - 支持过帧过头后的跳过防死循环逻辑。
 - 支持自动反查范围设置、能力页 OCR 重试和个性 / IV 范围匹配。
 - 可选 OCR 闪光判定间隔校准和并行监测。
+- 艾姆利多和克雷色利亚会先等待游走脚本以 `宝可表 < 95` 确认进入战斗，再启动现有关键词间隔 OCR；寻找位置期间不计 OCR 的 300 秒时限，战斗事件缺失或 OCR 结果未知时停止并等待人工确认。
 - 判定出闪后可自动向伊机控发送 Capture 录像指令。
 - 自动面板会保存最近设置，并可在连接成功后自动连接伊机控。
 
 核心公式：
 
 ```text
-trigger_advances = raw_target_advances - fixed_delay - fixed_flash_frames
+script_wait_frames = integer _闪帧 when declared, otherwise 0
+trigger_advances = raw_target_advances - fixed_delay - script_wait_frames
 remaining_to_trigger = trigger_advances - current_advances
 ```
 
@@ -155,7 +157,7 @@ python -m auto_bdsp_rng reidentify --project-xs-config config_camera.json --seed
 
 ## Python 原生 EasyCon
 
-产品主路径完全由 `src/auto_bdsp_rng/automation/easycon/native/` 和 `native_backend.py` 实现，不启动 EasyCon GUI、CLI、Bridge 或 `ezcon.exe`，也不读取 `EASYCON_ROOT`。用户先在 Seed 捕捉页连接采集卡，再在伊机控页连接串口，之后脚本、自动定点、自动 TID、RIGHT 按键和捕捉亮屏保活都复用同一后端。
+产品主路径完全由 `src/auto_bdsp_rng/automation/easycon/native/` 和 `native_backend.py` 实现，不启动 EasyCon GUI、CLI、Bridge 或 `ezcon.exe`，也不读取 `EASYCON_ROOT`。用户先在 Seed 捕捉页连接采集卡，再在伊机控页连接串口，之后脚本、自动定点、自动 TID、RIGHT 按键和捕捉亮屏保活都复用同一后端。原生运行直接执行内存中的脚本文本，不会生成 `script/.generated` ECS 快照。
 
 仓库仍保留旧 CLI/Bridge 源码和协议测试，供兼容回归与上游实现对照；它们不会被默认界面选择，也不会进入正式包的主执行路径。旧 Bridge 的开发资料见：
 

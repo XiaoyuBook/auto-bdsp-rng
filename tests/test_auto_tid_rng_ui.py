@@ -7,9 +7,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QPoint, QSettings, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QListView, QToolButton, QWidget
+from PySide6.QtWidgets import QApplication, QListView, QScrollArea, QToolButton, QWidget
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
@@ -25,7 +25,14 @@ from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    return QApplication.instance() or QApplication([])
+    application = QApplication.instance() or QApplication([])
+    yield application
+    for widget in application.topLevelWidgets():
+        for timer in widget.findChildren(QTimer):
+            timer.stop()
+        widget.close()
+        widget.deleteLater()
+    application.processEvents()
 
 
 def _settings(tmp_path: Path) -> QSettings:
@@ -54,6 +61,34 @@ def test_auto_tid_panel_builds_config_with_target_list(app, tmp_path: Path) -> N
     assert config.target_display_tids == (1, 222222)
     assert config.seed_script_path == seed_script
     assert config.name_script_path == name_script
+
+
+def test_auto_tid_panel_migrates_legacy_internal_script_settings(app, tmp_path: Path) -> None:
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    seed_script = script_dir / "自定义测种.txt"
+    name_script = script_dir / "自定义取名.txt"
+    for path in (seed_script, name_script):
+        path.write_text("A 100\n", encoding="utf-8")
+    settings = _settings(tmp_path)
+    settings.setValue(
+        "seed_script",
+        str(tmp_path / "_internal" / "script" / seed_script.name),
+    )
+    settings.setValue(
+        "name_script",
+        str(tmp_path / "_internal" / "script" / name_script.name),
+    )
+
+    panel = AutoTidRngPanel(script_dir=script_dir, settings=settings)
+    panel.add_target_display_tid(123456)
+
+    assert panel.seed_script_combo.currentData() == str(seed_script)
+    assert panel.name_script_combo.currentData() == str(name_script)
+    assert panel.build_config().seed_script_path == seed_script
+    assert panel.build_config().name_script_path == name_script
+    assert settings.value("seed_script") == str(seed_script)
+    assert settings.value("name_script") == str(name_script)
 
 
 def test_auto_tid_panel_can_start_from_capture_seed_via_menu(app, tmp_path: Path) -> None:
@@ -123,6 +158,118 @@ def test_auto_tid_log_sink_receives_failure_once_and_cannot_break_ui(app, tmp_pa
     assert "仍写入界面" in panel.log_view.toPlainText()
 
 
+def test_auto_tid_stop_button_passes_user_reason_to_worker(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    reasons: list[str] = []
+    emitted: list[bool] = []
+    panel._runner_worker = SimpleNamespace(request_stop=lambda reason: reasons.append(reason))  # type: ignore[assignment]
+    panel.stopRequested.connect(lambda: emitted.append(True))
+
+    panel._stop_clicked()
+
+    assert reasons == ["用户点击停止按钮"]
+    assert emitted == [True]
+
+
+def test_preview_failure_logs_broker_diagnostics_and_tid_stop_reason(app, monkeypatch, tmp_path: Path, request) -> None:
+    class Process:
+        status = "failed"
+        failure = "共享视频源连续无新帧超过 1 秒"
+        process = SimpleNamespace(poll=lambda: 2)
+
+        @staticmethod
+        def stop() -> bool:
+            return True
+
+    window = MainWindow(capture_broker_process=Process())
+    window._video_source_connected = True
+    window._preview_timer.start()
+    window.auto_tid_rng_tab._runner_thread = object()  # type: ignore[assignment]
+    reasons: list[str] = []
+    window.auto_tid_rng_tab._runner_worker = SimpleNamespace(  # type: ignore[assignment]
+        request_stop=lambda reason: reasons.append(reason),
+    )
+
+    def cleanup() -> None:
+        window.auto_tid_rng_tab._runner_worker = None
+        window.auto_tid_rng_tab._runner_thread = None
+        window.close()
+        app.processEvents()
+
+    request.addfinalizer(cleanup)
+    logs: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda source, message, **kwargs: logs.append((str(source), str(message), str(kwargs.get("level")))),
+    )
+    monkeypatch.setattr(window, "_show_error", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(window, "_config_from_form", lambda: SimpleNamespace(capture=object()))
+
+    def read_failure(_config):
+        try:
+            raise ValueError("no new frame")
+        except ValueError as cause:
+            raise RuntimeError("read wrapper") from cause
+
+    monkeypatch.setattr(window, "_read_live_preview_frame", read_failure)
+
+    window._update_preview_frame()
+
+    assert reasons and reasons[0].startswith("视频源读帧失败")
+    assert len(logs) == 1
+    source, message, level = logs[0]
+    assert source == "视频源"
+    assert level == "ERROR"
+    assert "异常链=RuntimeError: read wrapper <- ValueError: no new frame" in message
+    assert "broker_state=failed" in message
+    assert "broker_failure=共享视频源连续无新帧超过 1 秒" in message
+    assert "broker_exit=2" in message
+
+
+def test_video_source_diagnostic_rejects_replaced_manifest_session(app, monkeypatch, tmp_path: Path) -> None:
+    class Process:
+        process = SimpleNamespace(pid=1111, poll=lambda: 2)
+        manifest_path = tmp_path / "capture-broker.json"
+        _session_id = "owned-session"
+        device_index = 3
+        capture_api = 1400
+
+        @staticmethod
+        def status():
+            return "failed"
+
+        @staticmethod
+        def failure():
+            return "旧会话已失败"
+
+    replaced = SimpleNamespace(
+        pid=2222,
+        session_id="replacement-session",
+        state="running",
+        failure_message="新会话的状态",
+        frame_timeout_seconds=1.0,
+        capture={"device_index": 9, "api": 700},
+    )
+    monkeypatch.setattr(
+        "auto_bdsp_rng.capture_broker.BrokerManifest.load",
+        lambda _path: replaced,
+    )
+    window = MainWindow(capture_broker_process=Process())
+
+    diagnostic = window._video_source_diagnostic_snapshot()
+
+    assert "broker_pid=1111" in diagnostic
+    assert "broker_session=owned-session" in diagnostic
+    assert "manifest_path=" in diagnostic
+    assert "manifest_identity=mismatch/" in diagnostic
+    assert "manifest_pid=2222" in diagnostic
+    assert "manifest_session=replacement-session" in diagnostic
+    assert "manifest_failure=" not in diagnostic
+    assert "capture_device_index=3" in diagnostic
+    assert "capture_api=1400" in diagnostic
+
+
 def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_path: Path) -> None:
     panel = AutoTidRngPanel(script_dir=tmp_path)
 
@@ -132,6 +279,19 @@ def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_
     assert panel.target_list.isWrapping()
     assert panel.id_table.minimumHeight() >= 320
     assert panel.id_table.horizontalHeader().stretchLastSection()
+
+
+def test_auto_tid_content_scrolls_below_desktop_height(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path)
+    panel.resize(700, 400)
+    panel.show()
+    app.processEvents()
+
+    assert isinstance(panel.content_scroll, QScrollArea)
+    assert panel.content_scroll.widget().objectName() == "AutoTidContent"
+    assert panel.content_scroll.verticalScrollBar().maximum() > 0
+    toolbar = panel.layout().itemAt(0).widget()
+    assert toolbar is not None and toolbar.isVisible()
 
 
 def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: Path) -> None:

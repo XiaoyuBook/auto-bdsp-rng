@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -43,12 +44,12 @@ from auto_bdsp_rng.automation.auto_rng.scripts import DEFAULT_SEED_SCRIPT_NAME, 
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase, AutoTidRngProgress
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
-from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
 
-SCRIPT_DIR = resource_path("script")
+SCRIPT_DIR = script_directory()
 _TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
 
 
@@ -140,11 +141,30 @@ class AutoTidRngWorker(QObject):
             return
         self.finished.emit(result)
 
-    @Slot()
-    def stop(self) -> None:
+    def request_stop(self, reason: str | None = None) -> None:
+        """Forward a stop request while tolerating legacy runner doubles."""
+
         stop = getattr(self.runner, "stop", None)
         if callable(stop):
-            stop()
+            if reason is None:
+                stop()
+                return
+            try:
+                stop(reason=reason)
+            except TypeError:
+                # Older injected runners expose only ``stop()``.  Keep that
+                # compatibility path usable while the production runner gets
+                # the richer reason field.
+                try:
+                    stop()
+                except TypeError:
+                    # Preserve the original failure for a genuinely broken
+                    # runner rather than silently reporting a successful stop.
+                    raise
+
+    @Slot()
+    def stop(self, reason: str | None = None) -> None:
+        self.request_stop(reason)
 
 
 class AutoTidRngPanel(QWidget):
@@ -158,6 +178,7 @@ class AutoTidRngPanel(QWidget):
         parent: QWidget | None = None,
         script_dir: Path = SCRIPT_DIR,
         run_log_sink: Callable[[str, str], None] | None = None,
+        settings: QSettings | None = None,
     ) -> None:
         super().__init__(parent)
         self.script_dir = script_dir
@@ -165,7 +186,7 @@ class AutoTidRngPanel(QWidget):
         self._scripts: list[Path] = []
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoTidRngWorker | None = None
-        self._settings = QSettings("auto-bdsp-rng", "AutoTidRngPanel")
+        self._settings = settings or QSettings("auto-bdsp-rng", "AutoTidRngPanel")
         self._ocr_region = load_tid_ocr_region()
         self._build_ui()
         self.refresh_scripts()
@@ -179,6 +200,7 @@ class AutoTidRngPanel(QWidget):
         layout.addWidget(self._build_toolbar())
 
         content = QWidget(self)
+        content.setObjectName("AutoTidContent")
         grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
@@ -192,7 +214,24 @@ class AutoTidRngPanel(QWidget):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 2)
         grid.setRowStretch(2, 1)
-        layout.addWidget(content, 1)
+
+        # Keep the action toolbar visible and make the tall target/ID table
+        # area reachable on displays shorter than the desktop layout.
+        # ``content`` keeps the same grid and child ownership, so existing
+        # callers can continue using the panel's public widget attributes.
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setObjectName("AutoTidContentScroll")
+        self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.content_scroll.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.content_scroll.setMinimumSize(0, 0)
+        self.content_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        content.setMinimumSize(0, 0)
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.content_scroll.setWidget(content)
+        layout.addWidget(self.content_scroll, 1)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_panel_state()
@@ -787,7 +826,15 @@ class AutoTidRngPanel(QWidget):
 
     def _stop_clicked(self) -> None:
         if self._runner_worker is not None:
-            self._runner_worker.stop()
+            request_stop = getattr(self._runner_worker, "request_stop", None)
+            if callable(request_stop):
+                try:
+                    request_stop("用户点击停止按钮")
+                except TypeError:
+                    request_stop()
+            else:
+                # Keep simple test/extension worker objects compatible.
+                self._runner_worker.stop()
         self.stopRequested.emit()
 
     def _validate_config(self, config: AutoTidRngConfig) -> None:
@@ -812,10 +859,22 @@ class AutoTidRngPanel(QWidget):
             return
         self._select_script_by_path(combo, str(path))
 
-    def _select_script_by_path(self, combo: QComboBox, path_str: str) -> None:
-        index = combo.findData(path_str)
+    def _select_script_by_path(self, combo: QComboBox, path_str: str) -> Path | None:
+        path = remap_legacy_script_path(path_str, script_dir=self.script_dir)
+        index = combo.findData(str(path))
+        if index < 0:
+            for candidate_index in range(combo.count()):
+                candidate = Path(str(combo.itemData(candidate_index)))
+                try:
+                    if candidate.samefile(path):
+                        index = candidate_index
+                        break
+                except OSError:
+                    continue
         if index >= 0:
             combo.setCurrentIndex(index)
+            return Path(str(combo.itemData(index)))
+        return None
 
     def _choose_script_by_keywords(self, keywords: tuple[str, ...]) -> Path | None:
         for path in self._scripts:
@@ -955,12 +1014,17 @@ class AutoTidRngPanel(QWidget):
                     self.add_target_tid(int(value))
                 except ValueError:
                     pass
-        if s.contains("seed_script"):
-            self._select_script_by_path(self.seed_script_combo, str(s.value("seed_script", "")))
-        if s.contains("name_script"):
-            self._select_script_by_path(self.name_script_combo, str(s.value("name_script", "")))
-        if s.contains("reverse_id_script"):
-            self._select_script_by_path(self.reverse_id_script_combo, str(s.value("reverse_id_script", "")))
+        for key, combo in (
+            ("seed_script", self.seed_script_combo),
+            ("name_script", self.name_script_combo),
+            ("reverse_id_script", self.reverse_id_script_combo),
+        ):
+            if not s.contains(key):
+                continue
+            saved_path = str(s.value(key, ""))
+            selected_path = self._select_script_by_path(combo, saved_path)
+            if selected_path is not None and str(selected_path) != saved_path:
+                s.setValue(key, str(selected_path))
         if s.contains("debug_output"):
             self.debug_output_check.setChecked(s.value("debug_output") == "true")
         self._refresh_target_count()

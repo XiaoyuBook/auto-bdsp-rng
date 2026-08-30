@@ -97,13 +97,11 @@ def app(monkeypatch):
 def easycon_panel(monkeypatch, tmp_path, app):
     script_dir = tmp_path / "script"
     script_dir.mkdir()
-    generated_dir = script_dir / ".generated"
     (script_dir / "玫瑰公园.txt").write_text(
         "_闪帧 = 填入这里  # 目标差值\n_等待时间 = 8\nA 100\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", generated_dir)
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     monkeypatch.setattr(
@@ -180,10 +178,8 @@ def test_easycon_config_persists_key_mapping(tmp_path):
 def test_easycon_panel_restores_configured_key_mapping(monkeypatch, tmp_path, app):
     script_dir = tmp_path / "script"
     script_dir.mkdir()
-    generated_dir = script_dir / ".generated"
     saved_configs: list[EasyConConfig] = []
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", generated_dir)
     monkeypatch.setattr(
         panel_module,
         "load_config",
@@ -317,6 +313,8 @@ def test_easycon_panel_native_script_requires_broker_and_preserves_source_dir(ea
     assert "请先在 Seed 捕捉页面连接视频源" in easycon_panel.log_view.toPlainText()
 
     easycon_panel._video_source_connected = lambda: True
+    legacy_generated_dir = panel_module.SCRIPT_DIR / ".generated"
+    assert legacy_generated_dir.exists() is False
     easycon_panel.run_script()
     process_events_until(lambda: easycon_panel.native_run_thread is None)
 
@@ -330,6 +328,7 @@ def test_easycon_panel_native_script_requires_broker_and_preserves_source_dir(ea
     assert easycon_panel.status_controller_label.text() == "单片机已连接"
     assert easycon_panel.connect_button.text() == "断开连接"
     assert easycon_panel.connect_button.isEnabled() is True
+    assert legacy_generated_dir.exists() is False
 
 
 def test_easycon_panel_native_controls_and_keep_awake_share_backend(easycon_panel):
@@ -488,7 +487,6 @@ def test_easycon_panel_releases_reservation_when_worker_setup_fails(easycon_pane
 
 def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_path, app):
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", tmp_path)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", tmp_path / ".generated")
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     backend = FakeNativeBackend([])
@@ -504,14 +502,12 @@ def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_pat
 def test_easycon_panel_ignores_stale_bridge_config(monkeypatch, tmp_path, app):
     script_dir = tmp_path / "script"
     script_dir.mkdir()
-    generated_dir = script_dir / ".generated"
     bundled_bridge = tmp_path / "bundle" / "bridge" / "EasyConBridge" / "EasyConBridge.exe"
     bundled_bridge.parent.mkdir(parents=True)
     bundled_bridge.write_text("", encoding="utf-8")
     stale_bridge = tmp_path / "old-release" / "bridge" / "EasyConBridge" / "EasyConBridge.exe"
 
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", generated_dir)
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(bridge_path=stale_bridge))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     monkeypatch.setattr(panel_module, "bundled_easycon_bridge_path", lambda: bundled_bridge)
@@ -548,21 +544,18 @@ def test_easycon_panel_loads_script_and_blocks_required_parameter(easycon_panel)
     assert easycon_panel.run_button.isEnabled() is False
 
 
-def test_easycon_panel_syncs_parameters_and_saves_generated_script(easycon_panel):
+def test_easycon_panel_syncs_parameters_without_touching_source_or_creating_snapshot(easycon_panel):
     easycon_panel._load_script_item(easycon_panel.script_list.item(0))
     source = easycon_panel.current_script_path
     blink_input = easycon_panel.parameter_widgets["_闪帧"]
     assert isinstance(blink_input, QLineEdit)
 
     blink_input.setText("123")
-    generated = easycon_panel.save_generated_script()
 
-    assert generated is not None
-    assert generated.parent.name == ".generated"
     assert "_闪帧 = 123  # 目标差值" in easycon_panel.editor.toPlainText()
-    assert generated.read_text(encoding="utf-8").startswith("_闪帧 = 123")
     assert source is not None
     assert "_闪帧 = 填入这里" in source.read_text(encoding="utf-8")
+    assert (panel_module.SCRIPT_DIR / ".generated").exists() is False
 
 
 def test_easycon_panel_loads_external_script_without_adding_to_builtin_list(monkeypatch, tmp_path, easycon_panel):
@@ -580,10 +573,128 @@ def test_easycon_panel_loads_external_script_without_adding_to_builtin_list(monk
     assert saved_configs[-1].recent_scripts == (external.resolve(),)
 
 
+def test_easycon_panel_loads_legacy_internal_path_from_outer_script(monkeypatch, tmp_path, easycon_panel):
+    saved_configs: list[EasyConConfig] = []
+    monkeypatch.setattr(
+        panel_module,
+        "save_config",
+        lambda saved: saved_configs.append(saved) or tmp_path / "config.json",
+    )
+    legacy = tmp_path / "_internal" / "script" / "玫瑰公园.txt"
+
+    easycon_panel.load_script(legacy)
+
+    canonical = panel_module.SCRIPT_DIR / legacy.name
+    assert easycon_panel.current_script_path == canonical
+    assert "_闪帧 = 填入这里" in easycon_panel.editor.toPlainText()
+    assert "_闪帧 = 1" not in easycon_panel.editor.toPlainText()
+    assert saved_configs[-1].recent_scripts == (canonical.resolve(),)
+
+
+def test_easycon_panel_preserves_existing_external_script_with_legacy_marker(
+    monkeypatch,
+    tmp_path,
+    easycon_panel,
+):
+    saved_configs: list[EasyConConfig] = []
+    monkeypatch.setattr(
+        panel_module,
+        "save_config",
+        lambda saved: saved_configs.append(saved) or tmp_path / "config.json",
+    )
+    external = tmp_path / "workspace" / "_internal" / "script" / "custom.ecs"
+    external.parent.mkdir(parents=True)
+    external.write_text("_等待时间 = 9\nA 100\n", encoding="utf-8")
+
+    easycon_panel.load_script(external)
+
+    assert easycon_panel.current_script_path == external
+    assert "_等待时间 = 9" in easycon_panel.editor.toPlainText()
+    assert saved_configs[-1].recent_scripts == (external.resolve(),)
+
+
+def test_easycon_panel_migrates_legacy_config_with_canonical_values_winning(
+    monkeypatch, tmp_path, app
+):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    canonical = script_dir / "阿尔宙斯.txt"
+    canonical.write_text("_闪帧 = 60\n_等待时间 = 8\n", encoding="utf-8")
+    legacy = tmp_path / "_internal" / "script" / canonical.name
+    stable_key = f"script/{canonical.name}"
+    config = EasyConConfig(
+        mock_enabled=True,
+        recent_scripts=(legacy, canonical),
+        script_parameters={
+            str(legacy): {"_闪帧": "1", "_旧参数": "legacy"},
+            str(canonical.resolve()): {"_闪帧": "50", "_外层参数": "outer"},
+            stable_key: {"_闪帧": "60", "_稳定参数": "canonical"},
+        },
+    )
+    saved_configs: list[EasyConConfig] = []
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "load_config", lambda: config)
+    monkeypatch.setattr(
+        panel_module,
+        "save_config",
+        lambda saved: saved_configs.append(saved) or tmp_path / "config.json",
+    )
+
+    panel = EasyConPanel(native_backend=FakeNativeBackend(), video_source_connected=lambda: True)
+
+    assert panel.config.recent_scripts == (canonical,)
+    assert panel.config.script_parameters == {
+        stable_key: {
+            "_闪帧": "60",
+            "_稳定参数": "canonical",
+            "_外层参数": "outer",
+            "_旧参数": "legacy",
+        }
+    }
+    assert saved_configs
+    assert saved_configs[0].recent_scripts == (canonical,)
+    assert saved_configs[0].script_parameters == panel.config.script_parameters
+
+
+def test_easycon_panel_still_starts_when_migrated_config_cannot_be_saved(
+    monkeypatch,
+    tmp_path,
+    app,
+):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    canonical = script_dir / "阿尔宙斯.txt"
+    canonical.write_text("_闪帧 = 60\n", encoding="utf-8")
+    legacy = tmp_path / "_internal" / "script" / canonical.name
+    config = EasyConConfig(mock_enabled=True, recent_scripts=(legacy,))
+    run_log_events: list[tuple[str, str]] = []
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(panel_module, "load_config", lambda: config)
+    save_attempts: list[EasyConConfig] = []
+
+    def fail_first_save(saved_config: EasyConConfig):
+        save_attempts.append(saved_config)
+        if len(save_attempts) == 1:
+            raise OSError("read only")
+        return tmp_path / "config.json"
+
+    monkeypatch.setattr(panel_module, "save_config", fail_first_save)
+
+    panel = EasyConPanel(
+        run_log_sink=lambda level, message: run_log_events.append((level, message)),
+        native_backend=FakeNativeBackend(),
+        video_source_connected=lambda: True,
+    )
+
+    assert panel.config.recent_scripts == (canonical,)
+    assert len(save_attempts) >= 2
+    assert "无法保存配置：read only" in panel.log_view.toPlainText()
+    assert any(level == "WARNING" and "无法保存配置" in message for level, message in run_log_events)
+
+
 def test_easycon_panel_restores_and_persists_recent_script_parameters(monkeypatch, tmp_path, app):
     script_dir = tmp_path / "script"
     script_dir.mkdir()
-    generated_dir = script_dir / ".generated"
     (script_dir / "玫瑰公园.txt").write_text(
         "_闪帧 = 填入这里  # 目标差值\n_等待时间 = 8\nA 100\n",
         encoding="utf-8",
@@ -594,7 +705,6 @@ def test_easycon_panel_restores_and_persists_recent_script_parameters(monkeypatc
         script_parameters={"script/玫瑰公园.txt": {"_闪帧": "456", "_等待时间": "9"}},
     )
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", generated_dir)
     monkeypatch.setattr(panel_module, "load_config", lambda: config)
     monkeypatch.setattr(panel_module, "save_config", lambda saved: saved_configs.append(saved) or tmp_path / "config.json")
     monkeypatch.setattr(
@@ -721,7 +831,6 @@ def test_easycon_panel_auto_selects_last_port(monkeypatch, tmp_path, app):
     script_dir = tmp_path / "script"
     script_dir.mkdir()
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(last_port="COM9", mock_enabled=False))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     monkeypatch.setattr(
@@ -767,6 +876,9 @@ def test_easycon_panel_stops_running_cli_process(monkeypatch, tmp_path, easycon_
     easycon_panel.run_script()
     assert easycon_panel.process is not None
     assert easycon_panel.process.waitForStarted(1000)
+    temporary_script = Path(easycon_panel.process.arguments()[1])
+    assert temporary_script.suffix == ".txt"
+    assert temporary_script.exists()
 
     easycon_panel.toggle_run()
     assert easycon_panel.process.waitForFinished(2000)
@@ -775,6 +887,7 @@ def test_easycon_panel_stops_running_cli_process(monkeypatch, tmp_path, easycon_
     app.processEvents()
 
     assert "已中止" in easycon_panel.log_view.toPlainText()
+    assert temporary_script.exists() is False
 
 
 def test_easycon_panel_runs_script_text_through_bridge(monkeypatch, tmp_path, easycon_panel):
@@ -971,10 +1084,10 @@ def test_capture_keep_awake_cli_timeout_preserves_normal_task_state(monkeypatch,
     keep_awake_process = easycon_panel._capture_keep_awake_cli_process
     assert keep_awake_process is not None
     assert keep_awake_process.objectName() == "capture_keep_awake_cli"
-    generated_script_path = Path(keep_awake_process.arguments()[1])
-    assert generated_script_path.name.startswith("capture_keep_awake_l_")
-    assert generated_script_path.name.endswith("_controller.ecs")
-    assert generated_script_path.read_text(encoding="utf-8") == "L 100\n"
+    temporary_script_path = Path(keep_awake_process.arguments()[1])
+    assert temporary_script_path.name.startswith("auto-bdsp-rng-easycon-")
+    assert temporary_script_path.suffix == ".txt"
+    assert temporary_script_path.read_text(encoding="utf-8") == "L 100\n"
     assert keep_awake_process.waitForStarted(1000)
 
     easycon_panel._capture_keep_awake_cli_timeout()
@@ -991,6 +1104,7 @@ def test_capture_keep_awake_cli_timeout_preserves_normal_task_state(monkeypatch,
     assert easycon_panel.current_run_port == "mock"
     assert toast_calls == []
     assert "捕捉亮屏保活 CLI 超时" in easycon_panel.log_view.toPlainText()
+    assert temporary_script_path.exists() is False
     easycon_panel.run_timer.stop()
 
 
@@ -1395,14 +1509,18 @@ def test_easycon_panel_runs_cli_smoke_test(monkeypatch, tmp_path, easycon_panel)
 
     easycon_panel.run_cli_smoke_test()
     assert easycon_panel.process is not None
+    temporary_script = Path(easycon_panel.process.arguments()[1])
+    assert temporary_script.name.startswith("auto-bdsp-rng-easycon-")
+    assert temporary_script.suffix == ".txt"
+    assert temporary_script.read_text(encoding="utf-8") == "WAIT 50\n"
     assert easycon_panel.process.waitForFinished(2000)
     app = QApplication.instance()
     assert app is not None
     app.processEvents()
 
-    generated = sorted((panel_module.GENERATED_DIR).glob("*cli_smoke*.ecs"))
-    assert generated
-    assert generated[-1].read_text(encoding="utf-8") == "WAIT 50\n"
+    assert temporary_script.exists() is False
+    assert easycon_panel._cli_script_path is None
+    assert (panel_module.SCRIPT_DIR / ".generated").exists() is False
     log_text = easycon_panel.log_view.toPlainText()
     assert "测试 CLI 运行会触发一次 CLI 连接" in log_text
     assert "cli smoke" in log_text
@@ -1427,7 +1545,6 @@ def test_easycon_panel_cli_smoke_accepts_chinese_and_space_paths(monkeypatch, tm
         newline="\r\n",
     )
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     monkeypatch.setattr(
@@ -1442,14 +1559,16 @@ def test_easycon_panel_cli_smoke_accepts_chinese_and_space_paths(monkeypatch, tm
 
     panel.run_cli_smoke_test()
     assert panel.process is not None
+    temporary_script = Path(panel.process.arguments()[1])
+    assert temporary_script.suffix == ".txt"
+    assert script_dir not in temporary_script.parents
     assert panel.process.waitForFinished(2000)
     app = QApplication.instance()
     assert app is not None
     app.processEvents()
 
-    generated = sorted((script_dir / ".generated").glob("*cli_smoke*.ecs"))
-    assert generated
-    assert "脚本 目录" in str(generated[-1])
+    assert temporary_script.exists() is False
+    assert (script_dir / ".generated").exists() is False
     assert "ok path" in panel.log_view.toPlainText()
 
 
@@ -1530,7 +1649,6 @@ def test_easycon_panel_reports_missing_ezcon_and_empty_ports(monkeypatch, tmp_pa
     script_dir = tmp_path / "script"
     script_dir.mkdir()
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=False))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     monkeypatch.setattr(
@@ -1551,7 +1669,6 @@ def test_easycon_panel_reports_invalid_ezcon_version(monkeypatch, tmp_path, app)
     script_dir = tmp_path / "script"
     script_dir.mkdir()
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(ezcon_path=Path("D:/bad/ezcon.exe")))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     monkeypatch.setattr(
@@ -1571,7 +1688,6 @@ def test_easycon_panel_reports_empty_ports_when_mock_disabled(monkeypatch, tmp_p
     script_dir = tmp_path / "script"
     script_dir.mkdir()
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", script_dir)
-    monkeypatch.setattr(panel_module, "GENERATED_DIR", script_dir / ".generated")
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=False))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
     monkeypatch.setattr(

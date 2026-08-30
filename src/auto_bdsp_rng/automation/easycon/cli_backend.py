@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +10,7 @@ from auto_bdsp_rng.automation.easycon.backend import EasyConBackend
 from auto_bdsp_rng.automation.easycon.discovery import discover_ezcon, list_ports
 from auto_bdsp_rng.automation.easycon.models import EasyConInstallation, EasyConRunResult, EasyConRunTask, EasyConStatus
 from auto_bdsp_rng.automation.easycon.process import no_window_subprocess_kwargs
+from auto_bdsp_rng.automation.easycon.scripts import create_temporary_cli_script, remove_temporary_cli_script
 
 
 CLI_TRANSITION_NOTICE = (
@@ -122,8 +122,7 @@ class CliEasyConBackend(EasyConBackend):
             raise RuntimeError("ezcon.exe is not configured")
         if not port:
             raise RuntimeError("CLI 模式需要指定串口")
-        tmp_path = Path(tempfile.mktemp(suffix=".ecs"))
-        tmp_path.write_text(script_text, encoding="utf-8")
+        tmp_path = create_temporary_cli_script(script_text)
         t_ready = datetime.now()
         try:
             task = EasyConRunTask(script_path=tmp_path, port=port, ezcon_path=ezcon_path, name=name or "cli-script")
@@ -146,7 +145,7 @@ class CliEasyConBackend(EasyConBackend):
             return result
         finally:
             try:
-                tmp_path.unlink(missing_ok=True)
+                remove_temporary_cli_script(tmp_path)
             except OSError:
                 pass
 

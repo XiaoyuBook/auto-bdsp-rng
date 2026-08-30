@@ -31,10 +31,11 @@ from auto_bdsp_rng.automation.easycon.native_backend import (
 )
 from auto_bdsp_rng.automation.easycon.scripts import (
     apply_parameter_values,
+    create_temporary_cli_script,
     detect_newline_style,
-    generate_script_file,
+    discard_legacy_generated_snapshots,
     parse_script_parameters,
-    prune_generated_scripts,
+    remove_temporary_cli_script,
     scan_builtin_scripts,
 )
 
@@ -59,14 +60,15 @@ __all__ = [
     "apply_parameter_values",
     "classify_cli_failure",
     "cli_connection_notice",
+    "create_temporary_cli_script",
     "detect_newline_style",
+    "discard_legacy_generated_snapshots",
     "discover_ezcon",
     "extract_compile_error_line",
-    "generate_script_file",
     "list_ports",
     "load_config",
     "parse_script_parameters",
-    "prune_generated_scripts",
+    "remove_temporary_cli_script",
     "save_config",
     "scan_builtin_scripts",
 ]

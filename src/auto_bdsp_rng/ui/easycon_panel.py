@@ -4,7 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from time import monotonic
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
@@ -45,26 +45,30 @@ from auto_bdsp_rng.automation.easycon import (
     EasyConConfig,
     EasyConInstallation,
     EasyConStatus,
+    apply_parameter_values,
     classify_cli_failure,
     cli_connection_notice,
+    create_temporary_cli_script,
     detect_newline_style,
+    discard_legacy_generated_snapshots,
     discover_ezcon,
     extract_compile_error_line,
-    apply_parameter_values,
-    generate_script_file,
     list_ports,
     load_config,
     parse_script_parameters,
-    prune_generated_scripts,
+    remove_temporary_cli_script,
     save_config,
     scan_builtin_scripts,
 )
-from auto_bdsp_rng.resources import bundled_easycon_bridge_path, resource_path
+from auto_bdsp_rng.resources import (
+    bundled_easycon_bridge_path,
+    remap_legacy_script_path,
+    script_directory,
+)
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 
 
-SCRIPT_DIR = resource_path("script")
-GENERATED_DIR = SCRIPT_DIR / ".generated"
+SCRIPT_DIR = script_directory()
 CAPTURE_KEEP_AWAKE_BUTTON = "L"
 CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS = 2.0
 CAPTURE_KEEP_AWAKE_CLI_TIMEOUT_MS = 5_000
@@ -83,6 +87,80 @@ DEFAULT_KEY_MAPPING = {
     "LSUp": Qt.Key.Key_W, "LSDown": Qt.Key.Key_S, "LSLeft": Qt.Key.Key_A, "LSRight": Qt.Key.Key_D,
     "RSUp": Qt.Key.Key_Up, "RSDown": Qt.Key.Key_Down, "RSLeft": Qt.Key.Key_Left, "RSRight": Qt.Key.Key_Right,
 }
+
+
+def _resolved_path(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def _script_parameter_config_key(path: Path, script_dir: Path) -> str:
+    resolved = _resolved_path(path)
+    if resolved.parent == _resolved_path(script_dir):
+        return f"script/{resolved.name}"
+    return resolved.as_posix()
+
+
+def _is_absolute_path_text(value: str) -> bool:
+    return Path(value).is_absolute() or PureWindowsPath(value).is_absolute()
+
+
+def _migrated_script_parameter_key(key: str, script_dir: Path) -> str:
+    if not _is_absolute_path_text(key):
+        return key
+
+    original = Path(key)
+    migrated = remap_legacy_script_path(key, script_dir=script_dir)
+    if migrated != original:
+        return _script_parameter_config_key(migrated, script_dir)
+
+    resolved = _resolved_path(original)
+    if resolved.parent == _resolved_path(script_dir):
+        return _script_parameter_config_key(resolved, script_dir)
+    return key
+
+
+def _migrate_script_config(config: EasyConConfig, script_dir: Path) -> EasyConConfig:
+    recent_scripts: list[Path] = []
+    recent_keys: set[str] = set()
+    for path in config.recent_scripts:
+        migrated = remap_legacy_script_path(path, script_dir=script_dir)
+        identity = _resolved_path(migrated).as_posix().casefold()
+        if identity in recent_keys:
+            continue
+        recent_keys.add(identity)
+        recent_scripts.append(migrated)
+
+    canonical_items: list[tuple[str, dict[str, str]]] = []
+    canonical_alias_items: list[tuple[str, dict[str, str]]] = []
+    legacy_items: list[tuple[str, dict[str, str]]] = []
+    for key, values in config.script_parameters.items():
+        original_key = str(key)
+        migrated_key = _migrated_script_parameter_key(original_key, script_dir)
+        item = (migrated_key, {str(name): str(value) for name, value in values.items()})
+        if migrated_key == original_key:
+            canonical_items.append(item)
+        elif remap_legacy_script_path(original_key, script_dir=script_dir) == Path(original_key):
+            canonical_alias_items.append(item)
+        else:
+            legacy_items.append(item)
+
+    script_parameters: dict[str, dict[str, str]] = {}
+    for key, values in canonical_items:
+        script_parameters[key] = dict(values)
+    for items in (canonical_alias_items, legacy_items):
+        for key, values in items:
+            target = script_parameters.setdefault(key, {})
+            for name, value in values.items():
+                target.setdefault(name, value)
+
+    return replace(
+        config,
+        recent_scripts=tuple(recent_scripts),
+        script_parameters=script_parameters,
+    )
 
 _KEY_TO_QT = {int(v): k for k, v in Qt.Key.__dict__.items() if isinstance(v, int) and not k.startswith("_")}
 
@@ -448,7 +526,20 @@ class EasyConPanel(QWidget):
         self.native_connecting = False
         self._native_connection_failed = False
         self._last_native_display_status: tuple[EasyConStatus, bool, bool] | None = None
-        self.config = load_config()
+        loaded_config = load_config()
+        self.config = _migrate_script_config(loaded_config, SCRIPT_DIR)
+        config_migration_save_error: OSError | None = None
+        if self.config != loaded_config:
+            try:
+                save_config(self.config)
+            except OSError as exc:
+                config_migration_save_error = exc
+        legacy_snapshot_count = 0
+        legacy_snapshot_cleanup_error: OSError | None = None
+        try:
+            legacy_snapshot_count = discard_legacy_generated_snapshots(SCRIPT_DIR)
+        except OSError as exc:
+            legacy_snapshot_cleanup_error = exc
         self._preferred_last_port = self.config.last_port
         self.installation = EasyConInstallation(path=None, error="未检测")
         self.bridge_backend: BridgeEasyConBackend | None = None
@@ -463,6 +554,7 @@ class EasyConPanel(QWidget):
         self._capture_keep_awake_cli_duration_ms = 0
         self._capture_keep_awake_cli_timed_out = False
         self._capture_keep_awake_cli_cancelled = False
+        self._capture_keep_awake_cli_script_path: Path | None = None
         self._shutting_down = False
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self.bridge_connecting = False
@@ -483,6 +575,7 @@ class EasyConPanel(QWidget):
         self._last_record_ts: float = 0.0
         self._recorded_hat_direction = "RESET"
         self.process: QProcess | None = None
+        self._cli_script_path: Path | None = None
         self.current_run_started_at: datetime | None = None
         self.current_run_script_path: Path | None = None
         self.current_run_port: str | None = None
@@ -504,6 +597,15 @@ class EasyConPanel(QWidget):
         self.capture_keep_awake_finished.connect(self._handle_capture_keep_awake_finished)
 
         self._build_ui()
+        if config_migration_save_error is not None:
+            self._append_log(
+                "warn",
+                f"旧版脚本路径已在本次运行中迁移，但无法保存配置：{config_migration_save_error}",
+            )
+        if legacy_snapshot_count:
+            self._append_log("info", f"已清理旧版 ECS 运行快照：{legacy_snapshot_count} 个")
+        if legacy_snapshot_cleanup_error is not None:
+            self._append_log("warn", f"旧版 ECS 运行快照未清理：{legacy_snapshot_cleanup_error}")
         # Ctrl+S 快捷键
         save_action = QAction("保存", self)
         save_action.setShortcut("Ctrl+S")
@@ -1223,6 +1325,7 @@ class EasyConPanel(QWidget):
             self.load_script(Path(path))
 
     def load_script(self, path: Path) -> None:
+        path = remap_legacy_script_path(path, script_dir=SCRIPT_DIR)
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -1360,15 +1463,7 @@ class EasyConPanel(QWidget):
         save_config(self.config)
 
     def _script_config_key(self, path: Path) -> str:
-        try:
-            if path.resolve().parent == SCRIPT_DIR.resolve():
-                return f"script/{path.name}"
-        except OSError:
-            pass
-        try:
-            return path.resolve().as_posix()
-        except OSError:
-            return path.as_posix()
+        return _script_parameter_config_key(path, SCRIPT_DIR)
 
     def restore_template_defaults(self) -> None:
         if not self.parameter_defaults:
@@ -1398,27 +1493,6 @@ class EasyConPanel(QWidget):
                 self._append_log("error", f"第 {parameter.line_index + 1} 行参数 {parameter.name} 需要填写")
             return False
         return True
-
-    def save_generated_script(self) -> Path | None:
-        if not self.editor.toPlainText().strip():
-            self._append_log("warn", "没有可保存的脚本内容")
-            return None
-        try:
-            path = generate_script_file(
-                self.editor.toPlainText(),
-                self.current_script_name,
-                GENERATED_DIR,
-                newline=self.current_script_newline,
-            )
-        except OSError as exc:
-            self._append_log("error", f"保存临时脚本失败: {exc}")
-            return None
-        self._append_log("info", f"已保存临时脚本: {path.name}")
-        return path
-
-
-
-
 
     def toggle_run(self) -> None:
         if self._is_native_mode():
@@ -1450,9 +1524,16 @@ class EasyConPanel(QWidget):
         if not self._can_run():
             self._append_log("warn", "配置未完成，无法运行脚本")
             return
-        script_path = self.save_generated_script()
-        if script_path is None:
+        try:
+            script_path = create_temporary_cli_script(
+                self.editor.toPlainText(),
+                newline=self.current_script_newline,
+            )
+        except OSError as exc:
+            self._append_log("error", f"创建 CLI 临时脚本失败: {exc}")
             return
+        self._cleanup_cli_script()
+        self._cli_script_path = script_path
         port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
         self.process = QProcess(self)
         self.process.setProgram(str(self.installation.path))
@@ -1465,7 +1546,7 @@ class EasyConPanel(QWidget):
         self.current_run_stdout = []
         self.current_run_stderr = []
         self.current_run_started_at = datetime.now()
-        self.current_run_script_path = script_path
+        self.current_run_script_path = self.current_script_path or Path(self.current_script_name)
         self.current_run_port = port
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
@@ -1493,9 +1574,6 @@ class EasyConPanel(QWidget):
             else:
                 self._append_log("warn", "脚本内容或参数未准备完成")
             return
-        generated_script = self.save_generated_script()
-        if generated_script is None:
-            return
         script_text = self.editor.toPlainText()
         script_dir = self._current_native_script_dir()
         try:
@@ -1514,7 +1592,7 @@ class EasyConPanel(QWidget):
             self.current_run_stdout = []
             self.current_run_stderr = []
             self.current_run_started_at = started_at
-            self.current_run_script_path = self.current_script_path or generated_script
+            self.current_run_script_path = self.current_script_path or Path(self.current_script_name)
             self.current_run_port = self.port_combo.currentText()
             self.run_seconds = 0
             self.elapsed_label.setText("00:00:00")
@@ -1629,16 +1707,13 @@ class EasyConPanel(QWidget):
         if not self._can_run():
             self._append_log("warn", "请先连接伊机控，再运行脚本")
             return
-        generated_script = self.save_generated_script()
-        if generated_script is None:
-            return
         script_text = self.editor.toPlainText()
         started_at = datetime.now()
         self.stop_requested = False
         self.current_run_stdout = []
         self.current_run_stderr = []
         self.current_run_started_at = started_at
-        self.current_run_script_path = generated_script
+        self.current_run_script_path = self.current_script_path or Path(self.current_script_name)
         self.current_run_port = self.port_combo.currentText()
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
@@ -1919,8 +1994,7 @@ class EasyConPanel(QWidget):
         log_level = "error" if status.startswith("失败") else "warn" if status.startswith("已中止") else "info"
         self._append_log(log_level, status)
         self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
-        if exit_code == 0 and status.startswith("已完成"):
-            self._prune_successful_generated_scripts()
+        self._cleanup_cli_script()
         self.current_run_started_at = None
         self.current_run_script_path = None
         self.current_run_port = None
@@ -1928,14 +2002,13 @@ class EasyConPanel(QWidget):
         self.current_run_stderr = []
         self._update_run_enabled()
 
-    def _prune_successful_generated_scripts(self) -> None:
+    def _cleanup_cli_script(self) -> None:
+        path = self._cli_script_path
+        self._cli_script_path = None
         try:
-            removed = prune_generated_scripts(GENERATED_DIR, self.config.keep_generated)
+            remove_temporary_cli_script(path)
         except OSError as exc:
-            self._append_log("warn", f"清理临时脚本失败: {exc}")
-            return
-        if removed:
-            self._append_log("info", f"已按配置保留最近 {self.config.keep_generated} 个临时脚本，清理 {len(removed)} 个")
+            self._append_log("warn", f"清理 CLI 临时脚本失败: {exc}")
 
     def _report_cli_failure(self, exit_code: int | None) -> None:
         stdout = "".join(self.current_run_stdout)
@@ -2028,7 +2101,6 @@ class EasyConPanel(QWidget):
             recent_scripts=self.config.recent_scripts,
             script_parameters=self.config.script_parameters,
             key_mapping=self.key_mapping,
-            keep_generated=self.config.keep_generated,
             keep_log_lines=self.log_keep_lines.value() if hasattr(self, "log_keep_lines") else self.config.keep_log_lines,
         )
         save_config(self.config)
@@ -2517,6 +2589,8 @@ class EasyConPanel(QWidget):
             process.kill()
             if not process.waitForFinished(wait_ms):
                 stopped = False
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            self._cleanup_cli_script()
 
         backend = self.bridge_backend
         if backend is not None:
@@ -2553,12 +2627,7 @@ class EasyConPanel(QWidget):
             self._append_log("warn", f"请先选择串口，无法执行{log_label}")
             return False
         try:
-            script_path = generate_script_file(
-                f"{CAPTURE_KEEP_AWAKE_BUTTON} {duration_ms}\n",
-                "capture_keep_awake_l.ecs",
-                GENERATED_DIR,
-                task_type="controller",
-            )
+            script_path = create_temporary_cli_script(f"{CAPTURE_KEEP_AWAKE_BUTTON} {duration_ms}\n")
         except OSError as exc:
             self._append_log("warn", f"捕捉亮屏保活生成 CLI 脚本失败，继续捕捉: {exc}")
             return False
@@ -2578,6 +2647,7 @@ class EasyConPanel(QWidget):
             lambda error, owned_process=process: self._capture_keep_awake_cli_error(owned_process, error)
         )
         self._capture_keep_awake_cli_process = process
+        self._capture_keep_awake_cli_script_path = script_path
         self._capture_keep_awake_cli_label = log_label
         self._capture_keep_awake_cli_duration_ms = duration_ms
         self._capture_keep_awake_cli_timed_out = False
@@ -2634,6 +2704,12 @@ class EasyConPanel(QWidget):
         self._capture_keep_awake_cli_duration_ms = 0
         self._capture_keep_awake_cli_timed_out = False
         self._capture_keep_awake_cli_cancelled = False
+        script_path = self._capture_keep_awake_cli_script_path
+        self._capture_keep_awake_cli_script_path = None
+        try:
+            remove_temporary_cli_script(script_path)
+        except OSError as exc:
+            self._append_log("warn", f"清理捕捉亮屏保活 CLI 临时脚本失败: {exc}")
         process.deleteLater()
 
     def _settle_capture_keep_awake_cli(self, *, wait_ms: int) -> bool:
@@ -2948,25 +3024,31 @@ class EasyConPanel(QWidget):
 
     def run_cli_smoke_test(self) -> None:
         self._append_log("warn", "测试 CLI 运行会触发一次 CLI 连接，不代表常驻连接验收。")
-        self._run_inline_cli_script("cli_smoke", "WAIT 50\n", task_type="cli_smoke")
+        self._run_inline_cli_script("cli_smoke", "WAIT 50\n")
 
-    def _run_inline_cli_script(self, task_name: str, script_text: str, task_type: str = "controller") -> None:
+    def _run_inline_cli_script(self, task_name: str, script_text: str) -> None:
         if not self.prepare_for_external_cli_script():
             return
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             self._append_log("warn", "已有 CLI 任务执行中，暂不能启动手柄测试")
             return
         self.detect_easycon()
-        self._start_inline_cli_script(task_name, script_text, task_type)
+        self._start_inline_cli_script(task_name, script_text)
 
-    def _start_inline_cli_script(self, task_name: str, script_text: str, task_type: str) -> bool:
+    def _start_inline_cli_script(self, task_name: str, script_text: str) -> bool:
         if not self.installation.is_available:
             self._append_log("warn", "CLI 不可用，无法执行手柄测试脚本")
             return False
         if not self.mock_check.isChecked() and not self.port_combo.currentText():
             self._append_log("warn", "请先选择串口；CLI 手柄测试会触发一次连接")
             return False
-        script_path = generate_script_file(script_text, f"{task_name}.ecs", GENERATED_DIR, task_type=task_type)
+        try:
+            script_path = create_temporary_cli_script(script_text)
+        except OSError as exc:
+            self._append_log("error", f"创建 CLI 临时脚本失败: {exc}")
+            return False
+        self._cleanup_cli_script()
+        self._cli_script_path = script_path
         port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
         self.process = QProcess(self)
         self.process.setProgram(str(self.installation.path))
@@ -2979,7 +3061,7 @@ class EasyConPanel(QWidget):
         self.current_run_stdout = []
         self.current_run_stderr = []
         self.current_run_started_at = datetime.now()
-        self.current_run_script_path = script_path
+        self.current_run_script_path = Path(f"{task_name}.txt")
         self.current_run_port = port
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")

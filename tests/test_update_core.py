@@ -14,7 +14,9 @@ from auto_bdsp_rng.update_core import (
     UpdatePackageError,
     apply_update_packages,
     commit_update_transaction,
+    has_uncommitted_update_transaction,
     load_patch_manifest,
+    migrate_legacy_internal_scripts,
     recover_interrupted_update_transactions,
     rollback_update_transaction,
 )
@@ -265,6 +267,202 @@ def test_apply_update_keeps_modified_mutable_file_and_writes_new_copy(tmp_path: 
 
     assert script.read_bytes() == b"user edit"
     assert (script.parent / "run.txt.new-v2.2.1").read_bytes() == b"new default"
+
+
+def test_migrate_legacy_internal_scripts_removes_duplicates_and_backs_up_differences(
+    tmp_path: Path,
+):
+    install = tmp_path / "app"
+    canonical = install / "script"
+    legacy = install / "_internal" / "script"
+    canonical.mkdir(parents=True)
+    (legacy / "nested").mkdir(parents=True)
+    (install / "_internal" / "core.dll").write_bytes(b"runtime")
+    (canonical / "same.txt").write_bytes(b"same")
+    (legacy / "same.txt").write_bytes(b"same")
+    (canonical / "edited.txt").write_bytes(b"canonical")
+    (legacy / "edited.txt").write_bytes(b"legacy user edit")
+    (legacy / "nested" / "only-internal.txt").write_bytes(b"only internal")
+    backup_root = canonical / ".legacy-internal-backup"
+    backup_root.mkdir()
+    (backup_root / "edited.txt").write_bytes(b"existing backup")
+    messages: list[str] = []
+
+    migrated = migrate_legacy_internal_scripts(install, log=messages.append)
+
+    assert not legacy.exists()
+    assert (install / "_internal" / "core.dll").read_bytes() == b"runtime"
+    assert (canonical / "same.txt").read_bytes() == b"same"
+    assert (canonical / "edited.txt").read_bytes() == b"canonical"
+    assert (backup_root / "edited.txt").read_bytes() == b"existing backup"
+    assert (backup_root / "edited.txt.1").read_bytes() == b"legacy user edit"
+    assert (backup_root / "nested" / "only-internal.txt").read_bytes() == b"only internal"
+    assert migrated == (
+        backup_root / "edited.txt.1",
+        backup_root / "nested" / "only-internal.txt",
+    )
+    assert any("已删除旧版内部重复脚本" in message for message in messages)
+    assert len([message for message in messages if "已备份并删除旧版内部脚本" in message]) == 2
+    assert migrate_legacy_internal_scripts(install) == ()
+
+
+def test_migrate_legacy_internal_scripts_keeps_source_when_backup_fails(
+    tmp_path: Path,
+    monkeypatch,
+):
+    install = tmp_path / "app"
+    source = install / "_internal" / "script" / "user.txt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"user content")
+
+    original_fsync = update_core.os.fsync
+
+    def fail_fsync(_file_descriptor: int) -> None:
+        raise OSError("disk failure")
+
+    monkeypatch.setattr(update_core.os, "fsync", fail_fsync)
+
+    with pytest.raises(UpdatePackageError, match="迁移旧版内部脚本失败"):
+        migrate_legacy_internal_scripts(install)
+
+    backup_root = install / "script" / ".legacy-internal-backup"
+    staging_dirs = list(
+        backup_root.glob(f"{update_core.LEGACY_INTERNAL_SCRIPT_STAGING_PREFIX}*")
+    )
+    assert not source.exists()
+    assert len(staging_dirs) == 1
+    assert (staging_dirs[0] / "user.txt").read_bytes() == b"user content"
+    assert not (backup_root / "user.txt").exists()
+
+    monkeypatch.setattr(update_core.os, "fsync", original_fsync)
+    migrated = migrate_legacy_internal_scripts(install)
+
+    assert migrated == (backup_root / "user.txt",)
+    assert (backup_root / "user.txt").read_bytes() == b"user content"
+    assert not staging_dirs[0].exists()
+
+
+def test_migrate_legacy_internal_scripts_recovers_crash_staging(tmp_path: Path):
+    install = tmp_path / "app"
+    canonical = install / "script"
+    backup_root = canonical / ".legacy-internal-backup"
+    staging = backup_root / (
+        f"{update_core.LEGACY_INTERNAL_SCRIPT_STAGING_PREFIX}{'0' * 32}"
+    )
+    staging.mkdir(parents=True)
+    canonical.mkdir(parents=True, exist_ok=True)
+    (canonical / "duplicate.txt").write_bytes(b"same")
+    (staging / "duplicate.txt").write_bytes(b"same")
+    (staging / "recovered.txt").write_bytes(b"recovered user content")
+
+    migrated = migrate_legacy_internal_scripts(install)
+
+    assert migrated == (backup_root / "recovered.txt",)
+    assert (backup_root / "recovered.txt").read_bytes() == b"recovered user content"
+    assert not staging.exists()
+
+
+def test_migrate_legacy_internal_scripts_does_not_delete_recreated_source_tree(
+    tmp_path: Path,
+    monkeypatch,
+):
+    install = tmp_path / "app"
+    canonical = install / "script"
+    legacy = install / "_internal" / "script"
+    canonical.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    (canonical / "old.txt").write_bytes(b"old content")
+    (legacy / "old.txt").write_bytes(b"old content")
+    original_rename = update_core.os.rename
+
+    def rename_and_recreate(source, destination) -> None:
+        original_rename(source, destination)
+        if Path(source) == legacy:
+            legacy.mkdir(parents=True)
+            (legacy / "new.txt").write_bytes(b"concurrent content")
+
+    monkeypatch.setattr(update_core.os, "rename", rename_and_recreate)
+
+    assert migrate_legacy_internal_scripts(install) == ()
+
+    assert (legacy / "new.txt").read_bytes() == b"concurrent content"
+    assert not (legacy / "old.txt").exists()
+    backup_root = canonical / ".legacy-internal-backup"
+    assert list(backup_root.glob(f"{update_core.LEGACY_INTERNAL_SCRIPT_STAGING_PREFIX}*")) == []
+
+
+def test_uncommitted_update_transaction_blocks_nontransactional_migration(
+    tmp_path: Path,
+    monkeypatch,
+):
+    install = tmp_path / "app"
+    target = install / "app.exe"
+    install.mkdir()
+    target.write_bytes(b"old")
+    patch = _write_patch(
+        tmp_path / "update.zip",
+        files=[("app.exe", b"new", b"old", False)],
+    )
+
+    result = apply_update_packages(
+        [patch],
+        install_dir=install,
+        expected_version="2.2.0",
+        defer_commit=True,
+    )
+
+    assert isinstance(result, DeferredUpdate)
+    assert has_uncommitted_update_transaction(install) is True
+
+    def fail_remove_transaction_dir(_work_dir: Path) -> None:
+        raise UpdatePackageError("cleanup locked")
+
+    monkeypatch.setattr(update_core, "_remove_transaction_dir", fail_remove_transaction_dir)
+    commit_update_transaction(result.transaction_dir, install_dir=install)
+
+    assert result.transaction_dir.exists()
+    assert has_uncommitted_update_transaction(install) is False
+
+
+@pytest.mark.parametrize("failure_point", ["resolve", "glob", "resolve_transaction"])
+def test_uncommitted_update_transaction_check_fails_closed_on_filesystem_errors(
+    tmp_path: Path,
+    monkeypatch,
+    failure_point: str,
+):
+    install = tmp_path / "app"
+    install.mkdir()
+    if failure_point == "resolve":
+        original_resolve = Path.resolve
+
+        def fail_resolve(path: Path, *args, **kwargs):
+            if path == install:
+                raise OSError("resolve failed")
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", fail_resolve)
+    elif failure_point == "glob":
+        original_glob = Path.glob
+
+        def fail_glob(path: Path, pattern: str):
+            if path == install:
+                raise OSError("glob failed")
+            return original_glob(path, pattern)
+
+        monkeypatch.setattr(Path, "glob", fail_glob)
+    else:
+        (install / f"{update_core.TRANSACTION_DIR_PREFIX}broken").mkdir()
+
+        def fail_resolve_transaction(_candidate: Path, _install_dir: Path) -> Path:
+            raise OSError("transaction resolve failed")
+
+        monkeypatch.setattr(
+            update_core,
+            "_resolve_transaction_dir",
+            fail_resolve_transaction,
+        )
+
+    assert has_uncommitted_update_transaction(install) is True
 
 
 def test_preserved_update_never_overwrites_an_existing_different_sidecar(tmp_path: Path):

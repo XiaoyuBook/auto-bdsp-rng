@@ -7,6 +7,7 @@ import pytest
 from auto_bdsp_rng.automation.auto_tid_rng import (
     AutoTidRngConfig,
     AutoTidRngPhase,
+    AutoTidRngProgress,
     ProjectXsMunchlaxAdvanceCounter,
     AutoTidRngRunner,
     AutoTidRngServices,
@@ -115,6 +116,44 @@ def test_auto_tid_runner_does_not_run_second_seed_script_when_stopped_during_zoo
     assert runner.progress.log_message == "已请求停止自动 TID 乱数"
 
 
+def test_auto_tid_runner_stop_includes_first_reason_and_state_snapshot(tmp_path: Path) -> None:
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(script_dir=tmp_path),
+        progress_callback=None,
+    )
+    messages: list[str] = []
+    runner.log_callback = messages.append
+    runner.progress = AutoTidRngProgress(
+        phase=AutoTidRngPhase.WAIT_NAME_TRIGGER,
+        loop_index=3,
+        seed_text="0000000000000001 0000000000000002",
+        current_advances=3330,
+        target_tid=12,
+        target_sid=34,
+        target_display_tid=777777,
+        target_advances=3338,
+        trigger_advances=3337,
+        remaining_to_trigger=7,
+    )
+
+    runner.stop("视频源读帧失败")
+    runner.stop("第二次停止不应覆盖")
+
+    assert runner.progress.phase is AutoTidRngPhase.IDLE
+    assert runner.progress.stop_reason == "视频源读帧失败"
+    assert len(messages) == 1
+    message = messages[0]
+    assert "原因=视频源读帧失败" in message
+    assert "阶段=等待取名帧" in message
+    assert "轮次=3" in message
+    assert "当前Adv=3330" in message
+    assert "目标Adv=3338" in message
+    assert "触发Adv=3337" in message
+    assert "剩余Adv=7" in message
+    assert "目标DisplayTID=777777" in message
+    assert "Seed=0000000000000001 0000000000000002" in message
+
+
 def test_reverse_lookup_span_is_symmetric_and_inclusive() -> None:
     assert reverse_lookup_span(255, 20) == (235, 275, 41)
     assert reverse_lookup_span(10, 20) == (0, 30, 31)
@@ -138,6 +177,38 @@ def test_project_xs_munchlax_counter_uses_project_xs_rangefloat_interval() -> No
     assert counter.advance_to(counter.next_tick_at - 0.001) == 0
     assert counter.advance_to(counter.next_tick_at) == 1
     assert counter.current_advances == 1
+
+
+def test_project_xs_munchlax_estimate_target_at_matches_ticks_without_mutating_counter() -> None:
+    state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
+    counter = ProjectXsMunchlaxAdvanceCounter()
+    reference = ProjectXsMunchlaxAdvanceCounter()
+    counter.reset(current_advances=3330, seed=state, now=100.0)
+    reference.reset(current_advances=3330, seed=state, now=100.0)
+
+    assert counter._rng is not None
+    before = (
+        counter.current_advances,
+        counter.next_tick_at,
+        counter.last_tick_at,
+        counter.last_interval_seconds,
+        counter._rng.words,
+    )
+
+    for _ in range(7):
+        reference.advance_one_blink()
+    expected_target_at = reference.last_tick_at
+
+    assert counter.estimate_target_at(3337) == pytest.approx(expected_target_at)
+    assert counter.estimate_target_at(3337) == pytest.approx(expected_target_at)
+    after = (
+        counter.current_advances,
+        counter.next_tick_at,
+        counter.last_tick_at,
+        counter.last_interval_seconds,
+        counter._rng.words,
+    )
+    assert after == before
 
 
 def test_auto_tid_runner_waits_until_display_tid_target_then_runs_name_script(tmp_path: Path) -> None:
@@ -262,6 +333,61 @@ def test_auto_tid_runner_waits_with_project_xs_munchlax_timing(tmp_path: Path) -
 
     assert sleeps[:1] == pytest.approx([_project_xs_munchlax_interval(state)])
     assert runner.progress.phase == AutoTidRngPhase.COMPLETED
+
+
+def test_auto_tid_runner_records_single_adv_wait_timing_and_log(tmp_path: Path) -> None:
+    seed_script = tmp_path / "BDSP测种.txt"
+    name_script = tmp_path / "取名.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    name_script.write_text("B 100\n", encoding="utf-8")
+
+    state = SeedState32(0x11111111, 0x22222222, 0x33333333, 0x44444444)
+    measured_at = 100.0
+    clock = [measured_at]
+    sleeps: list[float] = []
+    logs: list[str] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            name_script_path=name_script,
+            frame_threshold=2,
+            target_display_tids=(123456,),
+            delay=0,
+        ),
+        services=AutoTidRngServices(
+            capture_seed=lambda: AutoTidSeedResult(seed=state, current_advances=0, measured_at=measured_at),
+            search_id_states=lambda _seed, _threshold, _targets: [
+                IDState8(advances=1, tid=1, sid=100, tsv=0, display_tid=123456)
+            ],
+            run_script_text=lambda _text, _name: None,
+            monotonic=lambda: clock[0],
+            sleep=sleep,
+        ),
+        log_callback=logs.append,
+    )
+
+    runner.run(max_steps=10)
+
+    expected_interval = _project_xs_munchlax_interval(state)
+    assert runner.progress.phase is AutoTidRngPhase.COMPLETED
+    assert runner.progress.wait_started_at == pytest.approx(measured_at)
+    assert runner.progress.wait_target_at == pytest.approx(measured_at + expected_interval)
+    assert runner.progress.wait_elapsed_seconds == pytest.approx(expected_interval)
+    assert runner.progress.wait_keep_awake is False
+    assert sleeps[:1] == pytest.approx([expected_interval])
+
+    arrival_logs = [message for message in logs if message.startswith("到达取名脚本触发帧 1")]
+    assert arrival_logs
+    arrival_log = arrival_logs[-1]
+    assert "理论等待=" in arrival_log
+    assert "等待已用=" in arrival_log
+    assert "等待Adv保活=未启用" in arrival_log
 
 
 def test_auto_tid_runner_retries_seed_script_when_display_tid_not_in_threshold(tmp_path: Path) -> None:

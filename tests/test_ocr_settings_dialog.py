@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 
@@ -42,7 +42,14 @@ _EXPECTED_DEFAULT_OCR_REGIONS = {
 def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setattr(MainWindow, "_start_ocr_warmup", lambda self: None)
-    return QApplication.instance() or QApplication([])
+    application = QApplication.instance() or QApplication([])
+    yield application
+    for widget in application.topLevelWidgets():
+        for timer in widget.findChildren(QTimer):
+            timer.stop()
+        widget.close()
+        widget.deleteLater()
+    application.processEvents()
 
 
 @pytest.fixture(autouse=True)

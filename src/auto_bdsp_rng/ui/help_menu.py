@@ -33,6 +33,8 @@ class HelpMenuController:
         set_run_log_enabled: Callable[[bool], bool] | None = None,
         open_run_log_dir: Callable[[], object] | None = None,
         check_updates: Callable[[], object] | None = None,
+        auto_update_check_enabled: bool = True,
+        set_auto_update_check_enabled: Callable[[bool], bool] | None = None,
     ) -> None:
         self.window = window
         self.open_url = open_url or self._open_url
@@ -42,6 +44,8 @@ class HelpMenuController:
         self.set_run_log_enabled = set_run_log_enabled
         self.open_run_log_dir = open_run_log_dir
         self.check_updates = check_updates
+        self._auto_update_check_enabled = bool(auto_update_check_enabled)
+        self.set_auto_update_check_enabled = set_auto_update_check_enabled
 
     def install(self, button: QToolButton | QPushButton | None = None) -> QMenu:
         self.help_menu = self._build_menu(parent=button or self.window)
@@ -76,6 +80,12 @@ class HelpMenuController:
         self.check_updates_action.setEnabled(self.check_updates is not None)
         self.check_updates_action.triggered.connect(self._check_updates)
         menu.addAction(self.check_updates_action)
+
+        self.auto_update_check_action = QAction("启动时自动检查更新", self.window)
+        self.auto_update_check_action.setCheckable(True)
+        self.auto_update_check_action.setChecked(self._auto_update_check_enabled)
+        self.auto_update_check_action.triggered.connect(self._set_auto_update_check_enabled)
+        menu.addAction(self.auto_update_check_action)
 
         menu.addSeparator()
         self.run_log_menu = QMenu("运行日志", self.window)
@@ -135,6 +145,21 @@ class HelpMenuController:
     def _check_updates(self) -> None:
         if self.check_updates is not None:
             self.check_updates()
+
+    def _set_auto_update_check_enabled(self, enabled: bool) -> None:
+        previous = self._auto_update_check_enabled
+        try:
+            actual = (
+                bool(enabled)
+                if self.set_auto_update_check_enabled is None
+                else bool(self.set_auto_update_check_enabled(bool(enabled)))
+            )
+        except Exception:
+            actual = previous
+        self._auto_update_check_enabled = actual
+        self.auto_update_check_action.blockSignals(True)
+        self.auto_update_check_action.setChecked(actual)
+        self.auto_update_check_action.blockSignals(False)
 
     def copy_author_email(self) -> None:
         self.copy_text(AUTHOR_EMAIL)

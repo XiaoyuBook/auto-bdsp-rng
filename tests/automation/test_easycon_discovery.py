@@ -107,7 +107,6 @@ def test_config_round_trip(tmp_path):
         mock_enabled=True,
         recent_scripts=(Path("script/BDSP测种.txt"),),
         script_parameters={"script/玫瑰公园.txt": {"_闪帧": "123", "_等待时间": "8"}},
-        keep_generated=7,
         keep_log_lines=300,
     )
 

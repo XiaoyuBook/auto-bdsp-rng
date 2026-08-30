@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import types
 
@@ -660,14 +661,17 @@ def test_plan_timeline_outputs_blink_and_pokemon_events(monkeypatch):
 
 def test_load_project_xs_config_from_real_submodule_config():
     config = load_project_xs_config("config_cave.json")
+    raw = json.loads(config.source_path.read_text(encoding="utf-8"))
 
     assert config.source_path.name == "config_cave.json"
-    assert config.capture.eye_image_path.name == "eye.png"
-    assert config.capture.roi == (610, 330, 30, 30)
-    assert config.capture.threshold == 0.9
-    assert config.capture.monitor_window is True
-    assert config.capture.crop == (0, 0, 0, 0)
-    assert config.npc == 0
+    assert config.capture.eye_image_path == (
+        project_xs_module.PROJECT_XS_ROOT / raw["image"]
+    ).resolve()
+    assert config.capture.roi == tuple(raw["view"])
+    assert config.capture.threshold == pytest.approx(float(raw["thresh"]))
+    assert config.capture.monitor_window is bool(raw["MonitorWindow"])
+    assert config.capture.crop == tuple(raw["crop"])
+    assert config.npc == int(raw["npc"])
 
 
 def test_load_project_xs_config_from_absolute_path(tmp_path):

@@ -15,8 +15,8 @@ from auto_bdsp_rng.resources import app_path
 
 
 _LOG_FILE_RE = re.compile(
-    r"^run_(?P<date>\d{4}-\d{2}-\d{2})_"
-    r"session-(?P<session>\d{8}T\d{12})_pid-(?P<pid>\d+)\.log$"
+    r"^run_(?P<date>\d{4}-\d{2}-\d{2})"
+    r"(?:_session-\d{8}T\d{12}_pid-\d+)?\.log$"
 )
 _RETENTION_DAYS = 7
 
@@ -35,16 +35,9 @@ class RunLogManager:
         self,
         directory: str | os.PathLike[str] | None = None,
         now: NowCallback | None = None,
-        pid: int | None = None,
     ) -> None:
         self._directory = Path(directory) if directory is not None else app_path("logs")
         self._now = now or datetime.now
-        self._pid = os.getpid() if pid is None else int(pid)
-        if self._pid < 0:
-            raise ValueError("pid must not be negative")
-
-        session_started = self._read_now()
-        self._session_id = session_started.strftime("%Y%m%dT%H%M%S%f")
         self._lock = threading.RLock()
         self._enabled = False
         self._stream: TextIO | None = None
@@ -174,7 +167,7 @@ class RunLogManager:
         return value
 
     def _path_for_date(self, day: date) -> Path:
-        name = f"run_{day:%Y-%m-%d}_session-{self._session_id}_pid-{self._pid}.log"
+        name = f"run_{day:%Y-%m-%d}.log"
         return self._directory / name
 
     def _open_stream(self, day: date) -> tuple[Path, TextIO]:

@@ -8,7 +8,6 @@ dist/
 release/
 /logs/
 private_assets/
-script/.generated/
 bridge/**/bin/
 bridge/**/obj/
 # 会话规划文件（不上传 git）

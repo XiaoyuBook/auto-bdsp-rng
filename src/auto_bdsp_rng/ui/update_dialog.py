@@ -364,6 +364,8 @@ class _DownloadThread(QThread):
 
 class UpdateController(QObject):
     busyChanged = Signal(bool)
+    silentCheckCompleted = Signal(object)
+    silentCheckFailed = Signal(str)
 
     def __init__(
         self,
@@ -388,6 +390,7 @@ class UpdateController(QObject):
         self._open_url = open_url or self._open_release_url
         self._plan: UpdatePlanLike | None = None
         self._check_thread: _CheckThread | None = None
+        self._check_silent = False
         self._download_thread: _DownloadThread | None = None
         self._downloaded_patches: tuple[Path, ...] | None = None
         self._download_cancel_requested = False
@@ -396,16 +399,21 @@ class UpdateController(QObject):
         self.dialog.openReleaseRequested.connect(self._open_current_release)
         self.dialog.cancelRequested.connect(self.cancel)
 
-    def check_for_updates(self) -> None:
+    def check_for_updates(self, *, silent: bool = False) -> None:
         if self._operation_running():
-            self._show_dialog()
+            if not silent:
+                if self._check_thread is not None:
+                    self._check_silent = False
+                self._show_dialog()
             return
         self._plan = None
+        self._check_silent = bool(silent)
         self.dialog.show_checking(self.current_version)
-        self._show_dialog()
+        if not silent:
+            self._show_dialog()
         thread = _CheckThread(self.current_version, self._check_updates, self)
         thread.completed.connect(self._check_completed)
-        thread.failed.connect(self._operation_failed)
+        thread.failed.connect(self._check_failed)
         thread.finished.connect(lambda owned=thread: self._check_thread_finished(owned))
         thread.finished.connect(thread.deleteLater)
         self._check_thread = thread
@@ -432,6 +440,8 @@ class UpdateController(QObject):
 
     @Slot(object)
     def _check_completed(self, plan: UpdatePlanLike) -> None:
+        silent = self._check_silent
+        self._check_silent = False
         self._plan = plan
         unavailable_reason: str | None = None
         if plan.update_available and plan.incremental_available:
@@ -440,6 +450,21 @@ class UpdateController(QObject):
             elif not self._installer_available():
                 unavailable_reason = "当前构建未包含升级程序，请前往 Release 页面更新"
         self.dialog.show_plan(plan, install_unavailable_reason=unavailable_reason)
+        if silent:
+            self.silentCheckCompleted.emit(plan)
+            if plan.update_available:
+                self._show_dialog()
+
+    @Slot(str)
+    def _check_failed(self, message: str) -> None:
+        detail = message or "未知错误"
+        silent = self._check_silent
+        self._check_silent = False
+        if silent:
+            self.dialog.show_error(detail)
+            self.silentCheckFailed.emit(detail)
+            return
+        self._operation_failed(detail)
 
     @Slot()
     def _start_download(self) -> None:
@@ -521,6 +546,7 @@ class UpdateController(QObject):
     def _check_thread_finished(self, thread: _CheckThread) -> None:
         if self._check_thread is thread:
             self._check_thread = None
+            self._check_silent = False
         self._emit_busy_state()
 
     def _download_thread_finished(self, thread: _DownloadThread) -> None:

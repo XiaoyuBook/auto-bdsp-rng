@@ -69,7 +69,7 @@ def set_startup_notice_acknowledged(acknowledged: bool, path: Path | None = None
 
 
 def is_run_log_enabled(path: Path | None = None) -> bool:
-    return bool(load_settings(path).get("run_log_enabled", False))
+    return bool(load_settings(path).get("run_log_enabled", True))
 
 
 def set_run_log_enabled(enabled: bool, path: Path | None = None) -> bool:
@@ -77,5 +77,19 @@ def set_run_log_enabled(enabled: bool, path: Path | None = None) -> bool:
         settings = load_settings(path)
         actual = bool(enabled)
         settings["run_log_enabled"] = actual
+        save_settings(settings, path)
+        return actual
+
+
+def is_auto_update_check_enabled(path: Path | None = None) -> bool:
+    value = load_settings(path).get("auto_update_check_enabled", True)
+    return value if isinstance(value, bool) else True
+
+
+def set_auto_update_check_enabled(enabled: bool, path: Path | None = None) -> bool:
+    with _SETTINGS_LOCK:
+        settings = load_settings(path)
+        actual = bool(enabled)
+        settings["auto_update_check_enabled"] = actual
         save_settings(settings, path)
         return actual

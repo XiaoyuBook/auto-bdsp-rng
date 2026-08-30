@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from auto_bdsp_rng.update_core import apply_update_packages
+from auto_bdsp_rng.update_core import apply_update_packages, migrate_legacy_internal_scripts
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,7 +84,7 @@ def test_build_manifest_hashes_files_and_marks_user_editable_paths(tmp_path: Pat
 
 def test_build_update_artifacts_without_previous_manifest_is_bootstrap_only(tmp_path: Path):
     dist = tmp_path / "dist"
-    dist.mkdir()
+    (dist / "script").mkdir(parents=True)
     (dist / "app.exe").write_bytes(b"application")
 
     manifest_path, patch_path = builder.build_update_artifacts(dist, tmp_path / "release", "1.0.0")
@@ -94,6 +94,53 @@ def test_build_update_artifacts_without_previous_manifest_is_bootstrap_only(tmp_
     raw = manifest_path.read_bytes()
     assert raw.endswith(b"\n")
     assert json.loads(raw.decode("utf-8"))["files"][0]["path"] == "app.exe"
+
+
+@pytest.mark.parametrize("legacy_kind", ["directory", "file"])
+def test_build_update_artifacts_rejects_legacy_internal_script_path(
+    tmp_path: Path,
+    legacy_kind: str,
+):
+    dist = tmp_path / "dist"
+    (dist / "script").mkdir(parents=True)
+    (dist / "app.exe").write_bytes(b"application")
+    legacy = dist / "_internal" / "script"
+    legacy.parent.mkdir()
+    if legacy_kind == "directory":
+        legacy.mkdir()
+    else:
+        legacy.write_bytes(b"unexpected")
+
+    with pytest.raises(builder.UpdatePackageError, match="must not contain"):
+        builder.build_update_artifacts(dist, tmp_path / "release", "1.0.0")
+
+
+def test_build_update_artifacts_requires_external_script_directory(tmp_path: Path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"application")
+
+    with pytest.raises(builder.UpdatePackageError, match="must contain the external script"):
+        builder.build_update_artifacts(dist, tmp_path / "release", "1.0.0")
+
+
+@pytest.mark.parametrize("generated_kind", ["directory", "file"])
+def test_build_update_artifacts_rejects_generated_script_snapshots(
+    tmp_path: Path,
+    generated_kind: str,
+):
+    dist = tmp_path / "dist"
+    script_dir = dist / "script"
+    script_dir.mkdir(parents=True)
+    (dist / "app.exe").write_bytes(b"application")
+    generated = script_dir / ".generated"
+    if generated_kind == "directory":
+        generated.mkdir()
+    else:
+        generated.write_bytes(b"unexpected")
+
+    with pytest.raises(builder.UpdatePackageError, match="must not contain generated script snapshots"):
+        builder.build_update_artifacts(dist, tmp_path / "release", "1.0.0")
 
 
 def test_patch_contains_only_added_and_changed_payloads_plus_removals(tmp_path: Path):
@@ -156,12 +203,43 @@ def test_patch_contains_only_added_and_changed_payloads_plus_removals(tmp_path: 
         assert archive.read("payload/app.exe") == b"new app"
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("_internal/script/legacy.txt", True),
+        ("_INTERNAL/SCRIPT/legacy.txt", True),
+        ("_internal/scripts/legacy.txt", False),
+        ("_internal/scripted/legacy.txt", False),
+        ("nested/_internal/script/legacy.txt", False),
+        ("_internal/script", False),
+        ("_internal/core.dll", False),
+    ],
+)
+def test_patch_only_preserves_removed_files_under_legacy_internal_script_prefix(
+    path: str,
+    expected: bool,
+):
+    previous = _manifest(
+        "1.0.0",
+        [_entry("app.exe", b"app"), _entry(path, b"legacy")],
+    )
+    current = _manifest("1.1.0", [_entry("app.exe", b"app")])
+
+    metadata = builder.build_patch_metadata(current, previous)
+
+    removed = {entry["path"]: entry for entry in metadata["remove"]}
+    assert removed[path]["preserve_if_modified"] is expected
+    assert builder.preserve_if_modified(path) is False
+
+
 def test_generated_patch_is_accepted_by_runtime_updater_and_preserves_user_edits(tmp_path: Path):
     previous_dist = tmp_path / "previous"
     (previous_dist / "script").mkdir(parents=True)
+    (previous_dist / "_internal" / "script").mkdir(parents=True)
     (previous_dist / "app.exe").write_bytes(b"old app")
     (previous_dist / "obsolete.dll").write_bytes(b"obsolete")
     (previous_dist / "script" / "default.txt").write_bytes(b"old default")
+    (previous_dist / "_internal" / "script" / "default.txt").write_bytes(b"old default")
     previous_manifest = builder.build_manifest(previous_dist, "2.2.0")
     previous_manifest_path = tmp_path / "previous.manifest.json"
     builder.write_manifest(previous_manifest, previous_manifest_path)
@@ -183,6 +261,7 @@ def test_generated_patch_is_accepted_by_runtime_updater_and_preserves_user_edits
     install_dir = tmp_path / "installed"
     shutil.copytree(previous_dist, install_dir)
     (install_dir / "script" / "default.txt").write_bytes(b"user edit")
+    (install_dir / "_internal" / "script" / "default.txt").write_bytes(b"legacy user edit")
 
     final_version = apply_update_packages(
         [patch_path],
@@ -196,6 +275,14 @@ def test_generated_patch_is_accepted_by_runtime_updater_and_preserves_user_edits
     assert not (install_dir / "obsolete.dll").exists()
     assert (install_dir / "script" / "default.txt").read_bytes() == b"user edit"
     assert (install_dir / "script" / "default.txt.new-v2.2.1").read_bytes() == b"new default"
+    legacy_script = install_dir / "_internal" / "script" / "default.txt"
+    assert legacy_script.read_bytes() == b"legacy user edit"
+
+    migrated = migrate_legacy_internal_scripts(install_dir)
+
+    assert not (install_dir / "_internal" / "script").exists()
+    assert [path.read_bytes() for path in migrated] == [b"legacy user edit"]
+    assert migrated[0].parent == install_dir / "script" / ".legacy-internal-backup"
 
 
 def test_manifest_rejects_unsafe_paths_and_case_collisions():

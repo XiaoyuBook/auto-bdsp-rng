@@ -74,6 +74,24 @@ def test_compiles_every_repository_script(engine: EasyConScriptEngine) -> None:
         assert program.source == str(path.resolve())
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        Path("红圣菇.txt"),
+        Path("美梦神.txt"),
+    ],
+)
+def test_compiles_roaming_scripts(
+    engine: EasyConScriptEngine, relative_path: Path
+) -> None:
+    path = ROOT / "script" / relative_path
+
+    program = engine.load_file(path)
+
+    assert program.source == str(path.resolve())
+    assert program.requires_image_search
+
+
 def test_compiles_original_easycon_examples(engine: EasyConScriptEngine) -> None:
     examples = ROOT / "third_party" / "EasyCon" / "examples"
     paths = [

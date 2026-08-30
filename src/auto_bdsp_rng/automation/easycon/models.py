@@ -27,7 +27,6 @@ class EasyConConfig:
     recent_scripts: tuple[Path, ...] = ()
     script_parameters: dict[str, dict[str, str]] = field(default_factory=dict)
     key_mapping: dict[str, int] = field(default_factory=dict)
-    keep_generated: int = 20
     keep_log_lines: int = 1000
 
 

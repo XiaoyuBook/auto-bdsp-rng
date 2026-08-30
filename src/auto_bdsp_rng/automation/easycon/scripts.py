@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
-from datetime import datetime
+import stat
+import tempfile
 from pathlib import Path
 
 from auto_bdsp_rng.automation.easycon.models import ScriptParameter
@@ -9,6 +11,9 @@ from auto_bdsp_rng.automation.easycon.models import ScriptParameter
 
 PARAMETER_RE = re.compile(r"^(?P<indent>\s*)(?P<name>_[^=\s]+)\s*=\s*(?P<value>.*?)(?P<comment>\s+#.*)?$")
 REQUIRED_MARKER = "填入这里"
+LEGACY_GENERATED_DIR_NAME = ".generated"
+LEGACY_GENERATED_SCRIPT_RE = re.compile(r"^.+_\d{8}_\d{6}(?:_.+)?\.ecs$", re.IGNORECASE)
+TEMPORARY_CLI_SCRIPT_PREFIX = "auto-bdsp-rng-easycon-"
 
 
 def detect_newline_style(text: str) -> str:
@@ -72,42 +77,67 @@ def apply_parameter_values(text: str, values: dict[str, str | int]) -> str:
     return "".join(lines)
 
 
-def generate_script_file(
+def create_temporary_cli_script(
     script_text: str,
-    source_name: str,
-    generated_dir: Path,
-    task_type: str | None = None,
+    *,
     newline: str | None = None,
+    temp_dir: Path | None = None,
 ) -> Path:
-    generated_dir.mkdir(parents=True, exist_ok=True)
-    stem = _safe_stem(Path(source_name).stem or "script")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    parts = [stem, timestamp]
-    if task_type:
-        parts.append(_safe_stem(task_type))
-    output = generated_dir / ("_".join(parts) + ".ecs")
-    output.write_text(script_text, encoding="utf-8", newline=newline or detect_newline_style(script_text))
-    return output
-
-
-def prune_generated_scripts(generated_dir: Path, keep: int) -> list[Path]:
-    if keep < 0 or not generated_dir.exists():
-        return []
-    scripts = sorted(
-        (path for path in generated_dir.iterdir() if path.is_file() and path.suffix.lower() == ".ecs"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=TEMPORARY_CLI_SCRIPT_PREFIX,
+        suffix=".txt",
+        dir=temp_dir,
     )
-    removed: list[Path] = []
-    for path in scripts[keep:]:
-        path.unlink()
-        removed.append(path)
-    return removed
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(
+            descriptor,
+            "w",
+            encoding="utf-8",
+            newline=newline or detect_newline_style(script_text),
+        ) as handle:
+            handle.write(script_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+    return temporary
+
+
+def remove_temporary_cli_script(path: Path | None) -> None:
+    if path is not None:
+        path.unlink(missing_ok=True)
+
+
+def discard_legacy_generated_snapshots(script_dir: Path) -> int:
+    generated_dir = script_dir / LEGACY_GENERATED_DIR_NAME
+    try:
+        directory_stat = generated_dir.lstat()
+    except FileNotFoundError:
+        return 0
+    if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(directory_stat.st_mode):
+        raise OSError(f"旧版临时脚本路径不是安全目录：{generated_dir}")
+
+    entries = list(generated_dir.iterdir())
+    for entry in entries:
+        entry_stat = entry.lstat()
+        if (
+            stat.S_ISLNK(entry_stat.st_mode)
+            or not stat.S_ISREG(entry_stat.st_mode)
+            or LEGACY_GENERATED_SCRIPT_RE.fullmatch(entry.name) is None
+        ):
+            raise OSError(f"旧版临时脚本目录包含未知内容，已保留：{entry}")
+
+    for entry in entries:
+        entry.unlink()
+    generated_dir.rmdir()
+    return len(entries)
 
 
 def _is_integer(value: str) -> bool:
     return re.fullmatch(r"[+-]?\d+", value.strip()) is not None
-
-
-def _safe_stem(value: str) -> str:
-    return re.sub(r'[<>:"/\\|?*\s]+', "_", value).strip("._") or "script"

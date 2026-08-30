@@ -16,12 +16,12 @@
 | 名称 | 含义 | 示例 |
 |------|------|------|
 | `raw_target_advances` | BDSP 定点搜索结果中的目标帧，即 `State8.advances` | 1000 |
-| `fixed_delay` | 用户填写的固定 delay，表示固定 `_闪帧` 等待结束后到实际撞到之间的延迟 | 1400 |
-| `fixed_flash_frames` | 从撞闪脚本 `_闪帧` 固定数字读取；配置默认 60 只作兜底；自动流程不动态改写脚本 | 60 |
-| `trigger_advances` | 撞闪脚本理论启动帧，`raw_target_advances - fixed_delay - fixed_flash_frames` | 340 |
+| `fixed_delay` | 用户填写的固定 delay，表示脚本等待结束后（无 `_闪帧` 时为脚本启动后）到实际撞到之间的延迟 | 1400 |
+| `fixed_flash_frames` | 撞闪脚本声明的整数 `_闪帧`；脚本未声明时为 `None`，计算偏移按 0 | 60 / `None` |
+| `trigger_advances` | 撞闪脚本理论启动帧，`raw_target_advances - fixed_delay - (fixed_flash_frames or 0)` | 340 |
 | `current_advances` | 当前已前进帧数，初次测 seed 后为 0，reidentify 后更新 | 600 |
 | `remaining_to_trigger` | 距离运行撞闪脚本还剩多少帧，`trigger_advances - current_advances` | 300 |
-| `flash_frames` | 撞闪脚本内固定 `_闪帧`，用于让脚本保持稳定的小等待窗口 | 60 |
+| `flash_frames` | 兼容旧脚本的脚本内等待量；新式脚本可以省略并交给 runner 等待 | 60 / 无 |
 | `max_wait_frames` | 最大等待帧数；剩余帧数小于等于它时，不再调用过帧脚本 | 300 |
 | `reseed_threshold_frames` | 单次过帧超过该值后不用 reidentify，改为重新捕获 seed | 内置 990,000，不在 UI 展示 |
 | `min_final_flash_frames` | 最终撞闪前的最小安全剩余帧；太近则放弃本目标 | 内置 5，不在 UI 展示 |
@@ -30,19 +30,20 @@
 - 搜索目标时，按当前 seed 和筛选条件生成结果。
 - 有多个结果时，默认锁定 `advances` 最低的结果。
 - 真正决定是否进入撞闪的是 `remaining_to_trigger <= max_wait_frames`。
-- 进入撞闪阶段后，必须做最终实时校准；撞闪脚本保持固定 `_闪帧`，自动流程只决定什么时候运行脚本，不再动态改写 `_闪帧`。
+- 进入撞闪阶段后必须做最终实时校准；有 `_闪帧` 的旧脚本沿用脚本内等待和动态调整，无 `_闪帧` 的脚本由 runner 等到启动点后原样运行。
 - 还没进入等待范围时，给过帧脚本填 `_目标帧数 = remaining_to_trigger`。
 - 过帧脚本本身已有内部预留逻辑，例如 `bdsp过帧.txt` 内部会用 `_目标帧数 - 300`，所以自动流程只填理论剩余帧，不额外替脚本扣预留值。
 
 ### delay 对 advances 的影响
 
-`fixed_delay` 不参与 seed 搜索，也不修改当前 advances。它表示固定 `_闪帧` 等待结束后到实际撞到之间的用户校准延迟；自动流程会额外扣除固定 `_闪帧` 来决定脚本启动点。
+`fixed_delay` 不参与 seed 搜索，也不修改当前 advances。它表示脚本等待结束后（无 `_闪帧` 时为脚本启动后）到实际撞到之间的用户校准延迟；自动流程只在脚本声明 `_闪帧` 时额外扣除该等待量。
 
 严格公式：
 
 ```text
 raw_target_advances = state.advances
-trigger_advances = raw_target_advances - fixed_delay - fixed_flash_frames
+script_wait_frames = fixed_flash_frames if declared else 0
+trigger_advances = raw_target_advances - fixed_delay - script_wait_frames
 remaining_to_trigger = trigger_advances - current_advances
 ```
 
@@ -63,19 +64,19 @@ current_advances = 40 时，remaining_to_trigger = 300，可以进入最终撞�
 - 不要用 `fixed_delay` 修改 seed 或搜索结果。
 - 不要在 `_目标帧数` 里额外扣 delay；过帧阶段逼近的是 `trigger_advances`，不是 `raw_target_advances`。
 
-### `_闪帧` 的固定性
+### `_闪帧` 兼容模式
 
-`_闪帧` 不再由自动流程按实时剩余帧动态填写。它是撞闪脚本内固定的小等待窗口，内置脚本默认 60；启动时软件会读取所选撞闪脚本里的固定数字，并用这个值参与 `trigger_advances` 计算。用户通过多次实机运行校准 `fixed_delay`，软件根据实时 advances 决定脚本启动帧。
+撞闪脚本声明整数 `_闪帧` 时按旧模式运行：软件读取该等待量并用于 `trigger_advances` 计算，必要时仍可在过帧过头分支动态缩短本次提交文本中的 `_闪帧`。脚本未声明 `_闪帧` 时按新模式运行：等待偏移按 0 计算，runner 通过实时 advances 等到 `raw_target_advances - fixed_delay`，再原样启动脚本，不新增或改写 `_闪帧`。
 
-因此进入 `max_wait_frames` 范围后，自动流程必须执行最终实时校准，但校准目标是“是否已经到达脚本启动点”，而不是重新填写 `_闪帧`：
+因此进入 `max_wait_frames` 范围后，自动流程必须执行最终实时校准：
 
 1. 做一次 final reidentify，或在需要重新测 seed 的场景做 final capture seed。
 2. 用最新 seed / current advances 重新搜索或重新确认锁定目标。
-3. 从撞闪脚本读取固定 `_闪帧`，得到 `trigger_advances = raw_target_advances - fixed_delay - fixed_flash_frames`。
+3. 读取可选 `_闪帧`；存在时扣除其整数值，不存在时按 0，得到脚本启动帧。
 4. 记录校准参考点：`current_advances_at_ref` 和 `ref_time`。
 5. 在即将提交撞闪脚本前，用当前时间修正已经流逝的 advances。
 6. 计算 `remaining_to_trigger = trigger_advances - live_current_advances`。
-7. `remaining_to_trigger` 安全时，直接按原文运行固定 `_闪帧` 的撞闪脚本。
+7. 旧模式在安全窗口内运行或动态调整脚本等待；新模式等待到 `remaining_to_trigger == 0` 后原样运行脚本。
 
 建议实时修正式：
 
@@ -87,9 +88,22 @@ remaining_to_trigger = trigger_advances - live_current_advances
 ```
 
 第一版安全规则：
-- `remaining_to_trigger <= 0`：已错过脚本启动点，不运行撞闪脚本。
+- `remaining_to_trigger < 0`：已错过脚本启动点，不运行撞闪脚本；无 `_闪帧` 模式在恰好为 0 时可以立即启动。
 - `remaining_to_trigger < min_final_flash_frames`：距离太近，脚本启动和通信误差可能导致错过；放弃本目标并回到测 seed / 搜索流程。
 - final reidentify / final capture 到运行撞闪脚本之间的 UI 和文件生成路径要尽量短，不做额外弹窗确认。
+
+### 游走目标的 OCR 门控
+
+艾姆利多（481）和克雷色利亚（488）的游走遭遇耗时不固定，不能从撞闪脚本启动时就运行 OCR 或开始 300 秒硬超时。当前流程复用脚本自身的搜图条件，以 `@宝可表` 返回的截断整数小于 `95` 作为进入战斗事件：
+
+```text
+启动游走脚本
+  -> 寻找草丛或水域：不运行 OCR，也不限制等待时长
+  -> `宝可表 < 95`：确认进入战斗，开始 OCR 并从此刻计算 300 秒
+  -> 监测 `出现了！ -> 去吧/上吧` 的关键词间隔
+```
+
+搜图事件由原生 backend 的现有结果 callback 分发，观察者同时绑定视频源 generation 和脚本 run generation，并在本次脚本结束后移除，不能覆盖预览识别框使用的 callback。游走脚本未产生战斗事件便结束，或战斗后的关键词 OCR 超时，都属于结果未知：runner 进入 `FAILED` 并等待人工确认，不能按未出闪逃跑续搜。其他定点目标仍在撞闪脚本运行期间立即启动 OCR，并保留普通 OCR 超时按未出闪继续的兼容行为。
 
 ## 页面布局
 
@@ -140,11 +154,11 @@ remaining_to_trigger = trigger_advances - live_current_advances
 辅助按钮：
 - `刷新脚本列表`
 - `查看参数`：显示当前脚本可被扫描到的 `_参数名`
-- `试填预览`：不运行，只显示将生成的临时脚本文本路径和参数值
+- `试填预览`：不运行，只显示参数填充后的脚本文本和参数值
 
 参数填充规则：
 - 过帧脚本必须包含 `_目标帧数`，否则开始前报错。
-- 撞闪脚本必须包含固定数字 `_闪帧`，否则开始前报错；软件以该数字为准计算脚本启动帧。
+- 撞闪脚本可选整数 `_闪帧`；声明后必须是固定数字，未声明则自动使用 runner 软件等待模式。
 - 测种脚本可以无参数。
 
 ### 右侧：实时运行面板
@@ -263,14 +277,14 @@ UI 职责：
 - 开始前校验 EasyCon Bridge 已连接。
 - 开始前校验三个脚本文件存在且编码为 UTF-8。
 - 开始前校验过帧脚本包含 `_目标帧数`。
-- 开始前校验撞闪脚本包含 `_闪帧`。
-- `raw_target_advances <= fixed_delay + fixed_flash_frames` 时不允许启动撞闪，提示 delay 或固定 `_闪帧` 过大。
-- `remaining_to_trigger <= 0` 时判定已错过目标，不运行撞闪。
-- 最终校准后的 `remaining_to_trigger <= 0` 时判定已错过脚本启动点，不运行撞闪。
+- 开始前校验撞闪脚本中的可选 `_闪帧`（若声明）是固定数字。
+- `raw_target_advances <= fixed_delay + (fixed_flash_frames or 0)` 时不允许启动撞闪，提示 delay 或脚本等待量过大。
+- `remaining_to_trigger < 0` 时判定已错过目标，不运行撞闪；无 `_闪帧` 模式允许恰好为 0 时启动。
+- 最终校准后若已经越过脚本启动点则不运行撞闪。
 - 最终校准后的 `remaining_to_trigger < min_final_flash_frames` 时判定距离太近，放弃本目标。
 - `max_wait_frames` 建议最小 1，避免填入 0 导致脚本边界不清。
 - 每次脚本完成后必须记录 exit code、stdout、stderr。
-- 自动流程失败时保留日志和最后一次生成的临时脚本路径。
+- 自动流程失败时保留日志、源脚本名称和本次使用的参数；不生成运行快照。
 
 ## 第一版验收标准
 

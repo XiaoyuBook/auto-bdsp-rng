@@ -5,8 +5,6 @@ from pathlib import Path
 
 from auto_bdsp_rng.automation.easycon.scripts import (
     apply_parameter_values,
-    detect_newline_style,
-    generate_script_file,
     parse_script_parameters,
     scan_builtin_scripts,
 )
@@ -14,6 +12,9 @@ from auto_bdsp_rng.automation.easycon.scripts import (
 
 AUTO_ADVANCE_PARAMETER = "_目标帧数"
 AUTO_HIT_PARAMETER = "_闪帧"
+AUTO_TELEPORT_SLOT_PARAMETER = "_瞬移精灵槽位"
+ROAMER_SPECIES = frozenset({481, 488})
+TELEPORT_SLOT_SPECIES = ROAMER_SPECIES
 DEFAULT_SEED_SCRIPT_NAME = "BDSP测种.txt"
 DEFAULT_ADVANCE_SCRIPT_NAME = "bdsp过帧.txt"
 DEFAULT_RECORD_SCRIPT_NAME = "录屏.txt"
@@ -44,30 +45,10 @@ def prepare_hit_script_text(text: str, flash_frames: int) -> str:
     return replace_required_parameter(text, AUTO_HIT_PARAMETER, flash_frames)
 
 
-def prepare_advance_script(path: Path, frames: int, generated_dir: Path) -> tuple[str, Path]:
-    text = path.read_text(encoding="utf-8")
-    updated = prepare_advance_script_text(text, frames)
-    output = generate_script_file(
-        updated,
-        path.name,
-        generated_dir,
-        task_type="auto_advance",
-        newline=detect_newline_style(text),
-    )
-    return updated, output
-
-
-def prepare_hit_script(path: Path, flash_frames: int, generated_dir: Path) -> tuple[str, Path]:
-    text = path.read_text(encoding="utf-8")
-    updated = prepare_hit_script_text(text, flash_frames)
-    output = generate_script_file(
-        updated,
-        path.name,
-        generated_dir,
-        task_type="auto_hit",
-        newline=detect_newline_style(text),
-    )
-    return updated, output
+def prepare_teleport_slot_script_text(text: str, slot: int, *, target_species: int | None) -> str:
+    if target_species not in TELEPORT_SLOT_SPECIES:
+        return text
+    return replace_required_parameter(text, AUTO_TELEPORT_SLOT_PARAMETER, slot)
 
 
 def validate_auto_scripts(
@@ -78,6 +59,7 @@ def validate_auto_scripts(
     escape_continue: bool = False,
     escape_script_path: Path | None = None,
     shiny_threshold_seconds: float | None = None,
+    target_species: int | None = None,
 ) -> None:
     if seed_script_path is not None:
         _read_utf8(seed_script_path)
@@ -86,7 +68,9 @@ def validate_auto_scripts(
     if hit_script_path is None:
         raise AutoScriptError("请选择撞闪脚本")
     require_parameter(advance_script_path, AUTO_ADVANCE_PARAMETER)
-    require_integer_parameter(hit_script_path, AUTO_HIT_PARAMETER)
+    read_optional_integer_parameter(hit_script_path, AUTO_HIT_PARAMETER)
+    if target_species in TELEPORT_SLOT_SPECIES:
+        require_integer_parameter(hit_script_path, AUTO_TELEPORT_SLOT_PARAMETER)
     if escape_continue:
         if shiny_threshold_seconds is None or not (shiny_threshold_seconds > 0):
             raise AutoScriptError("启用逃跑续搜后必须将闪光阈值设置为大于 0")
@@ -118,6 +102,13 @@ def require_integer_parameter(path: Path, parameter_name: str) -> None:
 
 
 def read_integer_parameter(path: Path, parameter_name: str) -> int:
+    value = read_optional_integer_parameter(path, parameter_name)
+    if value is None:
+        raise AutoScriptError(f"{path.name} 缺少必需参数 {parameter_name}")
+    return value
+
+
+def read_optional_integer_parameter(path: Path, parameter_name: str) -> int | None:
     text = _read_utf8(path)
     for parameter in parse_script_parameters(text):
         if parameter.name != parameter_name:
@@ -125,7 +116,7 @@ def read_integer_parameter(path: Path, parameter_name: str) -> int:
         if not parameter.is_integer:
             raise AutoScriptError(f"{path.name} 必需参数 {parameter_name} 必须是固定数字")
         return int(parameter.value)
-    raise AutoScriptError(f"{path.name} 缺少必需参数 {parameter_name}")
+    return None
 
 
 def replace_required_parameter(text: str, parameter_name: str, value: int) -> str:

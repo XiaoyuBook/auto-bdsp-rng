@@ -35,6 +35,8 @@ PRESERVE_PREFIXES = (
     ("third_party", "project_xs_chn", "configs"),
     ("third_party", "project_xs_chn", "images", "custom"),
 )
+LEGACY_INTERNAL_SCRIPT_PREFIX = ("_internal", "script")
+SCRIPT_GENERATED_DIR_NAME = ".generated"
 
 
 class UpdatePackageError(RuntimeError):
@@ -84,6 +86,15 @@ def _path_components(paths: Iterable[str]) -> dict[str, str]:
 def preserve_if_modified(path: str) -> bool:
     parts = tuple(part.casefold() for part in PurePosixPath(path).parts)
     return any(len(parts) > len(prefix) and parts[: len(prefix)] == prefix for prefix in PRESERVE_PREFIXES)
+
+
+def _preserve_removed_file(path: str, previous_policy: bool) -> bool:
+    parts = tuple(part.casefold() for part in PurePosixPath(path).parts)
+    is_legacy_internal_script = (
+        len(parts) > len(LEGACY_INTERNAL_SCRIPT_PREFIX)
+        and parts[: len(LEGACY_INTERNAL_SCRIPT_PREFIX)] == LEGACY_INTERNAL_SCRIPT_PREFIX
+    )
+    return previous_policy or is_legacy_internal_script
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
@@ -302,7 +313,10 @@ def build_patch_metadata(
         {
             "path": path,
             "sha256": previous["sha256"],
-            "preserve_if_modified": previous["preserve_if_modified"],
+            "preserve_if_modified": _preserve_removed_file(
+                path,
+                previous["preserve_if_modified"],
+            ),
         }
         for path, previous in previous_files.items()
         if path not in current_files
@@ -386,6 +400,7 @@ def build_update_artifacts(
     if output_dir == dist_dir or dist_dir in output_dir.parents:
         raise UpdatePackageError("Output directory must not be inside the distribution directory.")
 
+    validate_distribution_script_layout(dist_dir)
     manifest = build_manifest(dist_dir, version)
     manifest_path = output_dir / f"{APPLICATION}-v{version}-{PLATFORM}.manifest.json"
     write_manifest(manifest, manifest_path)
@@ -405,6 +420,39 @@ def build_update_artifacts(
         compresslevel=compresslevel,
     )
     return manifest_path, patch_path
+
+
+def validate_distribution_script_layout(dist_dir: Path) -> None:
+    script_dir = dist_dir / "script"
+    if script_dir.is_symlink() or not script_dir.is_dir():
+        raise UpdatePackageError(
+            f"Distribution must contain the external script directory: {script_dir}"
+        )
+    generated = script_dir / SCRIPT_GENERATED_DIR_NAME
+    try:
+        generated.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise UpdatePackageError(
+            f"Cannot verify the generated script snapshot path: {generated}: {exc}"
+        ) from exc
+    else:
+        raise UpdatePackageError(
+            f"Distribution must not contain generated script snapshots: {generated}"
+        )
+    legacy = dist_dir / "_internal" / "script"
+    try:
+        legacy.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise UpdatePackageError(
+            f"Cannot verify the legacy internal script path: {legacy}: {exc}"
+        ) from exc
+    raise UpdatePackageError(
+        f"Distribution must not contain the legacy internal script directory: {legacy}"
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

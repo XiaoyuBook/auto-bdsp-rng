@@ -25,7 +25,7 @@
 - [x] 新增 `validate_auto_scripts()`：检查文件存在、UTF-8、必需参数。
 - [x] 新增 `prepare_advance_script(path, frames)`：填 `_目标帧数`。
 - [x] 新增 `prepare_hit_script(path, flash_frames)`：填 `_闪帧`。
-- [x] 保留临时脚本到 `script\.generated`，日志记录生成路径。
+- [x] 原生运行直接执行内存脚本文本；不再生成或保留 `script\.generated` ECS 快照。
 
 ## 3. 搜索服务
 

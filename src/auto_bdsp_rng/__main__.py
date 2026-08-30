@@ -55,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_broker.add_argument("--manifest", default=None)
     capture_broker.add_argument("--first-frame-timeout", type=float, default=5.0)
     capture_broker.add_argument("--frame-timeout", type=float, default=1.0)
+    capture_broker.add_argument("--parent-pid", type=int, default=0)
 
     blink_config = subparsers.add_parser(
         "blink-config",
@@ -311,7 +312,11 @@ def main(argv: list[str] | None = None) -> int:
 
         return run()
     if args.command == "capture-broker":
-        from auto_bdsp_rng.capture_broker import CaptureBroker
+        from auto_bdsp_rng.capture_broker import (
+            BROKER_ALREADY_RUNNING_EXIT_CODE,
+            BrokerAlreadyRunningError,
+            CaptureBroker,
+        )
 
         broker = CaptureBroker(
             args.device_index,
@@ -319,9 +324,13 @@ def main(argv: list[str] | None = None) -> int:
             manifest_path=args.manifest,
             first_frame_timeout=args.first_frame_timeout,
             frame_timeout=args.frame_timeout,
+            parent_pid=args.parent_pid,
         )
         try:
             return 0 if broker.serve_forever() else 2
+        except BrokerAlreadyRunningError:
+            broker.stop()
+            return BROKER_ALREADY_RUNNING_EXIT_CODE
         except KeyboardInterrupt:
             broker.stop()
             return 0

@@ -30,15 +30,16 @@ def test_app_settings_persists_startup_notice_acknowledgement(tmp_path, monkeypa
     assert "startup_notice_acknowledged" in settings_path.read_text(encoding="utf-8")
 
 
-def test_app_settings_run_log_defaults_off_and_preserves_other_keys(tmp_path, monkeypatch):
+def test_app_settings_run_log_defaults_on_and_preserves_other_keys(tmp_path, monkeypatch):
     import auto_bdsp_rng.app_settings as app_settings
 
     settings_path = tmp_path / "settings" / "config.json"
     monkeypatch.setattr(app_settings, "SETTINGS_PATH", settings_path)
 
-    assert app_settings.is_run_log_enabled() is False
+    assert app_settings.is_run_log_enabled() is True
 
     app_settings.save_settings({"startup_notice_acknowledged": True, "other": "保留"})
+    assert app_settings.is_run_log_enabled() is True
     assert app_settings.set_run_log_enabled(True) is True
     assert app_settings.is_run_log_enabled() is True
     assert json.loads(settings_path.read_text(encoding="utf-8")) == {
@@ -50,6 +51,53 @@ def test_app_settings_run_log_defaults_off_and_preserves_other_keys(tmp_path, mo
     assert app_settings.set_run_log_enabled(False) is False
     assert app_settings.is_run_log_enabled() is False
     assert json.loads(settings_path.read_text(encoding="utf-8"))["other"] == "保留"
+
+
+def test_app_settings_run_log_defaults_on_when_settings_are_invalid(tmp_path, monkeypatch):
+    import auto_bdsp_rng.app_settings as app_settings
+
+    settings_path = tmp_path / "settings" / "config.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text("not-json", encoding="utf-8")
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", settings_path)
+
+    assert app_settings.is_run_log_enabled() is True
+
+
+def test_app_settings_auto_update_check_defaults_on_and_preserves_other_keys(
+    tmp_path,
+    monkeypatch,
+):
+    import auto_bdsp_rng.app_settings as app_settings
+
+    settings_path = tmp_path / "settings" / "config.json"
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", settings_path)
+
+    assert app_settings.is_auto_update_check_enabled() is True
+
+    app_settings.save_settings({"other": "保留"})
+    assert app_settings.set_auto_update_check_enabled(False) is False
+    assert app_settings.is_auto_update_check_enabled() is False
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "other": "保留",
+        "auto_update_check_enabled": False,
+    }
+
+
+@pytest.mark.parametrize("content", ["not-json", '{"auto_update_check_enabled": "false"}'])
+def test_app_settings_auto_update_check_invalid_values_default_on(
+    tmp_path,
+    monkeypatch,
+    content,
+):
+    import auto_bdsp_rng.app_settings as app_settings
+
+    settings_path = tmp_path / "settings" / "config.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", settings_path)
+
+    assert app_settings.is_auto_update_check_enabled() is True
 
 
 def test_app_settings_atomic_write_preserves_existing_file_on_replace_failure(tmp_path, monkeypatch):
@@ -95,8 +143,14 @@ def test_help_menu_exposes_expected_actions(app):
     assert controller.changelog_action.text() == "更新日志"
     assert controller.check_updates_action.text() == "检查更新…"
     assert controller.check_updates_action.isEnabled() is False
+    assert controller.auto_update_check_action.text() == "启动时自动检查更新"
+    assert controller.auto_update_check_action.isCheckable()
+    assert controller.auto_update_check_action.isChecked() is True
     assert controller.help_menu.actions().index(controller.check_updates_action) == (
         controller.help_menu.actions().index(controller.changelog_action) + 1
+    )
+    assert controller.help_menu.actions().index(controller.auto_update_check_action) == (
+        controller.help_menu.actions().index(controller.check_updates_action) + 1
     )
     assert controller.run_log_menu.menuAction() in controller.help_menu.actions()
     assert controller.contact_menu.menuAction() in controller.help_menu.actions()
@@ -125,6 +179,41 @@ def test_help_menu_check_updates_action_uses_injected_callback(app):
 
     assert controller.check_updates_action.isEnabled() is True
     assert checked == [True]
+
+
+def test_help_menu_auto_update_check_action_applies_persisted_state(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    requested: list[bool] = []
+    controller = HelpMenuController(
+        QMainWindow(),
+        auto_update_check_enabled=True,
+        set_auto_update_check_enabled=lambda enabled: requested.append(enabled) or enabled,
+    )
+    controller.install()
+
+    controller.auto_update_check_action.trigger()
+
+    assert requested == [False]
+    assert controller.auto_update_check_action.isChecked() is False
+
+
+def test_help_menu_auto_update_check_action_restores_state_when_save_fails(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    def fail(_enabled: bool) -> bool:
+        raise OSError("设置目录不可写")
+
+    controller = HelpMenuController(
+        QMainWindow(),
+        auto_update_check_enabled=False,
+        set_auto_update_check_enabled=fail,
+    )
+    controller.install()
+
+    controller.auto_update_check_action.trigger()
+
+    assert controller.auto_update_check_action.isChecked() is False
 
 
 def test_help_menu_run_log_actions_apply_actual_state_and_open_directory(app):

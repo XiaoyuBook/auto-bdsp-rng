@@ -376,9 +376,14 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
     assert window.video_source_status_dot.property("state") == "connecting"
     assert "连接中" in window.video_source_header_button.text()
     deadline = time.perf_counter() + 2
-    while not window._video_source_connected and time.perf_counter() < deadline:
+    while (
+        not window._video_source_connected
+        or window._capture_broker_start_thread is not None
+    ) and time.perf_counter() < deadline:
         app.processEvents()
         QTest.qWait(5)
+    assert window._video_source_connected
+    assert window._capture_broker_start_thread is None
     config = window._config_from_form().capture
 
     assert process.started == (0, 1400)
@@ -429,11 +434,48 @@ def test_shared_video_source_connection_does_not_block_ui(app):
     assert window._video_source_connecting
 
     deadline = time.perf_counter() + 2
-    while not window._video_source_connected and time.perf_counter() < deadline:
+    while (
+        not window._video_source_connected
+        or window._capture_broker_start_thread is not None
+    ) and time.perf_counter() < deadline:
         app.processEvents()
         QTest.qWait(5)
     assert window._video_source_connected
+    assert window._capture_broker_start_thread is None
     assert window.disconnect_video_source(force=True)
+
+
+def test_shared_video_source_start_failure_preserves_broker_reason(app, monkeypatch):
+    expected = "采集卡正在被另一个本软件实例使用（主程序 PID 2468，视频源 PID 9876）"
+    dialogs: list[tuple[str, str]] = []
+
+    class BrokerProcess:
+        failure = expected
+
+        def start(self, *, device_index, capture_api):
+            del device_index, capture_api
+            return False
+
+        def stop(self):
+            return True
+
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "critical",
+        lambda _parent, title, message: dialogs.append((title, message)),
+    )
+    window = MainWindow(capture_broker_process=BrokerProcess())
+
+    assert window.connect_video_source()
+    deadline = time.perf_counter() + 2
+    while window._capture_broker_start_thread is not None and time.perf_counter() < deadline:
+        app.processEvents()
+        QTest.qWait(5)
+
+    assert dialogs == [("视频源连接失败", expected)]
+    assert "未检测到捕捉画面" not in dialogs[0][1]
+    assert not window._video_source_connected
+    assert window.video_source_status.text() == "连接失败"
 
 
 @pytest.mark.parametrize("running", [True, False])
@@ -1149,6 +1191,32 @@ def test_easycon_search_results_are_scoped_to_source_and_script_generations(app)
     window._video_source_connected = False
     window._handle_easycon_image_search_result(4, 6, current)
     assert window._latest_easycon_image_search_result is None
+
+
+def test_easycon_image_result_observers_are_scoped_and_removable(app):
+    window = MainWindow()
+    observed: list[object] = []
+    current = object()
+    window._video_source_connected = True
+    window._video_source_generation = 4
+    window._easycon_run_generation = 6
+    token = window._add_easycon_image_result_observer(
+        observed.append,
+        source_generation=4,
+        run_generation=6,
+    )
+
+    window._notify_easycon_image_result_observers(3, 6, object())
+    window._notify_easycon_image_result_observers(4, 5, object())
+    assert observed == []
+
+    window._notify_easycon_image_result_observers(4, 6, current)
+    assert observed == [current]
+
+    window._remove_easycon_image_result_observer(token)
+    window._notify_easycon_image_result_observers(4, 6, object())
+    assert observed == [current]
+    window._video_source_connected = False
 
 
 def test_new_native_script_rejects_queued_results_from_previous_run(app):
@@ -1932,6 +2000,24 @@ def test_auto_rng_panel_persists_escape_continue_and_script(app, tmp_path):
     assert restored.build_config().escape_script_path == escape_script
 
 
+def test_auto_rng_panel_migrates_legacy_internal_script_setting(app, tmp_path):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    hit_script = script_dir / "谢米.txt"
+    hit_script.write_text("_闪帧 = 60\n", encoding="utf-8")
+    settings = _auto_rng_settings(tmp_path)
+    settings.setValue(
+        "hit_script",
+        str(tmp_path / "_internal" / "script" / hit_script.name),
+    )
+
+    panel = AutoRngPanel(script_dir=script_dir, settings=settings)
+
+    assert panel.hit_script_combo.currentData() == str(hit_script)
+    assert panel.build_config().hit_script_path == hit_script
+    assert settings.value("hit_script") == str(hit_script)
+
+
 def test_auto_rng_panel_blocks_invalid_escape_continue_settings(app, tmp_path):
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
@@ -2495,7 +2581,7 @@ def test_main_window_saves_profile_settings_on_close(app, tmp_path):
 def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_path):
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
-    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text("_瞬移精灵槽位 = 1\nA 100\n", encoding="utf-8")
     panel = AutoRngPanel(script_dir=tmp_path)
     emitted: list[AutoRngConfig] = []
     panel.startRequested.connect(lambda config: emitted.append(config))
@@ -2522,7 +2608,10 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
 def test_auto_rng_panel_can_start_from_capture_seed_via_menu(app, tmp_path):
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
-    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text(
+        "_闪帧 = 100\n_瞬移精灵槽位 = 1\n",
+        encoding="utf-8",
+    )
     panel = AutoRngPanel(script_dir=tmp_path)
     emitted: list[AutoRngConfig] = []
     panel.startRequested.connect(lambda config: emitted.append(config))
@@ -2538,7 +2627,10 @@ def test_auto_rng_panel_can_start_from_capture_seed_via_menu(app, tmp_path):
 def test_auto_rng_panel_can_start_from_reidentify_via_menu(app, tmp_path):
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
-    (tmp_path / "谢米.txt").write_text("_闪帧 = 100\n", encoding="utf-8")
+    (tmp_path / "谢米.txt").write_text(
+        "_闪帧 = 100\n_瞬移精灵槽位 = 1\n",
+        encoding="utf-8",
+    )
     panel = AutoRngPanel(script_dir=tmp_path)
     emitted: list[AutoRngConfig] = []
     panel.startRequested.connect(lambda config: emitted.append(config))
@@ -2727,6 +2819,18 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
+def test_auto_rng_content_scrolls_below_desktop_height(app):
+    panel = AutoRngPanel()
+    panel.resize(700, 400)
+    panel.show()
+    app.processEvents()
+
+    assert panel.content_scroll.widget().objectName() == "AutoRngContent"
+    assert panel.content_grid.indexOf(panel.config_panel) >= 0
+    assert panel.content_scroll.verticalScrollBar().maximum() > 0
+    assert panel.toolbar.isVisible()
+
+
 def test_auto_rng_target_summary_uses_chinese_compact_rows_and_scroll(app):
     panel = AutoRngPanel()
     from auto_bdsp_rng.data import get_static_encounters
@@ -2745,6 +2849,20 @@ def test_auto_rng_target_summary_uses_chinese_compact_rows_and_scroll(app):
     assert "Weight" not in panel.target_summary_labels[0].text()
     assert panel.target_summary_scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     assert panel.target_summary_scroll.maximumHeight() <= 150
+
+
+@pytest.mark.parametrize(
+    ("description", "species"),
+    [("Mespirit", 481), ("Cresselia", 488)],
+)
+def test_auto_rng_panel_build_config_reports_roamer_species(app, tmp_path, description, species):
+    from auto_bdsp_rng.data import get_static_encounters
+
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    record = next(r for r in get_static_encounters() if r.description == description)
+    panel.set_targets([(record, StateFilter(), "any")])
+
+    assert panel.build_config().target_species == species
 
 
 def test_auto_rng_target_summary_describes_shiny_only_without_repetition(app):
@@ -4262,6 +4380,28 @@ def _install_connected_native_backend(window, monkeypatch, backend) -> None:
     monkeypatch.setattr(window.easycon_tab, "_ensure_native_backend", lambda: backend)
 
 
+def _run_with_qt_events(app, callback):
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(callback())
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    deadline = time.perf_counter() + 2
+    while worker.is_alive() and time.perf_counter() < deadline:
+        app.processEvents()
+        QTest.qWait(5)
+    worker.join(timeout=0.1)
+    app.processEvents()
+    assert not worker.is_alive()
+    return results, errors
+
+
 def test_main_window_auto_rng_run_script_service_uses_native_backend(app, tmp_path, monkeypatch):
     window = MainWindow()
     calls: list[tuple[str, str, Path]] = []
@@ -4325,6 +4465,198 @@ def test_auto_rng_script_installs_overlay_generation_before_backend_runs(app, tm
     assert observations[0][0] == 1
     assert observations[0][1] is not None
     assert window._latest_easycon_image_search_result is image_result
+    window._video_source_connected = False
+
+
+@pytest.mark.parametrize("target_species", [481, 488])
+def test_roamer_shiny_ocr_starts_only_after_battle_image_event(
+    app,
+    tmp_path,
+    monkeypatch,
+    target_species,
+):
+    window = MainWindow()
+    ocr_started = threading.Event()
+    calls: list[str] = []
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.image_callback = None
+
+        def set_image_result_callback(self, callback) -> None:
+            self.image_callback = callback
+
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            assert self.image_callback is not None
+            calls.append("script")
+            self.image_callback(SimpleNamespace(label_name="艾姆利多在水域", script_value=99))
+            self.image_callback(SimpleNamespace(label_name="宝可表", script_value=95))
+            assert not ocr_started.wait(timeout=0.05)
+            calls.append("battle")
+            self.image_callback(SimpleNamespace(label_name="宝可表", script_value=94))
+            assert ocr_started.wait(timeout=1.0)
+            return "ok"
+
+        def stop_current_script(self) -> None:
+            return None
+
+    def fake_measure(_capture_frame, _read_text, **_kwargs):
+        calls.append("ocr")
+        ocr_started.set()
+        return DialogTimingResult(101.0, 104.5, 3.5)
+
+    backend = FakeBackend()
+    _install_connected_native_backend(window, monkeypatch, backend)
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure)
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            target_species=target_species,
+            shiny_threshold_seconds=3.0,
+        )
+    )
+
+    results, errors = _run_with_qt_events(
+        app,
+        lambda: services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0),
+    )
+
+    assert errors == []
+    assert results == [main_window_module.ShinyCheckResult(is_shiny=True, interval_seconds=3.5)]
+    assert calls == ["script", "battle", "ocr"]
+    assert window._easycon_image_result_observers == {}
+    window._video_source_connected = False
+
+
+def test_roamer_shiny_check_returns_unknown_when_script_ends_without_battle_event(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = MainWindow()
+    ocr_calls: list[bool] = []
+
+    class FakeBackend:
+        def set_image_result_callback(self, _callback) -> None:
+            return None
+
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            return "ok"
+
+        def stop_current_script(self) -> None:
+            return None
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    monkeypatch.setattr(
+        main_window_module,
+        "measure_keyword_interval",
+        lambda *_args, **_kwargs: ocr_calls.append(True),
+    )
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, target_species=481, shiny_threshold_seconds=3.0)
+    )
+
+    results, errors = _run_with_qt_events(
+        app,
+        lambda: services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0),
+    )
+
+    assert errors == []
+    assert results == [main_window_module.ShinyCheckResult(is_shiny=False)]
+    assert ocr_calls == []
+    assert window._easycon_image_result_observers == {}
+    window._video_source_connected = False
+
+
+def test_roamer_shiny_check_can_be_cancelled_while_waiting_for_battle_event(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = MainWindow()
+    script_started = threading.Event()
+    script_stopped = threading.Event()
+    ocr_calls: list[bool] = []
+
+    class FakeBackend:
+        def set_image_result_callback(self, _callback) -> None:
+            return None
+
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            script_started.set()
+            assert script_stopped.wait(timeout=1.0)
+            return "cancelled"
+
+        def stop_current_script(self) -> None:
+            script_stopped.set()
+
+    def cancel_when_script_starts() -> None:
+        assert script_started.wait(timeout=1.0)
+        window._capture_cancel.set()
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    monkeypatch.setattr(
+        main_window_module,
+        "measure_keyword_interval",
+        lambda *_args, **_kwargs: ocr_calls.append(True),
+    )
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, target_species=481, shiny_threshold_seconds=3.0)
+    )
+    canceller = threading.Thread(target=cancel_when_script_starts)
+    canceller.start()
+
+    results, errors = _run_with_qt_events(
+        app,
+        lambda: services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0),
+    )
+    canceller.join(timeout=0.1)
+
+    assert results == []
+    assert len(errors) == 1
+    assert "自动流程已停止" in str(errors[0])
+    assert not canceller.is_alive()
+    assert script_stopped.is_set()
+    assert ocr_calls == []
+    assert window._easycon_image_result_observers == {}
+    window._video_source_connected = False
+
+
+def test_non_roamer_shiny_ocr_starts_while_script_is_running(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    ocr_started = threading.Event()
+    ocr_started_during_script: list[bool] = []
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            ocr_started_during_script.append(ocr_started.wait(timeout=1.0))
+            return "ok"
+
+        def stop_current_script(self) -> None:
+            return None
+
+    def fake_measure(_capture_frame, _read_text, **_kwargs):
+        ocr_started.set()
+        return DialogTimingResult(101.0, 103.0, 2.0)
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    monkeypatch.setattr(main_window_module, "measure_keyword_interval", fake_measure)
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, target_species=492, shiny_threshold_seconds=3.0)
+    )
+
+    results, errors = _run_with_qt_events(
+        app,
+        lambda: services.run_hit_script_with_shiny_check("A 100", "hit.txt", 3.0),
+    )
+
+    assert errors == []
+    assert results == [main_window_module.ShinyCheckResult(is_shiny=False, interval_seconds=2.0)]
+    assert ocr_started_during_script == [True]
     window._video_source_connected = False
 
 

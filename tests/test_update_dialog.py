@@ -151,6 +151,73 @@ def test_update_controller_source_mode_opens_release_instead_of_installing(app):
     assert opened == ["https://example.invalid/release"]
 
 
+def test_update_controller_silent_check_stays_hidden_when_current(app):
+    completed: list[object] = []
+    controller = UpdateController(
+        QMainWindow(),
+        current_version="3.0.0",
+        check_updates=lambda _version: _plan(
+            current_version="3.0.0",
+            latest_version="3.0.0",
+            update_available=False,
+            incremental_available=False,
+            assets=(),
+        ),
+    )
+    controller.silentCheckCompleted.connect(completed.append)
+
+    controller.check_for_updates(silent=True)
+    _wait_until(lambda: controller._check_thread is None)
+
+    assert len(completed) == 1
+    assert controller.dialog.isVisible() is False
+    assert controller.dialog.status_label.text() == "当前已是最新版本"
+
+
+def test_update_controller_silent_check_shows_dialog_when_update_exists(app):
+    controller = UpdateController(
+        QMainWindow(),
+        current_version="2.1.7",
+        check_updates=lambda _version: _plan(),
+        frozen=False,
+    )
+
+    controller.check_for_updates(silent=True)
+    _wait_until(controller.dialog.isVisible)
+
+    assert controller.dialog.latest_version_label.text() == "2.2.0"
+    assert "源码运行模式" in controller.dialog.status_label.text()
+
+
+def test_update_controller_silent_failure_stays_hidden_and_emits_diagnostic(app):
+    failures: list[str] = []
+
+    def fail(_version: str):
+        raise RuntimeError("network unavailable")
+
+    controller = UpdateController(QMainWindow(), check_updates=fail)
+    controller.silentCheckFailed.connect(failures.append)
+
+    controller.check_for_updates(silent=True)
+    _wait_until(lambda: controller._check_thread is None)
+
+    assert failures == ["network unavailable"]
+    assert controller.dialog.isVisible() is False
+    assert "network unavailable" in controller.dialog.status_label.text()
+
+
+def test_update_controller_manual_failure_remains_visible(app):
+    def fail(_version: str):
+        raise RuntimeError("network unavailable")
+
+    controller = UpdateController(QMainWindow(), check_updates=fail)
+
+    controller.check_for_updates()
+    _wait_until(lambda: "network unavailable" in controller.dialog.status_label.text())
+
+    assert controller.dialog.isVisible() is True
+
+
 def test_update_controller_downloads_launches_installer_and_closes_window(app, tmp_path):
     events: list[object] = []
     patch = tmp_path / "2.1.7-to-2.2.0.patch"

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import os
+import pytest
 
 from auto_bdsp_rng.automation.easycon.scripts import (
     apply_parameter_values,
+    create_temporary_cli_script,
     detect_newline_style,
-    generate_script_file,
+    discard_legacy_generated_snapshots,
     parse_script_parameters,
-    prune_generated_scripts,
+    remove_temporary_cli_script,
     scan_builtin_scripts,
 )
 
@@ -31,19 +32,29 @@ def test_apply_parameter_values_preserves_indent_comment_and_newline():
     assert updated == "  _闪帧 = 123  # 目标差值\r\nA 100\r\n"
 
 
-def test_generate_script_file_writes_ecs_without_touching_source(tmp_path):
-    generated = generate_script_file("A 100\n", "玫瑰公园.txt", tmp_path / ".generated", task_type="test")
+def test_temporary_cli_script_uses_txt_and_can_be_removed(tmp_path):
+    temporary = create_temporary_cli_script("A 100\n", temp_dir=tmp_path)
 
-    assert generated.suffix == ".ecs"
-    assert generated.parent.name == ".generated"
-    assert "玫瑰公园" in generated.name
-    assert generated.read_text(encoding="utf-8") == "A 100\n"
+    assert temporary.parent == tmp_path
+    assert temporary.name.startswith("auto-bdsp-rng-easycon-")
+    assert temporary.suffix == ".txt"
+    assert temporary.read_text(encoding="utf-8") == "A 100\n"
+
+    remove_temporary_cli_script(temporary)
+
+    assert temporary.exists() is False
 
 
-def test_generate_script_file_preserves_requested_newline_style(tmp_path):
-    generated = generate_script_file("A 100\nB 100\n", "sample.txt", tmp_path / ".generated", newline="\r\n")
-
-    assert generated.read_bytes() == b"A 100\r\nB 100\r\n"
+def test_temporary_cli_script_preserves_requested_newline_style(tmp_path):
+    temporary = create_temporary_cli_script(
+        "A 100\nB 100\n",
+        newline="\r\n",
+        temp_dir=tmp_path,
+    )
+    try:
+        assert temporary.read_bytes() == b"A 100\r\nB 100\r\n"
+    finally:
+        remove_temporary_cli_script(temporary)
 
 
 def test_detect_newline_style_prefers_existing_majority():
@@ -51,22 +62,33 @@ def test_detect_newline_style_prefers_existing_majority():
     assert detect_newline_style("A\nB\n") == "\n"
 
 
-def test_prune_generated_scripts_keeps_newest_files(tmp_path):
+def test_discard_legacy_generated_snapshots_removes_only_known_snapshot_layout(tmp_path):
     generated_dir = tmp_path / ".generated"
     generated_dir.mkdir()
-    old = generated_dir / "old.ecs"
-    middle = generated_dir / "middle.ecs"
-    new = generated_dir / "new.ecs"
-    for index, path in enumerate((old, middle, new), start=1):
-        path.write_text(str(index), encoding="utf-8")
-        os.utime(path, (index, index))
+    first = generated_dir / "玫瑰公园_20260525_103655.ecs"
+    second = generated_dir / "bdsp过帧_20260522_224318_auto_advance.ecs"
+    first.write_text("A 100\n", encoding="utf-8")
+    second.write_text("B 100\n", encoding="utf-8")
 
-    removed = prune_generated_scripts(generated_dir, keep=2)
+    removed = discard_legacy_generated_snapshots(tmp_path)
 
-    assert [path.name for path in removed] == ["old.ecs"]
-    assert old.exists() is False
-    assert middle.exists() is True
-    assert new.exists() is True
+    assert removed == 2
+    assert generated_dir.exists() is False
+
+
+def test_discard_legacy_generated_snapshots_preserves_directory_with_unknown_content(tmp_path):
+    generated_dir = tmp_path / ".generated"
+    generated_dir.mkdir()
+    snapshot = generated_dir / "玫瑰公园_20260525_103655.ecs"
+    unknown = generated_dir / "手动保存.ecs"
+    snapshot.write_text("A 100\n", encoding="utf-8")
+    unknown.write_text("B 100\n", encoding="utf-8")
+
+    with pytest.raises(OSError, match="未知内容"):
+        discard_legacy_generated_snapshots(tmp_path)
+
+    assert snapshot.exists() is True
+    assert unknown.exists() is True
 
 
 def test_scan_builtin_scripts_only_returns_supported_files(tmp_path):

@@ -43,7 +43,6 @@ def test_main_window_run_log_menu_toggles_and_collects_sources(app, tmp_path, mo
     manager = RunLogManager(
         tmp_path / "logs",
         now=lambda: datetime(2026, 8, 22, 15, 31, 8, 125000),
-        pid=123,
     )
     window = MainWindow(run_log_manager=manager)
 
@@ -80,7 +79,6 @@ def test_manual_tid_seed_capture_writes_start_result_and_seed(app, tmp_path, mon
     manager = RunLogManager(
         tmp_path / "logs",
         now=lambda: datetime(2026, 8, 22, 16, 0),
-        pid=456,
     )
     path = manager.enable()
     window = MainWindow(run_log_manager=manager)
@@ -232,6 +230,363 @@ def test_run_restores_enabled_setting_and_reports_startup_write_failure(monkeypa
     assert window.startup_errors == ["写入运行日志失败，已自动停用: disk full"]
     assert manager.closed is True
     assert guard.restored is True
+
+
+@pytest.mark.parametrize(("enabled", "expected_calls"), [(True, 1), (False, 0)])
+def test_run_schedules_startup_update_check_from_persisted_setting(
+    monkeypatch,
+    enabled,
+    expected_calls,
+):
+    class FakeApp:
+        def exec(self) -> int:
+            return 0
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.shown = False
+            self.schedule_calls = 0
+
+        def show(self) -> None:
+            self.shown = True
+
+        def schedule_startup_update_check(self) -> None:
+            assert self.shown is True
+            self.schedule_calls += 1
+
+    manager = SimpleNamespace(
+        enabled=False,
+        set_error_callback=lambda _callback: None,
+        cleanup=lambda: (),
+        write=lambda *_args, **_kwargs: None,
+        write_exception=lambda *_args: None,
+        close=lambda: None,
+    )
+    guard = SimpleNamespace(restore=lambda: None)
+    window = FakeWindow()
+    monkeypatch.setattr(main_window_module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(
+        main_window_module,
+        "QApplication",
+        SimpleNamespace(instance=lambda: FakeApp()),
+    )
+    monkeypatch.setattr(main_window_module, "configure_application_identity", lambda _app: None)
+    monkeypatch.setattr(main_window_module, "RunLogManager", lambda: manager)
+    monkeypatch.setattr(
+        main_window_module,
+        "ExceptionHookGuard",
+        lambda _manager: SimpleNamespace(install=lambda: guard),
+    )
+    monkeypatch.setattr(main_window_module, "is_run_log_enabled", lambda: False)
+    monkeypatch.setattr(main_window_module, "is_auto_update_check_enabled", lambda: enabled)
+    monkeypatch.setattr(main_window_module, "create_window", lambda **_kwargs: window)
+
+    assert main_window_module.run() == 0
+
+    assert window.shown is True
+    assert window.schedule_calls == expected_calls
+
+
+@pytest.mark.parametrize(("enabled", "expected_calls"), [(True, 1), (False, 0)])
+def test_startup_update_callback_rechecks_setting_and_runs_silently(
+    monkeypatch,
+    enabled,
+    expected_calls,
+):
+    update_calls: list[dict[str, object]] = []
+    log_calls: list[tuple[str, str, str]] = []
+    window = SimpleNamespace(
+        _is_closing=False,
+        _startup_update_check_started=False,
+        update_controller=SimpleNamespace(
+            check_for_updates=lambda **kwargs: update_calls.append(kwargs)
+        ),
+        _write_run_log=lambda source, message, level="INFO": log_calls.append(
+            (source, message, level)
+        ),
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "QApplication",
+        SimpleNamespace(activeModalWidget=lambda: None),
+    )
+    monkeypatch.setattr(main_window_module, "is_auto_update_check_enabled", lambda: enabled)
+
+    MainWindow._start_startup_update_check(window)
+
+    assert window._startup_update_check_started is True
+    assert update_calls == ([{"silent": True}] if expected_calls else [])
+    assert log_calls == (
+        [("软件更新", "开始启动自动检查", "INFO")] if expected_calls else []
+    )
+
+
+def test_frozen_run_migrates_legacy_internal_scripts_and_reports_backups(monkeypatch, tmp_path):
+    class FakeApp:
+        def __init__(self) -> None:
+            self.exec_called = False
+
+        def exec(self) -> int:
+            self.exec_called = True
+            return 0
+
+    class FakeManager:
+        def __init__(self) -> None:
+            self.enabled = False
+            self.write_calls: list[tuple[str, str, str]] = []
+
+        def set_error_callback(self, _callback) -> None:
+            return
+
+        def cleanup(self) -> tuple[Path, ...]:
+            return ()
+
+        def write(self, source, message, level="INFO") -> None:
+            self.write_calls.append((source, message, level))
+
+        def write_exception(self, *_args) -> None:
+            return
+
+        def close(self) -> None:
+            return
+
+    class FakeGuard:
+        def install(self):
+            return self
+
+        def restore(self) -> None:
+            return
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.shown = False
+            self.migration_results: list[int] = []
+
+        def show(self) -> None:
+            self.shown = True
+
+        def show_legacy_script_migration_result(self, count: int) -> None:
+            self.migration_results.append(count)
+
+    app = FakeApp()
+    manager = FakeManager()
+    window = FakeWindow()
+    backup = tmp_path / "script" / ".legacy-internal-backup" / "hit.txt"
+    migration_calls: list[Path] = []
+
+    def migrate(install_dir: Path, *, log) -> tuple[Path, ...]:
+        migration_calls.append(install_dir)
+        log("已备份旧版内部脚本")
+        return (backup,)
+
+    monkeypatch.setattr(main_window_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_window_module, "QApplication", SimpleNamespace(instance=lambda: app))
+    monkeypatch.setattr(main_window_module, "configure_application_identity", lambda _app: None)
+    monkeypatch.setattr(main_window_module, "RunLogManager", lambda: manager)
+    monkeypatch.setattr(main_window_module, "ExceptionHookGuard", lambda _manager: FakeGuard())
+    monkeypatch.setattr(main_window_module, "is_run_log_enabled", lambda: False)
+    monkeypatch.setattr(main_window_module, "set_run_log_enabled", lambda _enabled: None)
+    monkeypatch.setattr(main_window_module, "app_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(main_window_module, "migrate_legacy_internal_scripts", migrate)
+    monkeypatch.setattr(main_window_module, "create_window", lambda **_kwargs: window)
+    monkeypatch.setattr(
+        main_window_module,
+        "QTimer",
+        SimpleNamespace(singleShot=lambda _delay, callback: callback()),
+    )
+
+    assert main_window_module.run() == 0
+
+    assert migration_calls == [tmp_path]
+    assert manager.write_calls[0] == ("脚本目录迁移", "已备份旧版内部脚本", "INFO")
+    assert window.migration_results == [1]
+    assert window.shown is True
+    assert app.exec_called is True
+
+
+def test_frozen_run_skips_legacy_script_migration_during_uncommitted_update(
+    monkeypatch,
+    tmp_path,
+):
+    class FakeApp:
+        def __init__(self) -> None:
+            self.exec_called = False
+
+        def exec(self) -> int:
+            self.exec_called = True
+            return 0
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.shown = False
+
+        def show(self) -> None:
+            self.shown = True
+
+    app = FakeApp()
+    window = FakeWindow()
+    manager = SimpleNamespace(
+        enabled=False,
+        set_error_callback=lambda _callback: None,
+        cleanup=lambda: (),
+        write=lambda *_args, **_kwargs: None,
+        write_exception=lambda *_args: None,
+        close=lambda: None,
+    )
+    guard = SimpleNamespace(restore=lambda: None)
+    transaction_checks: list[Path] = []
+
+    def has_uncommitted_transaction(install_dir: Path) -> bool:
+        transaction_checks.append(install_dir)
+        return True
+
+    def fail_if_migrated(*_args, **_kwargs):
+        pytest.fail("未提交更新事务期间不应迁移旧版内部脚本")
+
+    monkeypatch.setattr(main_window_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_window_module, "QApplication", SimpleNamespace(instance=lambda: app))
+    monkeypatch.setattr(main_window_module, "configure_application_identity", lambda _app: None)
+    monkeypatch.setattr(main_window_module, "RunLogManager", lambda: manager)
+    monkeypatch.setattr(
+        main_window_module,
+        "ExceptionHookGuard",
+        lambda _manager: SimpleNamespace(install=lambda: guard),
+    )
+    monkeypatch.setattr(main_window_module, "is_run_log_enabled", lambda: False)
+    monkeypatch.setattr(main_window_module, "set_run_log_enabled", lambda _enabled: None)
+    monkeypatch.setattr(main_window_module, "app_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        main_window_module,
+        "has_uncommitted_update_transaction",
+        has_uncommitted_transaction,
+    )
+    monkeypatch.setattr(main_window_module, "migrate_legacy_internal_scripts", fail_if_migrated)
+    monkeypatch.setattr(main_window_module, "create_window", lambda **_kwargs: window)
+
+    assert main_window_module.run() == 0
+
+    assert transaction_checks == [tmp_path]
+    assert window.shown is True
+    assert app.exec_called is True
+
+
+def test_frozen_run_reports_legacy_script_migration_error_and_still_starts(monkeypatch, tmp_path):
+    class FakeApp:
+        def __init__(self) -> None:
+            self.exec_called = False
+
+        def exec(self) -> int:
+            self.exec_called = True
+            return 9
+
+    class FakeManager:
+        def __init__(self) -> None:
+            self.enabled = False
+            self.write_calls: list[tuple[str, str, str]] = []
+
+        def set_error_callback(self, _callback) -> None:
+            return
+
+        def cleanup(self) -> tuple[Path, ...]:
+            return ()
+
+        def write(self, source, message, level="INFO") -> None:
+            self.write_calls.append((source, message, level))
+
+        def write_exception(self, *_args) -> None:
+            return
+
+        def close(self) -> None:
+            return
+
+    class FakeGuard:
+        def install(self):
+            return self
+
+        def restore(self) -> None:
+            return
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.shown = False
+            self.migration_errors: list[str] = []
+
+        def show(self) -> None:
+            self.shown = True
+
+        def show_legacy_script_migration_error(self, message: str) -> None:
+            self.migration_errors.append(message)
+
+    app = FakeApp()
+    manager = FakeManager()
+    window = FakeWindow()
+    migration_calls: list[Path] = []
+
+    def migrate(install_dir: Path, *, log) -> tuple[Path, ...]:
+        _ = log
+        migration_calls.append(install_dir)
+        raise main_window_module.UpdatePackageError("backup directory is not writable")
+
+    monkeypatch.setattr(main_window_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_window_module, "QApplication", SimpleNamespace(instance=lambda: app))
+    monkeypatch.setattr(main_window_module, "configure_application_identity", lambda _app: None)
+    monkeypatch.setattr(main_window_module, "RunLogManager", lambda: manager)
+    monkeypatch.setattr(main_window_module, "ExceptionHookGuard", lambda _manager: FakeGuard())
+    monkeypatch.setattr(main_window_module, "is_run_log_enabled", lambda: False)
+    monkeypatch.setattr(main_window_module, "set_run_log_enabled", lambda _enabled: None)
+    monkeypatch.setattr(main_window_module, "app_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(main_window_module, "migrate_legacy_internal_scripts", migrate)
+    monkeypatch.setattr(main_window_module, "create_window", lambda **_kwargs: window)
+    monkeypatch.setattr(
+        main_window_module,
+        "QTimer",
+        SimpleNamespace(singleShot=lambda _delay, callback: callback()),
+    )
+
+    assert main_window_module.run() == 9
+
+    assert migration_calls == [tmp_path]
+    assert (
+        "脚本目录迁移",
+        "旧版内部脚本清理失败：backup directory is not writable",
+        "ERROR",
+    ) in manager.write_calls
+    assert window.migration_errors == ["backup directory is not writable"]
+    assert window.shown is True
+    assert app.exec_called is True
+
+
+def test_legacy_script_migration_notices_explain_backup_and_retry_locations(
+    monkeypatch,
+    tmp_path,
+):
+    dialogs: list[tuple[str, str, str]] = []
+    statuses: list[str] = []
+    status_bar = SimpleNamespace(showMessage=lambda message, _timeout: statuses.append(message))
+    window = SimpleNamespace(statusBar=lambda: status_bar)
+    monkeypatch.setattr(main_window_module, "script_directory", lambda: tmp_path / "script")
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, title, message: dialogs.append(("information", title, message)),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, title, message: dialogs.append(("warning", title, message)),
+    )
+
+    MainWindow.show_legacy_script_migration_result(window, 2)
+    MainWindow.show_legacy_script_migration_error(window, "disk full")
+
+    success_message = dialogs[0][2]
+    error_message = dialogs[1][2]
+    assert "备份目录不会被程序执行" in success_message
+    assert "复制到外层 script 目录" in success_message
+    assert ".legacy-internal-backup" in error_message
+    assert "迁移暂存目录" in error_message
+    assert "下次启动会自动重试" in error_message
+    assert statuses == ["旧版内部脚本已备份并清理", "旧版内部脚本清理失败"]
 
 
 @pytest.mark.parametrize("failure_phase", ["exit_write", "close"])

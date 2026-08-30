@@ -9,6 +9,7 @@ import stat
 import tempfile
 import time
 import unicodedata
+import uuid
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ MAX_PATCH_EXPANDED_SIZE = 4 * 1024 * 1024 * 1024
 MAX_PATCH_ARCHIVE_SIZE = 2 * 1024 * 1024 * 1024
 MAX_MANIFEST_SIZE = 8 * 1024 * 1024
 MAX_PRESERVED_SIDECAR_CANDIDATES = 1000
+LEGACY_INTERNAL_SCRIPT_PARTS = ("_internal", "script")
+LEGACY_INTERNAL_SCRIPT_BACKUP_PARTS = ("script", ".legacy-internal-backup")
+LEGACY_INTERNAL_SCRIPT_STAGING_PREFIX = ".migration-staging-"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _WINDOWS_DEVICE_NAMES = {
@@ -96,6 +100,58 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
         while chunk := handle.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def migrate_legacy_internal_scripts(
+    install_dir: Path,
+    *,
+    log: Callable[[str], object] | None = None,
+) -> tuple[Path, ...]:
+    """Move unique legacy internal scripts to the canonical user script tree."""
+    try:
+        install_dir = install_dir.resolve()
+    except OSError as exc:
+        raise UpdatePackageError(f"无法解析安装目录：{install_dir}：{exc}") from exc
+    if not install_dir.is_dir():
+        raise UpdatePackageError(f"安装目录不存在：{install_dir}")
+    logger = _best_effort_logger(log)
+    legacy_root = install_dir.joinpath(*LEGACY_INTERNAL_SCRIPT_PARTS)
+    backup_root = install_dir.joinpath(*LEGACY_INTERNAL_SCRIPT_BACKUP_PARTS)
+    staging_dirs = _find_legacy_script_staging_dirs(backup_root)
+    isolated = _isolate_legacy_script_tree(legacy_root, backup_root)
+    if isolated is not None:
+        staging_dirs.append(isolated)
+        _remove_empty_parent_directories(legacy_root.parent, install_dir)
+
+    preserved: list[Path] = []
+    for staging_dir in staging_dirs:
+        preserved.extend(
+            _migrate_isolated_legacy_script_tree(
+                staging_dir,
+                install_dir=install_dir,
+                backup_root=backup_root,
+                log=logger,
+            )
+        )
+    return tuple(preserved)
+
+
+def has_uncommitted_update_transaction(install_dir: Path) -> bool:
+    """Return true while an update can still be rolled back by the helper."""
+    try:
+        install_dir = install_dir.resolve()
+        candidates = sorted(install_dir.glob(f"{TRANSACTION_DIR_PREFIX}*"))
+    except OSError:
+        return True
+    for candidate in candidates:
+        try:
+            work_dir = _resolve_transaction_dir(candidate, install_dir)
+            state, _originals = _read_transaction_journal(work_dir, install_dir)
+        except (OSError, UpdatePackageError):
+            return True
+        if state in {"applying", "applied"}:
+            return True
+    return False
 
 
 def _best_effort_logger(
@@ -920,6 +976,238 @@ def _destination_path(install_dir: Path, relative_path: str) -> Path:
 def _existing_file_hash(path: Path) -> str | None:
     _ensure_regular_or_missing(path)
     return sha256_file(path) if path.exists() else None
+
+
+def _is_legacy_script_staging_name(name: str) -> bool:
+    suffix = name.removeprefix(LEGACY_INTERNAL_SCRIPT_STAGING_PREFIX)
+    return (
+        name.startswith(LEGACY_INTERNAL_SCRIPT_STAGING_PREFIX)
+        and len(suffix) == 32
+        and all(character in "0123456789abcdef" for character in suffix)
+    )
+
+
+def _prepare_legacy_script_backup_root(backup_root: Path, *, create: bool) -> bool:
+    for directory, label in (
+        (backup_root.parent, "外层脚本目录"),
+        (backup_root, "旧版内部脚本备份目录"),
+    ):
+        try:
+            status = directory.lstat()
+        except FileNotFoundError:
+            if not create:
+                return False
+            try:
+                directory.mkdir()
+                status = directory.lstat()
+            except OSError as exc:
+                raise UpdatePackageError(f"无法创建{label}：{directory}：{exc}") from exc
+        except OSError as exc:
+            raise UpdatePackageError(f"无法检查{label}：{directory}：{exc}") from exc
+        if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode):
+            raise UpdatePackageError(f"{label}不是安全目录：{directory}")
+    return True
+
+
+def _find_legacy_script_staging_dirs(backup_root: Path) -> list[Path]:
+    if not _prepare_legacy_script_backup_root(backup_root, create=False):
+        return []
+    try:
+        children = sorted(backup_root.iterdir(), key=lambda path: normalized_path_key(path.name))
+    except OSError as exc:
+        raise UpdatePackageError(f"无法读取旧版内部脚本备份目录：{backup_root}：{exc}") from exc
+    staging_dirs: list[Path] = []
+    for child in children:
+        if not _is_legacy_script_staging_name(child.name):
+            continue
+        try:
+            status = child.lstat()
+        except OSError as exc:
+            raise UpdatePackageError(f"无法检查旧版内部脚本暂存目录：{child}：{exc}") from exc
+        if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode):
+            raise UpdatePackageError(f"旧版内部脚本暂存路径不是安全目录：{child}")
+        staging_dirs.append(child)
+    return staging_dirs
+
+
+def _isolate_legacy_script_tree(legacy_root: Path, backup_root: Path) -> Path | None:
+    try:
+        status = legacy_root.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise UpdatePackageError(f"无法检查旧版内部脚本目录：{legacy_root}：{exc}") from exc
+    if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode):
+        raise UpdatePackageError(f"旧版内部脚本路径不是安全目录：{legacy_root}")
+    _prepare_legacy_script_backup_root(backup_root, create=True)
+
+    for _attempt in range(MAX_PRESERVED_SIDECAR_CANDIDATES):
+        staging_dir = backup_root / (
+            f"{LEGACY_INTERNAL_SCRIPT_STAGING_PREFIX}{uuid.uuid4().hex}"
+        )
+        try:
+            staging_dir.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise UpdatePackageError(f"无法检查旧版内部脚本暂存路径：{staging_dir}：{exc}") from exc
+        else:
+            continue
+        try:
+            os.rename(legacy_root, staging_dir)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise UpdatePackageError(f"无法隔离旧版内部脚本目录：{legacy_root}：{exc}") from exc
+        try:
+            isolated_status = staging_dir.lstat()
+        except OSError as exc:
+            raise UpdatePackageError(f"无法检查已隔离的旧版内部脚本：{staging_dir}：{exc}") from exc
+        if stat.S_ISLNK(isolated_status.st_mode) or not stat.S_ISDIR(isolated_status.st_mode):
+            raise UpdatePackageError(f"已隔离的旧版内部脚本不是安全目录：{staging_dir}")
+        return staging_dir
+    raise UpdatePackageError(f"无法为旧版内部脚本选择安全的暂存目录：{legacy_root}")
+
+
+def _migrate_isolated_legacy_script_tree(
+    staging_dir: Path,
+    *,
+    install_dir: Path,
+    backup_root: Path,
+    log: Callable[[str], object],
+) -> tuple[Path, ...]:
+    files, directories = _scan_legacy_script_tree(staging_dir)
+    preserved: list[Path] = []
+    active_path = staging_dir
+    try:
+        for source in files:
+            active_path = source
+            relative = source.relative_to(staging_dir)
+            source_hash = sha256_file(source)
+            canonical_relative = PurePosixPath("script", *relative.parts).as_posix()
+            canonical = _destination_path(install_dir, canonical_relative)
+            if _existing_file_hash(canonical) == source_hash:
+                if sha256_file(source) != source_hash:
+                    raise UpdatePackageError(f"旧版内部脚本在迁移期间发生变化：{source}")
+                _unlink_with_retry(source)
+                log(
+                    "已删除旧版内部重复脚本："
+                    f"{PurePosixPath(*LEGACY_INTERNAL_SCRIPT_PARTS, *relative.parts)}"
+                )
+                continue
+
+            backup_parts = list(relative.parts)
+            if backup_parts and _is_legacy_script_staging_name(backup_parts[0]):
+                backup_parts[0] = f"preserved-{backup_parts[0]}"
+            backup_relative = PurePosixPath(
+                *LEGACY_INTERNAL_SCRIPT_BACKUP_PARTS,
+                *backup_parts,
+            ).as_posix()
+            backup_base = _destination_path(install_dir, backup_relative)
+            backup = _copy_legacy_script_backup(source, backup_base, source_hash)
+            if sha256_file(source) != source_hash:
+                raise UpdatePackageError(f"旧版内部脚本在迁移期间发生变化：{source}")
+            _unlink_with_retry(source)
+            preserved.append(backup)
+            log(
+                "已备份并删除旧版内部脚本："
+                f"{PurePosixPath(*LEGACY_INTERNAL_SCRIPT_PARTS, *relative.parts)} -> "
+                f"{backup.relative_to(install_dir).as_posix()}"
+            )
+
+        for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+            active_path = directory
+            directory.rmdir()
+        active_path = staging_dir
+        staging_dir.rmdir()
+    except UpdatePackageError:
+        raise
+    except OSError as exc:
+        raise UpdatePackageError(f"迁移旧版内部脚本失败：{active_path}：{exc}") from exc
+    return tuple(preserved)
+
+
+def _scan_legacy_script_tree(root: Path) -> tuple[list[Path], list[Path]]:
+    files: list[Path] = []
+    directories: list[Path] = []
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            children = sorted(directory.iterdir(), key=lambda path: normalized_path_key(path.name))
+        except OSError as exc:
+            raise UpdatePackageError(f"无法读取旧版内部脚本目录：{directory}：{exc}") from exc
+        for child in children:
+            try:
+                status = child.lstat()
+            except OSError as exc:
+                raise UpdatePackageError(f"无法检查旧版内部脚本：{child}：{exc}") from exc
+            if stat.S_ISLNK(status.st_mode):
+                raise UpdatePackageError(f"旧版内部脚本不能是符号链接：{child}")
+            if stat.S_ISDIR(status.st_mode):
+                directories.append(child)
+                pending.append(child)
+                continue
+            if not stat.S_ISREG(status.st_mode):
+                raise UpdatePackageError(f"旧版内部脚本不是普通文件：{child}")
+            files.append(child)
+    files.sort(key=lambda path: normalized_path_key(path.relative_to(root).as_posix()))
+    return files, directories
+
+
+def _copy_legacy_script_backup(source: Path, base: Path, expected_sha256: str) -> Path:
+    base.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".legacy-internal-",
+        dir=base.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "wb") as output, source.open("rb") as input_file:
+            digest = hashlib.sha256()
+            while chunk := input_file.read(1024 * 1024):
+                output.write(chunk)
+                digest.update(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        if digest.hexdigest() != expected_sha256:
+            raise UpdatePackageError(f"旧版内部脚本在备份期间发生变化：{source}")
+
+        for index in range(MAX_PRESERVED_SIDECAR_CANDIDATES):
+            candidate = base if index == 0 else base.with_name(f"{base.name}.{index}")
+            try:
+                status = candidate.lstat()
+            except FileNotFoundError:
+                try:
+                    if os.name == "nt":
+                        os.rename(temporary, candidate)
+                    else:
+                        os.link(temporary, candidate)
+                        temporary.unlink()
+                except FileExistsError:
+                    continue
+                except OSError as exc:
+                    raise UpdatePackageError(
+                        f"无法原子写入旧版内部脚本备份：{candidate}：{exc}"
+                    ) from exc
+                return candidate
+            except OSError:
+                continue
+            if not stat.S_ISREG(status.st_mode):
+                continue
+            try:
+                if sha256_file(candidate) == expected_sha256:
+                    return candidate
+            except OSError:
+                continue
+        raise UpdatePackageError(f"无法为旧版内部脚本选择安全的备份名称：{source}")
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
 
 def _write_preserved_sidecar(
