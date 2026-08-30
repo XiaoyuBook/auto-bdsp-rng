@@ -1336,7 +1336,7 @@ class ShinyThresholdCalibrationWorker(QObject):
         self,
         capture_frame: Callable[[], object],
         *,
-        first_keyword: str = "出现了！",
+        first_keyword: str | tuple[str, ...] = "出现了！",
         second_keyword: str | tuple[str, ...] = ("去吧", "上吧"),
         second_capture_frame: Callable[[], object] | None = None,
     ) -> None:
@@ -6238,7 +6238,7 @@ class MainWindow(QMainWindow):
         def capture_starter_battle_region() -> object:
             return capture_region(STARTER_BATTLE_REGION_FIELD)
 
-        first_keyword = "上吧" if is_starter else "出现了！"
+        first_keyword: str | tuple[str, ...] = ("去吧", "上吧") if is_starter else "出现了！"
         second_keyword: str | tuple[str, ...] = ("战斗", "戰鬥") if is_starter else ("去吧", "上吧")
         worker = ShinyThresholdCalibrationWorker(
             capture_dialog_region,
@@ -6262,7 +6262,7 @@ class MainWindow(QMainWindow):
         if self._ocr_settings_dialog is not None:
             self._ocr_settings_dialog.set_automation_active(True)
         self.calibrate_shiny_threshold_button.setText("停止校准")
-        event_text = "上吧 -> 战斗按钮出现" if is_starter else "出现了！ -> 去吧/上吧"
+        event_text = "去吧/上吧 -> 战斗按钮出现" if is_starter else "出现了！ -> 去吧/上吧"
         self.auto_rng_tab.captureLog.emit(f"[闪光判定校准] 开始监控 {event_text}")
         self.statusBar().showMessage(f"正在后台监控 {event_text}...")
         thread.start()
@@ -7339,9 +7339,9 @@ class MainWindow(QMainWindow):
             self._capture_cancel.clear()
             is_roamer = config.target_species in ROAMER_SPECIES
             is_starter = config.target_species in STARTER_SPECIES
-            first_keyword = "上吧" if is_starter else "出现了！"
+            first_keywords: str | tuple[str, ...] = ("去吧", "上吧") if is_starter else "出现了！"
             second_keywords: tuple[str, ...] = ("战斗", "戰鬥") if is_starter else ("去吧", "上吧")
-            first_event_label = "上吧" if is_starter else "出现了! / 出现了！"
+            first_event_label = "去吧/上吧" if is_starter else "出现了! / 出现了！"
             second_event_label = "战斗" if is_starter else "去吧/上吧"
             errors: list[BaseException] = []
             script_done = threading.Event()
@@ -7474,8 +7474,9 @@ class MainWindow(QMainWindow):
                     )
                 elif event.event == "first_seen":
                     first_event = event
+                    recognized_label = event.keyword if is_starter and event.keyword else first_event_label
                     self.auto_rng_tab.captureLog.emit(
-                        f"[OCR判闪] 识别到「{first_event_label}」：{observed}；"
+                        f"[OCR判闪] 识别到「{recognized_label}」：{observed}；"
                         f"监控累计 {event.elapsed_seconds:.3f}s"
                     )
                 elif event.event == "second_seen":
@@ -7527,7 +7528,7 @@ class MainWindow(QMainWindow):
                 timing = measure_keyword_interval(
                     capture_dialog_region,
                     read_ocr_text,
-                    first_keyword=first_keyword,
+                    first_keyword=first_keywords,
                     second_keyword=second_keywords,
                     second_capture_frame=(capture_starter_battle_region if is_starter else None),
                     should_stop=lambda: self._capture_cancel.is_set() or bool(errors),
@@ -7552,7 +7553,7 @@ class MainWindow(QMainWindow):
                 )
                 return ShinyCheckResult(
                     is_shiny=False,
-                    first_event_text="上吧" if is_starter else "出现了",
+                    first_event_text="去吧/上吧" if is_starter else "出现了",
                     second_event_text="战斗" if is_starter else "去吧",
                 )
             except DialogScriptTimeoutError as exc:
@@ -7594,10 +7595,14 @@ class MainWindow(QMainWindow):
                 f"[OCR判闪] 判定：关键词间隔 {timing.interval_seconds:.3f}s，"
                 f"阈值 {threshold_seconds:.3f}s，结果={'疑似出闪' if is_shiny else '未出闪'}"
             )
+            matched_first_keyword = next(
+                (event.keyword for event in timing.events if event.event == "first_seen" and event.keyword),
+                None,
+            )
             return ShinyCheckResult(
                 is_shiny=is_shiny,
                 interval_seconds=timing.interval_seconds,
-                first_event_text="上吧" if is_starter else "出现了",
+                first_event_text=(matched_first_keyword or "去吧/上吧") if is_starter else "出现了",
                 second_event_text="战斗" if is_starter else "去吧",
             )
 

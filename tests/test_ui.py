@@ -2755,14 +2755,14 @@ def test_starter_shiny_threshold_calibration_uses_two_stage_regions(app, monkeyp
 
     assert shown == [2.5]
     assert len(calls) == 1
-    assert calls[0]["first_keyword"] == "上吧"
+    assert calls[0]["first_keyword"] == ("去吧", "上吧")
     assert calls[0]["second_keyword"] == ("战斗", "戰鬥")
     assert callable(calls[0]["second_capture_frame"])
     assert slices == [
         (slice(540, 1080, None), slice(0, 1920, None)),
         (slice(620, 715, None), slice(1540, 1710, None)),
     ]
-    assert "开始监控 上吧 -> 战斗按钮出现" in window.auto_rng_tab.log_view.toPlainText()
+    assert "开始监控 去吧/上吧 -> 战斗按钮出现" in window.auto_rng_tab.log_view.toPlainText()
 
 
 def test_auto_rng_panel_includes_editable_shiny_threshold_in_config(app, tmp_path):
@@ -4708,12 +4708,16 @@ def test_non_roamer_shiny_ocr_starts_while_script_is_running(app, tmp_path, monk
     window._video_source_connected = False
 
 
-@pytest.mark.parametrize("target_species", [387, 390, 393])
-def test_starter_shiny_check_uses_shangba_then_independent_battle_roi(
+@pytest.mark.parametrize(
+    ("target_species", "send_out_keyword"),
+    [(387, "去吧"), (390, "上吧"), (393, "去吧")],
+)
+def test_starter_shiny_check_accepts_send_out_text_then_uses_independent_battle_roi(
     app,
     tmp_path,
     monkeypatch,
     target_species,
+    send_out_keyword,
 ):
     window = MainWindow()
     logs: list[str] = []
@@ -4740,7 +4744,7 @@ def test_starter_shiny_check_uses_shangba_then_independent_battle_roi(
         second_capture = kwargs["second_capture_frame"]
         assert second_capture() == (slice(620, 715, None), slice(1540, 1710, None))
         callback = kwargs["event_callback"]
-        first = main_window_module.DialogTimingEvent("first_seen", 101.25, 1.25, keyword="上吧")
+        first = main_window_module.DialogTimingEvent("first_seen", 101.25, 1.25, keyword=send_out_keyword)
         second = main_window_module.DialogTimingEvent("second_seen", 104.75, 4.75, 3.5, "战斗")
         callback(main_window_module.DialogTimingEvent("monitor_started", 100.0, 0.0))
         callback(first)
@@ -4767,11 +4771,11 @@ def test_starter_shiny_check_uses_shangba_then_independent_battle_roi(
     assert result == main_window_module.ShinyCheckResult(
         is_shiny=True,
         interval_seconds=3.5,
-        first_event_text="上吧",
+        first_event_text=send_out_keyword,
         second_event_text="战斗",
     )
     assert len(measure_calls) == 1
-    assert measure_calls[0]["first_keyword"] == "上吧"
+    assert measure_calls[0]["first_keyword"] == ("去吧", "上吧")
     assert measure_calls[0]["second_keyword"] == ("战斗", "戰鬥")
     assert callable(measure_calls[0]["second_capture_frame"])
     assert slices == [
@@ -4779,7 +4783,7 @@ def test_starter_shiny_check_uses_shangba_then_independent_battle_roi(
         (slice(620, 715, None), slice(1540, 1710, None)),
     ]
     assert any("御三家战斗区域有效 ROI" in message for message in logs)
-    assert any("识别到「上吧」" in message for message in logs)
+    assert any(f"识别到「{send_out_keyword}」" in message for message in logs)
     assert any("识别到「战斗」" in message and "关键词间隔 3.500s" in message for message in logs)
 
 
@@ -4787,7 +4791,7 @@ def test_starter_shiny_check_uses_shangba_then_independent_battle_roi(
     ("target_species", "expected_stage", "expected_action", "first_event_text", "second_event_text"),
     [
         (492, "出现了", "按未出闪继续自动流程", "出现了", "去吧"),
-        (387, "上吧", "停止自动流程并等待人工确认", "上吧", "战斗"),
+        (387, "去吧/上吧", "停止自动流程并等待人工确认", "去吧/上吧", "战斗"),
     ],
 )
 def test_main_window_auto_rng_shiny_timeout_returns_unknown_result(

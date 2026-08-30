@@ -178,9 +178,10 @@ def test_measure_keyword_interval_accepts_shangba_as_second_keyword():
 
 
 @pytest.mark.parametrize("battle_text", ["战斗", "戰鬥"])
-def test_measure_keyword_interval_switches_callbacks_after_shangba(battle_text):
+@pytest.mark.parametrize("send_out_keyword", ["去吧", "上吧"])
+def test_measure_keyword_interval_switches_callbacks_after_starter_send_out(battle_text, send_out_keyword):
     clock = _FakeClock()
-    first_frames = iter(["dialog-before", "dialog-shangba"])
+    first_frames = iter(["dialog-before", "dialog-send-out"])
     second_frames = iter(["battle-hud"])
     calls: list[tuple[str, object]] = []
 
@@ -191,7 +192,7 @@ def test_measure_keyword_interval_switches_callbacks_after_shangba(battle_text):
 
     def read_first(frame):
         calls.append(("read:first", frame))
-        return "战斗" if frame == "dialog-before" else "上吧！草苗龟！"
+        return "战斗" if frame == "dialog-before" else f"{send_out_keyword}！草苗龟！"
 
     def capture_second():
         frame = next(second_frames)
@@ -205,7 +206,7 @@ def test_measure_keyword_interval_switches_callbacks_after_shangba(battle_text):
     result = measure_keyword_interval(
         capture_first,
         read_first,
-        first_keyword="上吧",
+        first_keyword=("去吧", "上吧"),
         second_keyword=("战斗", "戰鬥"),
         second_capture_frame=capture_second,
         second_read_text=read_second,
@@ -216,13 +217,13 @@ def test_measure_keyword_interval_switches_callbacks_after_shangba(battle_text):
     )
 
     assert result.interval_seconds == pytest.approx(0.1)
-    assert result.events[1].keyword == "上吧"
+    assert result.events[1].keyword == send_out_keyword
     assert result.events[2].keyword == battle_text
     assert calls == [
         ("capture:first", "dialog-before"),
         ("read:first", "dialog-before"),
-        ("capture:first", "dialog-shangba"),
-        ("read:first", "dialog-shangba"),
+        ("capture:first", "dialog-send-out"),
+        ("read:first", "dialog-send-out"),
         ("capture:second", "battle-hud"),
         ("read:second", "battle-hud"),
     ]

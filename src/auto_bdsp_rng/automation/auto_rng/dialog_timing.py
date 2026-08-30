@@ -81,7 +81,7 @@ def measure_keyword_interval(
     capture_frame: Callable[[], object],
     read_text: Callable[[object], str],
     *,
-    first_keyword: str = "出现了！",
+    first_keyword: str | Sequence[str] = "出现了！",
     second_keyword: str | Sequence[str] = ("去吧", "上吧"),
     second_capture_frame: Callable[[], object] | None = None,
     second_read_text: Callable[[object], str] | None = None,
@@ -102,7 +102,8 @@ def measure_keyword_interval(
     keyword is observed. Omitting either callback keeps using its first-stage
     counterpart.
     """
-    first = normalize_ocr_text(first_keyword)
+    first_keywords = (first_keyword,) if isinstance(first_keyword, str) else tuple(first_keyword)
+    firsts = tuple(normalize_ocr_text(keyword) for keyword in first_keywords)
     second_keywords = (second_keyword,) if isinstance(second_keyword, str) else tuple(second_keyword)
     seconds = tuple(normalize_ocr_text(keyword) for keyword in second_keywords)
     started_at = monotonic()
@@ -167,8 +168,9 @@ def measure_keyword_interval(
             return
         if timed_out:
             timeout_event = record_event("timeout_before_first", now)
+            first_label = "/".join(first_keywords)
             raise DialogKeywordTimeoutError(
-                f"Timed out while waiting for first OCR keyword: {first_keyword}",
+                f"Timed out while waiting for first OCR keyword: {first_label}",
                 stage="before_first",
                 event=timeout_event,
                 events=tuple(events),
@@ -208,9 +210,13 @@ def measure_keyword_interval(
         check_timeout(ocr_completed_at)
         text = normalize_ocr_text(raw_text)
         if first_seen_at is None:
-            if first in text:
+            matched_keyword = next(
+                (keyword for keyword, normalized in zip(first_keywords, firsts) if normalized in text),
+                None,
+            )
+            if matched_keyword is not None:
                 first_seen_at = ocr_completed_at
-                record_event("first_seen", ocr_completed_at, keyword=first_keyword)
+                record_event("first_seen", ocr_completed_at, keyword=matched_keyword)
         else:
             matched_keyword = next(
                 (keyword for keyword, normalized in zip(second_keywords, seconds) if normalized in text),
