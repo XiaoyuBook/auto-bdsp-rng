@@ -25,11 +25,15 @@ FUNC 撞帧
 	WAIT 3900
 	LS RESET
 	LS LEFT
+	$count = 0
 	FOR 270
+	$count += 1
+	IF $count  == 100
+	LS RESET
+	ENDIF
 	A
 	WAIT 20
 	NEXT
-	LS RESET
 	WAIT 600
     WAIT 1000
 ENDFUNC
