@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -215,23 +214,7 @@ class AutoTidRngPanel(QWidget):
         grid.setColumnStretch(1, 2)
         grid.setRowStretch(2, 1)
 
-        # Keep the action toolbar visible and make the tall target/ID table
-        # area reachable on displays shorter than the desktop layout.
-        # ``content`` keeps the same grid and child ownership, so existing
-        # callers can continue using the panel's public widget attributes.
-        self.content_scroll = QScrollArea(self)
-        self.content_scroll.setObjectName("AutoTidContentScroll")
-        self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.content_scroll.setWidgetResizable(True)
-        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.content_scroll.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.content_scroll.setMinimumSize(0, 0)
-        self.content_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
-        content.setMinimumSize(0, 0)
-        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.content_scroll.setWidget(content)
-        layout.addWidget(self.content_scroll, 1)
+        layout.addWidget(content, 1)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_panel_state()

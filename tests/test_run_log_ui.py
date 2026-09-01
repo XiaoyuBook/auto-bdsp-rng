@@ -287,6 +287,85 @@ def test_run_schedules_startup_update_check_from_persisted_setting(
     assert window.schedule_calls == expected_calls
 
 
+def test_run_configures_ui_scale_before_qapplication_and_passes_effective_scale(
+    monkeypatch,
+):
+    sequence: list[str] = []
+    created_with: list[dict[str, object]] = []
+
+    class FakeApp:
+        def exec(self) -> int:
+            return 0
+
+    class FakeWindow:
+        def show(self) -> None:
+            sequence.append("show")
+
+    scale_environment = main_window_module.UiScaleEnvironmentResult(
+        percent=75.0,
+        scale_factor=0.75,
+        source="automatic",
+        environment_value="0.75",
+    )
+    manager = SimpleNamespace(
+        enabled=False,
+        set_error_callback=lambda _callback: None,
+        cleanup=lambda: None,
+        write=lambda *_args, **_kwargs: None,
+        write_exception=lambda *_args: None,
+        close=lambda: None,
+    )
+    guard = SimpleNamespace(restore=lambda: None)
+
+    monkeypatch.setattr(main_window_module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(
+        main_window_module,
+        "get_ui_scale",
+        lambda: sequence.append("settings") or "auto",
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "configure_ui_scale_environment",
+        lambda setting: (
+            sequence.append(f"scale:{setting}") or scale_environment
+        ),
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "QApplication",
+        SimpleNamespace(
+            instance=lambda: sequence.append("qapplication") or FakeApp(),
+        ),
+    )
+    monkeypatch.setattr(main_window_module, "configure_application_identity", lambda _app: None)
+    monkeypatch.setattr(main_window_module, "RunLogManager", lambda: manager)
+    monkeypatch.setattr(
+        main_window_module,
+        "ExceptionHookGuard",
+        lambda _manager: SimpleNamespace(install=lambda: guard),
+    )
+    monkeypatch.setattr(main_window_module, "is_run_log_enabled", lambda: False)
+    monkeypatch.setattr(main_window_module, "is_auto_update_check_enabled", lambda: False)
+
+    def create_window(**kwargs):
+        sequence.append("window")
+        created_with.append(kwargs)
+        return FakeWindow()
+
+    monkeypatch.setattr(main_window_module, "create_window", create_window)
+
+    assert main_window_module.run() == 0
+
+    assert sequence[:4] == ["settings", "scale:auto", "qapplication", "window"]
+    assert created_with == [
+        {
+            "run_log_manager": manager,
+            "ui_scale": "auto",
+            "ui_scale_environment": scale_environment,
+        }
+    ]
+
+
 @pytest.mark.parametrize(("enabled", "expected_calls"), [(True, 1), (False, 0)])
 def test_startup_update_callback_rechecks_setting_and_runs_silently(
     monkeypatch,

@@ -171,23 +171,7 @@ class AutoRngPanel(QWidget):
         self.content_grid.setRowStretch(0, 0)
         self.content_grid.setRowStretch(1, 1)
 
-        # Keep the action toolbar visible while allowing the relatively tall
-        # strategy/script/log area to scroll on short displays.  The content
-        # widget retains its original layout and public attributes so callers
-        # and tests can continue to address ``content_grid`` directly.
-        self.content_scroll = QScrollArea(self)
-        self.content_scroll.setObjectName("AutoRngContentScroll")
-        self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.content_scroll.setWidgetResizable(True)
-        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.content_scroll.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.content_scroll.setMinimumSize(0, 0)
-        self.content_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
-        content.setMinimumSize(0, 0)
-        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.content_scroll.setWidget(content)
-        layout.addWidget(self.content_scroll, 1)
+        layout.addWidget(content, 1)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_panel_state()

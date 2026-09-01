@@ -8,7 +8,20 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, QSize, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QProcess,
+    QRect,
+    QSettings,
+    QSize,
+    QThread,
+    QTimer,
+    Qt,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -119,11 +132,15 @@ from auto_bdsp_rng.automation.auto_rng.search import (
 )
 from auto_bdsp_rng.automation.auto_rng.zoom_recovery import recover_zoom_overlay
 from auto_bdsp_rng.app_settings import (
+    UI_SCALE_AUTO,
+    UiScale,
+    get_ui_scale,
     is_auto_update_check_enabled,
     is_run_log_enabled,
     set_auto_update_check_enabled,
     set_run_log_enabled,
     set_startup_notice_acknowledged,
+    set_ui_scale,
     should_show_startup_notice,
 )
 from auto_bdsp_rng.automation.easycon import EasyConRunResult, EasyConStatus
@@ -149,6 +166,7 @@ from auto_bdsp_rng.update_core import (
     has_uncommitted_update_transaction,
     migrate_legacy_internal_scripts,
 )
+from auto_bdsp_rng.ui_scale import UiScaleEnvironmentResult, configure_ui_scale_environment
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
@@ -179,12 +197,11 @@ STARTUP_UPDATE_CHECK_MODAL_RETRY_MS = 500
 CAPTURE_API_SETTINGS_VERSION = 1
 CAPTURE_API_SETTINGS_VERSION_KEY = "video_source/capture_api_settings_version"
 
-# The original 1150x900 layout is comfortable on a desktop monitor, but its
-# hard minimum made the application impossible to fit on common 1366x768
-# displays.  Keep a readable compact floor and let page-level scroll areas
-# expose the controls that do not fit vertically.
+# The application uses one stable logical layout. Small-screen support is
+# provided by the process-wide UI scale configured before QApplication is
+# created, so pages do not reflow or acquire layout-level scroll bars.
 MAIN_WINDOW_DEFAULT_SIZE = QSize(1150, 900)
-MAIN_WINDOW_COMPACT_MIN_SIZE = QSize(900, 600)
+MAIN_WINDOW_MIN_SIZE = QSize(1150, 900)
 MAIN_WINDOW_SCREEN_MARGIN = 16
 MAIN_WINDOW_GEOMETRY_KEYS = (
     "window/x",
@@ -192,16 +209,10 @@ MAIN_WINDOW_GEOMETRY_KEYS = (
     "window/width",
     "window/height",
 )
-# The Project_Xs controls and preview are both useful side by side on a
-# desktop, but the preview's minimum width leaves too little room on compact
-# displays.  The comparison is made against the splitter's logical width so
-# window decorations and high-DPI scaling do not affect the breakpoint.
-PROJECT_XS_VERTICAL_BREAKPOINT = 1100
+MAIN_WINDOW_UI_SCALE_KEY = "window/ui_scale_percent"
+MAIN_WINDOW_CURRENT_TAB_KEY = "window/current_tab"
 PROJECT_XS_HORIZONTAL_LEFT_WIDTH = 550
-PROJECT_XS_VERTICAL_LEFT_MIN_HEIGHT = 180
-PROJECT_XS_VERTICAL_LEFT_MAX_HEIGHT = 420
 PROJECT_XS_PREVIEW_MIN_HEIGHT = 260
-PROJECT_XS_COMPACT_PREVIEW_MIN_HEIGHT = 140
 
 
 def _exception_chain_text(error: BaseException) -> str:
@@ -293,7 +304,7 @@ def _uses_same_capture_source(left: BlinkCaptureConfig, right: BlinkCaptureConfi
 
 
 def _scale_preview_pixmap(pixmap: QPixmap, target: QSize, device_pixel_ratio: float) -> tuple[QPixmap, QSize]:
-    dpr = max(1.0, float(device_pixel_ratio))
+    dpr = max(0.01, float(device_pixel_ratio))
     physical_target = QSize(
         min(pixmap.width(), max(1, round(target.width() * dpr))),
         min(pixmap.height(), max(1, round(target.height() * dpr))),
@@ -311,7 +322,7 @@ def _fit_window_rect(
     available: QRect,
     desired: QSize = MAIN_WINDOW_DEFAULT_SIZE,
     *,
-    minimum: QSize = MAIN_WINDOW_COMPACT_MIN_SIZE,
+    minimum: QSize = MAIN_WINDOW_MIN_SIZE,
     margin: int = MAIN_WINDOW_SCREEN_MARGIN,
 ) -> QRect:
     """Return a centered window rectangle that fits a screen work area.
@@ -341,7 +352,7 @@ def _clamp_window_rect(
     rect: QRect,
     available: QRect,
     *,
-    minimum: QSize = MAIN_WINDOW_COMPACT_MIN_SIZE,
+    minimum: QSize = MAIN_WINDOW_MIN_SIZE,
     margin: int = MAIN_WINDOW_SCREEN_MARGIN,
 ) -> QRect:
     """Keep a saved window rectangle visible on the current monitor."""
@@ -360,48 +371,6 @@ def _clamp_window_rect(
     y = min(max(rect.top(), work.top()), work.bottom() - fitted.height() + 1)
     fitted.moveTopLeft(QPoint(x, y))
     return fitted
-
-
-def _scrollable_page(
-    content: QWidget,
-    *,
-    object_name: str = "ResponsivePageScroll",
-    horizontal: bool = False,
-) -> QScrollArea:
-    """Put a page body behind a compact, style-consistent scroll viewport."""
-
-    scroll = QScrollArea()
-    scroll.setObjectName(object_name)
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setWidgetResizable(True)
-    scroll.setHorizontalScrollBarPolicy(
-        Qt.ScrollBarPolicy.ScrollBarAsNeeded if horizontal else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    )
-    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    scroll.setWidget(content)
-    content.setMinimumSize(0, 0)
-    content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-    return scroll
-
-
-class _ResponsiveTabWidget(QTabWidget):
-    """Keep page internals from forcing the main window beyond the screen."""
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(0, 0)
-
-    def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(960, 640)
-
-
-class _ResponsiveProjectSplitter(QSplitter):
-    """Splitter whose page hint remains compact until a page is displayed."""
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(0, 0)
-
-    def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(960, 640)
 
 
 def _enumerate_capture_devices(capture_api: int) -> list[tuple[int, str]]:
@@ -465,6 +434,19 @@ def configure_application_identity(app: QApplication) -> QIcon:
         except Exception:
             pass
     return icon
+
+
+def _start_detached_gui_process() -> bool:
+    if getattr(sys, "frozen", False):
+        program = str(Path(sys.executable).resolve())
+        arguments: list[str] = []
+        working_directory = str(Path(program).parent)
+    else:
+        program = sys.executable
+        arguments = ["-m", "auto_bdsp_rng", "gui"]
+        working_directory = str(Path.cwd())
+    started = QProcess.startDetached(program, arguments, working_directory)
+    return bool(started[0] if isinstance(started, tuple) else started)
 
 
 def _make_labels_copyable(root: QWidget) -> None:
@@ -1481,17 +1463,22 @@ class MainWindow(QMainWindow):
         profile_settings: QSettings | None = None,
         run_log_manager: RunLogManager | None = None,
         capture_broker_process: object | None = None,
+        ui_scale: UiScale = UI_SCALE_AUTO,
+        ui_scale_percent: float = 100.0,
+        ui_scale_source: str = "fallback",
     ) -> None:
         super().__init__()
         self.setWindowTitle(APP_DISPLAY_TITLE)
         if app_icon_path().exists():
             self.setWindowIcon(QIcon(str(app_icon_path())))
-        # Set a compact floor before constructing the pages.  Page-level
-        # scroll areas below keep the layout usable when the screen is shorter
-        # than the desktop-oriented default size.
-        self.setMinimumSize(MAIN_WINDOW_COMPACT_MIN_SIZE)
+        # Keep one stable logical canvas. The process-wide UI scale makes this
+        # canvas physically smaller on compact or high-DPI displays.
+        self.setMinimumSize(MAIN_WINDOW_MIN_SIZE)
         self.resize(MAIN_WINDOW_DEFAULT_SIZE)
         self.lang = "zh"
+        self._ui_scale = ui_scale
+        self._ui_scale_percent = max(1.0, float(ui_scale_percent))
+        self._ui_scale_source = str(ui_scale_source)
         self._run_log_manager = run_log_manager or RunLogManager()
         self._run_log_manager.set_error_callback(self._queue_run_log_failure)
         self.runLogFailed.connect(self._handle_run_log_failure, Qt.ConnectionType.QueuedConnection)
@@ -1759,8 +1746,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
-        self.tabs = _ResponsiveTabWidget()
-        self.tabs.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.tabs = QTabWidget()
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel(
@@ -1797,7 +1783,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.history_tab, "历史记录")
-        self.tabs.currentChanged.connect(lambda _index: QTimer.singleShot(0, self._update_responsive_layout))
         root_layout.addWidget(self.tabs, 1)
         _make_labels_copyable(self.tabs)
 
@@ -1812,6 +1797,11 @@ class MainWindow(QMainWindow):
             check_updates=self.update_controller.check_for_updates,
             auto_update_check_enabled=is_auto_update_check_enabled(),
             set_auto_update_check_enabled=set_auto_update_check_enabled,
+            ui_scale=self._ui_scale,
+            effective_ui_scale_percent=self._ui_scale_percent,
+            ui_scale_source=self._ui_scale_source,
+            set_ui_scale=set_ui_scale,
+            request_restart=self._request_ui_scale_restart,
         )
         self.help_menu_controller.install(self.help_button)
         self.update_controller.busyChanged.connect(
@@ -1827,6 +1817,35 @@ class MainWindow(QMainWindow):
             self._write_run_log(source, message, level=level)
 
         return write
+
+    def _request_ui_scale_restart(self, value: UiScale) -> None:
+        label = "自动适应所有屏幕" if value == UI_SCALE_AUTO else f"{value}%"
+        self._write_run_log(
+            "界面",
+            f"界面缩放已设置为 {label}；当前有效倍率 {self._ui_scale_percent:g}%",
+        )
+        choice = QMessageBox.question(
+            self,
+            "应用界面缩放",
+            f"界面缩放已设置为 {label}，重启后生效。\n\n是否立即重启？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            self.statusBar().showMessage("界面缩放将在下次启动时生效", 5000)
+            return
+
+        if not self.close():
+            self.statusBar().showMessage("后台任务尚未完全退出，界面缩放将在下次启动时生效", 5000)
+            return
+        if not _start_detached_gui_process():
+            QMessageBox.warning(
+                None,
+                "无法自动重启",
+                "界面缩放设置已保存，但软件未能自动重启。请手动重新打开软件。",
+            )
+            return
+        QApplication.quit()
 
     def _write_run_log(self, source: str, message: object, *, level: str = "INFO") -> None:
         self._run_log_manager.write(source, str(message), level=level)
@@ -1975,7 +1994,7 @@ class MainWindow(QMainWindow):
         self._startup_notice_dialog = dialog
 
     def _build_project_xs_tab(self) -> QWidget:
-        splitter = _ResponsiveProjectSplitter(Qt.Orientation.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setObjectName("ProjectXsSplitter")
         splitter.setChildrenCollapsible(False)
 
@@ -1989,20 +2008,6 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.capture_group)
         left_layout.addWidget(self.seed_group)
         left_layout.addStretch(1)
-        self._project_xs_left_layout = left_layout
-        left.setMinimumSize(0, 0)
-        left_scroll = _scrollable_page(
-            left,
-            object_name="ProjectXsControlsScroll",
-            # The capture form contains a few deliberately fixed-width
-            # controls.  Keep a horizontal escape hatch when the splitter is
-            # narrower than their natural width instead of silently clipping
-            # the rightmost buttons.
-            horizontal=True,
-        )
-        left_scroll.setMinimumSize(0, 0)
-        left_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
-        self.project_xs_controls_scroll = left_scroll
 
         # 右侧：状态条（紧凑） + 预览（下部）
         self.status_group = self._build_project_status_group()
@@ -2012,40 +2017,24 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(6)
         right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
-        self._project_xs_right_layout = right_layout
-        right.setMinimumSize(0, 0)
-        right.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
 
-        splitter.addWidget(left_scroll)
+        splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([PROJECT_XS_HORIZONTAL_LEFT_WIDTH, 1050])
-        self._project_xs_vertical: bool | None = None
         return splitter
 
     def _build_bdsp_tab(self) -> QWidget:
         panel = QWidget()
-        panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # Keep the profile/parameter/results structure intact inside one
-        # scroll viewport.  Several BDSP filter groups have fixed-width
-        # controls and a natural height larger than a compact monitor; a
-        # viewport lets users reach those controls without compressing rows
-        # until they overlap.
-        content = QWidget()
-        content.setObjectName("BdspContent")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(8)
-
         # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
         self.profile_group.setMaximumHeight(106)
-        content_layout.addWidget(self.profile_group)
+        layout.addWidget(self.profile_group)
 
         # 第 2 行：参数区（三列：乱数信息 + 设置 + 筛选项）
         params_widget = QWidget()
@@ -2060,22 +2049,11 @@ class MainWindow(QMainWindow):
         params_row.addWidget(self.rng_info_group)
         params_row.addWidget(self.static_group)
         params_row.addWidget(self.filter_group, 1)
-        content_layout.addWidget(params_widget)
+        layout.addWidget(params_widget)
 
         # 第 3 行 + 第 4 行：结果表格（工具栏 + 表格）
         self.results_panel = self._build_results()
-        content_layout.addWidget(self.results_panel, 1)
-
-        self.bdsp_content_scroll = _scrollable_page(
-            content,
-            object_name="BdspContentScroll",
-            horizontal=True,
-        )
-        self.bdsp_content_scroll.setSizePolicy(
-            QSizePolicy.Policy.Ignored,
-            QSizePolicy.Policy.Expanding,
-        )
-        layout.addWidget(self.bdsp_content_scroll, 1)
+        layout.addWidget(self.results_panel, 1)
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
@@ -2129,27 +2107,6 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.reidentify_config_combo, 1, 3)
         outer.setColumnStretch(3, 1)
         return group
-
-    def _build_controls(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 8, 0)
-        layout.setSpacing(10)
-        self.capture_group = self._build_blink_group()
-        self.seed_group = self._build_seed_group()
-        self.static_group = self._build_static_group()
-        self.profile_group = self._build_profile_group()
-        self.filter_group = self._build_filter_group()
-        layout.addWidget(self.capture_group)
-        layout.addWidget(self.seed_group)
-        layout.addWidget(self.static_group)
-        layout.addWidget(self.profile_group)
-        layout.addWidget(self.filter_group)
-        layout.addStretch(1)
-        scroll.setWidget(panel)
-        return scroll
 
     def _build_blink_group(self) -> QGroupBox:
         group = QGroupBox("捕捉配置")
@@ -3487,22 +3444,19 @@ class MainWindow(QMainWindow):
         settings = self._profile_settings
         values = [self._window_setting_int(settings.value(key), 0) for key in MAIN_WINDOW_GEOMETRY_KEYS]
         x, y, width, height = values
-        saved = QRect(x, y, width, height) if width > 0 and height > 0 else None
+        saved_scale = self._window_setting_int(settings.value(MAIN_WINDOW_UI_SCALE_KEY), 0)
+        current_scale = round(self._ui_scale_percent)
+        saved = (
+            QRect(x, y, width, height)
+            if width > 0 and height > 0 and saved_scale == current_scale
+            else None
+        )
         available = (
             self._screen_available_geometry_for_rect(saved)
             if saved is not None
             else self._screen_available_geometry()
         )
-        minimum = QSize(
-            min(
-                MAIN_WINDOW_COMPACT_MIN_SIZE.width(),
-                max(1, available.width() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
-            ),
-            min(
-                MAIN_WINDOW_COMPACT_MIN_SIZE.height(),
-                max(1, available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
-            ),
-        )
+        minimum = QSize(MAIN_WINDOW_MIN_SIZE)
         self.setMinimumSize(minimum)
 
         if saved is not None:
@@ -3515,7 +3469,8 @@ class MainWindow(QMainWindow):
             False,
         )
         self._window_geometry_restored = True
-        self._update_responsive_layout()
+        tab_index = self._window_setting_int(settings.value(MAIN_WINDOW_CURRENT_TAB_KEY), 0)
+        self.tabs.setCurrentIndex(max(0, min(self.tabs.count() - 1, tab_index)))
         if self._window_restore_maximized:
             QTimer.singleShot(0, self._restore_maximized_window)
 
@@ -3536,22 +3491,15 @@ class MainWindow(QMainWindow):
             settings.setValue("window/width", normal.width())
             settings.setValue("window/height", normal.height())
         settings.setValue("window/maximized", self.isMaximized())
+        settings.setValue(MAIN_WINDOW_UI_SCALE_KEY, round(self._ui_scale_percent))
+        settings.setValue(MAIN_WINDOW_CURRENT_TAB_KEY, self.tabs.currentIndex())
         settings.sync()
 
     def _keep_window_on_screen(self) -> None:
         if not self._window_geometry_restored or self.isFullScreen() or self.isMaximized():
             return
         available = self._screen_available_geometry()
-        minimum = QSize(
-            min(
-                MAIN_WINDOW_COMPACT_MIN_SIZE.width(),
-                max(1, available.width() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
-            ),
-            min(
-                MAIN_WINDOW_COMPACT_MIN_SIZE.height(),
-                max(1, available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN),
-            ),
-        )
+        minimum = QSize(MAIN_WINDOW_MIN_SIZE)
         self.setMinimumSize(minimum)
         rect = _clamp_window_rect(self.geometry(), available, minimum=minimum)
         if rect != self.geometry():
@@ -3559,89 +3507,6 @@ class MainWindow(QMainWindow):
 
     def _handle_screen_geometry_change(self) -> None:
         self._keep_window_on_screen()
-        self._update_responsive_layout()
-
-    def _update_responsive_layout(self) -> None:
-        """Switch the Project_Xs split view when the available width changes.
-
-        The method is intentionally idempotent: a normal resize should leave a
-        user's splitter adjustment untouched.  Sizes are only initialized when
-        the orientation changes (or on the first usable layout pass).
-        """
-
-        splitter = getattr(self, "project_xs_tab", None)
-        if not isinstance(splitter, _ResponsiveProjectSplitter):
-            return
-        # A hidden tab keeps its last page geometry (often the Qt default
-        # 640x480).  Use the tab widget's current content size in that case so
-        # changing the window while another page is selected still prepares
-        # Project_Xs for the correct orientation before it is shown.
-        tabs = getattr(self, "tabs", None)
-        if tabs is not None and tabs.width() > 0 and tabs.height() > 0:
-            # During a top-level resize the tab layout can lag one event
-            # behind.  The client area is a conservative fallback for the
-            # breakpoint, while the tab's own width remains preferred once
-            # it has been laid out.
-            width = max(tabs.width(), self.width() - 40)
-            height = max(1, tabs.height() - tabs.tabBar().height())
-        else:
-            width = splitter.width()
-            height = splitter.height()
-        if width <= 0 or height <= 0:
-            return
-
-        vertical = width < PROJECT_XS_VERTICAL_BREAKPOINT
-        orientation = Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
-        previous = getattr(self, "_project_xs_vertical", None)
-        orientation_changed = splitter.orientation() != orientation
-        if previous is not None and previous == vertical and not orientation_changed:
-            return
-
-        preview_label = getattr(self, "preview_label", None)
-        if preview_label is not None:
-            # The desktop preview is intentionally large, but its minimum
-            # height should not consume the whole vertical splitter on a
-            # short display.  The image itself continues to use KeepAspectRatio
-            # and all source-space coordinates remain unchanged.
-            if vertical:
-                preview_label.setMinimumHeight(PROJECT_XS_COMPACT_PREVIEW_MIN_HEIGHT)
-            else:
-                preview_label.setMinimumHeight(PROJECT_XS_PREVIEW_MIN_HEIGHT)
-
-        splitter.setOrientation(orientation)
-        self._project_xs_vertical = vertical
-
-        left_layout = getattr(self, "_project_xs_left_layout", None)
-        right_layout = getattr(self, "_project_xs_right_layout", None)
-        status_group = getattr(self, "status_group", None)
-        if left_layout is not None and right_layout is not None and status_group is not None:
-            if vertical:
-                right_layout.removeWidget(status_group)
-                # Keep the capture controls at the top of the scroll view;
-                # status/config selectors follow them on a narrow screen.
-                left_layout.insertWidget(2, status_group)
-            else:
-                left_layout.removeWidget(status_group)
-                right_layout.insertWidget(0, status_group)
-
-        if vertical:
-            # Leave enough room for the preview while exposing the complete
-            # control column through its own vertical scroll bar.
-            usable = max(1, height - splitter.handleWidth())
-            desired_first = min(
-                PROJECT_XS_VERTICAL_LEFT_MAX_HEIGHT,
-                max(PROJECT_XS_VERTICAL_LEFT_MIN_HEIGHT, int(usable * 0.46)),
-            )
-            right = splitter.widget(1)
-            right_minimum = right.minimumSizeHint().height() if right is not None else 0
-            first = min(desired_first, max(1, usable - max(1, right_minimum)))
-            second = max(1, usable - first)
-            splitter.setSizes([first, second])
-        else:
-            usable = max(1, width - splitter.handleWidth())
-            first = min(PROJECT_XS_HORIZONTAL_LEFT_WIDTH, max(280, usable // 2))
-            second = max(1, usable - first)
-            splitter.setSizes([first, second])
 
     def _set_profile_version(self, version: GameVersion) -> None:
         self._profile_version = version
@@ -3785,7 +3650,6 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
-        self._update_responsive_layout()
         self._keep_window_on_screen()
 
     def event(self, event) -> bool:  # type: ignore[override]
@@ -7260,9 +7124,11 @@ class MainWindow(QMainWindow):
             )
             locked = candidates[0].advances if candidates else None
             if locked is None:
-                self.auto_rng_tab.captureLog.emit("找到 0 个候选")
+                self.auto_rng_tab.captureLog.emit("找到 0 个原始候选")
             else:
-                self.auto_rng_tab.captureLog.emit(f"找到 {len(candidates)} 个候选，最低帧 Adv={locked}")
+                self.auto_rng_tab.captureLog.emit(
+                    f"找到 {len(candidates)} 个原始候选，最低帧 Adv={locked}"
+                )
             return candidates
 
         def search_sync_service(seed_result: AutoRngSeedResult, lead: int, nature_locked: int | None) -> list[State8]:
@@ -8983,11 +8849,29 @@ class _IVCalculatorDialog(QDialog):
         self._next_level_label.setText(", ".join(str(l) for l in next_levels))
 
 
-def create_window(run_log_manager: RunLogManager | None = None) -> MainWindow:
-    return MainWindow(run_log_manager=run_log_manager)
+def create_window(
+    run_log_manager: RunLogManager | None = None,
+    *,
+    ui_scale: UiScale = UI_SCALE_AUTO,
+    ui_scale_environment: UiScaleEnvironmentResult | None = None,
+) -> MainWindow:
+    scale_environment = ui_scale_environment or UiScaleEnvironmentResult(
+        percent=100.0,
+        scale_factor=1.0,
+        source="fallback",
+        environment_value="1",
+    )
+    return MainWindow(
+        run_log_manager=run_log_manager,
+        ui_scale=ui_scale,
+        ui_scale_percent=scale_environment.percent or 100.0,
+        ui_scale_source=scale_environment.source,
+    )
 
 
 def run() -> int:
+    ui_scale = get_ui_scale()
+    ui_scale_environment = configure_ui_scale_environment(ui_scale)
     app = QApplication.instance() or QApplication([])
     configure_application_identity(app)
     run_log_manager = RunLogManager()
@@ -9007,7 +8891,9 @@ def run() -> int:
         run_log_manager.write(
             "应用",
             f"应用启动；版本 {__version__}；模式 "
-            f"{'打包版' if getattr(sys, 'frozen', False) else '源码版'}",
+            f"{'打包版' if getattr(sys, 'frozen', False) else '源码版'}；"
+            f"界面倍率 {ui_scale_environment.environment_value}；"
+            f"来源 {ui_scale_environment.source}",
         )
     if run_log_requested and not run_log_manager.enabled:
         if run_log_startup_error is None:
@@ -9038,7 +8924,11 @@ def run() -> int:
 
     shutdown_run_log_errors: list[str] = []
     try:
-        window = create_window(run_log_manager=run_log_manager)
+        window = create_window(
+            run_log_manager=run_log_manager,
+            ui_scale=ui_scale,
+            ui_scale_environment=ui_scale_environment,
+        )
         if run_log_startup_error is not None:
             QTimer.singleShot(
                 0,

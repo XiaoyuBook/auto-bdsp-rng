@@ -7,11 +7,14 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QRect, QSettings, QSize, Qt
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtWidgets import QApplication, QSplitter, QTabWidget
 
 from auto_bdsp_rng.ui import MainWindow
 from auto_bdsp_rng.ui.main_window import (
+    MAIN_WINDOW_CURRENT_TAB_KEY,
+    MAIN_WINDOW_MIN_SIZE,
     MAIN_WINDOW_SCREEN_MARGIN,
+    MAIN_WINDOW_UI_SCALE_KEY,
     _clamp_window_rect,
     _fit_window_rect,
 )
@@ -73,7 +76,7 @@ def test_fit_window_rect_compresses_compact_floor_on_tiny_work_area() -> None:
 def test_clamp_window_rect_repositions_saved_window_without_losing_size() -> None:
     available = QRect(0, 0, 1366, 728)
     saved = QRect(-900, 500, 1000, 900)
-    rect = _clamp_window_rect(saved, available)
+    rect = _clamp_window_rect(saved, available, minimum=QSize(900, 600))
 
     assert rect.width() == 1000
     assert rect.height() == available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN
@@ -83,7 +86,7 @@ def test_clamp_window_rect_repositions_saved_window_without_losing_size() -> Non
     assert rect.bottom() <= available.bottom() - MAIN_WINDOW_SCREEN_MARGIN
 
 
-def test_main_window_uses_compact_geometry_and_vertical_project_xs_on_short_screen(
+def test_main_window_keeps_fixed_layout_on_short_screen(
     app,
     monkeypatch,
     tmp_path: Path,
@@ -95,31 +98,22 @@ def test_main_window_uses_compact_geometry_and_vertical_project_xs_on_short_scre
     window.show()
     app.processEvents()
 
-    assert window.width() <= available.width() - 2 * MAIN_WINDOW_SCREEN_MARGIN
-    assert window.height() <= available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN
-    assert window.minimumSize().width() <= available.width() - 2 * MAIN_WINDOW_SCREEN_MARGIN
-    assert window.minimumSize().height() <= available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN
-    assert window.project_xs_tab.orientation() == Qt.Orientation.Vertical
-    assert window._project_xs_vertical is True
-    window.tabs.setCurrentWidget(window.project_xs_tab)
-    app.processEvents()
-    capture_top = window.capture_group.mapTo(window.project_xs_tab, window.capture_group.rect().topLeft()).y()
-    assert capture_top <= 5
-    assert window.project_xs_tab.sizes()[0] >= 150
-    assert isinstance(window.project_xs_controls_scroll, QScrollArea)
-    assert window.project_xs_controls_scroll.verticalScrollBar().maximum() > 0
-    assert isinstance(window.auto_rng_tab.content_scroll, QScrollArea)
-    assert isinstance(window.auto_tid_rng_tab.content_scroll, QScrollArea)
-
-    window.tabs.setCurrentWidget(window.bdsp_tab)
-    app.processEvents()
-    assert isinstance(window.bdsp_content_scroll, QScrollArea)
-    assert window.bdsp_content_scroll.verticalScrollBar().maximum() > 0
-    assert window.bdsp_content_scroll.horizontalScrollBar().maximum() > 0
+    assert window.minimumSize() == MAIN_WINDOW_MIN_SIZE
+    assert window.width() >= MAIN_WINDOW_MIN_SIZE.width()
+    assert window.height() >= MAIN_WINDOW_MIN_SIZE.height()
+    assert isinstance(window.tabs, QTabWidget)
+    assert type(window.tabs) is QTabWidget
+    assert isinstance(window.project_xs_tab, QSplitter)
+    assert type(window.project_xs_tab) is QSplitter
+    assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
+    assert window.project_xs_tab.widget(0).isAncestorOf(window.capture_group)
+    assert window.project_xs_tab.widget(1).isAncestorOf(window.status_group)
+    assert not hasattr(window, "project_xs_controls_scroll")
+    assert not hasattr(window, "bdsp_content_scroll")
 
 
-def test_main_window_fits_common_1366x768_work_area(app, monkeypatch, tmp_path: Path) -> None:
-    available = QRect(0, 0, 1366, 728)
+def test_main_window_uses_design_geometry_when_screen_can_fit_it(app, monkeypatch, tmp_path: Path) -> None:
+    available = QRect(0, 0, 1600, 1000)
     monkeypatch.setattr(MainWindow, "_screen_available_geometry", lambda _self: QRect(available))
 
     window = MainWindow(profile_settings=_settings(tmp_path))
@@ -127,13 +121,12 @@ def test_main_window_fits_common_1366x768_work_area(app, monkeypatch, tmp_path: 
     app.processEvents()
 
     assert window.geometry().width() == 1150
-    assert window.geometry().height() == available.height() - 2 * MAIN_WINDOW_SCREEN_MARGIN
+    assert window.geometry().height() == 900
     assert window.geometry().bottom() <= available.bottom() - MAIN_WINDOW_SCREEN_MARGIN
     assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
-    assert window.project_xs_controls_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
 
 
-def test_project_xs_returns_to_horizontal_layout_when_width_is_restored(app, monkeypatch, tmp_path: Path) -> None:
+def test_project_xs_never_reflows_to_vertical(app, monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         MainWindow,
         "_screen_available_geometry",
@@ -143,10 +136,75 @@ def test_project_xs_returns_to_horizontal_layout_when_width_is_restored(app, mon
     window.show()
     window.resize(1024, 640)
     app.processEvents()
-    assert window.project_xs_tab.orientation() == Qt.Orientation.Vertical
+    assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
 
     window.resize(1280, 760)
     app.processEvents()
 
     assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
-    assert window._project_xs_vertical is False
+
+
+def test_window_geometry_and_tab_restore_when_effective_scale_matches(
+    app,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    saved = QRect(120, 80, 1300, 950)
+    for key, value in zip(
+        ("window/x", "window/y", "window/width", "window/height"),
+        (saved.x(), saved.y(), saved.width(), saved.height()),
+        strict=True,
+    ):
+        settings.setValue(key, value)
+    settings.setValue(MAIN_WINDOW_UI_SCALE_KEY, 75)
+    settings.setValue(MAIN_WINDOW_CURRENT_TAB_KEY, 3)
+    monkeypatch.setattr(
+        MainWindow,
+        "_screen_available_geometry",
+        lambda _self: QRect(0, 0, 1920, 1200),
+    )
+
+    window = MainWindow(profile_settings=settings, ui_scale=75, ui_scale_percent=75)
+
+    assert window.geometry() == saved
+    assert window.tabs.currentIndex() == 3
+
+
+def test_window_geometry_resets_but_tab_restores_when_scale_changes(
+    app,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.setValue("window/x", 120)
+    settings.setValue("window/y", 80)
+    settings.setValue("window/width", 1300)
+    settings.setValue("window/height", 950)
+    settings.setValue(MAIN_WINDOW_UI_SCALE_KEY, 75)
+    settings.setValue(MAIN_WINDOW_CURRENT_TAB_KEY, 4)
+    monkeypatch.setattr(
+        MainWindow,
+        "_screen_available_geometry",
+        lambda _self: QRect(0, 0, 1920, 1200),
+    )
+
+    window = MainWindow(profile_settings=settings, ui_scale=80, ui_scale_percent=80)
+
+    assert window.geometry().size() == QSize(1150, 900)
+    assert window.geometry() != QRect(120, 80, 1300, 950)
+    assert window.tabs.currentIndex() == 4
+
+
+def test_window_geometry_save_records_effective_scale_and_current_tab(
+    app,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    window = MainWindow(profile_settings=settings, ui_scale="auto", ui_scale_percent=65)
+    window.tabs.setCurrentIndex(2)
+
+    window._save_window_geometry()
+
+    assert int(settings.value(MAIN_WINDOW_UI_SCALE_KEY)) == 65
+    assert int(settings.value(MAIN_WINDOW_CURRENT_TAB_KEY)) == 2

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QPushButton, QToolButton
 
+from auto_bdsp_rng.app_settings import (
+    UI_SCALE_AUTO,
+    UI_SCALE_MAX,
+    UI_SCALE_MIN,
+    UI_SCALE_STEP,
+    UI_SCALE_VALUES,
+    UiScale,
+    normalize_ui_scale,
+)
 from auto_bdsp_rng.resources import app_base_dir
 from auto_bdsp_rng.ui.about_dialog import AboutDialog
 from auto_bdsp_rng.ui.markdown_viewer import MarkdownViewerDialog, read_markdown_text
@@ -35,6 +45,11 @@ class HelpMenuController:
         check_updates: Callable[[], object] | None = None,
         auto_update_check_enabled: bool = True,
         set_auto_update_check_enabled: Callable[[bool], bool] | None = None,
+        ui_scale: UiScale = UI_SCALE_AUTO,
+        effective_ui_scale_percent: float | None = 100.0,
+        ui_scale_source: str = "fallback",
+        set_ui_scale: Callable[[UiScale], UiScale | None] | None = None,
+        request_restart: Callable[[UiScale], object] | None = None,
     ) -> None:
         self.window = window
         self.open_url = open_url or self._open_url
@@ -46,6 +61,23 @@ class HelpMenuController:
         self.check_updates = check_updates
         self._auto_update_check_enabled = bool(auto_update_check_enabled)
         self.set_auto_update_check_enabled = set_auto_update_check_enabled
+        try:
+            self._ui_scale = normalize_ui_scale(ui_scale)
+        except ValueError:
+            self._ui_scale = UI_SCALE_AUTO
+        try:
+            effective_percent = float(effective_ui_scale_percent)
+        except (TypeError, ValueError):
+            effective_percent = math.nan
+        self._effective_ui_scale_percent = (
+            effective_percent
+            if math.isfinite(effective_percent) and effective_percent > 0
+            else None
+        )
+        self._ui_scale_source = str(ui_scale_source)
+        self._ui_scale_locked = self._ui_scale_source == "environment"
+        self.set_ui_scale = set_ui_scale
+        self.request_restart = request_restart
 
     def install(self, button: QToolButton | QPushButton | None = None) -> QMenu:
         self.help_menu = self._build_menu(parent=button or self.window)
@@ -86,6 +118,77 @@ class HelpMenuController:
         self.auto_update_check_action.setChecked(self._auto_update_check_enabled)
         self.auto_update_check_action.triggered.connect(self._set_auto_update_check_enabled)
         menu.addAction(self.auto_update_check_action)
+
+        menu.addSeparator()
+        self.ui_scale_menu = QMenu("界面缩放", self.window)
+        self.ui_scale_action_group = QActionGroup(self.window)
+        self.ui_scale_action_group.setExclusive(True)
+        self.ui_scale_actions: dict[UiScale, QAction] = {}
+
+        effective_label = (
+            f"{self._effective_ui_scale_percent:g}%"
+            if self._effective_ui_scale_percent is not None
+            else "未知"
+        )
+        status_text = (
+            f"当前由 QT_SCALE_FACTOR 控制（{effective_label}）"
+            if self._ui_scale_locked
+            else f"当前有效倍率：{effective_label}"
+        )
+        self.ui_scale_status_action = QAction(status_text, self.window)
+        self.ui_scale_status_action.setEnabled(False)
+        self.ui_scale_menu.addAction(self.ui_scale_status_action)
+        self.ui_scale_menu.addSeparator()
+
+        scale_options: tuple[tuple[UiScale, str], ...] = (
+            (UI_SCALE_AUTO, "自动适应所有屏幕"),
+            *((value, f"{value}%") for value in UI_SCALE_VALUES),
+        )
+        for value, label in scale_options:
+            action = QAction(label, self.window)
+            action.setCheckable(True)
+            action.setChecked(value == self._ui_scale)
+            action.setEnabled(not self._ui_scale_locked)
+            action.triggered.connect(
+                lambda _checked=False, selected=value: self._apply_ui_scale(selected)
+            )
+            self.ui_scale_action_group.addAction(action)
+            self.ui_scale_menu.addAction(action)
+            self.ui_scale_actions[value] = action
+
+        self.ui_scale_menu.addSeparator()
+        self.ui_scale_decrease_action = QAction("缩小", self.window)
+        self.ui_scale_decrease_action.setShortcut(QKeySequence("Ctrl+-"))
+        self.ui_scale_decrease_action.triggered.connect(
+            lambda: self._change_ui_scale(-UI_SCALE_STEP)
+        )
+        self.ui_scale_menu.addAction(self.ui_scale_decrease_action)
+
+        self.ui_scale_increase_action = QAction("放大", self.window)
+        self.ui_scale_increase_action.setShortcuts(
+            (QKeySequence("Ctrl++"), QKeySequence("Ctrl+="))
+        )
+        self.ui_scale_increase_action.triggered.connect(
+            lambda: self._change_ui_scale(UI_SCALE_STEP)
+        )
+        self.ui_scale_menu.addAction(self.ui_scale_increase_action)
+
+        self.ui_scale_reset_action = QAction("重置为 100%", self.window)
+        self.ui_scale_reset_action.setShortcut(QKeySequence("Ctrl+0"))
+        self.ui_scale_reset_action.setEnabled(not self._ui_scale_locked)
+        self.ui_scale_reset_action.triggered.connect(lambda: self._apply_ui_scale(100))
+        self.ui_scale_menu.addAction(self.ui_scale_reset_action)
+
+        # Register shortcuts on the window as well so they work when Help is a tool-button menu.
+        self.window.addActions(
+            (
+                self.ui_scale_decrease_action,
+                self.ui_scale_increase_action,
+                self.ui_scale_reset_action,
+            )
+        )
+        self._update_ui_scale_command_states()
+        menu.addMenu(self.ui_scale_menu)
 
         menu.addSeparator()
         self.run_log_menu = QMenu("运行日志", self.window)
@@ -160,6 +263,60 @@ class HelpMenuController:
         self.auto_update_check_action.blockSignals(True)
         self.auto_update_check_action.setChecked(actual)
         self.auto_update_check_action.blockSignals(False)
+
+    def _apply_ui_scale(self, value: UiScale) -> None:
+        previous = self._ui_scale
+        if self._ui_scale_locked:
+            self.set_ui_scale_state(previous)
+            return
+        try:
+            requested = normalize_ui_scale(value)
+            if requested == previous:
+                self.set_ui_scale_state(previous)
+                return
+            saved = requested if self.set_ui_scale is None else self.set_ui_scale(requested)
+            actual = requested if saved is None else normalize_ui_scale(saved)
+        except Exception:
+            self.set_ui_scale_state(previous)
+            return
+
+        self.set_ui_scale_state(actual)
+        if actual != previous and self.request_restart is not None:
+            self.request_restart(actual)
+
+    def _change_ui_scale(self, change: int) -> None:
+        current = self._current_ui_scale_step()
+        if (change < 0 and current <= UI_SCALE_MIN) or (
+            change > 0 and current >= UI_SCALE_MAX
+        ):
+            return
+        target = max(UI_SCALE_MIN, min(UI_SCALE_MAX, current + change))
+        self._apply_ui_scale(int(target))
+
+    def _current_ui_scale_step(self) -> int:
+        if self._ui_scale != UI_SCALE_AUTO:
+            return self._ui_scale
+        current = self._effective_ui_scale_percent or 100
+        return int(round(current / UI_SCALE_STEP) * UI_SCALE_STEP)
+
+    def _update_ui_scale_command_states(self) -> None:
+        if self._ui_scale_locked:
+            self.ui_scale_decrease_action.setEnabled(False)
+            self.ui_scale_increase_action.setEnabled(False)
+            self.ui_scale_reset_action.setEnabled(False)
+            return
+        current = self._current_ui_scale_step()
+        self.ui_scale_decrease_action.setEnabled(current > UI_SCALE_MIN)
+        self.ui_scale_increase_action.setEnabled(current < UI_SCALE_MAX)
+        self.ui_scale_reset_action.setEnabled(True)
+
+    def set_ui_scale_state(self, value: UiScale) -> None:
+        self._ui_scale = normalize_ui_scale(value)
+        for scale, action in self.ui_scale_actions.items():
+            action.blockSignals(True)
+            action.setChecked(scale == self._ui_scale)
+            action.blockSignals(False)
+        self._update_ui_scale_command_states()
 
     def copy_author_email(self) -> None:
         self.copy_text(AUTHOR_EMAIL)

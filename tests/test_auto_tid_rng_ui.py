@@ -9,7 +9,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPoint, QSettings, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QListView, QScrollArea, QToolButton, QWidget
+from PySide6.QtWidgets import QApplication, QListView, QToolButton, QWidget
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
@@ -281,17 +281,17 @@ def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_
     assert panel.id_table.horizontalHeader().stretchLastSection()
 
 
-def test_auto_tid_content_scrolls_below_desktop_height(app, tmp_path: Path) -> None:
+def test_auto_tid_content_is_added_directly_below_toolbar(app, tmp_path: Path) -> None:
     panel = AutoTidRngPanel(script_dir=tmp_path)
-    panel.resize(700, 400)
-    panel.show()
-    app.processEvents()
 
-    assert isinstance(panel.content_scroll, QScrollArea)
-    assert panel.content_scroll.widget().objectName() == "AutoTidContent"
-    assert panel.content_scroll.verticalScrollBar().maximum() > 0
+    content = panel.layout().itemAt(1).widget()
     toolbar = panel.layout().itemAt(0).widget()
-    assert toolbar is not None and toolbar.isVisible()
+
+    assert content is not None
+    assert content.objectName() == "AutoTidContent"
+    assert content.parentWidget() is panel
+    assert not hasattr(panel, "content_scroll")
+    assert toolbar is not None
 
 
 def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: Path) -> None:

@@ -120,6 +120,52 @@ def test_app_settings_atomic_write_preserves_existing_file_on_replace_failure(tm
     assert list(settings_path.parent.glob(".config.json.*.tmp")) == []
 
 
+def test_app_settings_ui_scale_defaults_to_auto_and_preserves_other_keys(tmp_path, monkeypatch):
+    import auto_bdsp_rng.app_settings as app_settings
+
+    settings_path = tmp_path / "settings" / "config.json"
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", settings_path)
+
+    assert app_settings.get_ui_scale() == "auto"
+
+    app_settings.save_settings({"other": "保留"})
+    assert app_settings.set_ui_scale(75) == 75
+    assert app_settings.get_ui_scale() == 75
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "other": "保留",
+        "ui_scale": 75,
+    }
+
+    assert app_settings.set_ui_scale("auto") == "auto"
+    assert app_settings.get_ui_scale() == "auto"
+
+
+@pytest.mark.parametrize("value", [None, True, "75", 49, 51, 130])
+def test_app_settings_ui_scale_rejects_invalid_values(tmp_path, monkeypatch, value):
+    import auto_bdsp_rng.app_settings as app_settings
+
+    settings_path = tmp_path / "settings" / "config.json"
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", settings_path)
+    app_settings.save_settings({"ui_scale": 80, "other": "保留"})
+
+    with pytest.raises(ValueError, match="ui_scale"):
+        app_settings.set_ui_scale(value)
+
+    assert app_settings.get_ui_scale() == 80
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["other"] == "保留"
+
+
+@pytest.mark.parametrize("stored", [None, True, "75", 49, 51, 130])
+def test_app_settings_invalid_stored_ui_scale_defaults_to_auto(tmp_path, monkeypatch, stored):
+    import auto_bdsp_rng.app_settings as app_settings
+
+    settings_path = tmp_path / "settings" / "config.json"
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", settings_path)
+    app_settings.save_settings({"ui_scale": stored})
+
+    assert app_settings.get_ui_scale() == "auto"
+
+
 def test_help_menu_exposes_expected_actions(app):
     from auto_bdsp_rng.ui.help_menu import HelpMenuController
 
@@ -146,6 +192,15 @@ def test_help_menu_exposes_expected_actions(app):
     assert controller.auto_update_check_action.text() == "启动时自动检查更新"
     assert controller.auto_update_check_action.isCheckable()
     assert controller.auto_update_check_action.isChecked() is True
+    assert controller.ui_scale_menu.title() == "界面缩放"
+    assert controller.ui_scale_status_action.text() == "当前有效倍率：100%"
+    assert controller.ui_scale_status_action.isEnabled() is False
+    assert controller.ui_scale_actions["auto"].text() == "自动适应所有屏幕"
+    assert controller.ui_scale_actions["auto"].isChecked() is True
+    assert list(controller.ui_scale_actions) == ["auto", *range(50, 126, 5)]
+    assert controller.ui_scale_decrease_action.shortcut().toString() == "Ctrl+-"
+    assert controller.ui_scale_increase_action.shortcut().toString() == "Ctrl++"
+    assert controller.ui_scale_reset_action.shortcut().toString() == "Ctrl+0"
     assert controller.help_menu.actions().index(controller.check_updates_action) == (
         controller.help_menu.actions().index(controller.changelog_action) + 1
     )
@@ -153,6 +208,7 @@ def test_help_menu_exposes_expected_actions(app):
         controller.help_menu.actions().index(controller.check_updates_action) + 1
     )
     assert controller.run_log_menu.menuAction() in controller.help_menu.actions()
+    assert controller.ui_scale_menu.menuAction() in controller.help_menu.actions()
     assert controller.contact_menu.menuAction() in controller.help_menu.actions()
 
     controller.tutorial_action.trigger()
@@ -166,6 +222,137 @@ def test_help_menu_exposes_expected_actions(app):
         "https://github.com/XiaoyuBook",
     ]
     assert copied == ["kesong2003@qq.com"]
+
+
+def test_help_menu_ui_scale_persists_selection_and_requests_restart(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    persisted: list[object] = []
+    restarted: list[object] = []
+    controller = HelpMenuController(
+        QMainWindow(),
+        ui_scale=80,
+        set_ui_scale=lambda value: persisted.append(value) or value,
+        request_restart=restarted.append,
+    )
+    controller.install()
+
+    controller.ui_scale_actions[75].trigger()
+
+    assert persisted == [75]
+    assert restarted == [75]
+    assert controller.ui_scale_actions[75].isChecked() is True
+    assert sum(action.isChecked() for action in controller.ui_scale_actions.values()) == 1
+
+
+def test_help_menu_ui_scale_shortcuts_step_from_effective_auto_scale_and_reset(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    persisted: list[object] = []
+    controller = HelpMenuController(
+        QMainWindow(),
+        effective_ui_scale_percent=75,
+        set_ui_scale=lambda value: persisted.append(value) or value,
+    )
+    controller.install()
+
+    controller.ui_scale_increase_action.trigger()
+    controller.ui_scale_decrease_action.trigger()
+    controller.set_ui_scale_state(75)
+    controller.ui_scale_reset_action.trigger()
+
+    assert persisted == [80, 75, 100]
+    assert controller.ui_scale_actions[100].isChecked() is True
+
+
+def test_help_menu_auto_scale_below_manual_floor_never_reverses_shrink_command(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    persisted: list[object] = []
+    controller = HelpMenuController(
+        QMainWindow(),
+        effective_ui_scale_percent=40,
+        set_ui_scale=lambda value: persisted.append(value) or value,
+    )
+    controller.install()
+
+    assert controller.ui_scale_decrease_action.isEnabled() is False
+    controller._change_ui_scale(-5)
+    assert persisted == []
+
+    controller.ui_scale_increase_action.trigger()
+    assert persisted == [50]
+
+
+def test_help_menu_ui_scale_is_read_only_when_environment_controls_qt_scale(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    persisted: list[object] = []
+    restarted: list[object] = []
+    controller = HelpMenuController(
+        QMainWindow(),
+        ui_scale=75,
+        effective_ui_scale_percent=125,
+        ui_scale_source="environment",
+        set_ui_scale=lambda value: persisted.append(value) or value,
+        request_restart=restarted.append,
+    )
+    controller.install()
+
+    assert controller.ui_scale_status_action.text() == (
+        "当前由 QT_SCALE_FACTOR 控制（125%）"
+    )
+    assert all(not action.isEnabled() for action in controller.ui_scale_actions.values())
+    assert controller.ui_scale_decrease_action.isEnabled() is False
+    assert controller.ui_scale_increase_action.isEnabled() is False
+    assert controller.ui_scale_reset_action.isEnabled() is False
+
+    controller._apply_ui_scale(80)
+
+    assert persisted == []
+    assert restarted == []
+    assert controller.ui_scale_actions[75].isChecked() is True
+
+
+def test_help_menu_ui_scale_restores_previous_selection_when_save_fails(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    restarted: list[object] = []
+
+    def fail(_value) -> None:
+        raise OSError("设置目录不可写")
+
+    controller = HelpMenuController(
+        QMainWindow(),
+        ui_scale=80,
+        set_ui_scale=fail,
+        request_restart=restarted.append,
+    )
+    controller.install()
+
+    controller.ui_scale_actions[75].trigger()
+
+    assert controller.ui_scale_actions[80].isChecked() is True
+    assert controller.ui_scale_actions[75].isChecked() is False
+    assert restarted == []
+
+
+def test_help_menu_ui_scale_does_not_restart_when_callback_rejects_change(app):
+    from auto_bdsp_rng.ui.help_menu import HelpMenuController
+
+    restarted: list[object] = []
+    controller = HelpMenuController(
+        QMainWindow(),
+        ui_scale=80,
+        set_ui_scale=lambda _value: 80,
+        request_restart=restarted.append,
+    )
+    controller.install()
+
+    controller.ui_scale_actions[75].trigger()
+
+    assert controller.ui_scale_actions[80].isChecked() is True
+    assert restarted == []
 
 
 def test_help_menu_check_updates_action_uses_injected_callback(app):

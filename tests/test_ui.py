@@ -22,7 +22,7 @@ from auto_bdsp_rng.blink_detection import (
 from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, QThread, QTimer, Qt
 from PySide6.QtGui import QPaintEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTableWidget
+from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QSizePolicy, QTableWidget
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import DialogTimingResult
@@ -84,8 +84,8 @@ def _project_xs_munchlax_interval(state: SeedState32) -> float:
     return temp * 3.0 + (1.0 - temp) * 12.0 + 0.285
 
 
-def test_main_window_generates_static_results(app):
-    window = MainWindow()
+def test_main_window_generates_static_results(app, tmp_path):
+    window = MainWindow(profile_settings=_profile_settings(tmp_path))
 
     assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
         "自动定点乱数",
@@ -327,6 +327,139 @@ def test_preview_scaling_uses_physical_pixels_on_high_dpi(app):
     assert scaled.width() > 600
     assert logical_size.width() <= 480
     assert logical_size.height() <= 260
+
+
+def test_preview_scaling_supports_ui_scale_below_one(app):
+    source = QPixmap(780, 460)
+
+    scaled, logical_size = main_window_module._scale_preview_pixmap(source, QSize(480, 260), 0.75)
+
+    assert scaled.devicePixelRatio() == 0.75
+    assert scaled.width() <= 360
+    assert scaled.height() <= 195
+    assert logical_size.width() <= 480
+    assert logical_size.height() <= 260
+
+
+def test_ui_scale_restart_decline_keeps_current_process_running(app, monkeypatch):
+    window = MainWindow(ui_scale="auto", ui_scale_percent=75)
+    close_calls: list[bool] = []
+    start_calls: list[bool] = []
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
+    )
+    monkeypatch.setattr(window, "close", lambda: close_calls.append(True) or True)
+    monkeypatch.setattr(
+        main_window_module,
+        "_start_detached_gui_process",
+        lambda: start_calls.append(True) or True,
+    )
+
+    window._request_ui_scale_restart(70)
+
+    assert close_calls == []
+    assert start_calls == []
+    assert window.statusBar().currentMessage() == "界面缩放将在下次启动时生效"
+
+
+def test_ui_scale_restart_waits_for_safe_window_close(app, monkeypatch):
+    window = MainWindow(ui_scale=75, ui_scale_percent=75)
+    start_calls: list[bool] = []
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(window, "close", lambda: False)
+    monkeypatch.setattr(
+        main_window_module,
+        "_start_detached_gui_process",
+        lambda: start_calls.append(True) or True,
+    )
+
+    window._request_ui_scale_restart(70)
+
+    assert start_calls == []
+    assert window.statusBar().currentMessage() == (
+        "后台任务尚未完全退出，界面缩放将在下次启动时生效"
+    )
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_ui_scale_restart_reports_start_failure_or_quits_old_process(
+    app,
+    monkeypatch,
+    started,
+):
+    window = MainWindow(ui_scale=75, ui_scale_percent=75)
+    warnings: list[tuple[str, str]] = []
+    quit_calls: list[bool] = []
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    monkeypatch.setattr(window, "close", lambda: True)
+    monkeypatch.setattr(main_window_module, "_start_detached_gui_process", lambda: started)
+    monkeypatch.setattr(
+        main_window_module,
+        "QApplication",
+        SimpleNamespace(quit=lambda: quit_calls.append(True)),
+    )
+
+    window._request_ui_scale_restart(70)
+
+    assert quit_calls == ([True] if started else [])
+    assert [title for title, _message in warnings] == ([] if started else ["无法自动重启"])
+
+
+def test_start_detached_gui_process_uses_python_module_in_source_mode(monkeypatch):
+    calls: list[tuple[str, list[str], str]] = []
+    monkeypatch.setattr(main_window_module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(
+        main_window_module,
+        "QProcess",
+        SimpleNamespace(
+            startDetached=lambda program, arguments, working_directory: (
+                calls.append((program, arguments, working_directory)) or (True, 1234)
+            )
+        ),
+    )
+
+    assert main_window_module._start_detached_gui_process() is True
+    assert calls == [
+        (
+            main_window_module.sys.executable,
+            ["-m", "auto_bdsp_rng", "gui"],
+            str(Path.cwd()),
+        )
+    ]
+
+
+def test_start_detached_gui_process_restarts_frozen_executable(monkeypatch, tmp_path):
+    executable = tmp_path / "珍钻复刻自动乱数.exe"
+    calls: list[tuple[str, list[str], str]] = []
+    monkeypatch.setattr(main_window_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_window_module.sys, "executable", str(executable))
+    monkeypatch.setattr(
+        main_window_module,
+        "QProcess",
+        SimpleNamespace(
+            startDetached=lambda program, arguments, working_directory: (
+                calls.append((program, arguments, working_directory)) or (False, 0)
+            )
+        ),
+    )
+
+    assert main_window_module._start_detached_gui_process() is False
+    assert calls == [(str(executable.resolve()), [], str(executable.resolve().parent))]
 
 
 def test_preview_scaling_does_not_enlarge_low_resolution_source(app):
@@ -2867,16 +3000,17 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
-def test_auto_rng_content_scrolls_below_desktop_height(app):
+def test_auto_rng_content_is_added_directly_below_toolbar(app):
     panel = AutoRngPanel()
-    panel.resize(700, 400)
-    panel.show()
-    app.processEvents()
 
-    assert panel.content_scroll.widget().objectName() == "AutoRngContent"
+    content = panel.layout().itemAt(1).widget()
+
+    assert content is not None
+    assert content.objectName() == "AutoRngContent"
+    assert content.parentWidget() is panel
+    assert not hasattr(panel, "content_scroll")
     assert panel.content_grid.indexOf(panel.config_panel) >= 0
-    assert panel.content_scroll.verticalScrollBar().maximum() > 0
-    assert panel.toolbar.isVisible()
+    assert panel.layout().itemAt(0).widget() is panel.toolbar
 
 
 def test_auto_rng_target_summary_uses_chinese_compact_rows_and_scroll(app):
