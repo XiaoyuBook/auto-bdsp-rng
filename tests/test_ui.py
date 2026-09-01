@@ -4450,6 +4450,93 @@ def _run_with_qt_events(app, callback):
     return results, errors
 
 
+def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failure(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    reverse_script = tmp_path / "reverse.txt"
+    reverse_script.write_text("A 100\n", encoding="utf-8")
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    expansion_levels: list[int] = []
+    fallback_flags: list[bool] = []
+    iv_range_calls: list[list[int]] = []
+    generated: list[object] = []
+    history_events: list[tuple[str, object]] = []
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            return "ok"
+
+    def fake_extract_pokemon_info(**kwargs):
+        if "notes_image" in kwargs:
+            return {"stats": None, "nature": "浮躁", "characteristic": None}
+        expansion_levels.append(kwargs["stats_region_expansion_level"])
+        fallback_flags.append(kwargs["allow_stats_page_fallback"])
+        return {
+            "stats": {"HP": 20, "攻击": 11, "防御": 10, "特攻": 11, "特防": 9, "速度": 11},
+            "nature": None,
+            "characteristic": None,
+        }
+
+    def fake_compute_iv_ranges(_base_stats, actual_stats, _nature, _level):
+        iv_range_calls.append(list(actual_stats))
+        if len(iv_range_calls) < 3:
+            return [(31, 0)] * 6
+        return [(0, 31)] * 6
+
+    candidate = SimpleNamespace(advances=1204, ivs=(1, 2, 3, 4, 5, 6), ec=0, pid=0)
+
+    def fake_generate(criteria):
+        generated.append(criteria)
+        return [candidate]
+
+    from auto_bdsp_rng.rng_core import _native as native_module
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    monkeypatch.setattr(main_window_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _capture: frame)
+    monkeypatch.setattr(window, "_pause_ocr_and_turn_to_stats_page", lambda **_kwargs: None)
+    monkeypatch.setattr(main_window_module, "extract_pokemon_info", fake_extract_pokemon_info)
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", fake_generate)
+    monkeypatch.setattr(native_module, "compute_iv_ranges", fake_compute_iv_ranges)
+    window.autoHistoryEvent.connect(lambda event, args: history_events.append((event, args)))
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, reverse_script_path=reverse_script)
+    )
+
+    services.run_reverse_lookup(
+        AutoRngSeedResult(seed=SeedPair64(1, 2)),
+        AutoRngTarget(raw_target_advances=1204),
+    )
+
+    assert expansion_levels == [0, 1, 2]
+    assert fallback_flags == [False, False, False]
+    assert iv_range_calls == [[20, 11, 10, 11, 9, 11]] * 3
+    assert len(generated) == 1
+    assert history_events[-1][0] == "reverse_lookup_results"
+    assert history_events[-1][1][0] == [candidate]
+
+    expansion_levels.clear()
+    fallback_flags.clear()
+    history_events.clear()
+    monkeypatch.setattr(native_module, "compute_iv_ranges", lambda *_args: [(31, 0)] * 6)
+
+    services.run_reverse_lookup(
+        AutoRngSeedResult(seed=SeedPair64(1, 2)),
+        AutoRngTarget(raw_target_advances=1204),
+    )
+
+    assert expansion_levels == [0, 1, 2]
+    assert fallback_flags == [False, False, False]
+    assert history_events[-1][0] == "reverse_lookup_results"
+    assert history_events[-1][1][0] == []
+    log_text = window.auto_rng_tab.log_view.toPlainText()
+    assert "能力页 OCR 第1次（原始六项 ROI）" in log_text
+    assert "能力页 OCR 第2次（六项 ROI 每边扩大约 12%（至少 4px））" in log_text
+    assert "能力页 OCR 第3次（六项 ROI 每边扩大约 24%（至少 8px））" in log_text
+    assert "OCR 能力值: HP=20 / 攻击=11 / 防御=10 / 特攻=11 / 特防=9 / 速度=11" in log_text
+    assert "3次尝试均未找到匹配个体" in log_text
+
+
 def test_main_window_auto_rng_run_script_service_uses_native_backend(app, tmp_path, monkeypatch):
     window = MainWindow()
     calls: list[tuple[str, str, Path]] = []

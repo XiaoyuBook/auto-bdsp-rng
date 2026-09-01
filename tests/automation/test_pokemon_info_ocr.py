@@ -3,12 +3,16 @@
 import numpy as np
 import pytest
 
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     _bbox_is_red_text,
     _clean_characteristic,
     _clean_nature,
     _detect_page_type,
+    _expanded_stat_region,
     _extract_nature_and_characteristic,
+    _extract_region_number,
+    _extract_stat_value_text,
     _extract_stats,
     _match_characteristic_text,
     _stats_have_obvious_digit_drop,
@@ -241,10 +245,10 @@ def test_extract_all_six_stats_spatial():
 
 
 def test_extract_stats_hp_slash():
-    """HP 109/109 格式提取最大 HP。"""
+    """HP 当前值/最大值格式提取斜杠后的最大 HP。"""
     rows = [
         _row_at("HP", 200, 20),
-        _row_at("109/109", 200, 45),
+        _row_at("73/109", 200, 45),
         _row_at("攻击", 100, 90),
         _row_at("67", 100, 115),
         _row_at("防御", 100, 210),
@@ -253,6 +257,89 @@ def test_extract_stats_hp_slash():
     stats = _extract_stats(rows)
     assert stats["HP"] == 109
     assert stats["攻击"] == 67
+
+
+@pytest.mark.parametrize(
+    ("raw", "use_max_hp", "expected"),
+    [
+        ("攻击 11", False, 11),
+        ("特攻11", False, 11),
+        ("HP 18/20", True, 20),
+        ("HP 18／20", True, 20),
+        ("2026年09月01日", False, None),
+        ("2026年09月", False, None),
+        ("2026年9月", False, None),
+        ("11 10", False, None),
+    ],
+)
+def test_extract_stat_value_text_removes_labels_and_rejects_ambiguous_numbers(raw, use_max_hp, expected):
+    assert _extract_stat_value_text(raw, use_max_hp=use_max_hp) == expected
+
+
+def test_extract_region_number_prefers_value_nearest_original_roi():
+    anchor = OcrRegion(100, 100, 20, 20)
+    rows = [
+        _row_at("99", 150, 110),
+        _row_at("11", 110, 110),
+        _row_at("防御10", 105, 105),
+    ]
+
+    assert _extract_region_number(rows, field="attack", anchor_region=anchor) == 11
+
+
+def test_extract_region_number_does_not_guess_between_values_without_positions():
+    rows = [
+        {"text": "11", "bbox": None, "confidence": 0.99},
+        {"text": "10", "bbox": None, "confidence": 0.99},
+    ]
+
+    assert _extract_region_number(rows, field="attack", anchor_region=OcrRegion(10, 10, 20, 20)) is None
+
+
+def test_extract_region_number_prefers_target_label_even_when_its_bbox_is_missing():
+    rows = [
+        {"text": "攻击11", "bbox": None, "confidence": 0.99},
+        _row_at("99", 100, 100, 10, 10),
+    ]
+
+    assert _extract_region_number(rows, field="attack", anchor_region=OcrRegion(100, 100, 20, 20)) == 11
+
+
+def test_extract_region_number_rejects_mixed_positioned_and_unpositioned_unlabelled_values():
+    rows = [
+        {"text": "11", "bbox": None, "confidence": 0.99},
+        _row_at("99", 100, 100, 10, 10),
+    ]
+
+    assert _extract_region_number(rows, field="attack", anchor_region=OcrRegion(100, 100, 20, 20)) is None
+
+
+def test_extract_region_number_rejects_only_unlabelled_value_outside_original_roi():
+    rows = [_row_at("99", 123, 105, 4, 10)]
+
+    assert _extract_region_number(rows, field="attack", anchor_region=OcrRegion(100, 100, 20, 20)) is None
+
+
+def test_expanded_stat_region_uses_three_predictable_levels_and_clips_to_frame():
+    region = OcrRegion(20, 30, 50, 20)
+
+    assert _expanded_stat_region(region, 100, 100, 0) == OcrRegion(20, 30, 50, 20)
+    assert _expanded_stat_region(region, 100, 100, 1) == OcrRegion(14, 26, 62, 28)
+    assert _expanded_stat_region(region, 100, 100, 2) == OcrRegion(8, 22, 74, 36)
+    assert _expanded_stat_region(OcrRegion(0, 0, 10, 10), 100, 100, 2) == OcrRegion(0, 0, 18, 18)
+
+
+def test_extract_stats_accepts_labels_and_values_in_the_same_rows():
+    rows = [
+        _row_at("HP 73/109", 200, 20),
+        _row_at("特攻 74", 100, 90),
+        _row_at("攻击 67", 350, 90),
+        _row_at("特防 81", 100, 210),
+        _row_at("防御 69", 350, 210),
+        _row_at("速度 66", 200, 270),
+    ]
+
+    assert _extract_stats(rows) == {"HP": 109, "攻击": 67, "防御": 69, "特攻": 74, "特防": 81, "速度": 66}
 
 
 def test_extract_stats_partial():

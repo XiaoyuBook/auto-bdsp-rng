@@ -78,7 +78,7 @@ def test_extract_pokemon_info_prefers_configured_stat_regions(monkeypatch):
 
     def fake_ocr_rows(_image, roi_bounds, **_kwargs):
         calls.append(tuple(roi_bounds))
-        return [{"text": values[len(calls) - 1], "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]], "confidence": 0.99}]
+        return [{"text": values[len(calls) - 1], "bbox": None, "confidence": 0.99}]
 
     monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", fake_ocr_rows)
 
@@ -120,7 +120,7 @@ def test_extract_pokemon_info_falls_back_when_configured_stats_are_invalid(monke
         if len(calls) < 6:
             text = field_values[len(calls)]
             calls.append(tuple(roi_bounds))
-            return [{"text": text, "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]], "confidence": 0.99}]
+            return [{"text": text, "bbox": None, "confidence": 0.99}]
         calls.append(tuple(roi_bounds))
         return broad_rows
 
@@ -133,24 +133,135 @@ def test_extract_pokemon_info_falls_back_when_configured_stats_are_invalid(monke
     assert len(calls) == 7
 
 
-def test_characteristic_region_retries_with_expanded_region(monkeypatch):
+def test_extract_pokemon_info_can_expand_stat_regions_without_broad_fallback(monkeypatch):
     image = np.zeros((100, 200, 3), dtype=np.uint8)
-    config = OcrRegionConfig({"characteristic": OcrRegion(50, 40, 20, 10)})
+    config = OcrRegionConfig()
+    for index, field in enumerate(("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")):
+        config.set(field, OcrRegion(20 + index * 20, 30, 10, 10))
+    values = ["HP 18/20", "攻击11", "防御10", "特攻11", "特防9", "速度11"]
     calls: list[tuple[float, float, float, float]] = []
 
     def fake_ocr_rows(_image, roi_bounds, **_kwargs):
         calls.append(tuple(roi_bounds))
-        text = "欢胡" if len(calls) == 1 else "喜欢胡闹"
-        return [{"text": text, "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]], "confidence": 0.99}]
+        return [{"text": values[len(calls) - 1], "bbox": None, "confidence": 0.99}]
+
+    monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", fake_ocr_rows)
+
+    result = extract_pokemon_info(
+        stats_image=image,
+        ocr_regions=config,
+        stats_region_expansion_level=1,
+        allow_stats_page_fallback=False,
+    )
+
+    assert result["stats"] == {"HP": 20, "攻击": 11, "防御": 10, "特攻": 11, "特防": 9, "速度": 11}
+    assert len(calls) == 6
+    assert calls[0] == (0.08, 0.17, 0.26, 0.44)
+
+
+def test_extract_pokemon_info_skips_broad_fallback_when_auto_retry_requests_it(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    config = OcrRegionConfig()
+    for index, field in enumerate(("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")):
+        config.set(field, OcrRegion(index * 10, 0, 8, 8))
+    values = ["108", "6", "65", "74", "74", "9"]
+    calls: list[tuple[float, float, float, float]] = []
+
+    def fake_ocr_rows(_image, roi_bounds, **_kwargs):
+        calls.append(tuple(roi_bounds))
+        return [{"text": values[len(calls) - 1], "bbox": None, "confidence": 0.99}]
+
+    monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", fake_ocr_rows)
+
+    result = extract_pokemon_info(
+        stats_image=image,
+        ocr_regions=config,
+        allow_stats_page_fallback=False,
+    )
+
+    assert result["stats"] is None
+    assert len(calls) == 6
+
+
+def test_characteristic_region_uses_exact_roi_and_same_raw_fallback_as_manual_test(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    region = OcrRegion(50, 40, 20, 10)
+    config = OcrRegionConfig({"characteristic": region})
+    calls: list[tuple[float, float, float, float]] = []
+
+    def fake_ocr_rows(_image, roi_bounds, **_kwargs):
+        calls.append(tuple(roi_bounds))
+        return [{"text": "身休强状", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]], "confidence": 0.99}]
 
     monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", fake_ocr_rows)
 
     result = extract_pokemon_info(notes_image=image, ocr_regions=config)
 
-    assert result["characteristic"] == "喜欢胡闹"
-    assert calls[0] == (0.25, 0.35, 0.4, 0.5)
-    assert calls[1][0] < calls[0][0]
-    assert calls[1][1] > calls[0][1]
+    assert result["characteristic"] == "身休强状"
+    assert calls == [(0.25, 0.35, 0.4, 0.5)]
+    assert pokemon_info_ocr.recognize_ocr_field(image, "characteristic", region) == "身休强状"
+    assert calls == [(0.25, 0.35, 0.4, 0.5)] * 2
+
+
+def test_configured_note_regions_never_fall_back_to_full_notes_page(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    config = OcrRegionConfig(
+        {
+            "nature": OcrRegion(10, 10, 20, 10),
+            "characteristic": OcrRegion(50, 40, 20, 10),
+        }
+    )
+    calls: list[tuple[float, float, float, float]] = []
+
+    def fake_ocr_rows(_image, roi_bounds, **_kwargs):
+        calls.append(tuple(roi_bounds))
+        text = "浮躁" if len(calls) == 1 else ""
+        return [] if not text else [{"text": text, "bbox": None, "confidence": 0.99}]
+
+    monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", fake_ocr_rows)
+
+    result = extract_pokemon_info(notes_image=image, ocr_regions=config)
+
+    assert result["nature"] == "浮躁"
+    assert result["characteristic"] is None
+    assert calls == [
+        (0.05, 0.15, 0.1, 0.2),
+        (0.25, 0.35, 0.4, 0.5),
+    ]
+
+
+def test_configured_characteristic_roi_recognizes_body_is_strong(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    region = OcrRegion(50, 40, 20, 10)
+    config = OcrRegionConfig({"characteristic": region})
+    monkeypatch.setattr(
+        pokemon_info_ocr,
+        "_ocr_rows",
+        lambda *_args, **_kwargs: [{"text": "身体强壮", "bbox": None, "confidence": 0.99}],
+    )
+
+    automatic = extract_pokemon_info(notes_image=image, ocr_regions=config)
+    manual = pokemon_info_ocr.recognize_ocr_field(image, "characteristic", region)
+
+    assert automatic["characteristic"] == "身体强壮"
+    assert automatic["characteristic"] == manual
+
+
+def test_unconfigured_notes_keep_legacy_full_page_extraction(monkeypatch):
+    image = np.zeros((120, 200, 3), dtype=np.uint8)
+    rows = [
+        {"text": "浮躁的性格。", "bbox": [[0, 10], [100, 10], [100, 20], [0, 20]], "confidence": 0.99},
+        {"text": "2026年09月01日", "bbox": [[0, 30], [100, 30], [100, 40], [0, 40]], "confidence": 0.99},
+        {"text": "命中注定般地遇见了它。", "bbox": [[0, 50], [100, 50], [100, 60], [0, 60]], "confidence": 0.99},
+        {"text": "身体强壮。", "bbox": [[0, 70], [100, 70], [100, 80], [0, 80]], "confidence": 0.99},
+        {"text": "喜欢甜味。", "bbox": [[0, 90], [100, 90], [100, 100], [0, 100]], "confidence": 0.99},
+    ]
+    monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", lambda *_args, **_kwargs: rows)
+
+    result = extract_pokemon_info(notes_image=image)
+
+    assert result["nature"] == "浮躁"
+    assert result["characteristic"] == "身体强壮"
 
 
 def test_recognize_ocr_field_formats_result_for_preview(monkeypatch):

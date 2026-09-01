@@ -176,7 +176,7 @@ def _parse_ocr_item(item: object) -> dict[str, object] | None:
         if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
             return {
                 "text": str(text_info[0]).strip(),
-                "bbox": list(bbox_raw) if isinstance(bbox_raw, (list, tuple)) else None,
+                "bbox": _to_list_bbox(bbox_raw) or None,
                 "confidence": float(text_info[1]),
             }
     return None
@@ -308,6 +308,9 @@ def _detect_page_type(rows: list[dict[str, object]]) -> str:
 
 _STAT_NAMES = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
 _STAT_NAME_SET = set(_STAT_NAMES)
+_CJK_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+")
+_HP_VALUE_PAIR_RE = re.compile(r"(?<!\d)(\d{1,3})\s*[/／]\s*(\d{1,3})(?!\d)")
+_STAT_VALUE_RE = re.compile(r"(?<!\d)\d{1,3}(?!\d)")
 
 
 def _row_center(bbox: object) -> tuple[float, float]:
@@ -328,6 +331,31 @@ def _match_stat_name(text: str) -> str | None:
     return None
 
 
+def _extract_stat_value_text(text: str, *, use_max_hp: bool = False) -> int | None:
+    """Extract one stat value after dropping CJK labels from an OCR row."""
+    raw_text = str(text)
+    if any(marker in raw_text for marker in ("年", "月", "日")):
+        return None
+    cleaned = _CJK_TEXT_RE.sub(" ", raw_text)
+    if re.search(r"\d{4,}", cleaned):
+        return None
+    hp_pair = _HP_VALUE_PAIR_RE.search(cleaned)
+    if hp_pair is not None:
+        if not use_max_hp:
+            return None
+        remaining = cleaned[: hp_pair.start()] + cleaned[hp_pair.end() :]
+        if _STAT_VALUE_RE.search(remaining):
+            return None
+        value = int(hp_pair.group(2))
+        return value if 0 <= value <= 999 else None
+
+    matches = _STAT_VALUE_RE.findall(cleaned)
+    if len(matches) != 1:
+        return None
+    value = int(matches[0])
+    return value if 0 <= value <= 999 else None
+
+
 def _extract_stats(rows: list[dict[str, object]]) -> dict[str, int]:
     """从 OCR 行中提取六项能力值（基于空间位置关联标签与数值）。"""
     if not rows:
@@ -341,7 +369,10 @@ def _extract_stats(rows: list[dict[str, object]]) -> dict[str, int]:
         stat_name = _match_stat_name(text)
         if stat_name is not None:
             label_rows[stat_name] = row
-        elif re.match(r"^\d{1,3}$", text) or re.match(r"^\d{1,3}/\d{1,3}$", text):
+            inline_value = _extract_stat_value_text(text, use_max_hp=stat_name == "HP")
+            if inline_value is not None:
+                stats[stat_name] = inline_value
+        elif _extract_stat_value_text(text, use_max_hp=True) is not None:
             number_rows.append(row)
 
     # 为每个数值行提取数值和坐标
@@ -349,17 +380,17 @@ def _extract_stats(rows: list[dict[str, object]]) -> dict[str, int]:
     for num_row in number_rows:
         num_text = str(num_row["text"]).strip()
         nx, ny = _row_center(num_row.get("bbox"))
-        match = re.match(r"(\d{1,3})", num_text)
-        if match:
-            val = int(match.group(1))
-            if 0 <= val <= 999:
-                num_entries.append((nx, ny, val))
+        val = _extract_stat_value_text(num_text, use_max_hp=True)
+        if val is not None:
+            num_entries.append((nx, ny, val))
 
     # 贪心匹配：每个标签找最近的数值（上下双向），数值不重复分配
     used_num: set[int] = set()
     # 按标签的 x 坐标排序，左列优先匹配左列数值
     label_items = sorted(label_rows.items(), key=lambda kv: _row_center(kv[1].get("bbox"))[0])
     for name, label_row in label_items:
+        if name in stats:
+            continue
         lx, ly = _row_center(label_row.get("bbox"))
         best_idx: int | None = None
         best_dist = float("inf")
@@ -569,24 +600,127 @@ def _rows_text(rows: list[dict[str, object]]) -> str:
     return " ".join(str(row.get("text", "")).strip() for row in rows if str(row.get("text", "")).strip())
 
 
-def _extract_region_number(rows: list[dict[str, object]]) -> int | None:
-    text = _rows_text(rows)
-    match = re.search(r"\d{1,3}", text)
-    if match is None:
+def _bbox_geometry_or_none(bbox: object) -> tuple[float, float, float, float, float, float] | None:
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
         return None
-    value = int(match.group(0))
-    return value if 0 <= value <= 999 else None
+    points = [point for point in bbox[:4] if isinstance(point, (list, tuple)) and len(point) >= 2]
+    if len(points) < 4:
+        return None
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    return min(xs), min(ys), max(xs), max(ys), sum(xs) / len(xs), sum(ys) / len(ys)
 
 
-def _extract_stats_from_regions(image: np.ndarray, regions: OcrRegionConfig | None) -> dict[str, int] | None:
+def _extract_region_number(
+    rows: list[dict[str, object]],
+    *,
+    field: str,
+    anchor_region: OcrRegion,
+) -> int | None:
+    target_name = STAT_FIELD_NAMES[field]
+    anchor_x = anchor_region.x + anchor_region.width / 2.0
+    anchor_y = anchor_region.y + anchor_region.height / 2.0
+    positioned: list[tuple[tuple[int, int, float, float], int]] = []
+    unpositioned: list[tuple[str | None, int]] = []
+    labelled_values: list[int] = []
+
+    for row in rows:
+        text = str(row.get("text", "")).strip()
+        matched_name = _match_stat_name(text)
+        if matched_name is not None and matched_name != target_name:
+            continue
+        value = _extract_stat_value_text(text, use_max_hp=field == "hp")
+        if value is None:
+            continue
+        if matched_name == target_name:
+            labelled_values.append(value)
+
+        geometry = _bbox_geometry_or_none(row.get("bbox"))
+        if geometry is None:
+            unpositioned.append((matched_name, value))
+            continue
+        left, top, right, bottom, cx, cy = geometry
+        if matched_name is None:
+            tolerance = 2.0
+            intersects_anchor = (
+                right >= anchor_region.x - tolerance
+                and left <= anchor_region.x + anchor_region.width + tolerance
+                and bottom >= anchor_region.y - tolerance
+                and top <= anchor_region.y + anchor_region.height + tolerance
+            )
+            if not intersects_anchor:
+                continue
+        inside_anchor = (
+            anchor_region.x <= cx <= anchor_region.x + anchor_region.width
+            and anchor_region.y <= cy <= anchor_region.y + anchor_region.height
+        )
+        normalized_distance = (
+            ((cx - anchor_x) / max(1, anchor_region.width)) ** 2
+            + ((cy - anchor_y) / max(1, anchor_region.height)) ** 2
+        )
+        confidence = float(row.get("confidence", 0.0) or 0.0)
+        score = (
+            0 if matched_name == target_name else 1,
+            0 if inside_anchor else 1,
+            normalized_distance,
+            -confidence,
+        )
+        positioned.append((score, value))
+
+    if labelled_values:
+        return labelled_values[0] if len(set(labelled_values)) == 1 else None
+    if positioned and not unpositioned:
+        return min(positioned, key=lambda item: item[0])[1]
+    if len(unpositioned) == 1:
+        return unpositioned[0][1] if not positioned else None
+    return None
+
+
+_STAT_REGION_EXPANSION_RATIO = 0.12
+_STAT_REGION_EXPANSION_MIN_PIXELS = 4
+
+
+def _expanded_stat_region(
+    region: OcrRegion,
+    image_width: int,
+    image_height: int,
+    expansion_level: int,
+) -> OcrRegion:
+    if expansion_level < 0:
+        raise ValueError("stats region expansion level cannot be negative")
+    if expansion_level == 0:
+        return region.clip(image_width, image_height)
+    return region.expanded(
+        image_width,
+        image_height,
+        ratio=_STAT_REGION_EXPANSION_RATIO * expansion_level,
+        min_pixels=_STAT_REGION_EXPANSION_MIN_PIXELS * expansion_level,
+    )
+
+
+def _extract_stats_from_regions(
+    image: np.ndarray,
+    regions: OcrRegionConfig | None,
+    *,
+    expansion_level: int = 0,
+) -> dict[str, int] | None:
     if regions is None or not regions.has_all_stats():
         return None
+    image_height, image_width = image.shape[:2]
     stats: dict[str, int] = {}
     for field in STAT_REGION_FIELDS:
         region = regions.get(field)
         if region is None:
             return None
-        value = _extract_region_number(_ocr_rows_for_region(image, region))
+        anchor_region = region.clip(image_width, image_height)
+        if not anchor_region.is_valid():
+            return None
+        ocr_region = _expanded_stat_region(region, image_width, image_height, expansion_level)
+        value = _extract_region_number(
+            _ocr_rows_for_region(image, ocr_region),
+            field=field,
+            anchor_region=anchor_region,
+        )
         if value is None:
             return None
         stats[STAT_FIELD_NAMES[field]] = value
@@ -623,6 +757,14 @@ def _match_characteristic_text(text: str) -> str | None:
     return best_item if best_item is not None and best_ratio >= 0.72 else None
 
 
+def _normalize_note_region_text(field: str, text: str) -> str:
+    if field == "nature":
+        return _clean_nature(text)
+    if field == "characteristic":
+        return _match_characteristic_text(text) or _clean_characteristic(text)
+    raise KeyError(f"Unknown note OCR field: {field}")
+
+
 def _extract_notes_from_regions(
     image: np.ndarray,
     regions: OcrRegionConfig | None,
@@ -634,18 +776,11 @@ def _extract_notes_from_regions(
     nature_region = regions.get("nature")
     if nature_region is not None:
         text = _rows_text(_ocr_rows_for_region(image, nature_region))
-        nature = _clean_nature(text) if text else None
-        if nature and not re.match(r"^[一-鿿]{2,4}$", nature):
-            nature = None
+        nature = _normalize_note_region_text("nature", text) or None
     characteristic_region = regions.get("characteristic")
     if characteristic_region is not None:
         text = _rows_text(_ocr_rows_for_region(image, characteristic_region))
-        characteristic = _match_characteristic_text(text)
-        if characteristic is None:
-            height, width = image.shape[:2]
-            expanded = characteristic_region.expanded(width, height)
-            if expanded != characteristic_region.clip(width, height):
-                characteristic = _match_characteristic_text(_rows_text(_ocr_rows_for_region(image, expanded)))
+        characteristic = _normalize_note_region_text("characteristic", text) or None
     return nature, characteristic
 
 
@@ -653,12 +788,15 @@ def recognize_ocr_field(image_input: ImageInput, field: str, region: OcrRegion) 
     image = _load_image(image_input)
     rows = _ocr_rows_for_region(image, region)
     text = _rows_text(rows)
-    if field == "nature":
-        return _clean_nature(text)
-    if field == "characteristic":
-        return _match_characteristic_text(text) or _clean_characteristic(text)
+    if field in ("nature", "characteristic"):
+        return _normalize_note_region_text(field, text)
     if field in STAT_FIELD_NAMES:
-        value = _extract_region_number(rows)
+        image_height, image_width = image.shape[:2]
+        value = _extract_region_number(
+            rows,
+            field=field,
+            anchor_region=region.clip(image_width, image_height),
+        )
         return "" if value is None else str(value)
     return text
 
@@ -667,6 +805,9 @@ def extract_pokemon_info(
     stats_image: ImageInput | None = None,
     notes_image: ImageInput | None = None,
     ocr_regions: OcrRegionConfig | None = None,
+    *,
+    stats_region_expansion_level: int = 0,
+    allow_stats_page_fallback: bool = True,
 ) -> dict[str, object]:
     """从宝可梦详情页截图中提取结构化信息。
 
@@ -679,6 +820,8 @@ def extract_pokemon_info(
     Args:
         stats_image: 能力页图片路径 或 numpy 数组
         notes_image: 笔记页图片路径 或 numpy 数组
+        stats_region_expansion_level: 六项能力值 ROI 的临时扩大量级，0 表示原始范围
+        allow_stats_page_fallback: 单项能力值 ROI 失败后是否使用整页能力区兜底
 
     Returns:
         {"stats": {...} or None, "nature": str or None, "characteristic": str or None}
@@ -687,8 +830,12 @@ def extract_pokemon_info(
     # 能力页 → stats
     if stats_image is not None:
         img = _load_image(stats_image)
-        result["stats"] = _extract_stats_from_regions(img, ocr_regions)
-        if result["stats"] is None:
+        result["stats"] = _extract_stats_from_regions(
+            img,
+            ocr_regions,
+            expansion_level=stats_region_expansion_level,
+        )
+        if result["stats"] is None and allow_stats_page_fallback:
             stats_rows = _ocr_rows(img, STATS_ROI)
             if _detect_page_type(stats_rows) == "unknown":
                 # 也可能放进错了，用笔记 ROI 再试
@@ -702,7 +849,8 @@ def extract_pokemon_info(
     if notes_image is not None:
         img = _load_image(notes_image)
         nature, chara = _extract_notes_from_regions(img, ocr_regions)
-        if nature is None or chara is None:
+        # Configured note ROIs are authoritative; broad inference is only for legacy no-config callers.
+        if ocr_regions is None and (nature is None or chara is None):
             notes_rows = _ocr_rows(img, NOTES_ROI)
             if _detect_page_type(notes_rows) == "unknown":
                 alt_rows = _ocr_rows(img, STATS_ROI)

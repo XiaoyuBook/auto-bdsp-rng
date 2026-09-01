@@ -7669,23 +7669,37 @@ class MainWindow(QMainWindow):
                               lead=reverse_lead)
             log(f"[自动反查] 搜索范围: Adv {reverse_start}-{reverse_end} (±{min(10_000, max(0, int(config.reverse_lookup_window)))})")
 
-            # 能力页 OCR 重试逻辑（最多3次）
+            # 能力页 OCR 重试逻辑：原始 ROI、约 12%（至少 4px）、约 24%（至少 8px）。
             stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
             candidates: list[object] = []
             last_ocr_stats: dict[str, object] | None = None
             prev_ocr_key: str | None = None
-            for attempt in range(1, 4):
-                log(f"[自动反查] 能力页 OCR 第{attempt}次…")
+            for attempt, expansion_level in enumerate((0, 1, 2), start=1):
+                expansion_label = (
+                    "原始六项 ROI"
+                    if expansion_level == 0
+                    else f"六项 ROI 每边扩大约 {expansion_level * 12}%（至少 {expansion_level * 4}px）"
+                )
+                log(f"[自动反查] 能力页 OCR 第{attempt}次（{expansion_label}）…")
                 stats_frame = self._capture_preview_frame_for_config(tracking_config.capture)
-                stats_result = extract_pokemon_info(stats_image=stats_frame, ocr_regions=ocr_regions)
+                stats_result = extract_pokemon_info(
+                    stats_image=stats_frame,
+                    ocr_regions=ocr_regions,
+                    stats_region_expansion_level=expansion_level,
+                    allow_stats_page_fallback=False,
+                )
                 stats = stats_result.get("stats")
                 if not stats:
-                    log(f"[自动反查] 第{attempt}次能力值识别失败")
+                    log(f"[自动反查] 第{attempt}次能力值识别失败（未获得完整六项）")
                     if attempt < 3:
                         time.sleep(0.5)
                     continue
 
                 stat_vals = [int(stats.get(n, 0)) for n in stat_names]
+                log(
+                    "[自动反查] OCR 能力值: "
+                    + " / ".join(f"{name}={value}" for name, value in zip(stat_names, stat_vals))
+                )
                 use_nature = ni if (ni is not None and 0 <= ni < 25) else 255
                 is_new_ocr = True  # 每个 OCR 尝试默认视作新结果
                 last_ocr_stats = {
