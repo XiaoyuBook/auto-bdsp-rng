@@ -8,10 +8,10 @@
 
 ## 下载与安装
 
-当前正式版为 [v3.0.0](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.0.0)。普通用户请不要下载 GitHub 绿色 `Code` 按钮中的源码压缩包，请下载 Windows x64 绿色版：
+当前正式版为 [v3.0.1](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.0.1)。普通用户请不要下载 GitHub 绿色 `Code` 按钮中的源码压缩包，请下载 Windows x64 绿色版：
 
 ```text
-auto-bdsp-rng-v3.0.0-windows-x64.zip
+auto-bdsp-rng-v3.0.1-windows-x64.zip
 ```
 
 完整解压 zip 后，进入 `auto-bdsp-rng` 文件夹并双击：
@@ -22,7 +22,7 @@ auto-bdsp-rng-v3.0.0-windows-x64.zip
 
 目标电脑不需要安装 Python、EasyCon、EasyConBridge 或 `ezcon.exe`。请保留 exe 同级的 `_internal`、`script`、`docs` 等目录，不要只复制单独的 exe。实际自动流程还需要采集卡和可用的伊机控串口设备。
 
-`v3.0.0` 是首个内置升级器的正式版。`v2.1.7` 及更早版本需要完整下载一次上述 zip；安装 `v3.0.0` 后，后续版本可直接在软件中检查更新。
+`v3.0.0` 是首个内置升级器的正式版。已安装 `v3.0.0` 的用户可以直接在软件中检查并升级到 `v3.0.1`，无需重新下载完整压缩包；`v2.1.7` 及更早版本仍需要完整下载一次上述 zip。
 
 ## 首次使用
 
@@ -278,6 +278,7 @@ python -m pytest
 | 2026-08-22 至 08-23 | 加入七天运行日志、OBS 投影窗口捕获、校正术语、逃跑续搜、`神奥图鉴过帧.txt` 和文件级升级器。 |
 | 2026-08-25 至 08-28 | 加入第九项判闪对话区域，并重做可配置判闪 OCR、共享 Capture Broker、全局视频源、原生伊机控、繁体 OCR、候选表和响应式预览。 |
 | 2026-08-30 | 统一 exe 同级 `script` 目录和脚本迁移，默认启用每日日志与启动更新检查，正式发布 `v3.0.0`。 |
+| 2026-09-01 | 发布 `v3.0.1`：改进自动反查 OCR 和能力值重试，新增应用级界面等比例缩放，并过滤活帧不可达候选；已安装 `v3.0.0` 的用户可直接增量升级。 |
 
 ## 上游依赖与许可
 
