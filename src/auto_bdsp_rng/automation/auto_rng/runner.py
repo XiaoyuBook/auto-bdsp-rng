@@ -465,6 +465,27 @@ def _nature_index(name: str) -> int | None:
     return _NATURE_MAP.get(name)
 
 
+def is_linear_trigger_reachable(
+    target_advances: int,
+    *,
+    current_advances: int,
+    npc: int,
+    fixed_delay: int,
+    fixed_flash_frames: int | None = 0,
+) -> bool:
+    """Return whether a linear counter can land on a hit-script trigger frame.
+
+    Candidate states use the raw Adv value, while the live counter must stop at
+    ``raw Adv - delay - flash``.  A linear Project_Xs counter can only visit
+    values separated by ``npc + 1`` from its current position.
+    """
+    flash_offset = 0 if fixed_flash_frames is None else int(fixed_flash_frames)
+    trigger_advances = int(target_advances) - int(fixed_delay) - flash_offset
+    delta = trigger_advances - int(current_advances)
+    step = max(1, int(npc) + 1)
+    return delta >= 0 and delta % step == 0
+
+
 @dataclass(frozen=True)
 class AutoRngServices:
     current_seed: Callable[[], AutoRngSeedResult] | None = None
@@ -693,30 +714,44 @@ class AutoRngRunner:
         primary_source = source_for_lead(lead_primary)
         secondary_source = source_for_lead(lead_secondary) if sync_enabled and self.services.search_sync is not None else "no_sync"
 
-        # 合并去重（按 advances 排序，同一同步来源内 PID+EC 相同取低帧）
+        # 过滤已过帧和线性计数器无法到达的启动帧。过滤要先于去重，
+        # 否则同一 PID+EC 的低帧不可达时会误删后面的可达帧。
+        fixed_flash = self._fixed_flash_frames()
+        min_reachable = seed.current_advances + self.config.fixed_delay + (fixed_flash or 0)
+        if self._missed_target_advance is not None:
+            min_reachable = max(min_reachable, self._missed_target_advance + 1)
+
+        def candidate_is_reachable(state: object) -> bool:
+            raw_advances = int(getattr(state, "advances", 0))
+            if raw_advances < min_reachable:
+                return False
+            # The timeline counter has event-dependent jumps, so its reachable
+            # values cannot be inferred from a single modulus.
+            return seed.advance_mode != "linear" or is_linear_trigger_reachable(
+                raw_advances,
+                current_advances=seed.current_advances,
+                npc=seed.npc,
+                fixed_delay=self.config.fixed_delay,
+                fixed_flash_frames=fixed_flash,
+            )
+
+        # 合并去重（按 advances 排序，同一同步来源内 PID+EC 相同取最低可达帧）
         seen_keys: set[str] = set()
         merged: list[object] = []
         sync_flags: list[str] = []  # 记录每个候选的同步来源
         sourced_results = [(state, primary_source) for state in results_primary]
         sourced_results.extend((state, secondary_source) for state in results_secondary)
         for state, source in sorted(sourced_results, key=lambda item: getattr(item[0], "advances", 0)):
+            if not candidate_is_reachable(state):
+                continue
             key = f"{source}:{getattr(state, 'pid', 0):08X}:{getattr(state, 'ec', 0):08X}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 merged.append(state)
                 sync_flags.append(source)
 
-        # 过滤已过帧——同时过滤 sync_flags
-        fixed_flash = self._fixed_flash_frames()
-        min_reachable = seed.current_advances + self.config.fixed_delay + (fixed_flash or 0)
-        if self._missed_target_advance is not None:
-            min_reachable = max(min_reachable, self._missed_target_advance + 1)
-        reachable = []
-        reachable_flags = []
-        for i, c in enumerate(merged):
-            if getattr(c, "advances", 0) >= min_reachable:
-                reachable.append(c)
-                reachable_flags.append(sync_flags[i])
+        reachable = merged
+        reachable_flags = sync_flags
         decision = decide_search_target(reachable if reachable else [])
         if decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT:
             self._record_no_candidate_seed(seed)

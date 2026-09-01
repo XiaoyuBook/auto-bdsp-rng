@@ -23,6 +23,7 @@ from auto_bdsp_rng.automation.auto_rng.runner import (
     decide_search_target,
     decide_target_advance,
     finalize_flash_frames,
+    is_linear_trigger_reachable,
 )
 from auto_bdsp_rng.automation.auto_rng.scripts import AUTO_ADVANCE_PARAMETER, AUTO_HIT_PARAMETER
 from auto_bdsp_rng.blink_detection.project_xs import plan_timeline
@@ -186,6 +187,147 @@ def test_no_candidates_decides_to_run_seed_script():
 
     assert decision.kind == AutoRngDecisionKind.RUN_SEED_SCRIPT
     assert decision.phase == AutoRngPhase.RUN_SEED_SCRIPT
+
+
+@pytest.mark.parametrize(
+    ("target_advances", "expected"),
+    [(1541, False), (1542, True), (1543, False)],
+)
+def test_linear_trigger_reachability_uses_script_start_frame(target_advances, expected):
+    """npc=1 时按脚本启动帧的奇偶性筛选，而不是按 raw Adv 盲算。"""
+    assert is_linear_trigger_reachable(
+        target_advances,
+        current_advances=0,
+        npc=1,
+        fixed_delay=195,
+        fixed_flash_frames=5,
+    ) is expected
+
+
+def test_linear_trigger_reachability_respects_current_frame_and_npc_zero():
+    assert is_linear_trigger_reachable(
+        1542,
+        current_advances=4,
+        npc=1,
+        fixed_delay=195,
+        fixed_flash_frames=5,
+    )
+    assert not is_linear_trigger_reachable(
+        1541,
+        current_advances=4,
+        npc=1,
+        fixed_delay=195,
+        fixed_flash_frames=5,
+    )
+    assert is_linear_trigger_reachable(
+        1541,
+        current_advances=0,
+        npc=0,
+        fixed_delay=195,
+        fixed_flash_frames=5,
+    )
+
+
+def test_runner_excludes_unreachable_linear_candidates(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 5\n", encoding="utf-8")
+    history: list[tuple[str, tuple[object, ...]]] = []
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            fixed_delay=195,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=1),
+            # 两个 Adv 使用同一 PID+EC，验证不可达低帧不会阻塞可达高帧。
+            search_candidates=lambda _seed: [FakeState(1541), FakeState(1542)],
+            run_script_text=lambda _text, _name: None,
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+
+    runner.run(max_steps=2)
+
+    candidates, locked_index, _flags = next(
+        args for event, args in history if event == "candidates_found"
+    )
+    assert [candidate.advances for candidate in candidates] == [1542]
+    assert locked_index == 0
+    assert runner.progress.locked_target is not None
+    assert runner.progress.locked_target.raw_target_advances == 1542
+
+
+def test_runner_restarts_when_all_linear_candidates_are_unreachable(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 5\n", encoding="utf-8")
+    history: list[tuple[str, tuple[object, ...]]] = []
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            fixed_delay=195,
+            loop_mode="infinite",
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=1),
+            search_candidates=lambda _seed: [FakeState(1541)],
+            run_script_text=lambda _text, _name: None,
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+
+    runner.run(max_steps=2)
+
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+    assert runner.progress.locked_target is None
+    assert ("cycle_no_candidate", ()) in history
+
+
+def test_runner_keeps_timeline_candidates_without_linear_modulus_filter(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    hit_script = tmp_path / "hit.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    hit_script.write_text("_闪帧 = 5\n", encoding="utf-8")
+    history: list[tuple[str, tuple[object, ...]]] = []
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            fixed_delay=195,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(
+                seed=SeedState32(1, 2, 3, 4),
+                current_advances=0,
+                npc=1,
+                advance_mode="timeline",
+            ),
+            search_candidates=lambda _seed: [FakeState(1541)],
+            run_script_text=lambda _text, _name: None,
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+
+    runner.run(max_steps=2)
+
+    candidates, _locked_index, _flags = next(
+        args for event, args in history if event == "candidates_found"
+    )
+    assert [candidate.advances for candidate in candidates] == [1541]
 
 
 def test_runner_checks_zoom_before_the_second_seed_script(tmp_path):
