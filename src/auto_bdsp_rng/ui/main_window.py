@@ -1721,16 +1721,22 @@ class MainWindow(QMainWindow):
 
         header = QFrame()
         header.setObjectName("Header")
+        self.header = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(16, 10, 16, 10)
+        header_layout.setSpacing(8)
+        self.header_layout = header_layout
         self.title_label = QLabel()
         self.title_label.setObjectName("WindowTitle")
         self.auto_loop_badge = QLabel("循环 0")
         self.auto_loop_badge.setObjectName("Badge")
+        self.auto_loop_badge.setMaximumWidth(82)
         self.auto_phase_badge = QLabel("阶段 空闲")
         self.auto_phase_badge.setObjectName("Badge")
+        self.auto_phase_badge.setMaximumWidth(150)
         self.auto_advance_badge = QLabel("advance 0")
         self.auto_advance_badge.setObjectName("Badge")
+        self.auto_advance_badge.setMaximumWidth(160)
         self.video_source_header_button = QToolButton()
         self.video_source_header_button.setObjectName("VideoSourceHeaderButton")
         self.video_source_header_button.setText("视频源 未连接")
@@ -1739,10 +1745,21 @@ class MainWindow(QMainWindow):
         self.video_source_header_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
-        self.video_source_header_button.setFixedSize(190, 30)
+        self.video_source_header_button.setFixedSize(150, 30)
         self.video_source_header_button.setToolTip("打开视频源设置")
         self.video_source_header_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_source_header_button.clicked.connect(self.show_video_source_dialog)
+        self.easycon_header_button = QToolButton()
+        self.easycon_header_button.setObjectName("EasyConHeaderButton")
+        self.easycon_header_button.setText("伊机控 未连接")
+        self.easycon_header_button.setIcon(_status_dot_icon("#9CA3AF"))
+        self.easycon_header_button.setIconSize(QSize(12, 12))
+        self.easycon_header_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.easycon_header_button.setFixedSize(150, 30)
+        self.easycon_header_button.setToolTip("打开伊机控连接设置")
+        self.easycon_header_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.help_button = QToolButton()
         self.help_button.setObjectName("HelpMenuButton")
         self.help_button.setText("帮助 ▾")
@@ -1750,13 +1767,10 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.auto_loop_badge)
-        header_layout.addSpacing(8)
         header_layout.addWidget(self.auto_phase_badge)
-        header_layout.addSpacing(8)
         header_layout.addWidget(self.auto_advance_badge)
-        header_layout.addSpacing(8)
         header_layout.addWidget(self.video_source_header_button)
-        header_layout.addSpacing(8)
+        header_layout.addWidget(self.easycon_header_button)
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
@@ -1764,10 +1778,18 @@ class MainWindow(QMainWindow):
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel(
+            parent=self.tabs,
             run_log_sink=self._run_log_sink("伊机控"),
             video_source_connected=lambda: self._video_source_connected,
             frame_client_factory=self._new_broker_client,
         )
+        self.easycon_header_button.clicked.connect(
+            self.easycon_tab.show_connection_dialog
+        )
+        self.easycon_tab.connectionPresentationChanged.connect(
+            self._update_easycon_header
+        )
+        self._update_easycon_header(*self.easycon_tab.connection_presentation())
         self._install_easycon_image_result_callback(
             self._video_source_generation,
             self._easycon_run_generation,
@@ -2859,7 +2881,8 @@ class MainWindow(QMainWindow):
                 font-weight: 700;
                 color: #111827;
             }
-            QToolButton#VideoSourceHeaderButton {
+            QToolButton#VideoSourceHeaderButton,
+            QToolButton#EasyConHeaderButton {
                 background: #F9FAFB;
                 border: 1px solid #D1D5DB;
                 border-radius: 7px;
@@ -2867,12 +2890,19 @@ class MainWindow(QMainWindow):
                 font-weight: 600;
                 padding: 0 10px;
             }
-            QToolButton#VideoSourceHeaderButton:hover {
+            QToolButton#VideoSourceHeaderButton:hover,
+            QToolButton#EasyConHeaderButton:hover {
                 background: #F3F4F6;
                 border-color: #9CA3AF;
             }
-            QToolButton#VideoSourceHeaderButton:pressed {
+            QToolButton#VideoSourceHeaderButton:pressed,
+            QToolButton#EasyConHeaderButton:pressed {
                 background: #E5E7EB;
+            }
+            QToolButton#EasyConHeaderButton:disabled {
+                background: #F3F4F6;
+                color: #9CA3AF;
+                border-color: #E5E7EB;
             }
 
             /* ── Badge ── */
@@ -2880,8 +2910,8 @@ class MainWindow(QMainWindow):
                 background: #EAF8F3;
                 color: #0E8F70;
                 font-weight: 600;
-                font-size: 13px;
-                padding: 4px 10px;
+                font-size: 12px;
+                padding: 4px 8px;
                 border-radius: 999px;
             }
             QLabel#BadgeDanger {
@@ -3659,7 +3689,6 @@ class MainWindow(QMainWindow):
         self._ocr_shutdown_requested = True
         self._request_ocr_background_stop()
         broker_start_stopped = self._shutdown_capture_broker_start_thread()
-        easycon_stopped = self.easycon_tab.shutdown() if broker_start_stopped else True
 
         pending_tasks: list[str] = []
         if not self._shutdown_automation_runner(
@@ -3674,8 +3703,6 @@ class MainWindow(QMainWindow):
             request_stop=False,
         ):
             pending_tasks.append("自动 TID")
-        if not easycon_stopped:
-            pending_tasks.append("伊机控或 CLI")
         if not broker_start_stopped:
             pending_tasks.append("视频源连接")
         if not self._shutdown_worker_thread(
@@ -3712,6 +3739,15 @@ class MainWindow(QMainWindow):
                 self,
                 "视频源未能停止",
                 "共享视频源尚未确认停止，请重试断开后再关闭程序。",
+            )
+            event.ignore()
+            return
+        if not self.easycon_tab.shutdown():
+            self._is_closing = False
+            QMessageBox.warning(
+                self,
+                "正在停止伊机控任务",
+                "伊机控或 CLI 任务尚未退出，请稍后再关闭程序。",
             )
             event.ignore()
             return
@@ -4071,11 +4107,31 @@ class MainWindow(QMainWindow):
         advances: int | None = None,
     ) -> None:
         if loop_index is not None:
-            self.auto_loop_badge.setText(f"循环 {loop_index}")
+            self._set_header_badge_text(
+                self.auto_loop_badge,
+                f"循环 {loop_index}",
+            )
         if phase_text is not None:
-            self.auto_phase_badge.setText(f"阶段 {phase_text}")
+            self._set_header_badge_text(
+                self.auto_phase_badge,
+                f"阶段 {phase_text}",
+            )
         if advances is not None:
-            self.auto_advance_badge.setText(f"advance {advances}")
+            self._set_header_badge_text(
+                self.auto_advance_badge,
+                f"advance {advances}",
+            )
+
+    @staticmethod
+    def _set_header_badge_text(label: QLabel, full_text: str) -> None:
+        available_width = max(24, label.maximumWidth() - 16)
+        visible_text = label.fontMetrics().elidedText(
+            full_text,
+            Qt.TextElideMode.ElideRight,
+            available_width,
+        )
+        label.setText(visible_text)
+        label.setToolTip(full_text)
 
     def _apply_auto_rng_header_progress(self, progress: object) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
@@ -4373,11 +4429,40 @@ class MainWindow(QMainWindow):
             button.fontMetrics().elidedText(
                 full_text,
                 Qt.TextElideMode.ElideRight,
-                145,
+                max(40, button.width() - 40),
             )
         )
+        button.setProperty("state", state)
         button.setIcon(_status_dot_icon(colors.get(state, colors["disconnected"])))
         button.setToolTip(f"{full_text}\n{status}\n点击打开视频源设置")
+
+    def _update_easycon_header(
+        self,
+        summary: str,
+        state: str,
+        detail: str,
+        enabled: bool,
+    ) -> None:
+        button = getattr(self, "easycon_header_button", None)
+        if button is None:
+            return
+        colors = {
+            "disconnected": "#9CA3AF",
+            "connecting": "#D97706",
+            "connected": "#0E8F70",
+            "failed": "#DC2626",
+        }
+        button.setText(
+            button.fontMetrics().elidedText(
+                summary,
+                Qt.TextElideMode.ElideRight,
+                max(40, button.width() - 40),
+            )
+        )
+        button.setProperty("state", state)
+        button.setIcon(_status_dot_icon(colors.get(state, colors["disconnected"])))
+        button.setToolTip(f"{summary}\n{detail}\n点击打开伊机控连接设置")
+        button.setEnabled(enabled)
 
     def _set_video_source_config_enabled(self, enabled: bool) -> None:
         for widget in (

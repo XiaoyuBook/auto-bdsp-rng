@@ -51,7 +51,8 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     easycon_panel = window.easycon_tab
     window.tabs.setCurrentWidget(easycon_panel)
     easycon_panel.latest_log_label.setText(
-        "脚本已就绪，等待连接伊机控后运行；这是一条用于验证布局的较长最近消息。"
+        "脚本已就绪，等待连接伊机控后运行；这是一条用于验证布局的较长最近消息，"
+        "需要确保窄列中的多行内容不会被裁切。"
     )
     app.processEvents()
     assert easycon_panel.view_log_button.height() == 30
@@ -63,6 +64,11 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     assert easycon_panel.latest_log_label.height() >= easycon_panel.latest_log_label.heightForWidth(
         easycon_panel.latest_log_label.width()
     )
+    side_panel = easycon_panel.overview_panel.parentWidget()
+    assert easycon_panel.keyboard_control_group.parentWidget() is side_panel
+    assert easycon_panel.overview_panel.geometry().bottom() < easycon_panel.action_row.geometry().top()
+    assert easycon_panel.action_row.geometry().bottom() < easycon_panel.keyboard_control_group.geometry().top()
+    assert easycon_panel.findChild(QWidget, "EasyConControlPanel") is None
     elapsed_rect = easycon_panel.elapsed_label.geometry()
     run_rect = easycon_panel.run_button.geometry()
     assert easycon_panel.action_row.rect().contains(elapsed_rect)

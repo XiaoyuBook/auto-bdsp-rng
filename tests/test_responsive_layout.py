@@ -126,6 +126,52 @@ def test_main_window_uses_design_geometry_when_screen_can_fit_it(app, monkeypatc
     assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
 
 
+def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
+    app,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        MainWindow,
+        "_screen_available_geometry",
+        lambda _self: QRect(0, 0, 1920, 1080),
+    )
+    window = MainWindow(profile_settings=_settings(tmp_path))
+    window.resize(MAIN_WINDOW_MIN_SIZE)
+    window._update_auto_rng_header(
+        loop_index=9999,
+        phase_text="搜索目标 Display TID",
+        advances=1_000_000_000,
+    )
+    window._update_easycon_header(
+        "伊机控 COM123456789",
+        "connected",
+        "已连接 · COM123456789",
+        True,
+    )
+    window.show()
+    app.processEvents()
+
+    controls = (
+        window.title_label,
+        window.auto_loop_badge,
+        window.auto_phase_badge,
+        window.auto_advance_badge,
+        window.video_source_header_button,
+        window.easycon_header_button,
+        window.help_button,
+    )
+    for left, right in zip(controls, controls[1:], strict=False):
+        assert left.geometry().right() < right.geometry().left()
+    assert controls[0].geometry().left() >= window.header.contentsRect().left()
+    assert controls[-1].geometry().right() <= window.header.contentsRect().right()
+    assert window.header_layout.minimumSize().width() <= window.header.width()
+    assert window.video_source_header_button.size() == QSize(150, 30)
+    assert window.easycon_header_button.size() == QSize(150, 30)
+    assert window.auto_phase_badge.toolTip() == "阶段 搜索目标 Display TID"
+    assert window.auto_advance_badge.toolTip() == "advance 1000000000"
+
+
 def test_project_xs_never_reflows_to_vertical(app, monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         MainWindow,

@@ -10,6 +10,7 @@ from time import monotonic
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -34,7 +35,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QSplitter,
     QStatusBar,
+    QStyle,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -76,6 +79,77 @@ CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS = 2.0
 CAPTURE_KEEP_AWAKE_CLI_TIMEOUT_MS = 5_000
 CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS = 500
 MOCK_PORT = "mock"
+INTERNAL_TEST_PORTS = frozenset({MOCK_PORT, "memory", "none"})
+
+
+class SerialPortComboBox(QComboBox):
+    """Non-editable serial selector with a reliable Windows popup and arrow."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._popup_menu: QMenu | None = None
+        self._popup_reopen_blocked = False
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        arrow_rect = QRect(
+            self.width() - 21,
+            max(0, (self.height() - 12) // 2),
+            12,
+            12,
+        )
+        painter = QPainter(self)
+        self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown).paint(
+            painter,
+            arrow_rect,
+            Qt.AlignmentFlag.AlignCenter,
+        )
+        painter.end()
+
+    def showPopup(self) -> None:  # type: ignore[override]
+        if not self.isEnabled() or self.count() == 0:
+            return
+        if self._popup_menu is not None:
+            self._popup_menu.close()
+            return
+        if self._popup_reopen_blocked:
+            return
+
+        menu = QMenu(self)
+        menu.setObjectName("EasyConPortComboMenu")
+        menu.setMinimumWidth(self.width())
+        menu.setAutoFillBackground(True)
+        menu.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        current = self.currentIndex()
+        for row in range(self.count()):
+            action = menu.addAction(self.itemIcon(row), self.itemText(row))
+            action.setCheckable(True)
+            action.setChecked(row == current)
+            action.triggered.connect(
+                lambda _checked=False, index=row: self.setCurrentIndex(index)
+            )
+
+        self._popup_menu = menu
+        menu.aboutToHide.connect(lambda current_menu=menu: self._dispose_popup(current_menu))
+        menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+        QTimer.singleShot(0, menu.repaint)
+
+    def hidePopup(self) -> None:  # type: ignore[override]
+        if self._popup_menu is not None:
+            self._popup_menu.close()
+
+    def _dispose_popup(self, menu: QMenu) -> None:
+        if self._popup_menu is menu:
+            self._popup_menu = None
+            # Clicking the combo while its popup owns the mouse first hides the
+            # menu, then delivers the same click to the combo.  Suppress that
+            # one delivery so a close click cannot immediately reopen it.
+            self._popup_reopen_blocked = True
+            QTimer.singleShot(0, self._allow_popup_reopen)
+        menu.deleteLater()
+
+    def _allow_popup_reopen(self) -> None:
+        self._popup_reopen_blocked = False
 
 # ── 可配置按键映射 ──────────────────────────────────
 
@@ -518,6 +592,7 @@ class KeyMappingDialog(QDialog):
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
     capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
+    connectionPresentationChanged = Signal(str, str, str, bool)
     virtualControllerKeyEvent = Signal(int, bool, bool, int)
     virtualControllerHookStopped = Signal(object, int)
     nativeScriptStarted = Signal()
@@ -594,6 +669,7 @@ class EasyConPanel(QWidget):
         self._controller_overlay: ControllerStateOverlay | None = None
         self._vpad_hide_pending = False
         self._escape_pressed = False
+        self._last_connection_presentation: tuple[str, str, str, bool] | None = None
         self._recording = False
         self._recording_paused = False
         self._recorded_lines: list[str] = []
@@ -704,8 +780,8 @@ class EasyConPanel(QWidget):
 
         layout.addWidget(content, 1)
 
-        # 底部三栏
-        layout.addWidget(self._build_bottom_panel())
+        self.connection_dialog = self._build_connection_dialog()
+        self._update_keyboard_control_presentation()
 
         # 状态栏
         layout.addWidget(self._build_bottom_status())
@@ -781,6 +857,7 @@ class EasyConPanel(QWidget):
 
     def _build_log_area(self) -> QWidget:
         area = QWidget()
+        area.setObjectName("EasyConSidePanel")
         area.setStyleSheet(f"background: {self.CLR_BG};")
         area.setMinimumWidth(250)
         area.setMaximumWidth(320)
@@ -814,7 +891,7 @@ class EasyConPanel(QWidget):
         self.latest_log_label = QLabel("暂无消息")
         self.latest_log_label.setObjectName("LatestLogLabel")
         self.latest_log_label.setWordWrap(True)
-        self.latest_log_label.setMaximumHeight(68)
+        self.latest_log_label.setMaximumHeight(72)
         self.latest_log_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.latest_log_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -858,7 +935,6 @@ class EasyConPanel(QWidget):
         log_panel.setVisible(False)
         self.log_panel = log_panel
         layout.addWidget(log_panel)
-        layout.addStretch(1)
 
         # 计时 + 运行按钮（横向排列）
         action_row = QWidget()
@@ -922,7 +998,11 @@ class EasyConPanel(QWidget):
         self.run_button.clicked.connect(self.toggle_run)
         action_layout.addWidget(self.run_button, 1)
 
+        layout.addSpacing(6)
         layout.addWidget(action_row)
+        layout.addSpacing(8)
+        layout.addWidget(self._build_keyboard_control_group())
+        layout.addStretch(1)
         return area
 
     # ── 中区：脚本编辑器 ────────────────────────────────
@@ -1009,65 +1089,170 @@ class EasyConPanel(QWidget):
         layout.addStretch()
         return area
 
-    # ── 底部三栏 ────────────────────────────────────────
+    # ── 连接设置与底部控制区 ──────────────────────────────
 
-    def _build_bottom_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setStyleSheet(f"background: {self.CLR_PANEL_BG}; border-top: 1px solid {self.CLR_BORDER};")
-        outer = QHBoxLayout(panel)
-        outer.setContentsMargins(6, 4, 6, 4)
-        outer.setSpacing(6)
-
-        outer.addWidget(self._build_serial_column(), 50)
-        outer.addWidget(self._build_vpad_column(), 50)
-        return panel
-
-    def _build_serial_column(self) -> QWidget:
-        group = QGroupBox("串口连接")
-        group.setStyleSheet(
-            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
-            f" background: {self.CLR_PANEL_BG}; }}"
-            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
+    def _build_connection_dialog(self) -> QDialog:
+        dialog = QDialog(self.window())
+        dialog.setObjectName("EasyConConnectionDialog")
+        dialog.setWindowTitle("伊机控连接")
+        dialog.setModal(False)
+        dialog.setMinimumWidth(500)
+        dialog.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        dialog.setStyleSheet(
+            """
+            QDialog#EasyConConnectionDialog {
+                background: #F7F8FA;
+                color: #111827;
+                font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+                font-size: 13px;
+            }
+            QDialog#EasyConConnectionDialog QLabel {
+                background: transparent;
+                border: none;
+            }
+            QDialog#EasyConConnectionDialog QComboBox {
+                background: #FFFFFF;
+                border: 1px solid #D1D5DB;
+                border-radius: 7px;
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0 38px 0 10px;
+                color: #111827;
+            }
+            QDialog#EasyConConnectionDialog QComboBox:focus {
+                border-color: #10A37F;
+            }
+            QComboBox#EasyConPortCombo::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 30px;
+                border: none;
+                border-left: 1px solid #E5E7EB;
+            }
+            QComboBox#EasyConPortCombo::down-arrow {
+                image: none;
+            }
+            QMenu#EasyConPortComboMenu {
+                background: #FFFFFF;
+                color: #111827;
+                border: 1px solid #D1D5DB;
+                padding: 4px;
+            }
+            QMenu#EasyConPortComboMenu::item {
+                min-height: 28px;
+                padding: 4px 28px 4px 10px;
+                border-radius: 4px;
+            }
+            QMenu#EasyConPortComboMenu::item:selected {
+                background: #DDF4EA;
+                color: #0B765E;
+            }
+            QDialog#EasyConConnectionDialog QPushButton {
+                background: #FFFFFF;
+                border: 1px solid #D1D5DB;
+                border-radius: 7px;
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0 14px;
+            }
+            QDialog#EasyConConnectionDialog QPushButton:hover {
+                background: #F3F4F6;
+            }
+            QDialog#EasyConConnectionDialog QPushButton#PrimaryButton {
+                background: #10A37F;
+                color: #FFFFFF;
+                border-color: #0E8F70;
+                font-weight: 600;
+            }
+            QDialog#EasyConConnectionDialog QPushButton#PrimaryButton:hover {
+                background: #0E8F70;
+            }
+            QDialog#EasyConConnectionDialog QPushButton:disabled,
+            QDialog#EasyConConnectionDialog QToolButton:disabled {
+                background: #F3F4F6;
+                color: #9CA3AF;
+                border-color: #E5E7EB;
+            }
+            QToolButton#EasyConPortRefreshButton {
+                background: #FFFFFF;
+                border: 1px solid #D1D5DB;
+                border-radius: 7px;
+            }
+            QToolButton#EasyConPortRefreshButton:hover {
+                background: #F3F4F6;
+                border-color: #9CA3AF;
+            }
+            QLabel#EasyConConnectionStatus {
+                color: #374151;
+                font-weight: 600;
+            }
+            QFrame#EasyConConnectionStatusDot {
+                border: none;
+                border-radius: 5px;
+                background: #9CA3AF;
+            }
+            QFrame#EasyConConnectionStatusDot[state="connecting"] { background: #D97706; }
+            QFrame#EasyConConnectionStatusDot[state="connected"] { background: #0E8F70; }
+            QFrame#EasyConConnectionStatusDot[state="failed"] { background: #DC2626; }
+            """
         )
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(8, 4, 8, 8)
-        layout.setSpacing(4)
 
-        btn_style = (
-            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            f" border-radius: 2px; padding: 4px 10px; font-size: 11px; }}"
-            f" QPushButton:hover {{ background: #e8e6e1; }}"
-        )
-        combo_style = (
-            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            f" padding: 3px 6px; font-size: 11px; min-height: 24px; max-height: 24px; }}"
-            f" QComboBox::drop-down {{ border: 1px solid {self.CLR_BORDER}; width: 18px; }}"
-            f" QComboBox QAbstractItemView {{ font-size: 11px; }}"
-        )
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
 
+        form = QGridLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(10)
+        self.port_label = QLabel("串口")
+        self.port_combo = SerialPortComboBox()
+        self.port_combo.setObjectName("EasyConPortCombo")
+        self.port_combo.setEditable(False)
+        self.port_combo.setPlaceholderText("请选择串口")
+        self.port_combo.setCurrentIndex(-1)
+        self.port_combo.setMinimumWidth(260)
+        self.port_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.port_combo.currentTextChanged.connect(self._port_changed)
+        self.port_refresh_button = QToolButton()
+        self.port_refresh_button.setObjectName("EasyConPortRefreshButton")
+        self.port_refresh_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
+        )
+        self.port_refresh_button.setToolTip("刷新串口")
+        self.port_refresh_button.setFixedSize(34, 34)
+        self.port_refresh_button.clicked.connect(self.refresh_ports)
+        # 保留旧属性名，兼容现有状态控制与外部调用。
+        self.disconnect_button = self.port_refresh_button
+        form.addWidget(self.port_label, 0, 0)
+        form.addWidget(self.port_combo, 0, 1)
+        form.addWidget(self.port_refresh_button, 0, 2)
+        layout.addLayout(form)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(8)
+        self.connection_status_dot = QFrame()
+        self.connection_status_dot.setObjectName("EasyConConnectionStatusDot")
+        self.connection_status_dot.setProperty("state", "disconnected")
+        self.connection_status_dot.setFixedSize(10, 10)
+        self.connection_state_label = QLabel("连接: 未检测")
+        self.connection_state_label.setObjectName("EasyConConnectionStatus")
+        footer.addWidget(self.connection_status_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        footer.addWidget(self.connection_state_label)
+        footer.addStretch(1)
+        self.connection_dialog_close_button = QPushButton("关闭")
+        self.connection_dialog_close_button.clicked.connect(dialog.hide)
+        footer.addWidget(self.connection_dialog_close_button)
         self.connect_button = QPushButton("连接伊机控")
-        self.connect_button.setStyleSheet(btn_style)
+        self.connect_button.setObjectName("PrimaryButton")
+        self.connect_button.setMinimumWidth(116)
         self.connect_button.clicked.connect(self.toggle_native_connection)
-        layout.addWidget(self.connect_button)
-
-        serial_row = QHBoxLayout()
-        self.port_combo = QComboBox()
-        self.port_combo.setEditable(True)
-        if self.port_combo.lineEdit() is not None:
-            self.port_combo.lineEdit().setPlaceholderText("下拉选择串口")
-        self.port_combo.setStyleSheet(combo_style)
-        self.port_combo.currentIndexChanged.connect(self._port_changed)
-        serial_row.addWidget(self.port_combo, 1)
-
-        self.disconnect_button = QPushButton("刷新")
-        self.disconnect_button.setStyleSheet(btn_style)
-        self.disconnect_button.clicked.connect(self.refresh_ports)
-        serial_row.addWidget(self.disconnect_button)
-        layout.addLayout(serial_row)
+        footer.addWidget(self.connect_button)
+        layout.addLayout(footer)
 
         # 隐藏的后端配置（保留原有控件，用户可通过设置菜单访问）
         self._hidden_config_widgets()
-        return group
+        return dialog
 
     def _hidden_config_widgets(self) -> None:
         """创建隐藏的配置控件，保留原有业务逻辑所需的所有属性"""
@@ -1089,7 +1274,6 @@ class EasyConPanel(QWidget):
         self.browse_bridge_button.clicked.connect(self.choose_bridge)
         self.version_label = QLabel("EasyCon: 未检测")
         self.backend_label = QLabel("单片机: 未连接")
-        self.connection_state_label = QLabel("连接: 未检测")
         self.task_state_label = QLabel("任务: 未检测")
         self.refresh_ports_button = QPushButton("刷新串口")
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
@@ -1120,56 +1304,127 @@ class EasyConPanel(QWidget):
         self.script_list.itemDoubleClicked.connect(self._load_script_item)
 
 
-    def _build_vpad_column(self) -> QWidget:
-        group = QGroupBox("虚拟手柄")
+    def _build_keyboard_control_group(self) -> QWidget:
+        group = QWidget()
+        group.setObjectName("KeyboardControlGroup")
+        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         group.setStyleSheet(
-            f"QGroupBox {{ font-weight: 700; border: 1px solid {self.CLR_BORDER}; margin-top: 8px; padding-top: 14px;"
-            f" background: {self.CLR_PANEL_BG}; }}"
-            f" QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}"
+            f"QWidget#KeyboardControlGroup {{ background: transparent; border: 0; }}"
+            f" QWidget#KeyboardControlGroup QLabel {{ border: 0; background: transparent; }}"
         )
-        layout = QGridLayout(group)
-        layout.setContentsMargins(8, 4, 8, 8)
-        layout.setSpacing(4)
+        self.keyboard_control_group = group
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(4, 4, 4, 0)
+        layout.setSpacing(7)
 
         btn_style = (
             f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            f" border-radius: 2px; padding: 4px 8px; font-size: 11px; }}"
+            f" border-radius: 3px; min-height: 32px; max-height: 32px; padding: 0 10px; font-size: 11px; }}"
             f" QPushButton:hover {{ background: #e8e6e1; }}"
-        )
-        combo_style = (
-            f"QComboBox {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; padding: 3px 6px; font-size: 11px; }}"
+            f" QPushButton:disabled {{ background: #e1e3e0; color: #8b8f8c; }}"
         )
 
-        vpad_combo = QComboBox()
-        vpad_combo.addItem("键盘")
-        vpad_combo.setStyleSheet(combo_style)
-        layout.addWidget(vpad_combo, 0, 0, 1, 1)
+        keyboard_header = QHBoxLayout()
+        keyboard_header.setContentsMargins(0, 0, 0, 0)
+        keyboard_title = QLabel("键盘控制")
+        keyboard_title.setStyleSheet(f"font-weight: 600; color: {self.CLR_TEXT};")
+        self.keyboard_controller_state_label = QLabel("不可用")
+        self.keyboard_controller_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.keyboard_controller_state_label.setMinimumWidth(62)
+        keyboard_header.addWidget(keyboard_title)
+        keyboard_header.addStretch(1)
+        keyboard_header.addWidget(self.keyboard_controller_state_label)
+        layout.addLayout(keyboard_header)
 
-        self.keyboard_controller_check = QCheckBox("连接")
-        self.keyboard_controller_check.setStyleSheet(f"font-size: 11px; background: transparent;")
+        # 保留旧复选框属性作为内部兼容入口；可见界面使用与真实状态一致的三态切换。
+        self.keyboard_controller_check = QCheckBox("启用键盘控制", group)
+        self.keyboard_controller_check.hide()
         self.keyboard_controller_check.toggled.connect(self.set_keyboard_controller_enabled)
-        layout.addWidget(self.keyboard_controller_check, 0, 1, 1, 1)
 
-        mapping_btn = QPushButton("按键映射")
-        mapping_btn.setStyleSheet(btn_style)
-        mapping_btn.clicked.connect(self.open_key_mapping)
-        layout.addWidget(mapping_btn, 1, 0, 1, 1)
+        mode_frame = QFrame()
+        mode_frame.setObjectName("KeyboardControlMode")
+        mode_frame.setFixedHeight(32)
+        mode_frame.setStyleSheet(
+            f"QFrame#KeyboardControlMode {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            " border-radius: 3px; }}"
+            " QFrame#KeyboardControlMode QPushButton { background: transparent; border: 0; border-radius: 0;"
+            " min-height: 30px; max-height: 30px; padding: 0 6px; font-size: 11px; color: #565d59; }"
+            " QFrame#KeyboardControlMode QPushButton:hover:!checked { background: #ecebe7; }"
+            " QFrame#KeyboardControlMode QPushButton:checked { background: #dceee8; color: #0b765e; font-weight: 700; }"
+            " QFrame#KeyboardControlMode QPushButton:disabled { color: #9a9d9b; background: #f0f0ed; }"
+        )
+        mode_layout = QHBoxLayout(mode_frame)
+        mode_layout.setContentsMargins(1, 1, 1, 1)
+        mode_layout.setSpacing(0)
+        self.controller_mode_group = QButtonGroup(group)
+        self.controller_mode_group.setExclusive(True)
+        mode_specs = (
+            ("off", "关闭", "完全关闭键盘捕获并隐藏手柄状态悬浮窗"),
+            ("standby", "待机", "保留快捷切换，映射按键不发送到手柄"),
+            ("active", "控制", "捕获映射按键并发送到手柄"),
+        )
+        self.controller_mode_buttons: dict[str, QPushButton] = {}
+        for index, (mode, text, tooltip) in enumerate(mode_specs):
+            button = QPushButton(text)
+            button.setCheckable(True)
+            button.setToolTip(tooltip)
+            button.clicked.connect(
+                lambda _checked=False, selected_mode=mode: self._set_keyboard_controller_mode(
+                    selected_mode
+                )
+            )
+            self.controller_mode_group.addButton(button)
+            self.controller_mode_buttons[mode] = button
+            mode_layout.addWidget(button, 1)
+            if index < len(mode_specs) - 1:
+                divider = QFrame()
+                divider.setFrameShape(QFrame.Shape.VLine)
+                divider.setStyleSheet(f"background: {self.CLR_BORDER}; border: 0;")
+                divider.setFixedWidth(1)
+                mode_layout.addWidget(divider)
+        self.controller_off_button = self.controller_mode_buttons["off"]
+        self.controller_standby_button = self.controller_mode_buttons["standby"]
+        self.controller_active_button = self.controller_mode_buttons["active"]
+        layout.addWidget(mode_frame)
 
-        self.controller_overlay_button = QPushButton("状态窗口")
-        self.controller_overlay_button.setStyleSheet(btn_style)
-        self.controller_overlay_button.clicked.connect(self.show_controller_overlay)
-        layout.addWidget(self.controller_overlay_button, 1, 1, 1, 1)
+        self.mapping_button = QPushButton("按键映射")
+        self.mapping_button.setStyleSheet(btn_style)
+        self.mapping_button.clicked.connect(self.open_key_mapping)
+        layout.addWidget(self.mapping_button)
 
-        self.record_btn = QPushButton("录制脚本")
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background: {self.CLR_BORDER}; border: 0;")
+        layout.addSpacing(3)
+        layout.addWidget(separator)
+        layout.addSpacing(3)
+
+        recording_header = QHBoxLayout()
+        recording_header.setContentsMargins(0, 0, 0, 0)
+        recording_title = QLabel("操作录制")
+        recording_title.setStyleSheet(f"font-weight: 600; color: {self.CLR_TEXT};")
+        self.recording_state_label = QLabel("未录制")
+        self.recording_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.recording_state_label.setMinimumWidth(62)
+        recording_header.addWidget(recording_title)
+        recording_header.addStretch(1)
+        recording_header.addWidget(self.recording_state_label)
+        layout.addLayout(recording_header)
+
+        recording_actions = QHBoxLayout()
+        recording_actions.setContentsMargins(0, 0, 0, 0)
+        recording_actions.setSpacing(8)
+        self.record_btn = QPushButton("开始录制")
         self.record_btn.setStyleSheet(btn_style)
         self.record_btn.clicked.connect(self._start_recording)
-        layout.addWidget(self.record_btn, 2, 0, 1, 1)
-
-        self.pause_btn = QPushButton("暂停录制")
+        recording_actions.addWidget(self.record_btn, 1)
+        self.pause_btn = QPushButton("暂停")
         self.pause_btn.setStyleSheet(btn_style)
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._toggle_pause_recording)
-        layout.addWidget(self.pause_btn, 2, 1, 1, 1)
+        recording_actions.addWidget(self.pause_btn, 1)
+        layout.addLayout(recording_actions)
 
         # 手柄测试按钮（保留原有功能）
         self.controller_duration = QSpinBox()
@@ -1219,6 +1474,153 @@ class EasyConPanel(QWidget):
             self.easycon_status.addPermanentWidget(label)
 
         return self.easycon_status
+
+    @staticmethod
+    def _set_compact_status(label: QLabel, text: str, state: str) -> None:
+        colors = {
+            "active": ("#DDF4EA", "#0B765E"),
+            "standby": ("#FEF3C7", "#92400E"),
+            "recording": ("#FEE2E2", "#B91C1C"),
+            "unavailable": ("#E5E7EB", "#6B7280"),
+            "idle": ("#ECEDEA", "#565D59"),
+        }
+        background, foreground = colors.get(state, colors["idle"])
+        label.setText(text)
+        label.setStyleSheet(
+            f"background: {background}; color: {foreground}; border: 0; border-radius: 3px;"
+            " padding: 2px 8px; font-size: 11px; font-weight: 600;"
+        )
+
+    def _update_keyboard_control_presentation(self) -> None:
+        if not hasattr(self, "keyboard_controller_state_label"):
+            return
+        if self._shutting_down:
+            controller_text, controller_state = "已关闭", "idle"
+            controller_mode = "off"
+        elif self._controller_script_running():
+            controller_text, controller_state = "脚本占用", "standby"
+            controller_mode = "off"
+        elif self.virtual_controller_enabled:
+            controller_text, controller_state = "控制中", "active"
+            controller_mode = "active"
+        elif self._vpad_input_source in {"hook", "qt"}:
+            controller_text, controller_state = "待机", "standby"
+            controller_mode = "standby"
+        elif not self._controller_connection_active():
+            controller_text, controller_state = "不可用", "unavailable"
+            controller_mode = "off"
+        else:
+            controller_text, controller_state = "已关闭", "idle"
+            controller_mode = "off"
+        self._set_compact_status(
+            self.keyboard_controller_state_label,
+            controller_text,
+            controller_state,
+        )
+        for mode, button in self.controller_mode_buttons.items():
+            button.setChecked(mode == controller_mode)
+        controls_available = self.keyboard_controller_check.isEnabled() and not self._shutting_down
+        self.controller_off_button.setEnabled(not self._shutting_down)
+        self.controller_standby_button.setEnabled(controls_available)
+        self.controller_active_button.setEnabled(controls_available)
+        self.mapping_button.setEnabled(not self._shutting_down)
+
+        if self._recording_paused:
+            recording_text, recording_state = "已暂停", "standby"
+        elif self._recording:
+            recording_text, recording_state = "录制中", "recording"
+        elif self._shutting_down:
+            recording_text, recording_state = "不可用", "unavailable"
+        elif self._controller_script_running():
+            recording_text, recording_state = "脚本占用", "standby"
+        elif not self._controller_connection_active():
+            recording_text, recording_state = "等待连接", "unavailable"
+        elif self.virtual_controller_enabled:
+            recording_text, recording_state = "可录制", "active"
+        else:
+            recording_text, recording_state = "等待控制", "idle"
+        self._set_compact_status(
+            self.recording_state_label,
+            recording_text,
+            recording_state,
+        )
+
+        can_record = (self.virtual_controller_enabled or self._recording) and not self._shutting_down
+        self.record_btn.setEnabled(can_record)
+        self.record_btn.setToolTip("" if can_record else "请先启用键盘控制")
+
+    def show_connection_dialog(self) -> None:
+        if self._shutting_down:
+            return
+        self.connection_dialog.adjustSize()
+        self.connection_dialog.show()
+        self.connection_dialog.raise_()
+        self.connection_dialog.activateWindow()
+
+    def connection_presentation(self) -> tuple[str, str, str, bool]:
+        if self._shutting_down and self.native_backend is None and self.bridge_backend is None:
+            return ("伊机控 未连接", "disconnected", "已关闭", False)
+
+        if self._is_native_mode():
+            status = self._native_status()
+            connected = self._native_connection_active(status)
+            connection_text = self._connection_state_text(
+                native_status=status,
+                native_connected=connected,
+            )
+            backend = self.native_backend
+        else:
+            connection_text = self._connection_state_text()
+            connected = self._is_bridge_mode() and self.bridge_status in (
+                EasyConStatus.BRIDGE_CONNECTED,
+                EasyConStatus.RUNNING,
+            )
+            backend = self.bridge_backend
+
+        if connected:
+            state = "connected"
+        elif connection_text == "正在连接":
+            state = "connecting"
+        elif connection_text == "连接失败":
+            state = "failed"
+        else:
+            state = "disconnected"
+
+        port = ""
+        if connected and backend is not None:
+            try:
+                port = str(getattr(backend, "connected_port", "") or "").strip()
+            except Exception:
+                port = ""
+        if connected and not port:
+            port = self._connection_port()
+        visible_port = "" if port.casefold() in INTERNAL_TEST_PORTS else port
+
+        if state == "connected":
+            summary = f"伊机控 {visible_port or '已连接'}"
+            detail = f"已连接 · {visible_port}" if visible_port else "已连接"
+        elif state == "connecting":
+            summary, detail = "伊机控 连接中", connection_text
+        elif state == "failed":
+            summary, detail = "伊机控 故障", connection_text
+        else:
+            summary, detail = "伊机控 未连接", connection_text
+        return summary, state, detail, not self._shutting_down
+
+    def _publish_connection_presentation(self, *, force: bool = False) -> None:
+        presentation = self.connection_presentation()
+        _summary, state, _detail, _enabled = presentation
+        if hasattr(self, "connection_status_dot"):
+            if self.connection_status_dot.property("state") != state:
+                self.connection_status_dot.setProperty("state", state)
+                style = self.connection_status_dot.style()
+                style.unpolish(self.connection_status_dot)
+                style.polish(self.connection_status_dot)
+                self.connection_status_dot.update()
+        if not force and presentation == self._last_connection_presentation:
+            return
+        self._last_connection_presentation = presentation
+        self.connectionPresentationChanged.emit(*presentation)
 
     def _refresh_script_list(self) -> None:
         self.script_list.clear()
@@ -1367,15 +1769,17 @@ class EasyConPanel(QWidget):
         ports = [
             str(port).strip()
             for port in ports
-            if str(port).strip() and str(port).strip().casefold() != MOCK_PORT
+            if str(port).strip()
+            and str(port).strip().casefold() not in INTERNAL_TEST_PORTS
         ]
         self.port_combo.blockSignals(True)
         self.port_combo.clear()
-        self.port_combo.setEditText("")
         self.port_combo.addItems(ports)
         selected = self._select_preferred_port(ports)
         if selected is not None:
             self.port_combo.setCurrentText(selected)
+        else:
+            self.port_combo.setCurrentIndex(-1)
         self.port_combo.blockSignals(False)
         self._append_log("info", f"已刷新串口: {', '.join(ports) if ports else '未发现'}")
         if not ports and not self.mock_check.isChecked():
@@ -1412,15 +1816,25 @@ class EasyConPanel(QWidget):
     def _connection_port(self) -> str:
         """Return the backend port without exposing test-only mock entries in the UI."""
         selected_port = self.port_combo.currentText().strip()
-        if self._is_native_mode() and selected_port and selected_port.casefold() != MOCK_PORT:
+        if selected_port.casefold() in INTERNAL_TEST_PORTS:
+            return ""
+        if self._is_native_mode() and selected_port:
             return selected_port
-        if self.mock_check.isChecked() and not self._is_bridge_mode():
+        if (
+            self.mock_check.isChecked()
+            and not self._is_bridge_mode()
+            and self.port_combo.count() == 0
+        ):
             return MOCK_PORT
         return selected_port
 
     @staticmethod
     def _display_port(port: str) -> str:
-        return "测试模式" if str(port).strip().casefold() == MOCK_PORT else str(port)
+        return (
+            "测试模式"
+            if str(port).strip().casefold() in INTERNAL_TEST_PORTS
+            else str(port)
+        )
 
     def choose_ezcon(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择 ezcon.exe", "", "EasyCon CLI (ezcon.exe);;All files (*.*)")
@@ -2377,6 +2791,7 @@ class EasyConPanel(QWidget):
         self._show_connection_toast(self._display_port(port))
         self._update_native_controls()
         self._update_run_enabled()
+        self.connection_dialog.hide()
         return True
 
     def disconnect_native(self) -> bool:
@@ -2435,6 +2850,7 @@ class EasyConPanel(QWidget):
         self._show_connection_toast(self._display_port(port))
         self._update_bridge_controls()
         self._update_run_enabled()
+        self.connection_dialog.hide()
 
     def disconnect_bridge(self) -> None:
         self._deactivate_virtual_controller(hide_overlay=True)
@@ -2698,6 +3114,8 @@ class EasyConPanel(QWidget):
             self._shutting_down = True
             self.run_timer.stop()
             self._native_status_timer.stop()
+        self.connection_dialog.hide()
+        self._publish_connection_presentation(force=True)
         vpad_stopped = self._deactivate_virtual_controller(hide_overlay=True, log=False)
         overlay = self._controller_overlay
         if not vpad_stopped:
@@ -2751,6 +3169,8 @@ class EasyConPanel(QWidget):
             thread.quit()
             if not thread.wait(wait_ms):
                 stopped = False
+        self._update_keyboard_control_presentation()
+        self._publish_connection_presentation(force=True)
         return stopped
 
     def _start_capture_keep_awake_cli(self, log_label: str, duration_ms: int) -> bool:
@@ -2931,6 +3351,19 @@ class EasyConPanel(QWidget):
         elif restore_standby and self._activate_virtual_controller():
             self._set_virtual_controller_standby(log=False)
 
+    def _set_keyboard_controller_mode(self, mode: str) -> None:
+        if mode == "active":
+            self._activate_virtual_controller()
+        elif mode == "standby":
+            if self.virtual_controller_enabled:
+                self._set_virtual_controller_standby()
+            elif self._vpad_input_source not in {"hook", "qt"}:
+                if self._activate_virtual_controller():
+                    self._set_virtual_controller_standby()
+        elif mode == "off":
+            self._deactivate_virtual_controller(hide_overlay=True)
+        self._update_keyboard_control_presentation()
+
     def set_keyboard_controller_enabled(self, enabled: bool) -> None:
         if enabled:
             self._activate_virtual_controller()
@@ -2938,11 +3371,11 @@ class EasyConPanel(QWidget):
             self._deactivate_virtual_controller()
 
     def _set_keyboard_controller_checked(self, checked: bool) -> None:
-        if self.keyboard_controller_check.isChecked() == checked:
-            return
-        self.keyboard_controller_check.blockSignals(True)
-        self.keyboard_controller_check.setChecked(checked)
-        self.keyboard_controller_check.blockSignals(False)
+        if self.keyboard_controller_check.isChecked() != checked:
+            self.keyboard_controller_check.blockSignals(True)
+            self.keyboard_controller_check.setChecked(checked)
+            self.keyboard_controller_check.blockSignals(False)
+        self._update_keyboard_control_presentation()
 
     def _controller_connection_active(self) -> bool:
         if self._is_native_mode():
@@ -3008,10 +3441,10 @@ class EasyConPanel(QWidget):
         if self._shutting_down:
             return
         if not self._is_native_mode():
-            self._append_log("warn", "手柄状态窗口仅支持 Python 原生后端")
+            self._append_log("warn", "手柄状态悬浮窗仅支持 Python 原生后端")
             return
         if not self._controller_connection_active():
-            self._append_log("warn", "请先连接伊机控，再打开手柄状态窗口")
+            self._append_log("warn", "请先连接伊机控，再打开手柄状态悬浮窗")
             return
         overlay = self._ensure_controller_overlay()
         overlay.set_active(self.virtual_controller_enabled)
@@ -3056,11 +3489,11 @@ class EasyConPanel(QWidget):
             return True
         if self._shutting_down or self._controller_script_running():
             self._set_keyboard_controller_checked(False)
-            self._append_log("warn", "脚本运行期间不能启用键盘虚拟手柄")
+            self._append_log("warn", "脚本运行期间不能启用键盘控制")
             return False
         if not self._controller_connection_active():
             self._set_keyboard_controller_checked(False)
-            self._append_log("warn", "请先连接伊机控，再启用键盘虚拟手柄")
+            self._append_log("warn", "请先连接伊机控，再启用键盘控制")
             return False
 
         if self._vpad_input_source in {"hook", "qt"}:
@@ -3069,7 +3502,7 @@ class EasyConPanel(QWidget):
                 hook = self._keyboard_hook
                 if hook is None or not hook.is_running:
                     self._deactivate_virtual_controller(log=False)
-                    self._append_log("error", "系统级键盘捕获已停止，无法恢复虚拟手柄")
+                    self._append_log("error", "系统级键盘捕获已停止，无法恢复键盘控制")
                     return False
                 try:
                     hook.set_mapped_keys_enabled(True)
@@ -3084,7 +3517,7 @@ class EasyConPanel(QWidget):
                 overlay.set_active(True)
                 overlay.show_overlay()
             source_label = "系统级键盘捕获" if source == "hook" else "窗口内键盘捕获"
-            self._append_log("info", f"键盘虚拟手柄已启用（{source_label}）")
+            self._append_log("info", f"键盘控制已启用（{source_label}）")
             self.setFocus()
             return True
 
@@ -3139,7 +3572,7 @@ class EasyConPanel(QWidget):
             app = QApplication.instance()
             if app is None:
                 self._set_keyboard_controller_checked(False)
-                self._append_log("error", "Qt 应用未就绪，无法启用键盘虚拟手柄")
+                self._append_log("error", "Qt 应用未就绪，无法启用键盘控制")
                 return False
             app.installEventFilter(self)
 
@@ -3152,7 +3585,7 @@ class EasyConPanel(QWidget):
             overlay.set_active(True)
             overlay.show_overlay()
         source_label = "系统级键盘捕获" if source == "hook" else "窗口内键盘捕获"
-        self._append_log("info", f"键盘虚拟手柄已启用（{source_label}）")
+        self._append_log("info", f"键盘控制已启用（{source_label}）")
         self.setFocus()
         return True
 
@@ -3189,7 +3622,7 @@ class EasyConPanel(QWidget):
         if overlay is not None:
             overlay.set_active(False)
         if log:
-            self._append_log("info", "键盘虚拟手柄已切换为待机")
+            self._append_log("info", "键盘控制已切换为待机")
         return True
 
     def _handle_escape_key(self, down: bool, *, control_down: bool = False) -> bool:
@@ -3255,7 +3688,8 @@ class EasyConPanel(QWidget):
                 overlay.hide()
                 self._vpad_hide_pending = False
         if had_controller and log:
-            self._append_log("info", "键盘虚拟手柄已关闭")
+            self._append_log("info", "键盘控制已关闭")
+        self._update_keyboard_control_presentation()
         return stopped
 
     def _stop_virtual_controller_for_script(self) -> bool:
@@ -3378,7 +3812,7 @@ class EasyConPanel(QWidget):
         except Exception as exc:
             if not self._is_native_mode():
                 self.bridge_status = EasyConStatus.FAILED
-            self._append_log("error", f"键盘虚拟手柄发送失败: {exc}")
+            self._append_log("error", f"键盘控制发送失败: {exc}")
             self._deactivate_virtual_controller(hide_overlay=True)
         return True
 
@@ -3471,7 +3905,7 @@ class EasyConPanel(QWidget):
             self._append_log("warn", "录制脚本需要先使用常驻连接")
             return
         if not self.virtual_controller_enabled:
-            self._append_log("warn", "请先启用键盘虚拟手柄（勾选连接）再开始录制")
+            self._append_log("warn", "请先启用键盘控制再开始录制")
             return
         self._release_virtual_controller_keys()
         self._recording = True
@@ -3480,17 +3914,18 @@ class EasyConPanel(QWidget):
         self._last_record_ts = 0.0
         self._recorded_hat_direction = "RESET"
         self.record_btn.setText("停止录制")
-        self.record_btn.setStyleSheet(self.record_btn.styleSheet() + "QPushButton { color: #DC2626; }")
         self.pause_btn.setEnabled(True)
-        self._append_log("info", "开始录制脚本，在键盘虚拟手柄上操作即可...")
+        self._update_keyboard_control_presentation()
+        self._append_log("info", "开始录制脚本，使用映射按键操作即可...")
 
     def _stop_recording(self) -> None:
         self._release_virtual_controller_keys()
         self._recording = False
         self._recording_paused = False
-        self.record_btn.setText("录制脚本")
+        self.record_btn.setText("开始录制")
         self.pause_btn.setEnabled(False)
-        self.pause_btn.setText("暂停录制")
+        self.pause_btn.setText("暂停")
+        self._update_keyboard_control_presentation()
         if self._recorded_lines:
             script = "\n".join(self._recorded_lines) + "\n"
             editor = self.editor
@@ -3511,8 +3946,8 @@ class EasyConPanel(QWidget):
             return
         self._release_virtual_controller_keys()
         self._recording_paused = True
-        self.pause_btn.setText("继续录制")
-        self.pause_btn.setStyleSheet(self.pause_btn.styleSheet() + "QPushButton { color: #10A37F; }")
+        self.pause_btn.setText("继续")
+        self._update_keyboard_control_presentation()
         self._append_log("info", "录制已暂停")
 
     def _resume_recording(self) -> None:
@@ -3521,8 +3956,9 @@ class EasyConPanel(QWidget):
         self._release_virtual_controller_keys()
         self._recording_paused = False
         self._last_record_ts = 0.0
-        self.pause_btn.setText("暂停录制")
+        self.pause_btn.setText("暂停")
         self.pause_btn.setEnabled(True)
+        self._update_keyboard_control_presentation()
         self._append_log("info", "录制已恢复")
 
     def _release_virtual_controller_keys(self) -> None:
@@ -3542,7 +3978,7 @@ class EasyConPanel(QWidget):
                 elif direction is not None:
                     backend.stick_direction(value, direction, False)  # type: ignore[attr-defined]
             except Exception as exc:
-                self._append_log("error", f"释放键盘虚拟手柄按键失败: {exc}")
+                self._append_log("error", f"释放键盘控制按键失败: {exc}")
             finally:
                 self.virtual_controller_keys.pop(key, None)
         if record_releases:
@@ -3746,9 +4182,6 @@ class EasyConPanel(QWidget):
             if self._is_native_mode()
             else self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED
         )
-        self.controller_overlay_button.setEnabled(
-            self._is_native_mode() and self._controller_connection_active()
-        )
         self.cli_test_button.setEnabled(
             not self._is_native_mode()
             and not self._is_bridge_mode()
@@ -3756,6 +4189,7 @@ class EasyConPanel(QWidget):
             and self.bridge_status != EasyConStatus.RUNNING
             and not (self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning)
         )
+        self._update_keyboard_control_presentation()
 
     def _update_status_labels(
         self,
@@ -3798,6 +4232,7 @@ class EasyConPanel(QWidget):
             controller_text = "单片机未连接"
         self.status_controller_label.setText(controller_text)
         self.status_backend_label.setText(f"后端: {backend_text}")
+        self._publish_connection_presentation()
 
     def _connection_state_text(
         self,
@@ -3815,7 +4250,7 @@ class EasyConPanel(QWidget):
                 else self._native_connection_active(status)
             )
             if connected:
-                return "已长期连接"
+                return "已连接"
             if self._native_connection_failed or status == EasyConStatus.FAILED:
                 return "连接失败"
             if not self._connection_port():
@@ -3825,7 +4260,7 @@ class EasyConPanel(QWidget):
             if self.bridge_connecting:
                 return "正在连接"
             if self.bridge_status in (EasyConStatus.RUNNING, EasyConStatus.BRIDGE_CONNECTED):
-                return "已长期连接"
+                return "已连接"
             if self.bridge_status == EasyConStatus.FAILED:
                 return "连接失败"
             if not self._bridge_path_from_ui() and not self.installation.is_available:

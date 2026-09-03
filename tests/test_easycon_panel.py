@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, QProcess, Qt
-from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QSpinBox
+from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QPushButton, QSpinBox, QWidget
 from PySide6.QtGui import QKeyEvent, QTextCursor
 
 import auto_bdsp_rng.ui.easycon_panel as panel_module
@@ -239,6 +239,138 @@ def process_events_until(predicate, timeout_ms=1000):
         time.sleep(0.01)
     app.processEvents()
     assert predicate()
+
+
+def test_easycon_panel_uses_connection_dialog_and_keyboard_control_group(
+    easycon_panel,
+    app,
+):
+    assert easycon_panel.connection_dialog.windowTitle() == "伊机控连接"
+    assert easycon_panel.connection_dialog.isModal() is False
+    assert easycon_panel.connection_dialog.isVisible() is False
+    assert easycon_panel.port_combo.parent() is easycon_panel.connection_dialog
+    assert easycon_panel.port_combo.isEditable() is False
+    assert easycon_panel.port_combo.placeholderText() == "请选择串口"
+    assert easycon_panel.port_refresh_button.toolTip() == "刷新串口"
+
+    easycon_panel.port_combo.showPopup()
+    popup = easycon_panel.port_combo._popup_menu
+    assert popup is not None
+    assert [action.text() for action in popup.actions()] == ["COM7"]
+    easycon_panel.port_combo.showPopup()
+    app.processEvents()
+    assert easycon_panel.port_combo._popup_menu is None
+
+    easycon_panel.port_combo.showPopup()
+    assert easycon_panel.port_combo._popup_menu is not None
+    easycon_panel.port_combo.hidePopup()
+
+    side_panel = easycon_panel.findChild(QWidget, "EasyConSidePanel")
+    assert side_panel is not None
+    assert easycon_panel.keyboard_control_group.parentWidget() is side_panel
+    assert easycon_panel.findChild(QWidget, "EasyConControlPanel") is None
+    assert easycon_panel.keyboard_controller_check.text() == "启用键盘控制"
+    assert easycon_panel.keyboard_controller_check.isHidden()
+    assert [
+        easycon_panel.controller_mode_buttons[mode].text()
+        for mode in ("off", "standby", "active")
+    ] == ["关闭", "待机", "控制"]
+    assert easycon_panel.controller_off_button.isChecked()
+    assert easycon_panel.mapping_button.text() == "按键映射"
+    assert easycon_panel.record_btn.text() == "开始录制"
+    assert easycon_panel.pause_btn.text() == "暂停"
+    assert easycon_panel.keyboard_controller_state_label.text() == "不可用"
+    assert easycon_panel.recording_state_label.text() == "等待连接"
+    assert easycon_panel.record_btn.isEnabled() is False
+    assert easycon_panel.keyboard_control_group.findChildren(type(easycon_panel.port_combo)) == []
+    assert not hasattr(easycon_panel, "controller_overlay_button")
+    assert "状态窗口" not in {
+        button.text()
+        for button in easycon_panel.keyboard_control_group.findChildren(QPushButton)
+    }
+
+    easycon_panel.show_connection_dialog()
+    app.processEvents()
+
+    assert easycon_panel.connection_dialog.isVisible()
+    easycon_panel.connection_dialog_close_button.click()
+    assert easycon_panel.connection_dialog.isVisible() is False
+
+
+def test_keyboard_control_mode_buttons_switch_active_standby_and_off(
+    easycon_panel_factory,
+):
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
+    assert panel.connect_native()
+
+    panel.controller_active_button.click()
+
+    assert panel.virtual_controller_enabled is True
+    assert panel.controller_active_button.isChecked()
+    assert panel.keyboard_controller_state_label.text() == "控制中"
+    assert panel.recording_state_label.text() == "可录制"
+
+    panel.controller_standby_button.click()
+
+    assert panel.virtual_controller_enabled is False
+    assert panel._vpad_input_source == "hook"
+    assert panel.controller_standby_button.isChecked()
+    assert panel.keyboard_controller_state_label.text() == "待机"
+    assert panel.recording_state_label.text() == "等待控制"
+
+    panel.controller_off_button.click()
+
+    assert panel._vpad_input_source is None
+    assert panel.controller_off_button.isChecked()
+    assert panel.keyboard_controller_state_label.text() == "已关闭"
+    assert panel.shutdown()
+
+
+def test_easycon_panel_connection_and_keyboard_presentations_follow_real_state(
+    easycon_panel,
+    app,
+):
+    presentations: list[tuple[str, str, str, bool]] = []
+    easycon_panel.connectionPresentationChanged.connect(
+        lambda *values: presentations.append(values),
+    )
+    assert easycon_panel.connection_presentation() == (
+        "伊机控 未连接",
+        "disconnected",
+        "未连接",
+        True,
+    )
+
+    easycon_panel.show_connection_dialog()
+    app.processEvents()
+    assert easycon_panel.connect_native()
+
+    assert easycon_panel.connection_dialog.isVisible() is False
+    assert easycon_panel.connection_presentation() == (
+        "伊机控 COM7",
+        "connected",
+        "已连接 · COM7",
+        True,
+    )
+    assert easycon_panel.connection_status_dot.property("state") == "connected"
+    assert presentations[-1][1] == "connected"
+    assert easycon_panel.keyboard_controller_state_label.text() == "已关闭"
+    assert easycon_panel.record_btn.isEnabled() is False
+
+    assert easycon_panel._activate_virtual_controller()
+    assert easycon_panel.keyboard_controller_state_label.text() == "控制中"
+    assert easycon_panel.record_btn.isEnabled()
+
+    assert easycon_panel._set_virtual_controller_standby()
+    assert easycon_panel.keyboard_controller_state_label.text() == "待机"
+    assert easycon_panel.record_btn.isEnabled() is False
+
+    assert easycon_panel._deactivate_virtual_controller()
+    assert easycon_panel.keyboard_controller_state_label.text() == "已关闭"
+    assert easycon_panel.disconnect_native()
+    assert easycon_panel.connection_presentation()[1] == "disconnected"
+    assert easycon_panel.connection_status_dot.property("state") == "disconnected"
 
 
 def test_key_mapping_dialog_uses_original_easycon_layout(app):
@@ -538,7 +670,7 @@ def test_easycon_panel_keeps_connection_display_while_native_script_is_reserved(
 
     assert easycon_panel.reserve_native_script_run()
 
-    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.connection_state_label.text() == "连接: 已连接"
     assert easycon_panel.task_state_label.text() == "任务: 执行中"
     assert easycon_panel.status_controller_label.text() == "单片机已连接"
     assert easycon_panel.backend_label.text() == "单片机: 已长期连接"
@@ -549,7 +681,7 @@ def test_easycon_panel_keeps_connection_display_while_native_script_is_reserved(
     easycon_panel.task_state_text = "已完成"
     easycon_panel.release_native_script_run()
 
-    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.connection_state_label.text() == "连接: 已连接"
     assert easycon_panel.task_state_label.text() == "任务: 已完成"
     assert easycon_panel.status_controller_label.text() == "单片机已连接"
     assert easycon_panel.connect_button.text() == "断开连接"
@@ -573,6 +705,8 @@ def test_easycon_panel_persists_native_connection_failure(monkeypatch, easycon_p
     assert easycon_panel.task_state_label.text() == "任务: 连接失败"
     assert easycon_panel.status_controller_label.text() == "单片机连接失败"
     assert easycon_panel.connect_button.text() == "连接伊机控"
+    assert easycon_panel.connection_presentation()[1:3] == ("failed", "连接失败")
+    assert easycon_panel.connection_status_dot.property("state") == "failed"
 
 
 def test_easycon_panel_refreshes_native_state_after_disconnect_failure(monkeypatch, easycon_panel):
@@ -604,7 +738,7 @@ def test_easycon_panel_disconnect_failure_preserves_actual_connection(monkeypatc
     monkeypatch.setattr(backend, "disconnect", fail_disconnect)
 
     assert easycon_panel.disconnect_native() is False
-    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.connection_state_label.text() == "连接: 已连接"
     assert easycon_panel.task_state_label.text() == "任务: 断开失败"
     assert easycon_panel.status_controller_label.text() == "单片机已连接"
     assert easycon_panel.connect_button.text() == "断开连接"
@@ -681,17 +815,22 @@ def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_pat
     panel = EasyConPanel(native_backend=backend, video_source_connected=lambda: True)
 
     assert panel.mock_check.text() == "模拟串口（测试模式）"
+    assert panel.port_combo.isEditable() is False
+    assert panel.port_combo.placeholderText() == "请选择串口"
     assert panel.port_combo.count() == 0
+    assert panel.port_combo.currentIndex() == -1
     assert panel._connection_port() == "mock"
     assert panel.connect_native()
     assert backend.connected_port == "mock"
+    assert panel.connection_presentation()[0] == "伊机控 已连接"
+    assert "mock" not in panel.connection_presentation()[0].casefold()
 
 
 def test_native_mock_config_does_not_override_a_visible_serial_port(monkeypatch, tmp_path, app):
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", tmp_path)
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
-    backend = FakeNativeBackend(["mock", "COM7", "MOCK"])
+    backend = FakeNativeBackend(["mock", "memory", "none", "COM7", "MOCK"])
 
     panel = EasyConPanel(native_backend=backend, video_source_connected=lambda: True)
 
@@ -699,6 +838,25 @@ def test_native_mock_config_does_not_override_a_visible_serial_port(monkeypatch,
     assert panel._connection_port() == "COM7"
     assert panel.connect_native()
     assert backend.connected_port == "COM7"
+
+
+def test_native_mock_config_only_falls_back_when_no_real_ports_exist(
+    monkeypatch,
+    tmp_path,
+    app,
+):
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", tmp_path)
+    monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
+    monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
+    backend = FakeNativeBackend(["COM7"])
+    panel = EasyConPanel(native_backend=backend, video_source_connected=lambda: True)
+
+    panel.port_combo.setCurrentIndex(-1)
+
+    assert panel.port_combo.count() == 1
+    assert panel._connection_port() == ""
+    assert panel.connect_native() is False
+    assert backend.connected_port is None
 
 
 def test_easycon_panel_ignores_stale_bridge_config(monkeypatch, tmp_path, app):
@@ -1011,7 +1169,7 @@ def test_easycon_panel_keeps_connection_display_while_bridge_script_runs(easycon
 
     easycon_panel._update_bridge_controls()
 
-    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.connection_state_label.text() == "连接: 已连接"
     assert easycon_panel.task_state_label.text() == "任务: 执行中"
     assert easycon_panel.status_controller_label.text() == "单片机已连接"
     assert easycon_panel.backend_label.text() == "单片机: 已长期连接"
@@ -1116,7 +1274,7 @@ def test_easycon_panel_runs_script_text_through_bridge(monkeypatch, tmp_path, ea
     assert backend.script_runs[0][1] == "玫瑰公园.txt"
     assert "_闪帧 = 123" in backend.script_runs[0][0]
     assert "bridge stdout" in easycon_panel.log_view.toPlainText()
-    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.connection_state_label.text() == "连接: 已连接"
     assert easycon_panel.task_state_label.text() == "任务: 已完成"
 
 
@@ -1251,7 +1409,7 @@ def test_keep_awake_terminal_bridge_failure_clears_backend_and_allows_reconnect(
     assert len(instances) == 2
     assert easycon_panel.bridge_backend is instances[-1]
     assert easycon_panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
-    assert easycon_panel.connection_state_label.text() == "连接: 已长期连接"
+    assert easycon_panel.connection_state_label.text() == "连接: 已连接"
 
 
 def test_capture_keep_awake_cli_timeout_preserves_normal_task_state(monkeypatch, tmp_path, easycon_panel):
@@ -1900,7 +2058,7 @@ def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch,
     backend = FakeBridgeBackend.instances[-1]
     assert backend.key_events == [("down", "A"), ("up", "A")]
     assert backend.stick_events == [("left", "Up", True), ("left", "Up", False)]
-    assert "键盘虚拟手柄已启用" in easycon_panel.log_view.toPlainText()
+    assert "键盘控制已启用" in easycon_panel.log_view.toPlainText()
 
 
 def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monkeypatch, easycon_panel):
@@ -1912,11 +2070,18 @@ def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monke
     easycon_panel.editor.clear()
 
     easycon_panel._start_recording()
+    assert easycon_panel.record_btn.text() == "停止录制"
+    assert easycon_panel.recording_state_label.text() == "录制中"
+    assert easycon_panel.pause_btn.isEnabled()
     for key in (Qt.Key.Key_H, Qt.Key.Key_D, Qt.Key.Key_Right):
         easycon_panel._handle_virtual_controller_key(key, True)
         easycon_panel._handle_virtual_controller_key(key, False)
     easycon_panel._stop_recording()
 
+    assert easycon_panel.record_btn.text() == "开始录制"
+    assert easycon_panel.recording_state_label.text() == "可录制"
+    assert easycon_panel.pause_btn.text() == "暂停"
+    assert easycon_panel.pause_btn.isEnabled() is False
     assert easycon_panel.editor.toPlainText() == (
         "RIGHT DOWN\n"
         "WAIT 2000\n"
@@ -2113,8 +2278,12 @@ def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypat
     easycon_panel._start_recording()
     easycon_panel._handle_virtual_controller_key(Qt.Key.Key_D, True)
     easycon_panel._toggle_pause_recording()
+    assert easycon_panel.recording_state_label.text() == "已暂停"
+    assert easycon_panel.pause_btn.text() == "继续"
     easycon_panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
     easycon_panel._resume_recording()
+    assert easycon_panel.recording_state_label.text() == "录制中"
+    assert easycon_panel.pause_btn.text() == "暂停"
 
     assert easycon_panel.virtual_controller_keys == {}
 
@@ -2524,7 +2693,7 @@ def test_easycon_panel_cli_smoke_accepts_chinese_and_space_paths(monkeypatch, tm
         lambda _config: EasyConInstallation(path=ezcon, version="fake", source="test"),
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
-    panel = EasyConPanel()
+    panel = EasyConPanel(native_backend=FakeNativeBackend([]))
     panel.detect_easycon()
     panel.backend_mode.setCurrentIndex(1)
 
@@ -2694,11 +2863,23 @@ def test_easycon_panel_shutdown_clears_pending_native_run_reservation(easycon_pa
     assert easycon_panel.connect_native()
     assert easycon_panel.reserve_native_script_run()
     assert easycon_panel.native_run_thread is None
+    presentations: list[tuple[str, str, str, bool]] = []
+    easycon_panel.connectionPresentationChanged.connect(
+        lambda *values: presentations.append(values),
+    )
+    easycon_panel.show_connection_dialog()
 
     assert easycon_panel.shutdown() is True
 
     assert easycon_panel._native_run_reserved is False
     assert backend.closed is True
+    assert easycon_panel.connection_dialog.isVisible() is False
+    assert presentations[-1] == (
+        "伊机控 未连接",
+        "disconnected",
+        "已关闭",
+        False,
+    )
 
 
 def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel):
@@ -2729,6 +2910,8 @@ def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel)
             events.append(("thread-wait", wait_ms))
             return False
 
+    assert easycon_panel.connect_native()
+    assert easycon_panel.controller_active_button.isEnabled()
     easycon_panel.process = StuckProcess()  # type: ignore[assignment]
     easycon_panel.bridge_run_thread = StuckThread()  # type: ignore[assignment]
 
@@ -2740,6 +2923,11 @@ def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel)
         "thread-quit",
         ("thread-wait", 25),
     ]
+    assert not easycon_panel.controller_off_button.isEnabled()
+    assert not easycon_panel.controller_standby_button.isEnabled()
+    assert not easycon_panel.controller_active_button.isEnabled()
+    assert not easycon_panel.mapping_button.isEnabled()
+    assert not easycon_panel.record_btn.isEnabled()
 
 
 def test_easycon_panel_shutdown_retries_failed_bridge_close(easycon_panel):

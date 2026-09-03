@@ -273,10 +273,18 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
     assert not hasattr(window, "video_source_combo")
     assert window.video_source_status_dot.property("state") == "disconnected"
     assert window.video_source_header_button.text() == "视频源 未连接"
+    assert window.easycon_header_button.text() == "伊机控 未连接"
+    assert window.easycon_header_button.property("state") == "disconnected"
+    assert window.easycon_header_button.size() == window.video_source_header_button.size()
     QTest.mouseClick(window.video_source_header_button, Qt.MouseButton.LeftButton)
     app.processEvents()
     assert window.video_source_dialog.isVisible()
     window.video_source_dialog.hide()
+    QTest.mouseClick(window.easycon_header_button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert window.easycon_tab.connection_dialog.isVisible()
+    assert window.easycon_tab.connection_presentation()[1] == "disconnected"
+    window.easycon_tab.connection_dialog.hide()
     assert seed.x() == capture.x()
     assert seed.y() > capture.bottom()
     assert window.window_prefix.parent() is window.capture_group
@@ -288,6 +296,35 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
     assert [label.text() for label in window.seed_group.findChildren(QLabel)] == ["Seed0", "Seed1"]
     assert window.threshold.height() <= 32
     assert window.capture_button.height() <= 34
+
+
+def test_easycon_header_uses_panel_connection_presentation(app):
+    window = MainWindow()
+
+    window.easycon_tab.connectionPresentationChanged.emit(
+        "伊机控 COM17",
+        "connected",
+        "已连接 · COM17",
+        True,
+    )
+    app.processEvents()
+
+    assert window.easycon_header_button.text() == "伊机控 COM17"
+    assert window.easycon_header_button.property("state") == "connected"
+    assert "已连接 · COM17" in window.easycon_header_button.toolTip()
+    assert window.easycon_header_button.isEnabled()
+
+    window.easycon_tab.connectionPresentationChanged.emit(
+        "伊机控 故障",
+        "failed",
+        "连接失败",
+        False,
+    )
+    app.processEvents()
+
+    assert window.easycon_header_button.text() == "伊机控 故障"
+    assert window.easycon_header_button.property("state") == "failed"
+    assert window.easycon_header_button.isEnabled() is False
 
 
 def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
@@ -992,7 +1029,14 @@ def test_main_window_refuses_close_until_video_source_stop_is_confirmed(app, mon
     window._video_source_connected = True
     window.show()
     warnings: list[tuple[str, str]] = []
-    monkeypatch.setattr(window.easycon_tab, "shutdown", lambda: True)
+    easycon_shutdown_calls: list[bool] = []
+    original_easycon_shutdown = window.easycon_tab.shutdown
+
+    def shutdown_easycon() -> bool:
+        easycon_shutdown_calls.append(True)
+        return original_easycon_shutdown()
+
+    monkeypatch.setattr(window.easycon_tab, "shutdown", shutdown_easycon)
     monkeypatch.setattr(
         main_window_module.QMessageBox,
         "warning",
@@ -1003,9 +1047,14 @@ def test_main_window_refuses_close_until_video_source_stop_is_confirmed(app, mon
     assert window.isVisible()
     assert window._video_source_stop_pending
     assert warnings[-1][0] == "视频源未能停止"
+    assert easycon_shutdown_calls == []
+    assert window.easycon_tab._shutting_down is False
+    assert window.easycon_header_button.isEnabled()
 
     process.stopped = True
     assert window.close() is True
+    assert easycon_shutdown_calls == [True]
+    assert window.easycon_tab._shutting_down is True
 
 
 def test_capture_devices_use_selected_backend_and_real_indices(app, monkeypatch):
@@ -3970,7 +4019,6 @@ def test_main_window_notifies_automation_before_easycon_and_refuses_live_runner(
     assert shutdown_order == [
         "notify:自动定点",
         "notify:自动 TID",
-        "easycon",
         "wait:自动定点",
         "wait:自动 TID",
     ]
@@ -3988,13 +4036,18 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
     window = MainWindow()
     window.show()
     warnings: list[tuple[str, str]] = []
+    easycon_shutdown_calls: list[bool] = []
     monkeypatch.setattr(window, "_request_automation_runner_stop", lambda *_args: None)
     monkeypatch.setattr(
         window,
         "_shutdown_automation_runner",
         lambda _panel, _label, **_kwargs: True,
     )
-    monkeypatch.setattr(window.easycon_tab, "shutdown", lambda: True)
+    monkeypatch.setattr(
+        window.easycon_tab,
+        "shutdown",
+        lambda: easycon_shutdown_calls.append(True) or True,
+    )
     monkeypatch.setattr(window, "_shutdown_worker_thread", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(window, "_shutdown_capture_thread", lambda: False)
     monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: False)
@@ -4008,6 +4061,8 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
     assert window.close() is False
     assert window.isVisible()
     assert window._is_closing is False
+    assert easycon_shutdown_calls == []
+    assert window.easycon_header_button.isEnabled()
     assert warnings == [
         (
             "正在停止后台任务",
@@ -4020,6 +4075,7 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
     monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: True)
     monkeypatch.setattr(window, "_shutdown_ocr_task_thread", lambda: True)
     assert window.close() is True
+    assert easycon_shutdown_calls == [True]
 
 
 def test_close_rejection_cancels_lazy_ocr_auto_start_and_restores_idle_status(app):
