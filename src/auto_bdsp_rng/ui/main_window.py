@@ -4,6 +4,7 @@ import csv
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -119,6 +120,8 @@ from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
 )
 from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
     extract_pokemon_info,
+    match_characteristic_text,
+    recognize_characteristic_full_frame,
     recognize_ocr_field,
     warm_up_pokemon_info_ocr,
 )
@@ -154,11 +157,17 @@ from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
-from auto_bdsp_rng.ui.easycon_panel import CAPTURE_KEEP_AWAKE_BUTTON, EasyConPanel
+from auto_bdsp_rng.ui.easycon_panel import (
+    CAPTURE_KEEP_AWAKE_BUTTON,
+    MOCK_PORT,
+    EasyConPanel,
+)
 from auto_bdsp_rng.ui.help_menu import HelpMenuController
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
+from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer
+from auto_bdsp_rng.ui.run_records_panel import RunRecordsPanel
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
 from auto_bdsp_rng.update_core import (
@@ -1480,8 +1489,13 @@ class MainWindow(QMainWindow):
         self._ui_scale_percent = max(1.0, float(ui_scale_percent))
         self._ui_scale_source = str(ui_scale_source)
         self._run_log_manager = run_log_manager or RunLogManager()
+        self._run_log_buffer = RunLogBuffer(self)
         self._run_log_manager.set_error_callback(self._queue_run_log_failure)
         self.runLogFailed.connect(self._handle_run_log_failure, Qt.ConnectionType.QueuedConnection)
+        self._active_auto_rng_run_id: str | None = None
+        self._active_auto_rng_round_id: int | None = None
+        self._active_auto_tid_run_id: str | None = None
+        self._active_auto_tid_round_id: int | None = None
         self._profile_settings = profile_settings or QSettings("auto-bdsp-rng", "MainWindowProfile")
         self._window_geometry_restored = False
         self._window_restore_maximized = False
@@ -1761,28 +1775,47 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab = AutoRngPanel(run_log_sink=self._run_log_sink("自动定点"))
         self.auto_tid_rng_tab = AutoTidRngPanel(run_log_sink=self._run_log_sink("自动 TID"))
         self.history_tab = HistoryPanel()
+        self.run_records_tab = RunRecordsPanel(
+            self.history_tab,
+            self._run_log_buffer,
+            save_enabled=self._run_log_manager.enabled,
+            set_save_enabled=self._set_run_log_enabled,
+            open_log_dir=self._open_run_log_dir,
+        )
+        self.records_tab = self.run_records_tab
         self.id_tab = IdPanel(status_callback=lambda text: self.statusBar().showMessage(text))
         self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)
         self.auto_rng_tab.runStateChanged.connect(self._set_ocr_automation_active)
+        self.auto_rng_tab.runStateChanged.connect(self._handle_auto_rng_run_state_changed)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self.open_ocr_settings)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
         self.auto_rng_tab.captureError.connect(
             lambda message: self.auto_rng_tab.add_log(message, level="ERROR")
         )
+        self.auto_rng_tab.runLogRequested.connect(
+            lambda: self._show_run_logs("自动定点")
+        )
         self.auto_rng_tab.requestStatsCapture.connect(self._on_request_stats_capture)
         self.auto_tid_rng_tab.startRequested.connect(self._start_auto_tid_rng)
-        self.auto_tid_rng_tab.progressChanged.connect(self._apply_auto_rng_header_progress)
+        self.auto_tid_rng_tab.progressChanged.connect(self._apply_auto_tid_header_progress)
+        self.auto_tid_rng_tab.runStateChanged.connect(self._handle_auto_tid_run_state_changed)
         self.auto_tid_rng_tab.ocrSettingsRequested.connect(self.open_tid_ocr_settings)
+        self.auto_tid_rng_tab.runLogRequested.connect(
+            lambda: self._show_run_logs("自动 TID")
+        )
+        self.easycon_tab.runLogRequested.connect(
+            lambda: self._show_run_logs("伊机控")
+        )
         self.tidOcrRegionSelected.connect(self.auto_tid_rng_tab.set_ocr_region)
         self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
         self.tabs.addTab(self.auto_tid_rng_tab, self._text("auto_tid_rng"))
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
-        self.tabs.addTab(self.history_tab, "历史记录")
+        self.tabs.addTab(self.run_records_tab, "日志区")
         root_layout.addWidget(self.tabs, 1)
         _make_labels_copyable(self.tabs)
 
@@ -1793,6 +1826,7 @@ class MainWindow(QMainWindow):
             self,
             run_log_enabled=self._run_log_manager.enabled,
             set_run_log_enabled=self._set_run_log_enabled,
+            open_run_logs=lambda: self._show_run_logs(None),
             open_run_log_dir=self._open_run_log_dir,
             check_updates=self.update_controller.check_for_updates,
             auto_update_check_enabled=is_auto_update_check_enabled(),
@@ -1817,6 +1851,23 @@ class MainWindow(QMainWindow):
             self._write_run_log(source, message, level=level)
 
         return write
+
+    def _show_run_logs(self, source: str | None = None) -> None:
+        self.tabs.setCurrentWidget(self.run_records_tab)
+        self.run_records_tab.show_logs(source)
+
+    def _run_log_context(self, source: str) -> tuple[str | None, int | None]:
+        auto_sources = {"自动定点", "历史记录", "OCR", "Seed 捕捉", "伊机控"}
+        if source in auto_sources and self._active_auto_rng_run_id is not None:
+            return self._active_auto_rng_run_id, self._active_auto_rng_round_id
+        if source in {"自动 TID", "Seed 捕捉", "伊机控", "OCR"} and self._active_auto_tid_run_id is not None:
+            return self._active_auto_tid_run_id, self._active_auto_tid_round_id
+        if source == "历史记录":
+            return (
+                getattr(self.history_tab, "current_run_id", None),
+                getattr(self.history_tab, "current_round_id", None),
+            )
+        return None, None
 
     def _request_ui_scale_restart(self, value: UiScale) -> None:
         label = "自动适应所有屏幕" if value == UI_SCALE_AUTO else f"{value}%"
@@ -1848,7 +1899,27 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _write_run_log(self, source: str, message: object, *, level: str = "INFO") -> None:
-        self._run_log_manager.write(source, str(message), level=level)
+        text = str(message)
+        run_id, round_id = self._run_log_context(str(source))
+        try:
+            self._run_log_buffer.publish(
+                str(source),
+                text,
+                level=level,
+                run_id=run_id,
+                round_id=round_id,
+            )
+        except Exception:
+            pass
+        self._run_log_manager.write(source, text, level=level)
+
+    def _sync_run_log_controls(self, enabled: bool) -> None:
+        controller = getattr(self, "help_menu_controller", None)
+        if controller is not None:
+            controller.set_run_log_state(enabled)
+        records = getattr(self, "run_records_tab", None)
+        if records is not None:
+            records.set_save_enabled(enabled)
 
     def _handle_silent_update_check_completed(self, plan: object) -> None:
         current_version = str(getattr(plan, "current_version", __version__))
@@ -1888,6 +1959,7 @@ class MainWindow(QMainWindow):
                     pass
                 QMessageBox.warning(self, "运行日志", f"无法开启运行日志：\n{exc}")
                 self.statusBar().showMessage("运行日志开启失败", 5000)
+                self._sync_run_log_controls(False)
                 return False
             self._write_run_log(
                 "应用",
@@ -1895,6 +1967,7 @@ class MainWindow(QMainWindow):
                 f"{'打包版' if getattr(sys, 'frozen', False) else '源码版'}",
             )
             self.statusBar().showMessage(f"运行日志已开启：{path}", 5000)
+            self._sync_run_log_controls(True)
             return True
 
         self._write_run_log("应用", "自动保存运行日志已关闭")
@@ -1904,6 +1977,7 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.warning(self, "运行日志", f"运行日志已关闭，但无法保存开关状态：\n{exc}")
         self.statusBar().showMessage("运行日志已关闭", 3000)
+        self._sync_run_log_controls(False)
         return False
 
     def _open_run_log_dir(self) -> None:
@@ -1923,9 +1997,7 @@ class MainWindow(QMainWindow):
             set_run_log_enabled(False)
         except OSError as exc:
             settings_error = exc
-        controller = getattr(self, "help_menu_controller", None)
-        if controller is not None:
-            controller.set_run_log_state(False)
+        self._sync_run_log_controls(False)
         detail = f"运行日志写入失败，已停止保存：\n{message}"
         if settings_error is not None:
             detail += f"\n\n同时无法保存关闭状态，下次启动可能再次尝试：\n{settings_error}"
@@ -3941,7 +4013,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(2, self._text("project_xs"))
         self.tabs.setTabText(3, self._text("bdsp_search"))
         self.tabs.setTabText(4, self._text("easycon"))
-        self.tabs.setTabText(5, "历史记录" if self.lang == "zh" else "History")
+        self.tabs.setTabText(5, "日志区" if self.lang == "zh" else "Logs")
         self.status_group.setTitle("配置" if self.lang == "zh" else "Config")
         self.video_source_dialog.setWindowTitle(
             "视频源设置" if self.lang == "zh" else "Video Source"
@@ -4006,17 +4078,55 @@ class MainWindow(QMainWindow):
 
     def _apply_auto_rng_header_progress(self, progress: object) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
+        loop_index = getattr(progress, "loop_index", None)
+        if self._active_auto_rng_run_id is not None and loop_index is not None and int(loop_index) > 0:
+            self._active_auto_rng_round_id = int(loop_index)
+            self.run_records_tab.set_active_round(self._active_auto_rng_round_id)
+        self._apply_common_auto_header_progress(progress, phase_text, loop_index)
+
+    def _apply_common_auto_header_progress(
+        self,
+        progress: object,
+        phase_text: str,
+        loop_index: object,
+    ) -> None:
         current_advances = getattr(progress, "current_advances", None)
         if current_advances is not None:
             self._display_tracked_advances(int(current_advances))
         advances = self._tracked_advances
         self._update_auto_rng_header(
-            loop_index=getattr(progress, "loop_index", None),
+            loop_index=loop_index,
             phase_text=phase_text,
             advances=advances,
         )
         if phase_text in {"已完成", "失败", "空闲"}:
             self._stop_advance_tracking()
+
+    def _apply_auto_tid_header_progress(self, progress: object) -> None:
+        phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
+        loop_index = getattr(progress, "loop_index", None)
+        if self._active_auto_tid_run_id is not None and loop_index is not None and int(loop_index) > 0:
+            next_round = int(loop_index)
+            if self._active_auto_tid_round_id != next_round:
+                if self._active_auto_tid_round_id is not None:
+                    self.history_tab.finish_run(
+                        self._active_auto_tid_run_id,
+                        "继续重试",
+                        round_id=self._active_auto_tid_round_id,
+                        target_label="自动 TID",
+                    )
+                self.history_tab.cycle_start(
+                    next_round,
+                    run_id=self._active_auto_tid_run_id,
+                    round_id=next_round,
+                    target_label="自动 TID",
+                )
+            self._active_auto_tid_round_id = next_round
+            self.run_records_tab.set_active_round(self._active_auto_tid_round_id)
+        log_message = str(getattr(progress, "log_message", ""))
+        if self._active_auto_tid_run_id is not None and log_message:
+            self.history_tab.auto_tid_log(log_message)
+        self._apply_common_auto_header_progress(progress, phase_text, loop_index)
 
     def _refresh_config_list(self) -> None:
         previous_main = self.config_combo.currentData() if hasattr(self, "config_combo") else None
@@ -6342,6 +6452,8 @@ class MainWindow(QMainWindow):
             self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
 
     def _start_auto_rng(self, config: AutoRngConfig) -> None:
+        if not self._ensure_automation_start_available():
+            return
         if config.start_phase == AutoRngPhase.REIDENTIFY:
             try:
                 self._current_auto_rng_seed_result()
@@ -6371,6 +6483,8 @@ class MainWindow(QMainWindow):
     def _start_auto_rng_after_warmup(self, config: AutoRngConfig) -> None:
         if self._is_closing:
             return
+        if not self._ensure_automation_start_available():
+            return
         if not self._ensure_preview_for_auto_rng():
             return
         # 自动连接伊机控（如果尚未连接）
@@ -6381,6 +6495,13 @@ class MainWindow(QMainWindow):
             seed_config_path=self._selected_auto_seed_config_path(),
             reidentify_config_path=self._selected_auto_reidentify_config_path(),
         )
+        self._active_auto_rng_run_id = uuid.uuid4().hex
+        self._active_auto_rng_round_id = None
+        target_text = self.auto_rng_tab.target_summary_title.text().partition("：")[2].strip()
+        target_label = target_text or "自动定点"
+        self.history_tab.begin_run(self._active_auto_rng_run_id, target_label)
+        self.run_records_tab.set_session_context("自动定点", target_label)
+        self.run_records_tab.set_active_round(None)
         services = self._build_auto_rng_services(config)
 
         def history_callback(event: str, args: tuple[object, ...]) -> None:
@@ -6389,17 +6510,82 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
 
     def _start_auto_tid_rng(self, config: AutoTidRngConfig) -> None:
+        if not self._ensure_automation_start_available():
+            return
         if not self._ensure_preview_for_auto_rng():
             return
         if not self._ensure_bridge_connected():
             return
+        self._active_auto_tid_run_id = uuid.uuid4().hex
+        self._active_auto_tid_round_id = 1
+        self.history_tab.begin_run(self._active_auto_tid_run_id, "自动 TID")
+        self.history_tab.cycle_start(
+            1,
+            run_id=self._active_auto_tid_run_id,
+            round_id=1,
+            target_label="自动 TID",
+        )
+        self.run_records_tab.set_session_context("自动 TID")
+        self.run_records_tab.set_active_round(1)
         services = self._build_auto_tid_rng_services(config)
         runner = AutoTidRngRunner(
             config,
             services=services,
-            log_callback=lambda message: self.autoHistoryEvent.emit("auto_tid_log", (message,)),
         )
         self.auto_tid_rng_tab.run_with_runner(runner)
+
+    def _ensure_automation_start_available(self) -> bool:
+        for panel, label in (
+            (self.auto_rng_tab, "自动定点"),
+            (self.auto_tid_rng_tab, "自动 TID"),
+        ):
+            if getattr(panel, "_runner_thread", None) is not None:
+                QMessageBox.warning(
+                    self,
+                    "自动流程正在运行",
+                    f"{label}正在运行，请先停止当前流程后再启动另一项自动任务。",
+                )
+                return False
+        return True
+
+    @staticmethod
+    def _run_outcome_from_status(status: object) -> str:
+        text = str(status).removeprefix("状态：").strip()
+        if "失败" in text or "错误" in text:
+            return "失败"
+        if "停止" in text or text == "空闲":
+            return "已停止"
+        return "已完成"
+
+    def _handle_auto_rng_run_state_changed(self, running: bool) -> None:
+        if running:
+            return
+        outcome = self._run_outcome_from_status(self.auto_rng_tab.status_badge.text())
+        if self._active_auto_rng_run_id is not None:
+            self.history_tab.finish_run(
+                self._active_auto_rng_run_id,
+                outcome,
+                round_id=self._active_auto_rng_round_id,
+                target_label=getattr(self.history_tab, "current_target_label", "自动定点"),
+            )
+        self.run_records_tab.set_run_finished(f"运行{outcome}")
+        self._active_auto_rng_run_id = None
+        self._active_auto_rng_round_id = None
+
+    def _handle_auto_tid_run_state_changed(self, running: bool) -> None:
+        if running:
+            return
+        outcome = self._run_outcome_from_status(self.auto_tid_rng_tab.status_badge.text())
+        if self._active_auto_tid_run_id is not None:
+            self.history_tab.finish_run(
+                self._active_auto_tid_run_id,
+                outcome,
+                round_id=self._active_auto_tid_round_id,
+                target_label="自动 TID",
+            )
+        self.run_records_tab.set_run_finished(f"运行{outcome}")
+        self._active_auto_tid_run_id = None
+        self._active_auto_tid_round_id = None
 
     def _build_auto_tid_rng_services(self, config: AutoTidRngConfig) -> AutoTidRngServices:
         seed_config_path = self._selected_auto_seed_config_path()
@@ -6544,6 +6730,13 @@ class MainWindow(QMainWindow):
         h = self.history_tab
         if event == "cycle_start" and len(values) >= 1:
             h.cycle_start(int(values[0]))
+            self._active_auto_rng_run_id = getattr(h, "current_run_id", None)
+            self._active_auto_rng_round_id = getattr(h, "current_round_id", int(values[0]))
+            self.run_records_tab.set_session_context(
+                "自动定点",
+                getattr(h, "current_target_label", ""),
+            )
+            self.run_records_tab.set_active_round(self._active_auto_rng_round_id)
             self._write_run_log("历史记录", f"自动定点第 {int(values[0])} 轮开始")
         elif event == "seed_captured" and len(values) >= 4:
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
@@ -6621,7 +6814,14 @@ class MainWindow(QMainWindow):
             ocr = dict(values[3]) if len(values) >= 4 and values[3] is not None else None
             results = list(values[0])
             h.reverse_lookup_results(results, chara, delays, ocr)  # type: ignore[arg-type]
-            self._write_run_log("历史记录", f"反查完成；候选 {len(results)} 个；个性 {chara or '-'}")
+            if ocr and ocr.get("characteristic_match_failed"):
+                self._write_run_log(
+                    "历史记录",
+                    f"个性匹配失败，已忽略个性条件；反查完成；候选 {len(results)} 个",
+                    level="WARNING",
+                )
+            else:
+                self._write_run_log("历史记录", f"反查完成；候选 {len(results)} 个；个性 {chara or '-'}")
 
     def _ensure_bridge_connected(self) -> bool:
         """Compatibility name for ensuring the native persistent backend is ready."""
@@ -6635,11 +6835,14 @@ class MainWindow(QMainWindow):
         if status == EasyConStatus.RUNNING:
             self._show_error("伊机控正在运行", "已有伊机控脚本正在运行，请先停止当前脚本")
             return False
-        port = self.easycon_tab.port_combo.currentText()
+        port = self.easycon_tab._connection_port()
         if not port:
             port = self.easycon_tab.config.last_port or ""
+            if port.casefold() == MOCK_PORT:
+                port = ""
             if port and self.easycon_tab.port_combo.findText(port) >= 0:
                 self.easycon_tab.port_combo.setCurrentText(port)
+                port = self.easycon_tab._connection_port()
         if not port:
             self._show_error("自动连接失败", "请先在伊机控面板选择串口并连接单片机")
             return False
@@ -7488,14 +7691,30 @@ class MainWindow(QMainWindow):
             run_script_text_service(text, path.name)
             time.sleep(1.0)
 
-            # OCR 笔记页 → 性格 + 个性（只做一次，识别可靠）
+            # OCR 笔记页 → 性格 + 个性；个性 ROI 无法匹配标准词时全图重试。
             log("[自动反查] 截图笔记页…")
             notes_frame = self._capture_preview_frame_for_config(tracking_config.capture)
             ocr_regions = self._ocr_region_config()
             notes_result = extract_pokemon_info(notes_image=notes_frame, ocr_regions=ocr_regions)
             nature = notes_result.get("nature")
-            characteristic = notes_result.get("characteristic")
-            log(f"[自动反查] 性格={nature}, 个性={characteristic}")
+            raw_characteristic = notes_result.get("characteristic")
+            characteristic = match_characteristic_text(raw_characteristic)
+            characteristic_match_failed = False
+            if characteristic is None:
+                raw_text = str(raw_characteristic).strip() if raw_characteristic is not None else ""
+                raw_label = f"（{raw_text}）" if raw_text else ""
+                log(f"[自动反查] 个性固定范围识别结果{raw_label}未匹配标准个性，改用全图识别…")
+                characteristic = recognize_characteristic_full_frame(notes_frame)
+                if characteristic is None:
+                    characteristic_match_failed = True
+                    log(
+                        "[自动反查] 个性匹配失败：固定范围与全图均未匹配到标准个性；"
+                        "已忽略个性条件，将按性格和能力值继续反查"
+                    )
+                else:
+                    log(f"[自动反查] 全图个性匹配成功: {characteristic}")
+            characteristic_text = characteristic or "未识别（未参与筛选）"
+            log(f"[自动反查] 性格={nature}, 个性={characteristic_text}")
 
             # RIGHT → 能力页
             self._pause_ocr_and_turn_to_stats_page(log_details=False)
@@ -7517,7 +7736,7 @@ class MainWindow(QMainWindow):
                 for desc in group_species
             }
             ni = _NATURE_MAP.get(str(nature)) if nature else None
-            # 构建搜索条件模板（性格+个性锁定，帧数范围可配置）
+            # 构建搜索条件模板：性格锁定，合法个性在生成后进一步过滤。
             natures_locked = (True,) * 25
             if ni is not None and 0 <= ni < 25:
                 natures_locked = tuple(i == ni for i in range(25))
@@ -7538,7 +7757,15 @@ class MainWindow(QMainWindow):
             # 能力页 OCR 重试逻辑：原始 ROI、约 12%（至少 4px）、约 24%（至少 8px）。
             stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
             candidates: list[object] = []
-            last_ocr_stats: dict[str, object] | None = None
+            characteristic_context: dict[str, object] = {
+                "nature": nature,
+                "characteristic": characteristic,
+                "characteristic_raw": raw_characteristic,
+                "characteristic_match_failed": characteristic_match_failed,
+            }
+            last_ocr_stats: dict[str, object] | None = (
+                dict(characteristic_context) if characteristic_match_failed else None
+            )
             prev_ocr_key: str | None = None
             for attempt, expansion_level in enumerate((0, 1, 2), start=1):
                 expansion_label = (
@@ -7569,9 +7796,8 @@ class MainWindow(QMainWindow):
                 use_nature = ni if (ni is not None and 0 <= ni < 25) else 255
                 is_new_ocr = True  # 每个 OCR 尝试默认视作新结果
                 last_ocr_stats = {
+                    **characteristic_context,
                     "stats": dict(zip(stat_names, stat_vals)),
-                    "nature": nature,
-                    "characteristic": characteristic,
                 }
 
                 # 对组内所有精灵遍历搜索
@@ -7647,7 +7873,11 @@ class MainWindow(QMainWindow):
                 delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + config.fixed_delay
                           if target.raw_target_advances else int(getattr(s, "advances", 0))
                           for s in candidates]
-                self.autoHistoryEvent.emit("reverse_lookup_results", (candidates, characteristic, delays))
+                result_context = last_ocr_stats if characteristic_match_failed else None
+                self.autoHistoryEvent.emit(
+                    "reverse_lookup_results",
+                    (candidates, characteristic, delays, result_context),
+                )
                 for state in candidates:
                     adv = int(getattr(state, "advances", 0))
                     actual_delay = adv - target.raw_target_advances + config.fixed_delay if target.raw_target_advances else adv

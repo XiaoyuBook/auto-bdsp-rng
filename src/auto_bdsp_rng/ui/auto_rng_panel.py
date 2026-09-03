@@ -120,6 +120,7 @@ class AutoRngPanel(QWidget):
     stopRequested = Signal()
     autoProgressChanged = Signal(object)
     runStateChanged = Signal(bool)
+    runLogRequested = Signal()
     ivCalculatorRequested = Signal()
     captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
     captureLog = Signal(str)  # 临时：后台线程日志输出
@@ -168,8 +169,8 @@ class AutoRngPanel(QWidget):
         self.content_grid.addWidget(self._build_log_group(), 1, 0, 1, 2)
         self.content_grid.setColumnStretch(0, 0)
         self.content_grid.setColumnStretch(1, 1)
-        self.content_grid.setRowStretch(0, 0)
-        self.content_grid.setRowStretch(1, 1)
+        self.content_grid.setRowStretch(0, 1)
+        self.content_grid.setRowStretch(1, 0)
 
         layout.addWidget(content, 1)
 
@@ -481,15 +482,43 @@ class AutoRngPanel(QWidget):
         return group
 
     def _build_log_group(self) -> QGroupBox:
-        group = QGroupBox("日志")
+        group = QGroupBox("当前消息")
+        group.setObjectName("CurrentMessageGroup")
         group.setMaximumWidth(16777215)
-        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        group.setFixedHeight(90)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        group.setStyleSheet(
+            "QGroupBox#CurrentMessageGroup { margin-top: 12px; padding: 6px 10px 8px 10px; }"
+            "QGroupBox#CurrentMessageGroup::title { left: 12px; top: 0; padding: 0 4px; }"
+            "QGroupBox#CurrentMessageGroup QPushButton#SecondaryButton { "
+            "min-height: 32px; max-height: 32px; padding: 0 12px; }"
+        )
         self.log_group = group
-        layout = QVBoxLayout(group)
-        self.log_view = _CopyableTextEdit()
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(10, 4, 10, 6)
+        layout.setSpacing(10)
+
+        self.latest_log_label = QLabel("暂无消息")
+        self.latest_log_label.setObjectName("LatestLogLabel")
+        self.latest_log_label.setWordWrap(True)
+        self.latest_log_label.setMaximumHeight(42)
+        self.latest_log_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.latest_log_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.latest_log_label, 1)
+
+        self.view_log_button = QPushButton("查看日志")
+        self.view_log_button.setObjectName("SecondaryButton")
+        self.view_log_button.setFixedHeight(34)
+        self.view_log_button.setMinimumWidth(96)
+        self.view_log_button.clicked.connect(self.runLogRequested.emit)
+        layout.addWidget(self.view_log_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.log_view = _CopyableTextEdit(group)
         self.log_view.setObjectName("LogView")
         self.log_view.setFont(QFont("Consolas", 10))
         self.log_view.setStyleSheet("QPlainTextEdit { padding: 12px; }")
+        self.log_view.setVisible(False)
         layout.addWidget(self.log_view)
         return group
 
@@ -545,6 +574,10 @@ class AutoRngPanel(QWidget):
             for line in lines
         ]
         self.log_view.appendPlainText("\n".join(stamped))
+        latest_line = next((line.strip() for line in reversed(lines) if line.strip()), None)
+        if latest_line is not None:
+            self.latest_log_label.setText(latest_line)
+            self.latest_log_label.setToolTip(text)
 
     def set_candidates(self, rows: list[list[str]], locked_index: int | None = None) -> None:
         locked_text = ""

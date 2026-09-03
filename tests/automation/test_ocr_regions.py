@@ -286,3 +286,79 @@ def test_recognize_characteristic_field_normalizes_traditional_text(monkeypatch)
     )
 
     assert pokemon_info_ocr.recognize_ocr_field(image, "characteristic", OcrRegion(10, 20, 30, 40)) == "喜欢恶作剧"
+
+
+def test_recognize_characteristic_full_frame_matches_standard_text(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    calls: list[tuple[float, float, float, float]] = []
+
+    def fake_ocr_rows(_image, roi_bounds, **_kwargs):
+        calls.append(tuple(roi_bounds))
+        return [
+            {"text": "喜欢", "bbox": None, "confidence": 0.99},
+            {"text": "《喜歡惡作劇》！", "bbox": None, "confidence": 0.99},
+        ]
+
+    monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", fake_ocr_rows)
+
+    assert pokemon_info_ocr.recognize_characteristic_full_frame(image) == "喜欢恶作剧"
+    assert calls == [(0.0, 1.0, 0.0, 1.0)]
+    assert pokemon_info_ocr.match_characteristic_text("《經常睡午覺》！") == "经常睡午觉"
+    assert pokemon_info_ocr.match_characteristic_text("喜欢") is None
+    assert pokemon_info_ocr.match_characteristic_text("经常睡") is None
+    assert pokemon_info_ocr.match_characteristic_text("经常睡午觉训练家笔记") is None
+    assert pokemon_info_ocr.match_characteristic_text("性格") is None
+    assert pokemon_info_ocr.match_characteristic_text("有一点点") is None
+
+
+def test_recognize_characteristic_full_frame_joins_adjacent_fragments(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        pokemon_info_ocr,
+        "_ocr_rows",
+        lambda *_args, **_kwargs: [
+            {"text": "固执", "bbox": [[80, 20], [120, 20], [120, 40], [80, 40]], "confidence": 0.99},
+            {"text": "有一点点", "bbox": [[10, 20], [75, 20], [75, 40], [10, 40]], "confidence": 0.99},
+        ],
+    )
+
+    assert pokemon_info_ocr.recognize_characteristic_full_frame(image) == "有一点点固执"
+
+
+def test_recognize_characteristic_full_frame_does_not_join_distant_fragments(monkeypatch):
+    image = np.zeros((100, 400, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        pokemon_info_ocr,
+        "_ocr_rows",
+        lambda *_args, **_kwargs: [
+            {"text": "有一点点", "bbox": [[10, 20], [75, 20], [75, 40], [10, 40]], "confidence": 0.99},
+            {"text": "固执", "bbox": [[300, 20], [340, 20], [340, 40], [300, 40]], "confidence": 0.99},
+        ],
+    )
+
+    assert pokemon_info_ocr.recognize_characteristic_full_frame(image) is None
+
+
+def test_recognize_characteristic_full_frame_rejects_ambiguous_or_low_confidence_text(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    rows = [
+        {"text": "经常睡午觉", "bbox": None, "confidence": 0.99},
+        {"text": "喜欢胡闹", "bbox": None, "confidence": 0.99},
+    ]
+    monkeypatch.setattr(pokemon_info_ocr, "_ocr_rows", lambda *_args, **_kwargs: rows)
+    assert pokemon_info_ocr.recognize_characteristic_full_frame(image) is None
+
+    rows[:] = [{"text": "经常睡午觉", "bbox": None, "confidence": 0.4}]
+    assert pokemon_info_ocr.recognize_characteristic_full_frame(image) is None
+
+
+def test_recognize_characteristic_full_frame_returns_none_without_standard_match(monkeypatch):
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        pokemon_info_ocr,
+        "_ocr_rows",
+        lambda *_args, **_kwargs: [{"text": "无法识别的内容", "bbox": None, "confidence": 0.99}],
+    )
+
+    assert pokemon_info_ocr.recognize_characteristic_full_frame(image) is None
+    assert pokemon_info_ocr.match_characteristic_text("无法识别的内容") is None

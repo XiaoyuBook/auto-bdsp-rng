@@ -93,7 +93,7 @@ def test_main_window_generates_static_results(app, tmp_path):
         "Seed 捕捉",
         "定点数据区",
         "伊机控",
-        "历史记录",
+        "日志区",
     ]
     assert window.tabs.tabText(window.tabs.currentIndex()) == "自动定点乱数"
     assert hasattr(window, "id_tab")
@@ -2601,7 +2601,7 @@ def test_main_window_has_auto_rng_tab(app):
     assert window.tabs.count() == 6
     assert window.tabs.tabText(0) == "自动定点乱数"
     assert window.tabs.tabText(1) == "自动 TID 乱数"
-    assert window.tabs.tabText(5) == "历史记录"
+    assert window.tabs.tabText(5) == "日志区"
     assert hasattr(window, "id_tab")
 
 
@@ -2948,7 +2948,7 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     assert "最小 final flash frames" not in labels
 
 
-def test_auto_rng_panel_uses_full_width_log_without_summary_group(app):
+def test_auto_rng_panel_uses_compact_current_message_without_summary_group(app):
     panel = AutoRngPanel()
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
     visible_labels = {label.text() for label in panel.findChildren(QLabel)}
@@ -2969,7 +2969,11 @@ def test_auto_rng_panel_uses_full_width_log_without_summary_group(app):
     assert not hasattr(panel, "summary_remaining")
     assert not hasattr(panel, "summary_target")
     assert panel.log_group.maximumWidth() == 16777215
-    assert len([group for group in panel.findChildren(QGroupBox) if group.title() == "日志"]) == 1
+    assert len([group for group in panel.findChildren(QGroupBox) if group.title() == "当前消息"]) == 1
+    assert panel.log_group.height() <= 90
+    assert panel.log_view.isHidden()
+    assert panel.latest_log_label.text() == "暂无消息"
+    assert panel.view_log_button.text() == "查看日志"
     assert panel.content_grid.itemAtPosition(1, 0).widget() is panel.log_group
     index = panel.content_grid.indexOf(panel.log_group)
     assert index >= 0
@@ -3227,7 +3231,7 @@ def test_history_panel_reverse_lookup_candidates_use_table(app):
         weight=12,
     )
 
-    panel.reverse_lookup_results([state], characteristic="喜欢吃东西", delays=[99])
+    panel.reverse_lookup_results([state], characteristic="非常喜欢吃东西", delays=[99])
 
     tables = panel.findChildren(QTableWidget)
     assert len(tables) == 1
@@ -3242,7 +3246,7 @@ def test_history_panel_reverse_lookup_candidates_use_table(app):
     assert table.rowCount() == 1
     assert table.item(0, headers.index("Adv")).text() == "1234"
     assert table.item(0, headers.index("实际 delay")).text() == "99"
-    assert table.item(0, headers.index("个性")).text() == "喜欢吃东西"
+    assert table.item(0, headers.index("个性")).text() == "非常喜欢吃东西"
     assert table.item(0, headers.index("HP")).text() == "31"
     assert table.item(0, headers.index("EC")).text() == "AABBCCDD"
     assert table.item(0, headers.index("PID")).text() == "11223344"
@@ -3261,6 +3265,67 @@ def test_history_panel_reverse_lookup_candidates_use_table(app):
     assert "身高=255" in reverse_lines[0]
     assert "体重=12" in reverse_lines[0]
     assert not any(line.strip().startswith("EC:") for line in lines)
+
+
+def test_history_panel_reports_ignored_characteristic_without_hiding_candidates(app):
+    panel = HistoryPanel()
+    state = SimpleNamespace(
+        advances=1234,
+        ec=0,
+        pid=0x11223344,
+        ivs=(1, 2, 3, 4, 5, 6),
+        ability=1,
+        gender=0,
+        nature=0,
+        shiny=0,
+        height=0,
+        weight=0,
+    )
+
+    panel.reverse_lookup_results(
+        [state],
+        delays=[99],
+        ocr_stats={
+            "nature": "浮躁",
+            "characteristic": None,
+            "characteristic_raw": "识别错误文本",
+            "characteristic_match_failed": True,
+        },
+    )
+
+    text = panel.text_view.toPlainText()
+    assert "个性匹配失败，已忽略个性条件" in text
+    assert "OCR 个性原文: 识别错误文本" in text
+    assert "反查结果 (1 个匹配)" in text
+    assert "未找到匹配个体" not in text
+    tables = panel.findChildren(QTableWidget)
+    assert len(tables) == 1
+    table = tables[0]
+    headers = [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
+    assert table.item(0, headers.index("个性")).text() == "对声音敏感"
+
+
+def test_history_panel_reports_no_candidates_after_ignoring_characteristic(app):
+    panel = HistoryPanel()
+
+    panel.reverse_lookup_results(
+        [],
+        ocr_stats={
+            "nature": "浮躁",
+            "characteristic": None,
+            "characteristic_raw": "识别错误文本",
+            "characteristic_match_failed": True,
+            "stats": {"HP": 20, "攻击": 11, "防御": 10, "特攻": 11, "特防": 9, "速度": 11},
+        },
+    )
+
+    text = panel.text_view.toPlainText()
+    failure_index = text.index("个性匹配失败，已忽略个性条件")
+    no_candidates_index = text.index("反查结果: 未找到匹配个体")
+    assert failure_index < no_candidates_index
+    assert "OCR 性格: 浮躁" in text
+    assert "OCR 能力值: HP=20 / 攻击=11 / 防御=10 / 特攻=11 / 特防=9 / 速度=11" in text
+    assert panel.findChildren(QTableWidget) == []
 
 
 def test_history_panel_candidates_do_not_show_global_delay(app):
@@ -4602,7 +4667,7 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
 
     def fake_extract_pokemon_info(**kwargs):
         if "notes_image" in kwargs:
-            return {"stats": None, "nature": "浮躁", "characteristic": None}
+            return {"stats": None, "nature": "浮躁", "characteristic": "对声音敏感"}
         expansion_levels.append(kwargs["stats_region_expansion_level"])
         fallback_flags.append(kwargs["allow_stats_page_fallback"])
         return {
@@ -4630,6 +4695,11 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
     monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _capture: frame)
     monkeypatch.setattr(window, "_pause_ocr_and_turn_to_stats_page", lambda **_kwargs: None)
     monkeypatch.setattr(main_window_module, "extract_pokemon_info", fake_extract_pokemon_info)
+    monkeypatch.setattr(
+        main_window_module,
+        "recognize_characteristic_full_frame",
+        lambda _frame: pytest.fail("合法个性不应触发全图 OCR"),
+    )
     monkeypatch.setattr(main_window_module, "generate_static_candidates", fake_generate)
     monkeypatch.setattr(native_module, "compute_iv_ranges", fake_compute_iv_ranges)
     window.autoHistoryEvent.connect(lambda event, args: history_events.append((event, args)))
@@ -4669,6 +4739,167 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
     assert "能力页 OCR 第3次（六项 ROI 每边扩大约 24%（至少 8px））" in log_text
     assert "OCR 能力值: HP=20 / 攻击=11 / 防御=10 / 特攻=11 / 特防=9 / 速度=11" in log_text
     assert "3次尝试均未找到匹配个体" in log_text
+
+
+def test_auto_reverse_lookup_falls_back_to_full_frame_and_continues_without_characteristic(
+    app, tmp_path, monkeypatch,
+):
+    window = MainWindow()
+    reverse_script = tmp_path / "reverse.txt"
+    reverse_script.write_text("A 100\n", encoding="utf-8")
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    extract_calls: list[str] = []
+    full_frame_calls: list[object] = []
+    page_turns: list[bool] = []
+    generated: list[object] = []
+    history_events: list[tuple[str, object]] = []
+    full_frame_results = iter(["对声音敏感", None, None])
+    note_results = iter(["不是标准个性", None, None])
+
+    class FakeBackend:
+        def run_script_text(self, _script_text: str, _name: str, *, script_dir: Path) -> str:
+            assert script_dir == tmp_path
+            return "ok"
+
+    def fake_extract_pokemon_info(**kwargs):
+        if "notes_image" in kwargs:
+            extract_calls.append("notes")
+            return {"stats": None, "nature": "浮躁", "characteristic": next(note_results)}
+        extract_calls.append("stats")
+        return {
+            "stats": {"HP": 20, "攻击": 11, "防御": 10, "特攻": 11, "特防": 9, "速度": 11},
+            "nature": None,
+            "characteristic": None,
+        }
+
+    def fake_full_frame(image):
+        full_frame_calls.append(image)
+        return next(full_frame_results)
+
+    candidate = SimpleNamespace(advances=1204, ivs=(1, 2, 3, 4, 5, 6), ec=0, pid=0)
+    other_candidate = SimpleNamespace(
+        advances=1205,
+        ivs=(31, 0, 0, 0, 0, 0),
+        ec=0,
+        pid=1,
+    )
+
+    def fake_generate(criteria):
+        generated.append(criteria)
+        return [candidate, other_candidate]
+
+    from auto_bdsp_rng.rng_core import _native as native_module
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    monkeypatch.setattr(main_window_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _capture: frame)
+    monkeypatch.setattr(
+        window,
+        "_pause_ocr_and_turn_to_stats_page",
+        lambda **_kwargs: page_turns.append(True),
+    )
+    monkeypatch.setattr(main_window_module, "extract_pokemon_info", fake_extract_pokemon_info)
+    monkeypatch.setattr(main_window_module, "recognize_characteristic_full_frame", fake_full_frame)
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", fake_generate)
+    monkeypatch.setattr(native_module, "compute_iv_ranges", lambda *_args: [(0, 31)] * 6)
+    window.autoHistoryEvent.connect(lambda event, args: history_events.append((event, args)))
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, reverse_script_path=reverse_script)
+    )
+
+    services.run_reverse_lookup(
+        AutoRngSeedResult(seed=SeedPair64(1, 2)),
+        AutoRngTarget(raw_target_advances=1204),
+    )
+
+    assert extract_calls == ["notes", "stats"]
+    assert full_frame_calls == [frame]
+    assert page_turns == [True]
+    assert len(generated) == 1
+    assert history_events[-1][1][0] == [candidate]
+    assert history_events[-1][1][1] == "对声音敏感"
+    assert "全图个性匹配成功: 对声音敏感" in window.auto_rng_tab.log_view.toPlainText()
+
+    window.auto_rng_tab.log_view.clear()
+    run_logs: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda _source, message, *, level="INFO": run_logs.append((level, message)),
+    )
+    services.run_reverse_lookup(
+        AutoRngSeedResult(seed=SeedPair64(1, 2)),
+        AutoRngTarget(raw_target_advances=1204),
+    )
+
+    assert extract_calls == ["notes", "stats", "notes", "stats"]
+    assert full_frame_calls == [frame, frame]
+    assert page_turns == [True, True]
+    assert len(generated) == 2
+    assert history_events[-1][0] == "reverse_lookup_results"
+    assert history_events[-1][1][0] == [candidate, other_candidate]
+    assert history_events[-1][1][1] is None
+    assert history_events[-1][1][3]["characteristic_match_failed"] is True
+    log_text = window.auto_rng_tab.log_view.toPlainText()
+    assert "个性匹配失败" in log_text
+    assert "已忽略个性条件，将按性格和能力值继续反查" in log_text
+    assert "未找到匹配个体" not in log_text
+    history_text = window.history_tab.text_view.toPlainText()
+    assert "个性匹配失败，已忽略个性条件" in history_text
+    assert "反查结果 (2 个匹配)" in history_text
+    assert (
+        "WARNING",
+        "个性匹配失败，已忽略个性条件；反查完成；候选 2 个",
+    ) in run_logs
+    assert not any("反查失败" in message for _level, message in run_logs)
+
+    window.auto_rng_tab.log_view.clear()
+    window.history_tab.clear()
+    app.processEvents()
+    history_events.clear()
+    run_logs.clear()
+    empty_searches: list[object] = []
+
+    def fake_empty_generate(criteria):
+        empty_searches.append(criteria)
+        return []
+
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", fake_empty_generate)
+    services.run_reverse_lookup(
+        AutoRngSeedResult(seed=SeedPair64(1, 2)),
+        AutoRngTarget(raw_target_advances=1204),
+    )
+
+    assert extract_calls[-4:] == ["notes", "stats", "stats", "stats"]
+    assert full_frame_calls == [frame, frame, frame]
+    assert page_turns == [True, True, True]
+    assert len(empty_searches) == 3
+    assert history_events[-1][0] == "reverse_lookup_results"
+    assert history_events[-1][1][0] == []
+    assert history_events[-1][1][1] is None
+    final_context = history_events[-1][1][3]
+    assert final_context["characteristic_match_failed"] is True
+    assert final_context["stats"] == {
+        "HP": 20,
+        "攻击": 11,
+        "防御": 10,
+        "特攻": 11,
+        "特防": 9,
+        "速度": 11,
+    }
+    log_text = window.auto_rng_tab.log_view.toPlainText()
+    assert "个性匹配失败" in log_text
+    assert "已忽略个性条件，将按性格和能力值继续反查" in log_text
+    assert "3次尝试均未找到匹配个体" in log_text
+    history_text = window.history_tab.text_view.toPlainText()
+    assert history_text.index("个性匹配失败，已忽略个性条件") < history_text.index(
+        "反查结果: 未找到匹配个体"
+    )
+    assert (
+        "WARNING",
+        "个性匹配失败，已忽略个性条件；反查完成；候选 0 个",
+    ) in run_logs
+    assert not any("反查失败" in message for _level, message in run_logs)
 
 
 def test_main_window_auto_rng_run_script_service_uses_native_backend(app, tmp_path, monkeypatch):

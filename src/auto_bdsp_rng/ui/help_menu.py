@@ -41,6 +41,7 @@ class HelpMenuController:
         project_root: Path | None = None,
         run_log_enabled: bool = False,
         set_run_log_enabled: Callable[[bool], bool] | None = None,
+        open_run_logs: Callable[[], object] | None = None,
         open_run_log_dir: Callable[[], object] | None = None,
         check_updates: Callable[[], object] | None = None,
         auto_update_check_enabled: bool = True,
@@ -57,6 +58,7 @@ class HelpMenuController:
         self.project_root = project_root or app_base_dir()
         self._run_log_enabled = bool(run_log_enabled)
         self.set_run_log_enabled = set_run_log_enabled
+        self.open_run_logs = open_run_logs
         self.open_run_log_dir = open_run_log_dir
         self.check_updates = check_updates
         self._auto_update_check_enabled = bool(auto_update_check_enabled)
@@ -192,6 +194,12 @@ class HelpMenuController:
 
         menu.addSeparator()
         self.run_log_menu = QMenu("运行日志", self.window)
+        self.view_run_logs_action = QAction("查看详细日志", self.window)
+        self.view_run_logs_action.setEnabled(self.open_run_logs is not None)
+        self.view_run_logs_action.triggered.connect(self._open_run_logs)
+        self.run_log_menu.addAction(self.view_run_logs_action)
+        self.run_log_menu.addSeparator()
+
         self.run_log_save_action = QAction("自动保存运行日志（保留 7 天）", self.window)
         self.run_log_save_action.setCheckable(True)
         self.run_log_save_action.setChecked(self._run_log_enabled)
@@ -244,6 +252,10 @@ class HelpMenuController:
     def _open_run_log_dir(self) -> None:
         if self.open_run_log_dir is not None:
             self.open_run_log_dir()
+
+    def _open_run_logs(self) -> None:
+        if self.open_run_logs is not None:
+            self.open_run_logs()
 
     def _check_updates(self) -> None:
         if self.check_updates is not None:

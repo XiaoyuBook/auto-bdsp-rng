@@ -73,6 +73,7 @@ CAPTURE_KEEP_AWAKE_BUTTON = "L"
 CAPTURE_KEEP_AWAKE_BRIDGE_TIMEOUT_SECONDS = 2.0
 CAPTURE_KEEP_AWAKE_CLI_TIMEOUT_MS = 5_000
 CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS = 500
+MOCK_PORT = "mock"
 
 # ── 可配置按键映射 ──────────────────────────────────
 
@@ -506,6 +507,7 @@ class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
     capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
     nativeScriptStarted = Signal()
+    runLogRequested = Signal()
 
     def __init__(
         self,
@@ -624,10 +626,10 @@ class EasyConPanel(QWidget):
     CLR_HINT = "#767676"
     CLR_LOG_BG = "#282826"
     CLR_LOG_TEXT = "#e7ece9"
-    CLR_RUN_BTN = "#23936b"
+    CLR_RUN_BTN = "#0e8f70"
     CLR_WHITE = "#ffffff"
-    CLR_TIMER_BG = "#1a1a1a"
-    CLR_TIMER_TEXT = "#ffffff"
+    CLR_TIMER_BG = "#303633"
+    CLR_TIMER_TEXT = "#e8f2ee"
     CLR_STATUSBAR_BG = "#e8e6e1"
 
     def _easycon_light_button(self, text: str, fixed_width: int = 0) -> QPushButton:
@@ -638,7 +640,9 @@ class EasyConPanel(QWidget):
                 background: {self.CLR_WHITE};
                 border: 1px solid {self.CLR_BORDER};
                 border-radius: 3px;
-                padding: 4px 12px;
+                min-height: 28px;
+                max-height: 28px;
+                padding: 0 12px;
                 color: {self.CLR_TEXT};
                 font-size: 12px;
             }}
@@ -663,8 +667,8 @@ class EasyConPanel(QWidget):
         content_layout.setContentsMargins(6, 6, 6, 6)
         content_layout.setSpacing(6)
 
-        content_layout.addWidget(self._build_log_area(), 42)
-        content_layout.addWidget(self._build_editor_area(), 55)
+        content_layout.addWidget(self._build_log_area())
+        content_layout.addWidget(self._build_editor_area(), 1)
         content_layout.addWidget(self._build_right_buttons(), 0)
 
         layout.addWidget(content, 1)
@@ -747,18 +751,53 @@ class EasyConPanel(QWidget):
     def _build_log_area(self) -> QWidget:
         area = QWidget()
         area.setStyleSheet(f"background: {self.CLR_BG};")
+        area.setMinimumWidth(250)
+        area.setMaximumWidth(320)
+        area.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(area)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setSpacing(4)
 
-        # 日志区标题
-        log_header = QLabel("输出")
+        log_header = QLabel("运行概览")
         log_header.setStyleSheet(
             f"font-weight: 700; font-size: 12px; padding: 2px 4px; border: 0; background: {self.CLR_BG};"
         )
         layout.addWidget(log_header)
 
-        # 黑色日志面板
+        overview_panel = QFrame()
+        overview_panel.setFixedHeight(120)
+        overview_panel.setStyleSheet(
+            f"QFrame {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER}; border-radius: 2px; }}"
+            " QLabel { border: 0; background: transparent; }"
+        )
+        self.overview_panel = overview_panel
+        overview_layout = QHBoxLayout(overview_panel)
+        overview_layout.setContentsMargins(10, 8, 8, 8)
+        overview_layout.setSpacing(10)
+        message_layout = QVBoxLayout()
+        message_layout.setContentsMargins(0, 0, 0, 0)
+        message_layout.setSpacing(4)
+        recent_title = QLabel("最近消息")
+        recent_title.setStyleSheet(f"font-weight: 700; color: {self.CLR_HINT};")
+        message_layout.addWidget(recent_title)
+        self.latest_log_label = QLabel("暂无消息")
+        self.latest_log_label.setObjectName("LatestLogLabel")
+        self.latest_log_label.setWordWrap(True)
+        self.latest_log_label.setMaximumHeight(68)
+        self.latest_log_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.latest_log_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        message_layout.addWidget(self.latest_log_label, 1)
+        overview_layout.addLayout(message_layout, 1)
+        self.view_log_button = self._easycon_light_button("查看日志")
+        self.view_log_button.setObjectName("EasyConViewLogButton")
+        self.view_log_button.setFixedHeight(30)
+        self.view_log_button.setMinimumWidth(86)
+        self.view_log_button.clicked.connect(self.runLogRequested.emit)
+        overview_layout.addWidget(self.view_log_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(overview_panel)
+
+        # 保留完整日志对象和操作 API，不再占用业务页空间。
         log_panel = QFrame()
         log_panel.setStyleSheet(
             f"QFrame {{ background: {self.CLR_LOG_BG}; border: 1px solid {self.CLR_BORDER}; border-radius: 0; }}"
@@ -785,53 +824,72 @@ class EasyConPanel(QWidget):
         )
         self.log_view.document().setMaximumBlockCount(self.config.keep_log_lines)
         log_panel_layout.addWidget(self.log_view)
-        layout.addWidget(log_panel, 1)
+        log_panel.setVisible(False)
+        self.log_panel = log_panel
+        layout.addWidget(log_panel)
+        layout.addStretch(1)
 
         # 计时 + 运行按钮（横向排列）
         action_row = QWidget()
+        action_row.setObjectName("EasyConActionRow")
+        action_row.setFixedHeight(54)
         action_row.setStyleSheet(f"background: {self.CLR_BG};")
+        self.action_row = action_row
         action_layout = QHBoxLayout(action_row)
-        action_layout.setContentsMargins(0, 3, 0, 0)
-        action_layout.setSpacing(4)
+        action_layout.setContentsMargins(0, 2, 0, 2)
+        action_layout.setSpacing(6)
 
         self.elapsed_label = QLabel("00:00:00")
         self.elapsed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.elapsed_label.setMinimumHeight(70)
+        self.elapsed_label.setFixedHeight(50)
+        self.elapsed_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.elapsed_label.setStyleSheet(
             f"""
             QLabel {{
                 background: {self.CLR_TIMER_BG};
                 color: {self.CLR_TIMER_TEXT};
-                font-size: 28px;
-                font-weight: 700;
+                min-height: 48px;
+                max-height: 48px;
+                padding: 0;
+                font-size: 22px;
+                font-weight: 600;
                 font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
-                border: 0;
+                border: 1px solid #555d59;
+                border-radius: 2px;
             }}
             """
         )
-        action_layout.addWidget(self.elapsed_label, 5)
+        action_layout.addWidget(self.elapsed_label, 1)
 
         self.run_button = QPushButton("运行脚本")
         self.run_button.setObjectName("PrimaryButton")
-        self.run_button.setMinimumHeight(70)
+        self.run_button.setFixedHeight(50)
+        self.run_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.run_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.run_button.setStyleSheet(
             f"""
             QPushButton {{
                 background: {self.CLR_RUN_BTN};
                 color: white;
-                font-size: 16px;
-                font-weight: 700;
-                border: 0;
-                border-radius: 0;
+                min-height: 48px;
+                max-height: 48px;
+                padding: 0;
+                font-size: 14px;
+                font-weight: 600;
+                border: 1px solid #0b765e;
+                border-radius: 2px;
             }}
-            QPushButton:hover {{ background: #1e7d5a; }}
-            QPushButton:pressed {{ background: #186b4c; }}
-            QPushButton:disabled {{ background: #a0a0a0; }}
+            QPushButton:hover {{ background: #0b765e; }}
+            QPushButton:pressed {{ background: #085f4c; }}
+            QPushButton:disabled {{
+                background: #e1e3e0;
+                color: #6b726e;
+                border-color: #c8ccc8;
+            }}
             """
         )
         self.run_button.clicked.connect(self.toggle_run)
-        action_layout.addWidget(self.run_button, 5)
+        action_layout.addWidget(self.run_button, 1)
 
         layout.addWidget(action_row)
         return area
@@ -964,7 +1022,8 @@ class EasyConPanel(QWidget):
         serial_row = QHBoxLayout()
         self.port_combo = QComboBox()
         self.port_combo.setEditable(True)
-        self.port_combo.setCurrentText("下拉选择串口")
+        if self.port_combo.lineEdit() is not None:
+            self.port_combo.lineEdit().setPlaceholderText("下拉选择串口")
         self.port_combo.setStyleSheet(combo_style)
         self.port_combo.currentIndexChanged.connect(self._port_changed)
         serial_row.addWidget(self.port_combo, 1)
@@ -1256,10 +1315,14 @@ class EasyConPanel(QWidget):
                 self._append_log("warn", f"刷新串口失败: {exc}")
         else:
             ports = list_ports(self.installation) if self.installation.is_available else []
-        if self._is_native_mode() and self.mock_check.isChecked() and "mock" not in ports:
-            ports.insert(0, "mock")
+        ports = [
+            str(port).strip()
+            for port in ports
+            if str(port).strip() and str(port).strip().casefold() != MOCK_PORT
+        ]
         self.port_combo.blockSignals(True)
         self.port_combo.clear()
+        self.port_combo.setEditText("")
         self.port_combo.addItems(ports)
         selected = self._select_preferred_port(ports)
         if selected is not None:
@@ -1267,7 +1330,7 @@ class EasyConPanel(QWidget):
         self.port_combo.blockSignals(False)
         self._append_log("info", f"已刷新串口: {', '.join(ports) if ports else '未发现'}")
         if not ports and not self.mock_check.isChecked():
-            self._append_log("warn", "未发现串口；请选择串口或启用模拟串口（测试模式），运行按钮已禁用")
+            self._append_log("warn", "未发现串口；请连接设备后刷新串口，运行按钮已禁用")
         self._save_config_from_ui()
         self._update_run_enabled()
         self._update_status_labels()
@@ -1276,7 +1339,7 @@ class EasyConPanel(QWidget):
         ports = [self.port_combo.itemText(index) for index in range(self.port_combo.count())]
         selected = self._select_preferred_port(ports)
         if selected is None:
-            self._append_log("warn", "未发现可自动选择的串口，请刷新串口或启用模拟串口（测试模式）")
+            self._append_log("warn", "未发现可自动选择的串口，请连接设备后刷新串口")
             self._update_run_enabled()
             return
         self.port_combo.setCurrentText(selected)
@@ -1296,6 +1359,19 @@ class EasyConPanel(QWidget):
         if self.port_combo.currentText() in ports:
             return self.port_combo.currentText()
         return None
+
+    def _connection_port(self) -> str:
+        """Return the backend port without exposing test-only mock entries in the UI."""
+        selected_port = self.port_combo.currentText().strip()
+        if self._is_native_mode() and selected_port and selected_port.casefold() != MOCK_PORT:
+            return selected_port
+        if self.mock_check.isChecked() and not self._is_bridge_mode():
+            return MOCK_PORT
+        return selected_port
+
+    @staticmethod
+    def _display_port(port: str) -> str:
+        return "测试模式" if str(port).strip().casefold() == MOCK_PORT else str(port)
 
     def choose_ezcon(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择 ezcon.exe", "", "EasyCon CLI (ezcon.exe);;All files (*.*)")
@@ -1534,7 +1610,7 @@ class EasyConPanel(QWidget):
             return
         self._cleanup_cli_script()
         self._cli_script_path = script_path
-        port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
+        port = self._connection_port()
         self.process = QProcess(self)
         self.process.setProgram(str(self.installation.path))
         self.process.setArguments(["run", str(script_path), "-p", port])
@@ -1553,7 +1629,7 @@ class EasyConPanel(QWidget):
         self.run_timer.start()
         self.run_button.setText("停止脚本")
         self._append_log("warn", cli_connection_notice())
-        self._append_log("info", f"开始运行脚本，端口: {port}")
+        self._append_log("info", f"开始运行脚本，端口: {self._display_port(port)}")
         self.task_state_text = "执行中"
         self._update_status_labels()
         self.process.start()
@@ -1593,7 +1669,7 @@ class EasyConPanel(QWidget):
             self.current_run_stderr = []
             self.current_run_started_at = started_at
             self.current_run_script_path = self.current_script_path or Path(self.current_script_name)
-            self.current_run_port = self.port_combo.currentText()
+            self.current_run_port = self._connection_port()
             self.run_seconds = 0
             self.elapsed_label.setText("00:00:00")
             self.run_timer.start()
@@ -1714,7 +1790,7 @@ class EasyConPanel(QWidget):
         self.current_run_stderr = []
         self.current_run_started_at = started_at
         self.current_run_script_path = self.current_script_path or Path(self.current_script_name)
-        self.current_run_port = self.port_combo.currentText()
+        self.current_run_port = self._connection_port()
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
@@ -1813,7 +1889,7 @@ class EasyConPanel(QWidget):
         self.current_run_stderr = []
         self.current_run_started_at = started_at
         self.current_run_script_path = Path(name)
-        self.current_run_port = self.port_combo.currentText()
+        self.current_run_port = self._connection_port()
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
@@ -1863,7 +1939,7 @@ class EasyConPanel(QWidget):
         self.current_run_stderr = []
         self.current_run_started_at = started_at
         self.current_run_script_path = Path(name)
-        self.current_run_port = self.port_combo.currentText()
+        self.current_run_port = self._connection_port()
         self.run_seconds = 0
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
@@ -2047,9 +2123,9 @@ class EasyConPanel(QWidget):
             return False
         if not self._validate_parameters_for_run(focus=False):
             return False
-        if self._is_native_mode() and not self.port_combo.currentText():
+        if self._is_native_mode() and not self._connection_port():
             return False
-        if not self._is_native_mode() and not self._is_bridge_mode() and not self.mock_check.isChecked() and not self.port_combo.currentText():
+        if not self._is_native_mode() and not self._is_bridge_mode() and not self._connection_port():
             return False
         if self.native_run_thread is not None and self.native_run_thread.isRunning():
             return self._native_status() == EasyConStatus.RUNNING
@@ -2096,7 +2172,7 @@ class EasyConPanel(QWidget):
         self.config = EasyConConfig(
             ezcon_path=Path(ezcon_text) if ezcon_text else None,
             bridge_path=Path(bridge_text) if bridge_text else None,
-            last_port=self.port_combo.currentText() or self.config.last_port,
+            last_port=self.port_combo.currentText().strip() or self.config.last_port,
             mock_enabled=self.mock_check.isChecked(),
             recent_scripts=self.config.recent_scripts,
             script_parameters=self.config.script_parameters,
@@ -2148,6 +2224,10 @@ class EasyConPanel(QWidget):
         for line in text.splitlines() or [""]:
             self.log_view.append(f'<span style="color:{color}">[{ts}] {line}</span>')
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
+        latest_line = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), None)
+        if latest_line is not None:
+            self.latest_log_label.setText(latest_line)
+            self.latest_log_label.setToolTip(text)
 
     def _log_context_menu(self, pos):
         menu = self.log_view.createStandardContextMenu()
@@ -2198,7 +2278,7 @@ class EasyConPanel(QWidget):
         if script_path is not None:
             self._append_log("info", f"脚本路径: {script_path}")
         if port:
-            self._append_log("info", f"串口: {port}")
+            self._append_log("info", f"串口: {self._display_port(port)}")
 
     def toggle_native_connection(self) -> None:
         if self._native_is_connected():
@@ -2210,7 +2290,7 @@ class EasyConPanel(QWidget):
         if self._native_status() == EasyConStatus.RUNNING:
             self._append_log("warn", "脚本正在运行，不能切换串口连接")
             return False
-        port = self.port_combo.currentText().strip()
+        port = self._connection_port()
         if not port:
             self._append_log("warn", "请先选择串口")
             return False
@@ -2235,9 +2315,9 @@ class EasyConPanel(QWidget):
         self.task_state_text = "已完成"
         self._preferred_last_port = port
         self._save_config_from_ui()
-        self._append_log("info", f"Python 原生伊机控已连接: {port}")
+        self._append_log("info", f"Python 原生伊机控已连接: {self._display_port(port)}")
         self.easycon_status.showMessage("已长期连接", 3000)
-        self._show_connection_toast(port)
+        self._show_connection_toast(self._display_port(port))
         self._update_native_controls()
         self._update_run_enabled()
         return True
@@ -2273,7 +2353,7 @@ class EasyConPanel(QWidget):
         if not self._bridge_path_from_ui():
             self._append_log("warn", "请先选择 EasyConBridge.exe")
             return
-        port = self.port_combo.currentText()
+        port = self._connection_port()
         if not port:
             self._append_log("warn", "请先选择串口")
             return
@@ -2294,9 +2374,9 @@ class EasyConPanel(QWidget):
         self.bridge_connecting = False
         self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
         self.task_state_text = "已完成"
-        self._append_log("info", f"已连接伊机控: {port}")
+        self._append_log("info", f"已连接伊机控: {self._display_port(port)}")
         self.easycon_status.showMessage("已长期连接", 3000)
-        self._show_connection_toast(port)
+        self._show_connection_toast(self._display_port(port))
         self._update_bridge_controls()
         self._update_run_enabled()
 
@@ -2623,7 +2703,7 @@ class EasyConPanel(QWidget):
         if not self.installation.is_available:
             self._append_log("warn", f"CLI 不可用，无法执行{log_label}")
             return False
-        if not self.mock_check.isChecked() and not self.port_combo.currentText():
+        if not self._connection_port():
             self._append_log("warn", f"请先选择串口，无法执行{log_label}")
             return False
         try:
@@ -2631,7 +2711,7 @@ class EasyConPanel(QWidget):
         except OSError as exc:
             self._append_log("warn", f"捕捉亮屏保活生成 CLI 脚本失败，继续捕捉: {exc}")
             return False
-        port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
+        port = self._connection_port()
         process = QProcess(self)
         process.setObjectName("capture_keep_awake_cli")
         process.setProgram(str(self.installation.path))
@@ -3039,7 +3119,7 @@ class EasyConPanel(QWidget):
         if not self.installation.is_available:
             self._append_log("warn", "CLI 不可用，无法执行手柄测试脚本")
             return False
-        if not self.mock_check.isChecked() and not self.port_combo.currentText():
+        if not self._connection_port():
             self._append_log("warn", "请先选择串口；CLI 手柄测试会触发一次连接")
             return False
         try:
@@ -3049,7 +3129,7 @@ class EasyConPanel(QWidget):
             return False
         self._cleanup_cli_script()
         self._cli_script_path = script_path
-        port = "mock" if self.mock_check.isChecked() else self.port_combo.currentText()
+        port = self._connection_port()
         self.process = QProcess(self)
         self.process.setProgram(str(self.installation.path))
         self.process.setArguments(["run", str(script_path), "-p", port])
@@ -3141,7 +3221,7 @@ class EasyConPanel(QWidget):
             backend_text = "单片机: 连接失败"
         else:
             button_text = "连接伊机控"
-            state = "未选择串口" if not self.port_combo.currentText() else "未连接"
+            state = "未选择串口" if not self._connection_port() else "未连接"
             backend_text = f"单片机: {state}"
         self.connect_button.setText(button_text)
         self.toolbar_connect_button.setText(button_text)
@@ -3184,7 +3264,7 @@ class EasyConPanel(QWidget):
             self.connect_button.setText("连接伊机控")
             self.toolbar_connect_button.setText("连接伊机控")
             self.disconnect_button.setEnabled(False)
-            status_text = "未选择串口" if not self.port_combo.currentText() else "未连接"
+            status_text = "未选择串口" if not self._connection_port() else "未连接"
             self.backend_label.setText(f"单片机: {status_text}")
         else:
             self.connect_button.setText("连接伊机控")
@@ -3285,7 +3365,7 @@ class EasyConPanel(QWidget):
                 return "已长期连接"
             if self._native_connection_failed or status == EasyConStatus.FAILED:
                 return "连接失败"
-            if not self.port_combo.currentText():
+            if not self._connection_port():
                 return "未选择串口"
             return "未连接"
         if self._is_bridge_mode():
@@ -3297,14 +3377,14 @@ class EasyConPanel(QWidget):
                 return "连接失败"
             if not self._bridge_path_from_ui() and not self.installation.is_available:
                 return "未检测"
-            if not self.port_combo.currentText():
+            if not self._connection_port():
                 return "未选择串口"
             return "未连接"
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             return "执行中"
         if not self.installation.is_available:
             return "未检测"
-        if not self.mock_check.isChecked() and not self.port_combo.currentText():
+        if not self._connection_port():
             return "未选择串口"
         return "CLI 可用（未长期连接）"
 

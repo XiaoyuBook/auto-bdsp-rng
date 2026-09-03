@@ -489,14 +489,29 @@ def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_pat
     monkeypatch.setattr(panel_module, "SCRIPT_DIR", tmp_path)
     monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
     monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
-    backend = FakeNativeBackend([])
+    backend = FakeNativeBackend(["mock", "MOCK"])
 
     panel = EasyConPanel(native_backend=backend, video_source_connected=lambda: True)
 
     assert panel.mock_check.text() == "模拟串口（测试模式）"
-    assert panel.port_combo.currentText() == "mock"
+    assert panel.port_combo.count() == 0
+    assert panel._connection_port() == "mock"
     assert panel.connect_native()
     assert backend.connected_port == "mock"
+
+
+def test_native_mock_config_does_not_override_a_visible_serial_port(monkeypatch, tmp_path, app):
+    monkeypatch.setattr(panel_module, "SCRIPT_DIR", tmp_path)
+    monkeypatch.setattr(panel_module, "load_config", lambda: EasyConConfig(mock_enabled=True))
+    monkeypatch.setattr(panel_module, "save_config", lambda _config: tmp_path / "config.json")
+    backend = FakeNativeBackend(["mock", "COM7", "MOCK"])
+
+    panel = EasyConPanel(native_backend=backend, video_source_connected=lambda: True)
+
+    assert [panel.port_combo.itemText(index) for index in range(panel.port_combo.count())] == ["COM7"]
+    assert panel._connection_port() == "COM7"
+    assert panel.connect_native()
+    assert backend.connected_port == "COM7"
 
 
 def test_easycon_panel_ignores_stale_bridge_config(monkeypatch, tmp_path, app):
@@ -1699,7 +1714,7 @@ def test_easycon_panel_reports_empty_ports_when_mock_disabled(monkeypatch, tmp_p
 
     panel = EasyConPanel(native_backend=FakeNativeBackend([]))
 
-    assert "未发现串口；请选择串口或启用模拟串口（测试模式），运行按钮已禁用" in panel.log_view.toPlainText()
+    assert "未发现串口；请连接设备后刷新串口，运行按钮已禁用" in panel.log_view.toPlainText()
     assert panel.run_button.isEnabled() is False
 
 

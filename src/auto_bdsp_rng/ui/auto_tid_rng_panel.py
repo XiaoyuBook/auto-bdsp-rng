@@ -171,6 +171,8 @@ class AutoTidRngPanel(QWidget):
     stopRequested = Signal()
     progressChanged = Signal(object)
     ocrSettingsRequested = Signal()
+    runLogRequested = Signal()
+    runStateChanged = Signal(bool)
 
     def __init__(
         self,
@@ -185,6 +187,7 @@ class AutoTidRngPanel(QWidget):
         self._scripts: list[Path] = []
         self._runner_thread: QThread | None = None
         self._runner_worker: AutoTidRngWorker | None = None
+        self._run_state_active = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoTidRngPanel")
         self._ocr_region = load_tid_ocr_region()
         self._build_ui()
@@ -275,7 +278,20 @@ class AutoTidRngPanel(QWidget):
         self.ocr_button.setVisible(False)
 
         row.addWidget(QLabel("自动 TID：按 Display TID 命中后取名"))
-        row.addStretch(1)
+        row.addSpacing(8)
+        row.addWidget(QLabel("最近："))
+        self.latest_log_label = QLabel("暂无消息")
+        self.latest_log_label.setObjectName("LatestLogLabel")
+        self.latest_log_label.setMaximumHeight(34)
+        self.latest_log_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        row.addWidget(self.latest_log_label, 1)
+        self.view_log_button = QPushButton("查看日志")
+        self.view_log_button.setObjectName("SecondaryButton")
+        self.view_log_button.setFixedHeight(34)
+        self.view_log_button.setMinimumWidth(88)
+        self.view_log_button.clicked.connect(self.runLogRequested.emit)
+        row.addWidget(self.view_log_button)
         row.addWidget(self.status_badge)
         row.addWidget(self.start_button)
         row.addWidget(self.stop_button)
@@ -673,6 +689,8 @@ class AutoTidRngPanel(QWidget):
         self._runner_worker = worker
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
+        self._run_state_active = True
+        self.runStateChanged.emit(True)
         thread.start()
 
     def apply_progress(self, progress: AutoTidRngProgress) -> None:
@@ -710,6 +728,10 @@ class AutoTidRngPanel(QWidget):
         lines = text.splitlines() or [""]
         stamped = [line if _TIMESTAMP_RE.match(line) else f"[{timestamp}] {line}" for line in lines]
         self.log_view.appendPlainText("\n".join(stamped))
+        latest_line = next((line.strip() for line in reversed(lines) if line.strip()), None)
+        if latest_line is not None:
+            self.latest_log_label.setText(latest_line)
+            self.latest_log_label.setToolTip(text)
 
     def set_id_states(self, states: list[IDState8]) -> None:
         self._id_states = list(states)
@@ -789,6 +811,9 @@ class AutoTidRngPanel(QWidget):
         self._runner_thread = None
         self._runner_worker = None
         self.start_button.setEnabled(True)
+        if self._run_state_active:
+            self._run_state_active = False
+            self.runStateChanged.emit(False)
 
     def _start_clicked(self) -> None:
         self._start_with_phase(AutoTidRngPhase.RUN_SEED_SCRIPT)

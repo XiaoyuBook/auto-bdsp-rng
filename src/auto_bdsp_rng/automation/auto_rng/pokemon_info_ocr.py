@@ -588,6 +588,7 @@ def _extract_nature_and_characteristic(
 STATS_ROI = (0.02, 0.52, 0.15, 0.80)
 # 笔记页 ROI：左侧笔记区 (左2%, 右52%, 上15%, 下75%)
 NOTES_ROI = (0.02, 0.52, 0.15, 0.75)
+FULL_FRAME_ROI = (0.0, 1.0, 0.0, 1.0)
 
 ImageInput = str | Path | np.ndarray
 
@@ -733,35 +734,151 @@ def _legal_characteristics() -> tuple[str, ...]:
     return tuple(item for group in _CHARACTERISTICS_ZH for item in group)
 
 
-def _match_characteristic_text(text: str) -> str | None:
-    cleaned = _clean_characteristic(text)
-    norm_text = _norm(cleaned)
-    if not norm_text:
+def _match_characteristic_texts(texts: list[str]) -> str | None:
+    normalized_texts = [
+        norm_text
+        for text in texts
+        if (norm_text := _norm(_clean_characteristic(text)))
+    ]
+    if not normalized_texts:
         return None
     legal_items = _legal_characteristics()
-    for item in legal_items:
-        norm_item = _norm(item)
-        if norm_item and (norm_item in norm_text or norm_text in norm_item):
-            return item
+
+    exact_matches = {
+        item
+        for norm_text in normalized_texts
+        for item in legal_items
+        if norm_text == _norm(item)
+    }
+    if exact_matches:
+        return next(iter(exact_matches)) if len(exact_matches) == 1 else None
+
+    complete_matches = {
+        item
+        for norm_text in normalized_texts
+        for item in legal_items
+        if _norm(item) in norm_text
+    }
+    if complete_matches:
+        return next(iter(complete_matches)) if len(complete_matches) == 1 else None
+
+    partial_matches: set[str] = set()
+    for norm_text in normalized_texts:
+        if len(norm_text) < 3:
+            continue
+        containing_items = [item for item in legal_items if norm_text in _norm(item)]
+        if len(containing_items) == 1:
+            item = containing_items[0]
+            if len(norm_text) / len(_norm(item)) >= 0.6:
+                partial_matches.add(item)
+    if partial_matches:
+        return next(iter(partial_matches)) if len(partial_matches) == 1 else None
+
     try:
         from difflib import SequenceMatcher
     except Exception:
-        return cleaned
-    best_item = None
+        return None
+    best_items: set[str] = set()
     best_ratio = 0.0
-    for item in legal_items:
-        ratio = SequenceMatcher(None, norm_text, _norm(item)).ratio()
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_item = item
-    return best_item if best_item is not None and best_ratio >= 0.72 else None
+    for norm_text in normalized_texts:
+        if len(norm_text) < 3:
+            continue
+        for item in legal_items:
+            norm_item = _norm(item)
+            if norm_text in norm_item or norm_item in norm_text:
+                continue
+            ratio = SequenceMatcher(None, norm_text, norm_item).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_items = {item}
+            elif ratio == best_ratio:
+                best_items.add(item)
+    return next(iter(best_items)) if len(best_items) == 1 and best_ratio >= 0.72 else None
+
+
+def match_characteristic_text(text: str | None) -> str | None:
+    """Match normalized ROI text exactly to one standard BDSP characteristic."""
+    if text is None:
+        return None
+    normalized = _norm(_clean_characteristic(text))
+    matches = {
+        item for item in _legal_characteristics()
+        if normalized and normalized == _norm(item)
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _match_characteristic_text(text: str) -> str | None:
+    """Compatibility wrapper for existing internal callers."""
+    return _match_characteristic_texts([text])
+
+
+_FULL_FRAME_CHARACTERISTIC_MIN_CONFIDENCE = 0.65
+
+
+def _full_frame_characteristic_texts(rows: list[dict[str, object]]) -> list[str]:
+    texts: list[str] = []
+    positioned: list[tuple[str, tuple[float, float, float, float, float, float]]] = []
+    for row in rows:
+        text = str(row.get("text", "")).strip()
+        try:
+            confidence = float(row.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not text or confidence < _FULL_FRAME_CHARACTERISTIC_MIN_CONFIDENCE:
+            continue
+        texts.append(text)
+        geometry = _bbox_geometry_or_none(row.get("bbox"))
+        if geometry is not None:
+            positioned.append((text, geometry))
+
+    # Paddle may split one displayed phrase into adjacent boxes. Only join boxes
+    # that occupy the same visual line; unrelated full-frame rows stay separate.
+    for index, (first_text, first) in enumerate(positioned):
+        for second_text, second in positioned[index + 1:]:
+            first_height = max(1.0, first[3] - first[1])
+            second_height = max(1.0, second[3] - second[1])
+            vertical_overlap = min(first[3], second[3]) - max(first[1], second[1])
+            if vertical_overlap < min(first_height, second_height) * 0.5:
+                continue
+
+            if first[4] <= second[4]:
+                left_text, left, right_text, right = first_text, first, second_text, second
+            else:
+                left_text, left, right_text, right = second_text, second, first_text, first
+            horizontal_gap = right[0] - left[2]
+            max_gap = max(12.0, max(first_height, second_height) * 2.0)
+            if -min(first_height, second_height) * 0.25 <= horizontal_gap <= max_gap:
+                texts.append(f"{left_text}{right_text}")
+    return texts
+
+
+def _complete_characteristic_matches(texts: list[str]) -> set[str]:
+    matches: set[str] = set()
+    for text in texts:
+        normalized = _norm(_clean_characteristic(text))
+        if not normalized:
+            continue
+        for item in _legal_characteristics():
+            normalized_item = _norm(item)
+            if normalized == normalized_item or normalized_item in normalized:
+                matches.add(item)
+    return matches
+
+
+def recognize_characteristic_full_frame(image_input: ImageInput) -> str | None:
+    """Return a unique, high-confidence standard characteristic in the frame."""
+    image = _load_image(image_input)
+    rows = _ocr_rows(image, FULL_FRAME_ROI)
+    matches = _complete_characteristic_matches(_full_frame_characteristic_texts(rows))
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def _normalize_note_region_text(field: str, text: str) -> str:
     if field == "nature":
         return _clean_nature(text)
     if field == "characteristic":
-        return _match_characteristic_text(text) or _clean_characteristic(text)
+        return _clean_characteristic(text)
     raise KeyError(f"Unknown note OCR field: {field}")
 
 
