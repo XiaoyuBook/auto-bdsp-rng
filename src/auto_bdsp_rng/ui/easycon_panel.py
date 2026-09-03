@@ -65,7 +65,9 @@ from auto_bdsp_rng.resources import (
     remap_legacy_script_path,
     script_directory,
 )
+from auto_bdsp_rng.ui.controller_overlay import ControllerStateOverlay
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
 
 
 SCRIPT_DIR = script_directory()
@@ -506,6 +508,8 @@ class KeyMappingDialog(QDialog):
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
     capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
+    virtualControllerKeyEvent = Signal(int, bool, int)
+    virtualControllerHookStopped = Signal(object, int)
     nativeScriptStarted = Signal()
     runLogRequested = Signal()
 
@@ -516,6 +520,7 @@ class EasyConPanel(QWidget):
         native_backend: object | None = None,
         video_source_connected: Callable[[], bool] | None = None,
         frame_client_factory: Callable[[], object] | None = None,
+        keyboard_hook_factory: Callable[..., WindowsKeyboardHook] | None = None,
     ) -> None:
         super().__init__(parent)
         self._run_log_sink = run_log_sink
@@ -571,6 +576,12 @@ class EasyConPanel(QWidget):
         self.virtual_controller_enabled = False
         self.virtual_controller_keys: dict[int, tuple[str, str, str | None]] = {}
         self.key_mapping: dict[str, int] = {**DEFAULT_KEY_MAPPING, **self.config.key_mapping}
+        self._keyboard_hook_factory = keyboard_hook_factory or WindowsKeyboardHook
+        self._keyboard_hook: WindowsKeyboardHook | None = None
+        self._vpad_input_source: str | None = None
+        self._vpad_generation = 0
+        self._controller_overlay: ControllerStateOverlay | None = None
+        self._vpad_hide_pending = False
         self._recording = False
         self._recording_paused = False
         self._recorded_lines: list[str] = []
@@ -597,6 +608,14 @@ class EasyConPanel(QWidget):
         self._capture_keep_awake_cli_timer.timeout.connect(self._capture_keep_awake_cli_timeout)
         self.bridge_log.connect(self._append_log)
         self.capture_keep_awake_finished.connect(self._handle_capture_keep_awake_finished)
+        self.virtualControllerKeyEvent.connect(
+            self._dispatch_virtual_controller_key,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self.virtualControllerHookStopped.connect(
+            self._handle_virtual_controller_hook_stopped,
+            Qt.ConnectionType.QueuedConnection,
+        )
 
         self._build_ui()
         if config_migration_save_error is not None:
@@ -1124,9 +1143,10 @@ class EasyConPanel(QWidget):
         mapping_btn.clicked.connect(self.open_key_mapping)
         layout.addWidget(mapping_btn, 1, 0, 1, 1)
 
-        help_btn = QPushButton("帮助")
-        help_btn.setStyleSheet(btn_style)
-        layout.addWidget(help_btn, 1, 1, 1, 1)
+        self.controller_overlay_button = QPushButton("状态窗口")
+        self.controller_overlay_button.setStyleSheet(btn_style)
+        self.controller_overlay_button.clicked.connect(self.show_controller_overlay)
+        layout.addWidget(self.controller_overlay_button, 1, 1, 1, 1)
 
         self.record_btn = QPushButton("录制脚本")
         self.record_btn.setStyleSheet(btn_style)
@@ -1235,10 +1255,23 @@ class EasyConPanel(QWidget):
         return effective_status in (EasyConStatus.BRIDGE_CONNECTED, EasyConStatus.RUNNING)
 
     def _poll_native_connection_status(self) -> None:
-        if self._shutting_down or not self._is_native_mode() or self.native_connecting:
+        if self._shutting_down:
+            return
+        if self._keyboard_hook is not None and not self.virtual_controller_enabled:
+            self._deactivate_virtual_controller(
+                hide_overlay=not self._controller_connection_active(),
+                log=False,
+            )
+        if not self._is_native_mode() or self.native_connecting:
             return
         status = self._native_status()
         connected = self._native_connection_active(status)
+        if not connected and (
+            self.virtual_controller_enabled
+            or self._keyboard_hook is not None
+            or (self._controller_overlay is not None and self._controller_overlay.isVisible())
+        ):
+            self._deactivate_virtual_controller(hide_overlay=True)
         signature = (status, connected, self._native_connection_failed)
         if signature != self._last_native_display_status:
             previous = self._last_native_display_status
@@ -1255,6 +1288,8 @@ class EasyConPanel(QWidget):
         if self.native_run_thread is not None:
             return False
         if self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
+            return False
+        if not self._stop_virtual_controller_for_script():
             return False
         self._native_run_reserved = True
         self._update_run_enabled()
@@ -1644,6 +1679,8 @@ class EasyConPanel(QWidget):
             self._append_log("warn", str(exc))
             self.easycon_status.showMessage(str(exc))
             return
+        if not self._stop_virtual_controller_for_script():
+            return
         if not self._can_run():
             if not self._native_is_connected():
                 self._append_log("warn", "请先连接伊机控，再运行脚本")
@@ -1676,7 +1713,6 @@ class EasyConPanel(QWidget):
             self.run_button.setText("停止脚本")
             self.run_button.setEnabled(True)
             self.task_state_text = "执行中"
-            self._release_virtual_controller_keys()
             self._append_log("info", f"通过 Python 原生后端运行脚本: {self.current_script_name}")
             self._update_native_controls()
             self.nativeScriptStarted.emit()
@@ -1780,6 +1816,8 @@ class EasyConPanel(QWidget):
         if self.bridge_status == EasyConStatus.RUNNING:
             self.stop_bridge_script()
             return
+        if not self._stop_virtual_controller_for_script():
+            return
         if not self._can_run():
             self._append_log("warn", "请先连接伊机控，再运行脚本")
             return
@@ -1799,8 +1837,6 @@ class EasyConPanel(QWidget):
         self.bridge_status = EasyConStatus.RUNNING
         self.task_state_text = "执行中"
         self._update_bridge_controls()
-        # 释放虚拟手柄状态，避免 eventFilter 残留输入影响脚本时序
-        self._release_virtual_controller_keys()
         self._append_log("info", "通过常驻连接运行脚本")
         thread = QThread(self)
         worker = BridgeScriptWorker(self._ensure_bridge_backend(), script_text, self.current_script_name)
@@ -1933,6 +1969,8 @@ class EasyConPanel(QWidget):
         self._update_native_controls()
 
     def begin_external_bridge_script(self, name: str) -> None:
+        if not self._stop_virtual_controller_for_script():
+            return
         started_at = datetime.now()
         self.stop_requested = False
         self.current_run_stdout = []
@@ -2140,6 +2178,11 @@ class EasyConPanel(QWidget):
     def has_unsaved_script_changes(self) -> bool:
         return self.editor.toPlainText() != self._saved_editor_text
 
+    def prepare_for_close_confirmation(self) -> None:
+        """Stop keyboard capture and flush an active recording before prompting."""
+
+        self._deactivate_virtual_controller(log=False)
+
     def _update_dirty_indicator(self) -> None:
         if not hasattr(self, "script_name_label"):
             return
@@ -2323,8 +2366,7 @@ class EasyConPanel(QWidget):
         return True
 
     def disconnect_native(self) -> bool:
-        if self.virtual_controller_enabled:
-            self.keyboard_controller_check.setChecked(False)
+        self._deactivate_virtual_controller(hide_overlay=True)
         try:
             self._ensure_native_backend().disconnect()  # type: ignore[attr-defined]
         except Exception as exc:
@@ -2381,8 +2423,7 @@ class EasyConPanel(QWidget):
         self._update_run_enabled()
 
     def disconnect_bridge(self) -> None:
-        if self.virtual_controller_enabled:
-            self.keyboard_controller_check.setChecked(False)
+        self._deactivate_virtual_controller(hide_overlay=True)
         try:
             self._ensure_bridge_backend().disconnect()
         except Exception as exc:
@@ -2474,6 +2515,7 @@ class EasyConPanel(QWidget):
             except Exception as exc:
                 self.task_state_text = "连接失败"
                 self._append_log("error", f"发送手柄按钮失败: {exc}")
+                self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_native_controls()
                 return
             self.task_state_text = "已完成"
@@ -2490,6 +2532,7 @@ class EasyConPanel(QWidget):
                 self.bridge_status = EasyConStatus.FAILED
                 self.task_state_text = "连接失败"
                 self._append_log("error", f"发送手柄按钮失败: {exc}")
+                self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_bridge_controls()
                 return
             self.task_state_text = "已完成"
@@ -2610,6 +2653,7 @@ class EasyConPanel(QWidget):
         self._append_log("info", f"{log_label}: {button} {duration_ms}ms")
 
     def _reset_failed_keep_awake_bridge(self) -> None:
+        self._deactivate_virtual_controller(hide_overlay=True, log=False)
         backend = self.bridge_backend
         self.bridge_backend = None
         if backend is not None:
@@ -2637,10 +2681,15 @@ class EasyConPanel(QWidget):
 
     def shutdown(self, *, wait_ms: int = 2000) -> bool:
         if not self._shutting_down:
+            self._shutting_down = True
             self.run_timer.stop()
             self._native_status_timer.stop()
-            self._release_virtual_controller_keys()
-            self._shutting_down = True
+        vpad_stopped = self._deactivate_virtual_controller(hide_overlay=True, log=False)
+        overlay = self._controller_overlay
+        if not vpad_stopped:
+            return False
+        if overlay is not None:
+            overlay.shutdown()
         self.release_native_script_run()
         stopped = self.shutdown_capture_keep_awake()
 
@@ -2807,6 +2856,8 @@ class EasyConPanel(QWidget):
         return True
 
     def prepare_for_external_cli_script(self) -> bool:
+        if not self._stop_virtual_controller_for_script():
+            return False
         return self._settle_capture_keep_awake_cli(wait_ms=CAPTURE_KEEP_AWAKE_CLI_SETTLE_MS)
 
     def send_controller_stick(self, side: str, direction: str) -> None:
@@ -2821,6 +2872,7 @@ class EasyConPanel(QWidget):
             except Exception as exc:
                 self.task_state_text = "连接失败"
                 self._append_log("error", f"发送摇杆动作失败: {exc}")
+                self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_native_controls()
                 return
             self.task_state_text = "已完成"
@@ -2837,6 +2889,7 @@ class EasyConPanel(QWidget):
                 self.bridge_status = EasyConStatus.FAILED
                 self.task_state_text = "连接失败"
                 self._append_log("error", f"发送摇杆动作失败: {exc}")
+                self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_bridge_controls()
                 return
             self.task_state_text = "已完成"
@@ -2846,65 +2899,317 @@ class EasyConPanel(QWidget):
         self._run_inline_cli_script(f"test_{side}_{direction.lower()}", f"{label}\n")
 
     def open_key_mapping(self) -> None:
-        dialog = KeyMappingDialog(self.key_mapping, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        restore_controller = self.virtual_controller_enabled
+        if restore_controller and not self._deactivate_virtual_controller(log=False):
+            self._append_log("error", "系统级键盘捕获尚未完全停止，无法打开按键映射")
             return
-        self.key_mapping = dialog.get_mapping()
-        self._save_config_from_ui()
-        self._append_log("info", "按键映射已更新")
-        # 如果虚拟手柄已启用，先关闭再重新启用以应用新映射
-        if self.virtual_controller_enabled:
-            self.keyboard_controller_check.setChecked(False)
+        dialog = KeyMappingDialog(self.key_mapping, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if accepted:
+            self.key_mapping = dialog.get_mapping()
+            self._save_config_from_ui()
+            self._append_log("info", "按键映射已更新")
+        if restore_controller:
+            self._activate_virtual_controller()
 
     def set_keyboard_controller_enabled(self, enabled: bool) -> None:
         if enabled:
-            connected = (
-                self._native_status() == EasyConStatus.BRIDGE_CONNECTED
-                if self._is_native_mode()
-                else self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED
-            )
-            if not connected:
-                self.keyboard_controller_check.blockSignals(True)
-                self.keyboard_controller_check.setChecked(False)
-                self.keyboard_controller_check.blockSignals(False)
-                self._append_log("warn", "请先连接伊机控，再启用键盘虚拟手柄")
-                return
-            QApplication.instance().installEventFilter(self)
-            self.virtual_controller_enabled = True
-            self._append_log("info", "键盘虚拟手柄已启用")
-            self.setFocus()
+            self._activate_virtual_controller()
+        else:
+            self._deactivate_virtual_controller()
+
+    def _set_keyboard_controller_checked(self, checked: bool) -> None:
+        if self.keyboard_controller_check.isChecked() == checked:
             return
-        self._release_virtual_controller_keys()
-        app = QApplication.instance()
-        if app is not None:
-            app.removeEventFilter(self)
+        self.keyboard_controller_check.blockSignals(True)
+        self.keyboard_controller_check.setChecked(checked)
+        self.keyboard_controller_check.blockSignals(False)
+
+    def _controller_connection_active(self) -> bool:
+        if self._is_native_mode():
+            backend = self.native_backend
+            if backend is None:
+                return False
+            marker = object()
+            try:
+                connected_port = getattr(backend, "connected_port", marker)
+            except Exception:
+                return False
+            if connected_port is not marker:
+                return bool(connected_port)
+            try:
+                return backend.status() in (  # type: ignore[attr-defined]
+                    EasyConStatus.BRIDGE_CONNECTED,
+                    EasyConStatus.RUNNING,
+                )
+            except Exception:
+                return False
+        return self._is_bridge_mode() and self.bridge_status in (
+            EasyConStatus.BRIDGE_CONNECTED,
+            EasyConStatus.RUNNING,
+        )
+
+    def _controller_script_running(self) -> bool:
+        if self._is_native_mode():
+            return self._native_run_reserved or (
+                self.native_run_thread is not None and self.native_run_thread.isRunning()
+            )
+        if self._is_bridge_mode():
+            return self.bridge_status == EasyConStatus.RUNNING
+        return self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning
+
+    def _controller_report_snapshot(self) -> object | None:
+        if not self._is_native_mode() or not self._controller_connection_active():
+            return None
+        backend = self.native_backend
+        getter = getattr(backend, "get_report", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
+
+    def _ensure_controller_overlay(self) -> ControllerStateOverlay:
+        overlay = self._controller_overlay
+        if overlay is not None:
+            return overlay
+        overlay = ControllerStateOverlay(
+            self._controller_report_snapshot,
+            connected_provider=self._controller_connection_active,
+            running_provider=self._controller_script_running,
+            parent=self,
+        )
+        overlay.toggleRequested.connect(self._toggle_virtual_controller_from_overlay)
+        overlay.hideRequested.connect(self._hide_controller_overlay)
+        self._controller_overlay = overlay
+        return overlay
+
+    def show_controller_overlay(self) -> None:
+        if self._shutting_down:
+            return
+        if not self._is_native_mode():
+            self._append_log("warn", "手柄状态窗口仅支持 Python 原生后端")
+            return
+        if not self._controller_connection_active():
+            self._append_log("warn", "请先连接伊机控，再打开手柄状态窗口")
+            return
+        overlay = self._ensure_controller_overlay()
+        overlay.set_active(self.virtual_controller_enabled)
+        overlay.show_overlay()
+
+    def _toggle_virtual_controller_from_overlay(self) -> None:
+        if self.virtual_controller_enabled:
+            self._deactivate_virtual_controller()
+        else:
+            self._activate_virtual_controller()
+
+    def _hide_controller_overlay(self) -> None:
+        self._deactivate_virtual_controller(hide_overlay=True)
+
+    def _emit_hook_key_event(self, key: int, down: bool, generation: int) -> None:
+        try:
+            self.virtualControllerKeyEvent.emit(int(key), bool(down), generation)
+        except RuntimeError:
+            pass
+
+    def _emit_hook_stopped(self, error: BaseException | None, generation: int) -> None:
+        try:
+            self.virtualControllerHookStopped.emit(error, generation)
+        except RuntimeError:
+            pass
+
+    def _activate_virtual_controller(self) -> bool:
+        if self.virtual_controller_enabled:
+            self._set_keyboard_controller_checked(True)
+            self.show_controller_overlay()
+            return True
+        if self._shutting_down or self._controller_script_running():
+            self._set_keyboard_controller_checked(False)
+            self._append_log("warn", "脚本运行期间不能启用键盘虚拟手柄")
+            return False
+        if not self._controller_connection_active():
+            self._set_keyboard_controller_checked(False)
+            self._append_log("warn", "请先连接伊机控，再启用键盘虚拟手柄")
+            return False
+
+        stale_hook = self._keyboard_hook
+        if stale_hook is not None:
+            try:
+                stale_hook.stop()
+            except Exception as exc:
+                self._set_keyboard_controller_checked(False)
+                self._append_log("error", f"键盘全局捕获尚未停止，无法重新启用: {exc}")
+                return False
+            self._keyboard_hook = None
+
+        self._vpad_generation += 1
+        generation = self._vpad_generation
+        source = "qt"
+        factory = self._keyboard_hook_factory
+        supported = getattr(factory, "is_supported", None)
+        should_try_hook = not callable(supported) or bool(supported())
+        if should_try_hook:
+            hook = None
+            try:
+                hook = factory(
+                    lambda key, down: self._emit_hook_key_event(key, down, generation),
+                    hook_stopped=lambda error: self._emit_hook_stopped(error, generation),
+                )
+                if not hook.start(self.key_mapping.values()):
+                    raise KeyboardHookError("键盘全局捕获未能启动")
+            except Exception as exc:
+                if hook is not None:
+                    try:
+                        hook.stop()
+                    except Exception as stop_exc:
+                        self._keyboard_hook = hook
+                        self._set_keyboard_controller_checked(False)
+                        self._append_log(
+                            "error",
+                            f"系统级键盘捕获启动失败且未能停止: {stop_exc}",
+                        )
+                        return False
+                self._append_log("warn", f"系统级键盘捕获不可用，已回退窗口内捕获: {exc}")
+            else:
+                self._keyboard_hook = hook
+                source = "hook"
+
+        if source == "qt":
+            app = QApplication.instance()
+            if app is None:
+                self._set_keyboard_controller_checked(False)
+                self._append_log("error", "Qt 应用未就绪，无法启用键盘虚拟手柄")
+                return False
+            app.installEventFilter(self)
+
+        self._vpad_input_source = source
+        self.virtual_controller_enabled = True
+        self._vpad_hide_pending = False
+        self._set_keyboard_controller_checked(True)
+        if self._is_native_mode():
+            overlay = self._ensure_controller_overlay()
+            overlay.set_active(True)
+            overlay.show_overlay()
+        source_label = "系统级键盘捕获" if source == "hook" else "窗口内键盘捕获"
+        self._append_log("info", f"键盘虚拟手柄已启用（{source_label}）")
+        self.setFocus()
+        return True
+
+    def _deactivate_virtual_controller(
+        self,
+        *,
+        hide_overlay: bool = False,
+        log: bool = True,
+    ) -> bool:
+        was_active = self.virtual_controller_enabled
+        self._vpad_hide_pending = self._vpad_hide_pending or hide_overlay
+        self._vpad_generation += 1
         self.virtual_controller_enabled = False
-        self._append_log("info", "键盘虚拟手柄已关闭")
+        self._set_keyboard_controller_checked(False)
+
+        source = self._vpad_input_source
+        self._vpad_input_source = None
+        app = QApplication.instance()
+        if source == "qt" and app is not None:
+            app.removeEventFilter(self)
+
+        stopped = True
+        hook = self._keyboard_hook
+        if hook is not None:
+            try:
+                hook.stop()
+            except Exception as exc:
+                stopped = False
+                self._append_log("error", f"停止系统级键盘捕获失败: {exc}")
+            else:
+                self._keyboard_hook = None
+
+        if self._recording:
+            self._stop_recording()
+        else:
+            self._release_virtual_controller_keys()
+
+        overlay = self._controller_overlay
+        if overlay is not None:
+            overlay.set_active(False)
+            if self._vpad_hide_pending and stopped:
+                overlay.hide()
+                self._vpad_hide_pending = False
+        if was_active and log:
+            self._append_log("info", "键盘虚拟手柄已关闭")
+        return stopped
+
+    def _stop_virtual_controller_for_script(self) -> bool:
+        if self._deactivate_virtual_controller(log=False):
+            return True
+        self._append_log("error", "系统级键盘捕获尚未完全停止，已取消脚本启动")
+        return False
+
+    def _dispatch_virtual_controller_key(self, key: int, down: bool, generation: int) -> None:
+        if self._vpad_input_source != "hook":
+            return
+        self._handle_virtual_controller_key(key, down, generation=generation)
+
+    def _handle_virtual_controller_hook_stopped(
+        self,
+        error: BaseException | None,
+        generation: int,
+    ) -> None:
+        if generation != self._vpad_generation or self._vpad_input_source != "hook":
+            return
+        self._deactivate_virtual_controller(log=False)
+        detail = f": {error}" if error is not None else ""
+        self._append_log("error", f"系统级键盘捕获已意外停止{detail}")
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if not self.virtual_controller_enabled:
+        if not self.virtual_controller_enabled or self._vpad_input_source != "qt":
             return super().eventFilter(watched, event)
         if event.type() == QEvent.Type.KeyPress:
             if event.isAutoRepeat():  # type: ignore[attr-defined]
-                return True
+                key = event.key()  # type: ignore[attr-defined]
+                return (
+                    key == Qt.Key.Key_Escape
+                    or _resolve_vpad_button(key, self.key_mapping) is not None
+                )
             return self._handle_virtual_controller_key(event.key(), down=True)  # type: ignore[attr-defined]
         if event.type() == QEvent.Type.KeyRelease:
             if event.isAutoRepeat():  # type: ignore[attr-defined]
-                return True
+                key = event.key()  # type: ignore[attr-defined]
+                return (
+                    key == Qt.Key.Key_Escape
+                    or _resolve_vpad_button(key, self.key_mapping) is not None
+                )
             return self._handle_virtual_controller_key(event.key(), down=False)  # type: ignore[attr-defined]
         if event.type() in (QEvent.Type.ApplicationDeactivate, QEvent.Type.WindowDeactivate):
             self._release_virtual_controller_keys()
         return super().eventFilter(watched, event)
 
-    def _handle_virtual_controller_key(self, key: int, down: bool) -> bool:
+    def _handle_virtual_controller_key(
+        self,
+        key: int,
+        down: bool,
+        *,
+        generation: int | None = None,
+    ) -> bool:
+        action = _resolve_vpad_button(key, self.key_mapping)
+        captured = key == Qt.Key.Key_Escape or action is not None
+        if generation is not None and generation != self._vpad_generation:
+            return captured
+        if not self.virtual_controller_enabled:
+            return False
         if key == Qt.Key.Key_Escape:
-            self.keyboard_controller_check.setChecked(False)
+            self._deactivate_virtual_controller()
+            return True
+        if action is None:
+            return False
+        if self._controller_script_running() or not self._controller_connection_active():
+            self._deactivate_virtual_controller(
+                hide_overlay=not self._controller_connection_active(),
+            )
             return True
         if down and key in self.virtual_controller_keys:
             return True
-        action = _resolve_vpad_button(key, self.key_mapping)
-        if action is None:
-            return False
         if not down and key not in self.virtual_controller_keys:
             return True
         kind, value, direction = action
@@ -2930,7 +3235,7 @@ class EasyConPanel(QWidget):
             if not self._is_native_mode():
                 self.bridge_status = EasyConStatus.FAILED
             self._append_log("error", f"键盘虚拟手柄发送失败: {exc}")
-            self.keyboard_controller_check.setChecked(False)
+            self._deactivate_virtual_controller(hide_overlay=True)
         return True
 
     def _append_recorded_commands(self, commands: list[str], observed_at: float) -> None:
@@ -3172,6 +3477,7 @@ class EasyConPanel(QWidget):
         return self.backend_mode.currentData() == "native"
 
     def _backend_mode_changed(self) -> None:
+        self._deactivate_virtual_controller(hide_overlay=True, log=False)
         # 切换到 Bridge 模式时，如果之前 CLI 运行残留了已连接状态，重置之
         if self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
             if self.bridge_backend is None:
@@ -3295,6 +3601,9 @@ class EasyConPanel(QWidget):
             self._native_status() == EasyConStatus.BRIDGE_CONNECTED
             if self._is_native_mode()
             else self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+        )
+        self.controller_overlay_button.setEnabled(
+            self._is_native_mode() and self._controller_connection_active()
         )
         self.cli_test_button.setEnabled(
             not self._is_native_mode()

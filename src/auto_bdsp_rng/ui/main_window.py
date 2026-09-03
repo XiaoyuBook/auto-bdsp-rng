@@ -3630,6 +3630,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("存档信息已应用" if self.lang == "zh" else "Profile applied")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.easycon_tab.prepare_for_close_confirmation()
         if not self._confirm_unsaved_easycon_script():
             event.ignore()
             return

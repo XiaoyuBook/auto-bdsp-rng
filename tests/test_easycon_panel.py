@@ -21,13 +21,100 @@ from auto_bdsp_rng.automation.easycon import (
     EasyConInstallation,
     EasyConStatus,
 )
+from auto_bdsp_rng.automation.easycon.native.device import SwitchButton, SwitchReport
 from auto_bdsp_rng.ui.easycon_panel import DEFAULT_KEY_MAPPING, EasyConPanel, KeyMappingDialog
+
+
+class UnsupportedKeyboardHookFactory:
+    def __init__(self) -> None:
+        self.support_checks = 0
+        self.create_calls = 0
+
+    def is_supported(self) -> bool:
+        self.support_checks += 1
+        return False
+
+    def __call__(self, *_args, **_kwargs):
+        self.create_calls += 1
+        raise AssertionError("unsupported keyboard hook factory must not be called")
+
+
+class FakeKeyboardHook:
+    def __init__(
+        self,
+        key_event,
+        hook_stopped,
+        *,
+        start_result: bool = True,
+        stop_failures: int = 0,
+        stop_failure_marks_stopped: bool = False,
+    ) -> None:
+        self.key_event = key_event
+        self.hook_stopped = hook_stopped
+        self.start_result = start_result
+        self.stop_failures = stop_failures
+        self.stop_failure_marks_stopped = stop_failure_marks_stopped
+        self.started_with: tuple[int, ...] | None = None
+        self.stop_calls = 0
+        self.is_running = False
+
+    def start(self, mapped_qt_keys) -> bool:
+        self.started_with = tuple(int(key) for key in mapped_qt_keys)
+        self.is_running = True
+        return self.start_result
+
+    def stop(self) -> bool:
+        self.stop_calls += 1
+        if self.stop_failures:
+            self.stop_failures -= 1
+            if self.stop_failure_marks_stopped:
+                self.is_running = False
+            raise RuntimeError("fake keyboard hook stop failed")
+        self.is_running = False
+        return True
+
+    def emit_key(self, key: int, down: bool) -> None:
+        self.key_event(int(key), down)
+
+    def emit_stopped(self, error: BaseException | None = None) -> None:
+        self.hook_stopped(error)
+
+
+class FakeKeyboardHookFactory:
+    def __init__(
+        self,
+        *,
+        start_result: bool = True,
+        stop_failures: int = 0,
+        stop_failure_marks_stopped: bool = False,
+    ) -> None:
+        self.instances: list[FakeKeyboardHook] = []
+        self.support_checks = 0
+        self.start_result = start_result
+        self.stop_failures = stop_failures
+        self.stop_failure_marks_stopped = stop_failure_marks_stopped
+
+    def is_supported(self) -> bool:
+        self.support_checks += 1
+        return True
+
+    def __call__(self, key_event, *, hook_stopped=None) -> FakeKeyboardHook:
+        hook = FakeKeyboardHook(
+            key_event,
+            hook_stopped,
+            start_result=self.start_result,
+            stop_failures=self.stop_failures,
+            stop_failure_marks_stopped=self.stop_failure_marks_stopped,
+        )
+        self.instances.append(hook)
+        return hook
 
 
 class FakeNativeBackend:
     def __init__(self, ports: list[str] | None = None) -> None:
         self.ports = list(ports) if ports is not None else ["COM7"]
         self.connected_port: str | None = None
+        self.report = SwitchReport()
         self.script_runs: list[tuple[str, str | None, Path | None]] = []
         self.presses: list[tuple[str, int]] = []
         self.sticks: list[tuple[str, str | int, int | None]] = []
@@ -51,6 +138,9 @@ class FakeNativeBackend:
     def close(self) -> None:
         self.closed = True
         self.connected_port = None
+
+    def get_report(self) -> SwitchReport:
+        return self.report.copy()
 
     def run_script_text(self, script_text, name=None, *, script_dir=None):
         source_dir = Path(script_dir) if script_dir is not None else None
@@ -94,7 +184,7 @@ def app(monkeypatch):
 
 
 @pytest.fixture
-def easycon_panel(monkeypatch, tmp_path, app):
+def easycon_panel_factory(monkeypatch, tmp_path, app):
     script_dir = tmp_path / "script"
     script_dir.mkdir()
     (script_dir / "玫瑰公园.txt").write_text(
@@ -110,7 +200,28 @@ def easycon_panel(monkeypatch, tmp_path, app):
         lambda _config: EasyConInstallation(path=Path("D:/EasyCon/ezcon.exe"), version="1.6.3", source="test"),
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
-    return EasyConPanel(native_backend=FakeNativeBackend(), video_source_connected=lambda: True)
+
+    def create_panel(
+        *,
+        native_backend: object | None = None,
+        keyboard_hook_factory=None,
+    ) -> EasyConPanel:
+        if native_backend is None:
+            native_backend = FakeNativeBackend()
+        if keyboard_hook_factory is None:
+            keyboard_hook_factory = UnsupportedKeyboardHookFactory()
+        return EasyConPanel(
+            native_backend=native_backend,
+            video_source_connected=lambda: True,
+            keyboard_hook_factory=keyboard_hook_factory,
+        )
+
+    return create_panel
+
+
+@pytest.fixture
+def easycon_panel(easycon_panel_factory):
+    return easycon_panel_factory()
 
 
 def process_events_until(predicate, timeout_ms=1000):
@@ -1183,6 +1294,447 @@ def test_normal_cli_script_stops_residual_keep_awake_before_start(monkeypatch, t
     assert easycon_panel.process.waitForFinished(2000)
 
 
+def test_easycon_panel_virtual_controller_uses_supported_keyboard_hook(easycon_panel_factory):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+
+    assert panel._activate_virtual_controller()
+
+    assert hook_factory.support_checks == 1
+    assert len(hook_factory.instances) == 1
+    hook = hook_factory.instances[0]
+    assert hook.is_running
+    assert hook.started_with == tuple(int(key) for key in panel.key_mapping.values())
+    assert panel._vpad_input_source == "hook"
+    assert panel.keyboard_controller_check.isChecked()
+
+    hook.emit_key(Qt.Key.Key_L, True)
+    hook.emit_key(Qt.Key.Key_L, False)
+    process_events_until(lambda: len(backend.key_events) == 2)
+
+    assert backend.key_events == [("down", "A"), ("up", "A")]
+    assert panel.shutdown()
+    assert hook.stop_calls == 1
+
+
+def test_easycon_panel_ignores_failed_hook_events_after_qt_fallback(
+    easycon_panel_factory,
+    app,
+):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory(start_result=False)
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+
+    assert panel._activate_virtual_controller()
+
+    hook = hook_factory.instances[0]
+    fallback_generation = panel._vpad_generation
+    assert hook.stop_calls == 1
+    assert not hook.is_running
+    assert panel._keyboard_hook is None
+    assert panel._vpad_input_source == "qt"
+
+    hook.emit_key(Qt.Key.Key_L, True)
+    hook.emit_stopped(RuntimeError("failed hook stopped late"))
+    app.processEvents()
+
+    assert panel._vpad_generation == fallback_generation
+    assert panel.virtual_controller_enabled
+    assert panel._vpad_input_source == "qt"
+    assert backend.key_events == []
+    assert "意外停止" not in panel.log_view.toPlainText()
+    assert panel.shutdown()
+
+
+def test_easycon_panel_virtual_controller_falls_back_to_qt_events(easycon_panel_factory):
+    backend = FakeNativeBackend()
+    hook_factory = UnsupportedKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+
+    assert panel._activate_virtual_controller()
+
+    assert hook_factory.support_checks == 1
+    assert hook_factory.create_calls == 0
+    assert panel._vpad_input_source == "qt"
+    QApplication.sendEvent(
+        panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier),
+    )
+    QApplication.sendEvent(
+        panel,
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier),
+    )
+
+    assert backend.key_events == [("down", "A"), ("up", "A")]
+    assert panel.shutdown()
+
+
+def test_easycon_panel_qt_fallback_only_swallows_mapped_auto_repeat_keys(
+    easycon_panel_factory,
+):
+    backend = FakeNativeBackend()
+    panel = easycon_panel_factory(native_backend=backend)
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    assert panel._vpad_input_source == "qt"
+
+    for event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+        unmapped = QKeyEvent(
+            event_type,
+            Qt.Key.Key_V,
+            Qt.KeyboardModifier.NoModifier,
+            "",
+            True,
+            1,
+        )
+        mapped = QKeyEvent(
+            event_type,
+            Qt.Key.Key_L,
+            Qt.KeyboardModifier.NoModifier,
+            "",
+            True,
+            1,
+        )
+
+        assert panel.eventFilter(panel, unmapped) is False
+        assert panel.eventFilter(panel, mapped) is True
+
+    assert backend.key_events == []
+    assert panel.shutdown()
+
+
+def test_easycon_panel_discards_queued_events_from_stopped_hook(easycon_panel_factory, app):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+    active_generation = panel._vpad_generation
+
+    hook.emit_key(Qt.Key.Key_L, True)
+    hook.emit_stopped(RuntimeError("late hook exit"))
+    assert panel._deactivate_virtual_controller(log=False)
+    app.processEvents()
+
+    assert panel._vpad_generation > active_generation
+    assert backend.key_events == []
+    assert panel.virtual_controller_keys == {}
+    assert "意外停止" not in panel.log_view.toPlainText()
+    assert panel.shutdown()
+
+
+def test_easycon_panel_native_reservation_disables_hook_without_restoring(
+    easycon_panel_factory,
+):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+    hook.emit_key(Qt.Key.Key_L, True)
+    process_events_until(lambda: backend.key_events == [("down", "A")])
+
+    assert panel.reserve_native_script_run()
+
+    assert hook.stop_calls == 1
+    assert not hook.is_running
+    assert backend.key_events == [("down", "A"), ("up", "A")]
+    assert panel.virtual_controller_enabled is False
+    assert panel.keyboard_controller_check.isChecked() is False
+    assert panel._vpad_input_source is None
+
+    panel.release_native_script_run()
+
+    assert panel.virtual_controller_enabled is False
+    assert panel.keyboard_controller_check.isChecked() is False
+    assert len(hook_factory.instances) == 1
+    assert panel.shutdown()
+
+
+def test_easycon_panel_native_reservation_retries_retained_stopped_hook(
+    easycon_panel_factory,
+):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory(
+        stop_failures=1,
+        stop_failure_marks_stopped=True,
+    )
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+
+    assert panel.reserve_native_script_run() is False
+
+    assert hook.stop_calls == 1
+    assert hook.is_running is False
+    assert panel._keyboard_hook is hook
+    assert panel._native_run_reserved is False
+    assert panel.native_run_thread is None
+    assert backend.script_runs == []
+    assert "已取消脚本启动" in panel.log_view.toPlainText()
+
+    assert panel.reserve_native_script_run() is True
+
+    assert hook.stop_calls == 2
+    assert panel._keyboard_hook is None
+    assert panel._native_run_reserved is True
+    panel.release_native_script_run()
+    assert panel.shutdown()
+
+
+def test_easycon_panel_bridge_script_disables_hook_without_restoring(
+    monkeypatch,
+    tmp_path,
+    easycon_panel_factory,
+):
+    FakeBridgeBackend.instances.clear()
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
+    select_bridge_mode(panel)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    panel.bridge_path.setText(str(bridge))
+    panel.editor.setPlainText("WAIT 1\n")
+    panel.connect_bridge()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+
+    panel.run_script_via_bridge()
+
+    assert hook.stop_calls == 1
+    assert panel.virtual_controller_enabled is False
+    assert panel.keyboard_controller_check.isChecked() is False
+    process_events_until(lambda: panel.bridge_run_thread is None)
+    assert panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+    assert panel.virtual_controller_enabled is False
+    assert len(hook_factory.instances) == 1
+    assert panel.shutdown()
+
+
+def test_easycon_panel_bridge_script_retries_retained_stopped_hook(
+    monkeypatch,
+    tmp_path,
+    easycon_panel_factory,
+):
+    FakeBridgeBackend.instances.clear()
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    hook_factory = FakeKeyboardHookFactory(
+        stop_failures=1,
+        stop_failure_marks_stopped=True,
+    )
+    panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
+    select_bridge_mode(panel)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    panel.bridge_path.setText(str(bridge))
+    panel.editor.setPlainText("WAIT 1\n")
+    panel.connect_bridge()
+    backend = FakeBridgeBackend.instances[-1]
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+
+    panel.run_script_via_bridge()
+
+    assert hook.stop_calls == 1
+    assert hook.is_running is False
+    assert panel._keyboard_hook is hook
+    assert panel.bridge_run_thread is None
+    assert panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+    assert backend.script_runs == []
+
+    panel.run_script_via_bridge()
+    process_events_until(lambda: panel.bridge_run_thread is None)
+
+    assert hook.stop_calls == 2
+    assert panel._keyboard_hook is None
+    assert len(backend.script_runs) == 1
+    assert panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+    assert panel.shutdown()
+
+
+def test_easycon_panel_bridge_failure_retries_retained_stopped_hook(
+    monkeypatch,
+    tmp_path,
+    easycon_panel_factory,
+):
+    FakeBridgeBackend.instances.clear()
+    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+    hook_factory = FakeKeyboardHookFactory(
+        stop_failures=1,
+        stop_failure_marks_stopped=True,
+    )
+    panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
+    select_bridge_mode(panel)
+    bridge = tmp_path / "EasyConBridge.exe"
+    bridge.write_text("", encoding="utf-8")
+    panel.bridge_path.setText(str(bridge))
+    panel.connect_bridge()
+    backend = FakeBridgeBackend.instances[-1]
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+
+    def fail_key_down(_button):
+        raise RuntimeError("bridge transport closed")
+
+    monkeypatch.setattr(backend, "key_down", fail_key_down)
+    hook.emit_key(Qt.Key.Key_L, True)
+    process_events_until(lambda: panel.bridge_status == EasyConStatus.FAILED)
+
+    assert hook.stop_calls == 1
+    assert hook.is_running is False
+    assert panel.virtual_controller_enabled is False
+    assert panel._keyboard_hook is hook
+
+    panel._poll_native_connection_status()
+
+    assert hook.stop_calls == 2
+    assert panel._keyboard_hook is None
+    assert panel.bridge_status == EasyConStatus.FAILED
+    assert panel.shutdown()
+
+
+def test_easycon_panel_physical_disconnect_stops_hook_and_hides_overlay(
+    easycon_panel_factory,
+    app,
+):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
+    assert overlay.isVisible()
+
+    backend.connected_port = None
+    panel._poll_native_connection_status()
+
+    assert hook.stop_calls == 1
+    assert panel.virtual_controller_enabled is False
+    assert panel.keyboard_controller_check.isChecked() is False
+    assert not overlay.isVisible()
+    assert panel.shutdown()
+
+
+def test_easycon_panel_physical_disconnect_retries_retained_stopped_hook(
+    easycon_panel_factory,
+    app,
+):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory(
+        stop_failures=1,
+        stop_failure_marks_stopped=True,
+    )
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
+    assert overlay.isVisible()
+
+    backend.connected_port = None
+    panel._poll_native_connection_status()
+
+    assert hook.stop_calls == 1
+    assert hook.is_running is False
+    assert panel.virtual_controller_enabled is False
+    assert panel._keyboard_hook is hook
+    assert overlay.isVisible()
+
+    panel._poll_native_connection_status()
+
+    assert hook.stop_calls == 2
+    assert panel._keyboard_hook is None
+    assert not overlay.isVisible()
+    assert panel.shutdown()
+
+
+def test_easycon_panel_controller_overlay_reads_native_report(easycon_panel_factory, app):
+    backend = FakeNativeBackend()
+    backend.report = SwitchReport(
+        button=int(SwitchButton.A | SwitchButton.HOME),
+        lx=255,
+        ly=0,
+        rx=64,
+        ry=192,
+    )
+    panel = easycon_panel_factory(native_backend=backend)
+    assert panel.connect_native()
+
+    panel.show_controller_overlay()
+    app.processEvents()
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    overlay.refresh_state()
+    snapshot = overlay.report
+
+    assert snapshot == backend.report
+    assert snapshot is not backend.report
+    backend.report.reset()
+    assert snapshot.button == int(SwitchButton.A | SwitchButton.HOME)
+    assert panel.shutdown()
+
+
+def test_easycon_panel_shutdown_stops_keyboard_hook_and_overlay(
+    easycon_panel_factory,
+    app,
+):
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
+    assert overlay._timer.isActive()
+
+    assert panel.shutdown()
+
+    assert hook.stop_calls == 1
+    assert not hook.is_running
+    assert panel._keyboard_hook is None
+    assert panel.virtual_controller_enabled is False
+    assert not overlay._timer.isActive()
+    assert not overlay.isVisible()
+
+
 def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch, tmp_path, easycon_panel):
     FakeBridgeBackend.instances.clear()
     monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
@@ -1220,7 +1772,8 @@ def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monke
     timestamps = iter((101.0, 103.0, 104.0, 107.0, 109.0, 110.0))
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
     easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
-    easycon_panel.virtual_controller_enabled = True
+    assert easycon_panel.connect_native()
+    assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
     easycon_panel._start_recording()
@@ -1242,6 +1795,7 @@ def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monke
         "WAIT 1000\n"
         "RS RESET\n"
     )
+    assert easycon_panel.shutdown()
 
 
 def test_easycon_panel_records_composite_hat_and_stick_directions(monkeypatch, easycon_panel):
@@ -1249,7 +1803,8 @@ def test_easycon_panel_records_composite_hat_and_stick_directions(monkeypatch, e
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
     easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
     easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
-    easycon_panel.virtual_controller_enabled = True
+    assert easycon_panel.connect_native()
+    assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
     easycon_panel._start_recording()
@@ -1282,6 +1837,7 @@ def test_easycon_panel_records_composite_hat_and_stick_directions(monkeypatch, e
         "WAIT 1000\n"
         "LS RESET\n"
     )
+    assert easycon_panel.shutdown()
 
 
 def test_easycon_panel_skips_unchanged_composite_hat_direction(monkeypatch, easycon_panel):
@@ -1290,7 +1846,8 @@ def test_easycon_panel_skips_unchanged_composite_hat_direction(monkeypatch, easy
     easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
     easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
     easycon_panel.key_mapping["UpRight"] = int(Qt.Key.Key_Y)
-    easycon_panel.virtual_controller_enabled = True
+    assert easycon_panel.connect_native()
+    assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
     easycon_panel._start_recording()
@@ -1316,6 +1873,7 @@ def test_easycon_panel_skips_unchanged_composite_hat_direction(monkeypatch, easy
         "WAIT 1000\n"
         "RIGHT UP\n"
     )
+    assert easycon_panel.shutdown()
 
 
 def test_easycon_panel_recording_ignores_auto_repeat_events(monkeypatch, easycon_panel):
@@ -1372,7 +1930,8 @@ def test_easycon_panel_records_opposite_directions_as_neutral(monkeypatch, easyc
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
     easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
     easycon_panel.key_mapping["Down"] = int(Qt.Key.Key_H)
-    easycon_panel.virtual_controller_enabled = True
+    assert easycon_panel.connect_native()
+    assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
     easycon_panel._start_recording()
@@ -1406,12 +1965,14 @@ def test_easycon_panel_records_opposite_directions_as_neutral(monkeypatch, easyc
         "WAIT 1000\n"
         "LS RESET\n"
     )
+    assert easycon_panel.shutdown()
 
 
 def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypatch, easycon_panel):
     timestamps = iter((101.0, 102.0, 1001.0, 1003.0))
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
-    easycon_panel.virtual_controller_enabled = True
+    assert easycon_panel.connect_native()
+    assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
     easycon_panel._start_recording()
@@ -1434,12 +1995,14 @@ def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypat
         "WAIT 2000\n"
         "RS RESET\n"
     )
+    assert easycon_panel.shutdown()
 
 
 def test_easycon_panel_stop_while_paused_preserves_closed_recording(monkeypatch, easycon_panel):
     timestamps = iter((101.0, 104.0))
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
-    easycon_panel.virtual_controller_enabled = True
+    assert easycon_panel.connect_native()
+    assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
     easycon_panel._start_recording()
@@ -1455,6 +2018,7 @@ def test_easycon_panel_stop_while_paused_preserves_closed_recording(monkeypatch,
     assert not easycon_panel._recording
     assert not easycon_panel._recording_paused
     assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 3000\nLS RESET\n"
+    assert easycon_panel.shutdown()
 
 
 def test_easycon_panel_escape_disables_keyboard_virtual_controller(monkeypatch, tmp_path, easycon_panel):

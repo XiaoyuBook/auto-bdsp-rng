@@ -31,6 +31,7 @@ from auto_bdsp_rng.automation.easycon.native.device import (
     DeviceNotConnectedError,
     NativeGamePadAdapter,
     NintendoSwitchDevice,
+    SwitchReport,
     list_ports as list_native_ports,
 )
 from auto_bdsp_rng.automation.easycon.native.image_labels import (
@@ -167,6 +168,11 @@ class NativeEasyConBackend(EasyConBackend):
     def is_running(self) -> bool:
         with self._state_lock:
             return self._running
+
+    def get_report(self) -> SwitchReport:
+        """Return a thread-safe snapshot of the report currently sent to the controller."""
+
+        return self._device.get_report()
 
     def set_image_result_callback(self, callback: ImageResultCallback | None) -> None:
         self._image_result_callback = callback

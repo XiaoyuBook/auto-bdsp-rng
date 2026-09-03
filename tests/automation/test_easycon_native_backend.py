@@ -104,6 +104,20 @@ def test_native_backend_keeps_serial_connected_and_requires_broker_for_every_scr
         backend.close()
 
 
+def test_native_backend_report_snapshot_does_not_expose_device_state() -> None:
+    client = FakeFrameClient(np.zeros((12, 16, 3), dtype=np.uint8))
+    backend = _backend(client, waiter=RecordingWaiter())
+    try:
+        backend.key_down("A")
+        snapshot = backend.get_report()
+        snapshot.reset()
+
+        assert backend.get_report() != snapshot
+        assert backend.get_report().button != 0
+    finally:
+        backend.close()
+
+
 def test_native_backend_releases_controller_after_successful_script() -> None:
     client = FakeFrameClient(np.zeros((12, 16, 3), dtype=np.uint8))
     backend = _backend(client, waiter=RecordingWaiter())
