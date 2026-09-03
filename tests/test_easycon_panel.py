@@ -57,6 +57,8 @@ class FakeKeyboardHook:
         self.started_with: tuple[int, ...] | None = None
         self.stop_calls = 0
         self.is_running = False
+        self.mapped_keys_enabled = True
+        self.mapped_keys_enabled_calls: list[bool] = []
 
     def start(self, mapped_qt_keys) -> bool:
         self.started_with = tuple(int(key) for key in mapped_qt_keys)
@@ -73,8 +75,12 @@ class FakeKeyboardHook:
         self.is_running = False
         return True
 
-    def emit_key(self, key: int, down: bool) -> None:
-        self.key_event(int(key), down)
+    def set_mapped_keys_enabled(self, enabled: bool) -> None:
+        self.mapped_keys_enabled = bool(enabled)
+        self.mapped_keys_enabled_calls.append(self.mapped_keys_enabled)
+
+    def emit_key(self, key: int, down: bool, control_down: bool = False) -> None:
+        self.key_event(int(key), bool(down), bool(control_down))
 
     def emit_stopped(self, error: BaseException | None = None) -> None:
         self.hook_stopped(error)
@@ -262,6 +268,35 @@ def test_key_mapping_dialog_updates_visible_key_text(app):
     assert dialog._buttons["A"].text() == "M"
 
 
+def test_key_mapping_dialog_right_click_action_clears_mapping(app):
+    dialog = KeyMappingDialog(DEFAULT_KEY_MAPPING)
+    button = dialog._buttons["A"]
+    delete_action = dialog._delete_actions["A"]
+    dialog._select_button("A")
+
+    assert button.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu
+    assert delete_action in button.actions()
+    assert delete_action.text() == "删除映射"
+    assert delete_action.isEnabled()
+
+    delete_action.trigger()
+
+    assert dialog.get_mapping()["A"] == 0
+    assert button.text() == ""
+    assert button.toolTip() == "A: 未绑定"
+    assert button.isChecked() is False
+    assert dialog._active_name is None
+    assert delete_action.isEnabled() is False
+
+
+def test_key_mapping_dialog_unbound_mapping_cannot_be_deleted_again(app):
+    dialog = KeyMappingDialog(DEFAULT_KEY_MAPPING)
+
+    assert dialog.get_mapping()["Up"] == 0
+    assert dialog._delete_actions["Up"].isEnabled() is False
+    assert dialog._dirty is False
+
+
 def test_key_mapping_dialog_close_accepts_changed_mapping(app):
     dialog = KeyMappingDialog(DEFAULT_KEY_MAPPING)
 
@@ -278,12 +313,18 @@ def test_key_mapping_dialog_close_accepts_changed_mapping(app):
 
 def test_easycon_config_persists_key_mapping(tmp_path):
     config_path = tmp_path / "config.json"
-    config = EasyConConfig(key_mapping={"A": int(Qt.Key.Key_M), "LSUp": int(Qt.Key.Key_U)})
+    config = EasyConConfig(
+        key_mapping={"A": int(Qt.Key.Key_M), "B": 0, "LSUp": int(Qt.Key.Key_U)},
+    )
 
     panel_module.save_config(config, config_path)
     restored = panel_module.load_config(config_path)
 
-    assert restored.key_mapping == {"A": int(Qt.Key.Key_M), "LSUp": int(Qt.Key.Key_U)}
+    assert restored.key_mapping == {
+        "A": int(Qt.Key.Key_M),
+        "B": 0,
+        "LSUp": int(Qt.Key.Key_U),
+    }
 
 
 def test_easycon_panel_restores_configured_key_mapping(monkeypatch, tmp_path, app):
@@ -294,7 +335,10 @@ def test_easycon_panel_restores_configured_key_mapping(monkeypatch, tmp_path, ap
     monkeypatch.setattr(
         panel_module,
         "load_config",
-        lambda: EasyConConfig(mock_enabled=True, key_mapping={"A": int(Qt.Key.Key_M)}),
+        lambda: EasyConConfig(
+            mock_enabled=True,
+            key_mapping={"A": int(Qt.Key.Key_M), "B": 0},
+        ),
     )
     monkeypatch.setattr(panel_module, "save_config", lambda config: saved_configs.append(config) or tmp_path / "config.json")
     monkeypatch.setattr(
@@ -307,7 +351,8 @@ def test_easycon_panel_restores_configured_key_mapping(monkeypatch, tmp_path, ap
     panel = EasyConPanel()
 
     assert panel.key_mapping["A"] == int(Qt.Key.Key_M)
-    assert panel.key_mapping["B"] == DEFAULT_KEY_MAPPING["B"]
+    assert panel.key_mapping["B"] == 0
+    assert panel.key_mapping["X"] == DEFAULT_KEY_MAPPING["X"]
 
 
 def test_easycon_panel_saves_key_mapping_after_dialog_accept(monkeypatch, tmp_path, easycon_panel):
@@ -331,6 +376,37 @@ def test_easycon_panel_saves_key_mapping_after_dialog_accept(monkeypatch, tmp_pa
 
     assert easycon_panel.key_mapping["A"] == int(Qt.Key.Key_M)
     assert saved_configs[-1].key_mapping["A"] == int(Qt.Key.Key_M)
+
+
+def test_easycon_panel_saves_cleared_key_mapping_after_dialog_accept(
+    monkeypatch,
+    tmp_path,
+    easycon_panel,
+):
+    saved_configs: list[EasyConConfig] = []
+
+    class FakeDialog:
+        def __init__(self, mapping, parent=None):
+            self.mapping = dict(mapping)
+            self.mapping["A"] = 0
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def get_mapping(self):
+            return dict(self.mapping)
+
+    monkeypatch.setattr(panel_module, "KeyMappingDialog", FakeDialog)
+    monkeypatch.setattr(
+        panel_module,
+        "save_config",
+        lambda config: saved_configs.append(config) or tmp_path / "config.json",
+    )
+
+    easycon_panel.open_key_mapping()
+
+    assert easycon_panel.key_mapping["A"] == 0
+    assert saved_configs[-1].key_mapping["A"] == 0
 
 
 class FakeBridgeBackend:
@@ -1619,6 +1695,65 @@ def test_easycon_panel_bridge_failure_retries_retained_stopped_hook(
     assert panel.shutdown()
 
 
+def test_easycon_panel_poll_keeps_hook_standby_until_physical_disconnect(
+    easycon_panel_factory,
+    app,
+):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    assert panel._set_virtual_controller_standby()
+    hook = hook_factory.instances[0]
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
+
+    panel._poll_native_connection_status()
+
+    assert panel._keyboard_hook is hook
+    assert panel._vpad_input_source == "hook"
+    assert hook.stop_calls == 0
+    assert overlay.isVisible()
+
+    backend.connected_port = None
+    panel._poll_native_connection_status()
+
+    assert panel._keyboard_hook is None
+    assert panel._vpad_input_source is None
+    assert hook.stop_calls == 1
+    assert not overlay.isVisible()
+    assert panel.shutdown()
+
+
+def test_easycon_panel_script_reservation_fully_stops_hook_from_standby(
+    easycon_panel_factory,
+    app,
+):
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    assert panel._set_virtual_controller_standby()
+    hook = hook_factory.instances[0]
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
+
+    assert panel.reserve_native_script_run()
+
+    assert panel._keyboard_hook is None
+    assert panel._vpad_input_source is None
+    assert hook.stop_calls == 1
+    assert overlay.isVisible()
+    panel.release_native_script_run()
+    assert panel.shutdown()
+
+
 def test_easycon_panel_physical_disconnect_stops_hook_and_hides_overlay(
     easycon_panel_factory,
     app,
@@ -2021,23 +2156,280 @@ def test_easycon_panel_stop_while_paused_preserves_closed_recording(monkeypatch,
     assert easycon_panel.shutdown()
 
 
-def test_easycon_panel_escape_disables_keyboard_virtual_controller(monkeypatch, tmp_path, easycon_panel):
-    FakeBridgeBackend.instances.clear()
-    monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
-    select_bridge_mode(easycon_panel)
-    bridge = tmp_path / "EasyConBridge.exe"
-    bridge.write_text("", encoding="utf-8")
-    easycon_panel.bridge_path.setText(str(bridge))
-    easycon_panel.connect_bridge()
+def test_easycon_panel_escape_press_immediately_toggles_hook_controller(
+    easycon_panel_factory,
+    app,
+):
+    backend = FakeNativeBackend()
+    hook_factory = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    hook = hook_factory.instances[0]
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
 
-    easycon_panel.keyboard_controller_check.setChecked(True)
+    hook.emit_key(Qt.Key.Key_Escape, True)
+    process_events_until(lambda: not panel.virtual_controller_enabled)
+
+    assert panel._keyboard_hook is hook
+    assert panel._vpad_input_source == "hook"
+    assert hook.is_running
+    assert hook.stop_calls == 0
+    assert hook.mapped_keys_enabled is False
+    assert hook.mapped_keys_enabled_calls == [False]
+    assert panel.keyboard_controller_check.isChecked() is False
+    assert overlay.isVisible()
+    assert overlay.active is False
+
+    hook.emit_key(Qt.Key.Key_Escape, True)
+    app.processEvents()
+    assert panel.virtual_controller_enabled is False
+    assert hook.mapped_keys_enabled_calls == [False]
+
+    hook.emit_key(Qt.Key.Key_Escape, False)
+    hook.emit_key(Qt.Key.Key_Escape, True)
+    process_events_until(lambda: panel.virtual_controller_enabled)
+
+    assert panel._keyboard_hook is hook
+    assert panel._vpad_input_source == "hook"
+    assert hook.stop_calls == 0
+    assert hook.mapped_keys_enabled is True
+    assert hook.mapped_keys_enabled_calls == [False, True]
+    assert panel.keyboard_controller_check.isChecked()
+    assert overlay.isVisible()
+    assert overlay.active is True
+    hook.emit_key(Qt.Key.Key_Escape, False)
+
+    assert panel.shutdown()
+    assert hook.stop_calls == 1
+    assert not hook.is_running
+
+
+def test_easycon_panel_escape_press_immediately_toggles_qt_fallback_controller(
+    easycon_panel_factory,
+    app,
+):
+    backend = FakeNativeBackend()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    assert panel._vpad_input_source == "qt"
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
+
+    def send_escape(down: bool) -> None:
+        QApplication.sendEvent(
+            panel,
+            QKeyEvent(
+                QEvent.Type.KeyPress if down else QEvent.Type.KeyRelease,
+                Qt.Key.Key_Escape,
+                Qt.KeyboardModifier.NoModifier,
+            ),
+        )
+
+    send_escape(True)
+    assert panel.virtual_controller_enabled is False
+
+    assert panel._vpad_input_source == "qt"
+    assert panel.keyboard_controller_check.isChecked() is False
+    assert overlay.isVisible()
+    assert overlay.active is False
+    mapped_press = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_L,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    mapped_release = QKeyEvent(
+        QEvent.Type.KeyRelease,
+        Qt.Key.Key_L,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    assert panel.eventFilter(panel, mapped_press) is False
+    assert panel.eventFilter(panel, mapped_release) is False
+    assert backend.key_events == []
+
+    send_escape(True)
+    assert panel.virtual_controller_enabled is False
+    send_escape(False)
+    send_escape(True)
+    assert panel.virtual_controller_enabled is True
+
+    assert panel._vpad_input_source == "qt"
+    assert panel.keyboard_controller_check.isChecked()
+    assert overlay.active is True
+    send_escape(False)
+    assert panel.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("use_hook", "start_in_standby"),
+    ((True, False), (True, True), (False, False), (False, True)),
+)
+def test_easycon_panel_ctrl_escape_fully_closes_from_active_or_standby(
+    easycon_panel_factory,
+    app,
+    use_hook,
+    start_in_standby,
+):
+    hook_factory = FakeKeyboardHookFactory() if use_hook else UnsupportedKeyboardHookFactory()
+    panel = easycon_panel_factory(
+        native_backend=FakeNativeBackend(),
+        keyboard_hook_factory=hook_factory,
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    overlay = panel._controller_overlay
+    assert overlay is not None
+    app.processEvents()
+    if start_in_standby:
+        assert panel._set_virtual_controller_standby()
+
+    if use_hook:
+        hook = hook_factory.instances[0]
+        hook.emit_key(Qt.Key.Key_Escape, True, control_down=True)
+    else:
+        QApplication.sendEvent(
+            panel,
+            QKeyEvent(
+                QEvent.Type.KeyPress,
+                Qt.Key.Key_Escape,
+                Qt.KeyboardModifier.ControlModifier,
+            ),
+        )
+    process_events_until(lambda: panel._vpad_input_source is None)
+
+    assert panel.virtual_controller_enabled is False
+    assert panel.keyboard_controller_check.isChecked() is False
+    assert panel._keyboard_hook is None
+    assert not overlay.isVisible()
+    if use_hook:
+        assert hook.stop_calls == 1
+        assert not hook.is_running
+    assert panel.shutdown()
+
+
+def test_easycon_panel_escape_auto_repeat_and_release_do_not_toggle_again(
+    easycon_panel_factory,
+    app,
+):
+    panel = easycon_panel_factory(
+        native_backend=FakeNativeBackend(),
+        keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+
     QApplication.sendEvent(
-        easycon_panel,
+        panel,
         QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
     )
+    assert panel.virtual_controller_enabled is False
 
-    assert easycon_panel.keyboard_controller_check.isChecked() is False
-    assert easycon_panel.virtual_controller_enabled is False
+    for event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+        QApplication.sendEvent(
+            panel,
+            QKeyEvent(
+                event_type,
+                Qt.Key.Key_Escape,
+                Qt.KeyboardModifier.NoModifier,
+                "",
+                True,
+                1,
+            ),
+        )
+    assert panel.virtual_controller_enabled is False
+
+    QApplication.sendEvent(
+        panel,
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
+    )
+    QApplication.sendEvent(
+        panel,
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
+    )
+    assert panel.virtual_controller_enabled is False
+
+    QApplication.sendEvent(
+        panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
+    )
+    assert panel.virtual_controller_enabled is True
+    QApplication.sendEvent(
+        panel,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
+    )
+    app.processEvents()
+    assert panel.virtual_controller_enabled is True
+    assert panel.shutdown()
+
+
+def test_easycon_panel_qt_fallback_keeps_standby_held_key_passthrough_after_resume(
+    easycon_panel_factory,
+):
+    backend = FakeNativeBackend()
+    panel = easycon_panel_factory(
+        native_backend=backend,
+        keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    assert panel._set_virtual_controller_standby()
+
+    mapped_press = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_L,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    mapped_release = QKeyEvent(
+        QEvent.Type.KeyRelease,
+        Qt.Key.Key_L,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    assert panel.eventFilter(panel, mapped_press) is False
+    assert Qt.Key.Key_L in panel._qt_passthrough_pressed_keys
+
+    assert panel._activate_virtual_controller()
+    assert panel.eventFilter(panel, mapped_release) is False
+    assert panel._qt_passthrough_pressed_keys == set()
+    assert backend.key_events == []
+
+    assert panel.eventFilter(panel, mapped_press) is True
+    assert panel.eventFilter(panel, mapped_release) is True
+    assert backend.key_events == [("down", "A"), ("up", "A")]
+    assert panel.shutdown()
+
+
+def test_easycon_panel_qt_fallback_clears_standby_passthrough_on_app_deactivate(
+    easycon_panel_factory,
+):
+    panel = easycon_panel_factory(
+        native_backend=FakeNativeBackend(),
+        keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
+    )
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    assert panel._set_virtual_controller_standby()
+    mapped_press = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_L,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    assert panel.eventFilter(panel, mapped_press) is False
+    assert panel._qt_passthrough_pressed_keys == {Qt.Key.Key_L}
+
+    panel.eventFilter(QApplication.instance(), QEvent(QEvent.Type.ApplicationDeactivate))
+
+    assert panel._qt_passthrough_pressed_keys == set()
+    assert panel.shutdown()
 
 
 def test_easycon_panel_keyboard_virtual_controller_releases_on_app_deactivate(monkeypatch, tmp_path, easycon_panel):

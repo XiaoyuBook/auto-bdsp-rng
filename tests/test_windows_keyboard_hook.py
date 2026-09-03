@@ -41,6 +41,7 @@ class FakeHookApi:
         self.call_next_events: list[tuple[object | None, int, int, int]] = []
         self.message_queue_ready = threading.Event()
         self.quit_requests: list[int] = []
+        self.pressed_virtual_keys: set[int] = set()
 
     def prepare_message_queue(self) -> None:
         self.message_queue_ready.set()
@@ -74,6 +75,9 @@ class FakeHookApi:
     def virtual_key_from_lparam(self, l_param: int) -> int:
         return l_param
 
+    def is_key_pressed(self, virtual_key: int) -> bool:
+        return virtual_key in self.pressed_virtual_keys
+
     def get_message(self) -> tuple[int, object]:
         result = self.messages.get(timeout=2.0)
         if isinstance(result, BaseException):
@@ -91,6 +95,10 @@ class FakeHookApi:
 
     def emit(self, virtual_key: int, message: int) -> int:
         assert self.hook_proc is not None
+        if message in (hook_module.WM_KEYDOWN, hook_module.WM_SYSKEYDOWN):
+            self.pressed_virtual_keys.add(virtual_key)
+        elif message in (hook_module.WM_KEYUP, hook_module.WM_SYSKEYUP):
+            self.pressed_virtual_keys.discard(virtual_key)
         return self.hook_proc(0, message, virtual_key)
 
 
@@ -110,6 +118,7 @@ def wait_until(predicate, timeout: float = 1.0) -> None:
         (Qt.Key.Key_F12, (0x7B,)),
         (Qt.Key.Key_Backspace, (0x08,)),
         (Qt.Key.Key_Delete, (0x2E,)),
+        (Qt.Key.Key_Control, (0xA2, 0xA3, 0x11)),
         (Qt.Key.Key_Plus, (0xBB, 0x6B)),
         (Qt.Key.Key_Minus, (0xBD, 0x6D)),
     ],
@@ -121,7 +130,7 @@ def test_qt_key_to_virtual_keys_covers_vpad_mapping_families(qt_key, expected):
 
 def test_unsupported_qt_key_is_reported_before_hook_install():
     api = FakeHookApi()
-    hook = WindowsKeyboardHook(lambda _key, _down: None, _api=api)
+    hook = WindowsKeyboardHook(lambda _key, _down, _control_down: None, _api=api)
 
     with pytest.raises(KeyboardHookConfigurationError, match="do not have a supported"):
         hook.start({Qt.Key.Key_MediaPlay})
@@ -130,7 +139,10 @@ def test_unsupported_qt_key_is_reported_before_hook_install():
 
 
 def test_ambiguous_virtual_key_mapping_is_rejected():
-    hook = WindowsKeyboardHook(lambda _key, _down: None, _api=FakeHookApi())
+    hook = WindowsKeyboardHook(
+        lambda _key, _down, _control_down: None,
+        _api=FakeHookApi(),
+    )
 
     with pytest.raises(KeyboardHookConfigurationError, match="both map"):
         hook.start({Qt.Key.Key_Plus, Qt.Key.Key_Equal})
@@ -138,7 +150,7 @@ def test_ambiguous_virtual_key_mapping_is_rejected():
 
 def test_non_windows_start_reports_unavailable(monkeypatch):
     monkeypatch.setattr(hook_module.os, "name", "posix")
-    hook = WindowsKeyboardHook(lambda _key, _down: None)
+    hook = WindowsKeyboardHook(lambda _key, _down, _control_down: None)
 
     with pytest.raises(KeyboardHookUnavailableError, match="unavailable"):
         hook.start({Qt.Key.Key_A})
@@ -146,8 +158,11 @@ def test_non_windows_start_reports_unavailable(monkeypatch):
 
 def test_hook_deduplicates_repeats_swallows_mapped_keys_and_captures_escape():
     api = FakeHookApi()
-    events: list[tuple[int, bool]] = []
-    hook = WindowsKeyboardHook(lambda key, down: events.append((key, down)), _api=api)
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
 
     assert hook.start({Qt.Key.Key_A}) is True
     assert hook.start({Qt.Key.Key_A}) is False
@@ -161,10 +176,10 @@ def test_hook_deduplicates_repeats_swallows_mapped_keys_and_captures_escape():
 
     wait_until(lambda: len(events) == 4)
     assert events == [
-        (int(Qt.Key.Key_A), True),
-        (int(Qt.Key.Key_A), False),
-        (int(Qt.Key.Key_Escape), True),
-        (int(Qt.Key.Key_Escape), False),
+        (int(Qt.Key.Key_A), True, False),
+        (int(Qt.Key.Key_A), False, False),
+        (int(Qt.Key.Key_Escape), True, False),
+        (int(Qt.Key.Key_Escape), False, False),
     ]
 
     assert hook.stop() is True
@@ -174,10 +189,244 @@ def test_hook_deduplicates_repeats_swallows_mapped_keys_and_captures_escape():
     assert hook.stop() is False
 
 
+@pytest.mark.parametrize(
+    "control_vk",
+    (0x11, 0xA2, 0xA3),
+    ids=("generic-control", "left-control", "right-control"),
+)
+def test_control_vk_passes_through_and_is_snapshotted_on_escape(control_vk):
+    api = FakeHookApi()
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_A})
+
+    assert api.emit(control_vk, hook_module.WM_KEYDOWN) == 777
+    assert api.emit(0x1B, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x1B, hook_module.WM_KEYUP) == 1
+    assert api.emit(control_vk, hook_module.WM_KEYUP) == 777
+    assert api.emit(0x1B, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x1B, hook_module.WM_KEYUP) == 1
+
+    wait_until(lambda: len(events) == 4)
+    assert events == [
+        (int(Qt.Key.Key_Escape), True, True),
+        (int(Qt.Key.Key_Escape), False, True),
+        (int(Qt.Key.Key_Escape), True, False),
+        (int(Qt.Key.Key_Escape), False, False),
+    ]
+    hook.stop()
+
+
+def test_escape_detects_control_that_was_held_before_hook_start():
+    api = FakeHookApi()
+    api.pressed_virtual_keys.add(0xA2)
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_A})
+
+    assert api.emit(0x1B, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x1B, hook_module.WM_KEYUP) == 1
+
+    wait_until(lambda: len(events) == 2)
+    assert events == [
+        (int(Qt.Key.Key_Escape), True, True),
+        (int(Qt.Key.Key_Escape), False, True),
+    ]
+    hook.stop()
+
+
+@pytest.mark.parametrize(
+    "control_vk",
+    (0xA2, 0xA3, 0x11),
+    ids=("left-control", "right-control", "generic-control"),
+)
+def test_explicitly_mapped_control_is_captured_with_updated_control_snapshot(
+    control_vk,
+):
+    api = FakeHookApi()
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_Control})
+
+    assert api.emit(control_vk, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(control_vk, hook_module.WM_KEYUP) == 1
+
+    wait_until(lambda: len(events) == 2)
+    assert events == [
+        (int(Qt.Key.Key_Control), True, True),
+        (int(Qt.Key.Key_Control), False, False),
+    ]
+    hook.stop()
+
+
+def test_control_snapshot_stays_true_until_both_control_keys_are_released():
+    api = FakeHookApi()
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_A})
+
+    assert api.emit(0xA2, hook_module.WM_KEYDOWN) == 777
+    assert api.emit(0xA3, hook_module.WM_KEYDOWN) == 777
+    assert api.emit(0xA2, hook_module.WM_KEYUP) == 777
+
+    # Exercise the Hook's per-key tracking without the async-state fallback.
+    api.pressed_virtual_keys.clear()
+    assert api.emit(0x1B, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x1B, hook_module.WM_KEYUP) == 1
+    assert api.emit(0xA3, hook_module.WM_KEYUP) == 777
+    assert api.emit(0x1B, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x1B, hook_module.WM_KEYUP) == 1
+
+    wait_until(lambda: len(events) == 4)
+    assert events == [
+        (int(Qt.Key.Key_Escape), True, True),
+        (int(Qt.Key.Key_Escape), False, True),
+        (int(Qt.Key.Key_Escape), True, False),
+        (int(Qt.Key.Key_Escape), False, False),
+    ]
+    hook.stop()
+
+
+def test_stop_releases_with_control_snapshot_and_clears_it_before_restart():
+    api = FakeHookApi()
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_A})
+
+    assert api.emit(0xA2, hook_module.WM_KEYDOWN) == 777
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 1
+    wait_until(lambda: events == [(int(Qt.Key.Key_A), True, True)])
+
+    hook.stop()
+    assert events == [
+        (int(Qt.Key.Key_A), True, True),
+        (int(Qt.Key.Key_A), False, True),
+    ]
+
+    api.pressed_virtual_keys.discard(0xA2)
+    hook.start({Qt.Key.Key_A})
+    assert api.emit(0x1B, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x1B, hook_module.WM_KEYUP) == 1
+    wait_until(lambda: len(events) == 4)
+    assert events[-2:] == [
+        (int(Qt.Key.Key_Escape), True, False),
+        (int(Qt.Key.Key_Escape), False, False),
+    ]
+    hook.stop()
+
+
+def test_disabling_mapped_keys_passes_them_through_but_still_captures_escape():
+    api = FakeHookApi()
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_A})
+
+    hook.set_mapped_keys_enabled(False)
+
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 777
+    assert api.emit(0x41, hook_module.WM_KEYUP) == 777
+    assert api.emit(0x1B, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x1B, hook_module.WM_KEYUP) == 1
+
+    wait_until(lambda: len(events) == 2)
+    assert events == [
+        (int(Qt.Key.Key_Escape), True, False),
+        (int(Qt.Key.Key_Escape), False, False),
+    ]
+    hook.stop()
+
+
+def test_reenabling_mapped_keys_restores_capture():
+    api = FakeHookApi()
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_A})
+
+    hook.set_mapped_keys_enabled(False)
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 777
+    assert api.emit(0x41, hook_module.WM_KEYUP) == 777
+
+    hook.set_mapped_keys_enabled(True)
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x41, hook_module.WM_KEYUP) == 1
+
+    wait_until(lambda: len(events) == 2)
+    assert events == [
+        (int(Qt.Key.Key_A), True, False),
+        (int(Qt.Key.Key_A), False, False),
+    ]
+    hook.stop()
+
+
+def test_disabling_releases_held_key_and_passes_it_through_until_physical_release():
+    api = FakeHookApi()
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
+    hook.start({Qt.Key.Key_A})
+
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 1
+    wait_until(lambda: events == [(int(Qt.Key.Key_A), True, False)])
+
+    hook.set_mapped_keys_enabled(False)
+    hook.set_mapped_keys_enabled(False)
+    wait_until(
+        lambda: events
+        == [
+            (int(Qt.Key.Key_A), True, False),
+            (int(Qt.Key.Key_A), False, False),
+        ]
+    )
+
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 777
+    hook.set_mapped_keys_enabled(True)
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 777
+    assert api.emit(0x41, hook_module.WM_KEYUP) == 777
+    assert events == [
+        (int(Qt.Key.Key_A), True, False),
+        (int(Qt.Key.Key_A), False, False),
+    ]
+
+    assert api.emit(0x41, hook_module.WM_KEYDOWN) == 1
+    assert api.emit(0x41, hook_module.WM_KEYUP) == 1
+    wait_until(lambda: len(events) == 4)
+    assert events[-2:] == [
+        (int(Qt.Key.Key_A), True, False),
+        (int(Qt.Key.Key_A), False, False),
+    ]
+    hook.stop()
+
+
 def test_hook_releases_keyboard_passthrough_as_soon_as_stop_is_requested():
     api = FakeHookApi()
-    events: list[tuple[int, bool]] = []
-    hook = WindowsKeyboardHook(lambda key, down: events.append((key, down)), _api=api)
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
     hook.start({Qt.Key.Key_A})
 
     with hook._state_lock:
@@ -191,8 +440,11 @@ def test_hook_releases_keyboard_passthrough_as_soon_as_stop_is_requested():
 
 def test_alias_virtual_keys_emit_one_logical_transition():
     api = FakeHookApi()
-    events: list[tuple[int, bool]] = []
-    hook = WindowsKeyboardHook(lambda key, down: events.append((key, down)), _api=api)
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
     hook.start({Qt.Key.Key_Plus})
 
     api.emit(0xBB, hook_module.WM_KEYDOWN)
@@ -202,8 +454,8 @@ def test_alias_virtual_keys_emit_one_logical_transition():
 
     wait_until(lambda: len(events) == 2)
     assert events == [
-        (int(Qt.Key.Key_Plus), True),
-        (int(Qt.Key.Key_Plus), False),
+        (int(Qt.Key.Key_Plus), True, False),
+        (int(Qt.Key.Key_Plus), False, False),
     ]
     hook.stop()
 
@@ -213,7 +465,7 @@ def test_slow_consumer_never_blocks_low_level_hook_callback():
     callback_started = threading.Event()
     unblock_callback = threading.Event()
 
-    def slow_callback(_key: int, _down: bool) -> None:
+    def slow_callback(_key: int, _down: bool, _control_down: bool) -> None:
         callback_started.set()
         unblock_callback.wait(timeout=1.0)
 
@@ -232,17 +484,20 @@ def test_slow_consumer_never_blocks_low_level_hook_callback():
 
 def test_stop_dispatches_release_for_every_active_logical_key():
     api = FakeHookApi()
-    events: list[tuple[int, bool]] = []
-    hook = WindowsKeyboardHook(lambda key, down: events.append((key, down)), _api=api)
+    events: list[tuple[int, bool, bool]] = []
+    hook = WindowsKeyboardHook(
+        lambda key, down, control_down: events.append((key, down, control_down)),
+        _api=api,
+    )
     hook.start({Qt.Key.Key_A})
 
     api.emit(0x41, hook_module.WM_KEYDOWN)
-    wait_until(lambda: events == [(int(Qt.Key.Key_A), True)])
+    wait_until(lambda: events == [(int(Qt.Key.Key_A), True, False)])
     hook.stop()
 
     assert events == [
-        (int(Qt.Key.Key_A), True),
-        (int(Qt.Key.Key_A), False),
+        (int(Qt.Key.Key_A), True, False),
+        (int(Qt.Key.Key_A), False, False),
     ]
 
 
@@ -250,7 +505,9 @@ def test_unexpected_message_loop_exit_releases_keys_then_notifies_consumer():
     api = FakeHookApi()
     timeline: list[tuple[str, object]] = []
     hook = WindowsKeyboardHook(
-        lambda key, down: timeline.append(("key", (key, down))),
+        lambda key, down, control_down: timeline.append(
+            ("key", (key, down, control_down))
+        ),
         hook_stopped=lambda error: timeline.append(("stopped", error)),
         _api=api,
     )
@@ -261,8 +518,8 @@ def test_unexpected_message_loop_exit_releases_keys_then_notifies_consumer():
     api.messages.put((0, None))
 
     wait_until(lambda: len(timeline) == 3)
-    assert timeline[0] == ("key", (int(Qt.Key.Key_A), True))
-    assert timeline[1] == ("key", (int(Qt.Key.Key_A), False))
+    assert timeline[0] == ("key", (int(Qt.Key.Key_A), True, False))
+    assert timeline[1] == ("key", (int(Qt.Key.Key_A), False, False))
     assert timeline[2][0] == "stopped"
     assert isinstance(timeline[2][1], KeyboardHookError)
     assert "unexpectedly" in str(timeline[2][1])
@@ -272,10 +529,10 @@ def test_unexpected_message_loop_exit_releases_keys_then_notifies_consumer():
 
 def test_get_message_failure_releases_keys_and_reports_lifecycle_error():
     api = FakeHookApi()
-    events: list[tuple[int, bool]] = []
+    events: list[tuple[int, bool, bool]] = []
     stopped_errors: list[BaseException | None] = []
     hook = WindowsKeyboardHook(
-        lambda key, down: events.append((key, down)),
+        lambda key, down, control_down: events.append((key, down, control_down)),
         hook_stopped=stopped_errors.append,
         _api=api,
     )
@@ -286,7 +543,7 @@ def test_get_message_failure_releases_keys_and_reports_lifecycle_error():
     api.messages.put(OSError("GetMessage failed"))
 
     wait_until(lambda: len(stopped_errors) == 1)
-    assert events[-1] == (int(Qt.Key.Key_A), False)
+    assert events[-1] == (int(Qt.Key.Key_A), False, False)
     assert isinstance(stopped_errors[0], OSError)
     assert "GetMessage failed" in str(stopped_errors[0])
     assert isinstance(hook.last_error, OSError)
@@ -295,10 +552,10 @@ def test_get_message_failure_releases_keys_and_reports_lifecycle_error():
 
 def test_uninstall_failure_is_reported_after_release_queue_is_drained():
     api = FakeHookApi(uninstall_error=OSError("unhook failed"))
-    events: list[tuple[int, bool]] = []
+    events: list[tuple[int, bool, bool]] = []
     stopped_errors: list[BaseException | None] = []
     hook = WindowsKeyboardHook(
-        lambda key, down: events.append((key, down)),
+        lambda key, down, control_down: events.append((key, down, control_down)),
         hook_stopped=stopped_errors.append,
         _api=api,
     )
@@ -309,7 +566,7 @@ def test_uninstall_failure_is_reported_after_release_queue_is_drained():
     with pytest.raises(KeyboardHookError, match="unhook failed"):
         hook.stop()
 
-    assert events[-1] == (int(Qt.Key.Key_A), False)
+    assert events[-1] == (int(Qt.Key.Key_A), False, False)
     assert len(stopped_errors) == 1
     assert isinstance(stopped_errors[0], OSError)
     assert hook.is_running is True
@@ -337,7 +594,7 @@ def test_transient_thread_uninstall_failure_is_retried_by_same_stop_call():
     )
     stopped_errors: list[BaseException | None] = []
     hook = WindowsKeyboardHook(
-        lambda _key, _down: None,
+        lambda _key, _down, _control_down: None,
         hook_stopped=stopped_errors.append,
         _api=api,
     )
@@ -355,7 +612,7 @@ def test_transient_thread_uninstall_failure_is_retried_by_same_stop_call():
 
 def test_start_refuses_to_replace_hook_until_pending_uninstall_succeeds():
     api = FakeHookApi(uninstall_error=OSError("persistent unhook failure"))
-    hook = WindowsKeyboardHook(lambda _key, _down: None, _api=api)
+    hook = WindowsKeyboardHook(lambda _key, _down, _control_down: None, _api=api)
     hook.start({Qt.Key.Key_A})
     original_proc = hook._hook_proc
     original_handle = hook._hook_handle
@@ -377,7 +634,7 @@ def test_start_refuses_to_replace_hook_until_pending_uninstall_succeeds():
 
 def test_post_quit_failure_is_clear_even_if_message_loop_also_exits():
     api = FakeHookApi(post_quit_error=OSError("post failed"))
-    hook = WindowsKeyboardHook(lambda _key, _down: None, _api=api)
+    hook = WindowsKeyboardHook(lambda _key, _down, _control_down: None, _api=api)
     hook.start({Qt.Key.Key_A})
 
     with pytest.raises(KeyboardHookError, match="request keyboard hook shutdown.*post failed"):
@@ -392,7 +649,7 @@ def test_stop_timeout_can_be_retried_after_slow_dispatcher_finishes(monkeypatch)
     callback_started = threading.Event()
     unblock_callback = threading.Event()
 
-    def slow_down_callback(_key: int, down: bool) -> None:
+    def slow_down_callback(_key: int, down: bool, _control_down: bool) -> None:
         if down:
             callback_started.set()
             unblock_callback.wait(timeout=1.0)
@@ -413,10 +670,10 @@ def test_stop_timeout_can_be_retried_after_slow_dispatcher_finishes(monkeypatch)
 
 def test_callback_failure_is_contained_and_later_events_continue():
     api = FakeHookApi()
-    calls: list[tuple[int, bool]] = []
+    calls: list[tuple[int, bool, bool]] = []
 
-    def failing_callback(key: int, down: bool) -> None:
-        calls.append((key, down))
+    def failing_callback(key: int, down: bool, control_down: bool) -> None:
+        calls.append((key, down, control_down))
         if len(calls) == 1:
             raise ValueError("consumer failed")
 
@@ -434,7 +691,7 @@ def test_install_failure_is_wrapped_and_dispatcher_is_stopped():
     api = FakeHookApi(install_error=OSError("installation denied"))
     stopped_errors: list[BaseException | None] = []
     hook = WindowsKeyboardHook(
-        lambda _key, _down: None,
+        lambda _key, _down, _control_down: None,
         hook_stopped=stopped_errors.append,
         _api=api,
     )

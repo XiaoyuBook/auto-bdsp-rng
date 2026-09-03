@@ -47,6 +47,10 @@ def _qt_key(name: str) -> int:
     return int(getattr(Qt.Key, name))
 
 
+_ESCAPE_QT_KEY = _qt_key("Key_Escape")
+_CONTROL_VIRTUAL_KEYS = frozenset({0x11, 0xA2, 0xA3})
+
+
 _DIRECT_QT_TO_VK = {
     _qt_key("Key_Backspace"): (0x08,),
     _qt_key("Key_Tab"): (0x09,),
@@ -70,7 +74,7 @@ _DIRECT_QT_TO_VK = {
     _qt_key("Key_Delete"): (0x2E,),
     _qt_key("Key_Help"): (0x2F,),
     _qt_key("Key_Shift"): (0xA0, 0xA1),
-    _qt_key("Key_Control"): (0xA2, 0xA3),
+    _qt_key("Key_Control"): (0xA2, 0xA3, 0x11),
     _qt_key("Key_Alt"): (0xA4, 0xA5),
     _qt_key("Key_Meta"): (0x5B, 0x5C),
     _qt_key("Key_Menu"): (0x5D,),
@@ -116,7 +120,7 @@ def qt_key_to_virtual_key(qt_key: int) -> int | None:
 
 def _build_vk_mapping(mapped_qt_keys: Iterable[int]) -> dict[int, int]:
     qt_keys = {int(key) for key in mapped_qt_keys if int(key) != 0}
-    qt_keys.add(_qt_key("Key_Escape"))
+    qt_keys.add(_ESCAPE_QT_KEY)
     unsupported: list[int] = []
     result: dict[int, int] = {}
     for qt_key in sorted(qt_keys):
@@ -153,6 +157,8 @@ class _HookApi(Protocol):
     def call_next(self, hook_handle: object | None, n_code: int, w_param: int, l_param: int) -> int: ...
 
     def virtual_key_from_lparam(self, l_param: int) -> int: ...
+
+    def is_key_pressed(self, virtual_key: int) -> bool: ...
 
     def get_message(self) -> tuple[int, object]: ...
 
@@ -213,6 +219,8 @@ class _CtypesWindowsHookApi:
             wintypes.LPARAM,
         )
         self._user32.CallNextHookEx.restype = ctypes.c_ssize_t
+        self._user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
+        self._user32.GetAsyncKeyState.restype = ctypes.c_short
         self._user32.PeekMessageW.argtypes = (
             ctypes.POINTER(_Message),
             wintypes.HWND,
@@ -283,6 +291,9 @@ class _CtypesWindowsHookApi:
         data = ctypes.cast(l_param, ctypes.POINTER(_KbdLlHookStruct)).contents
         return int(data.vkCode)
 
+    def is_key_pressed(self, virtual_key: int) -> bool:
+        return bool(self._user32.GetAsyncKeyState(int(virtual_key)) & 0x8000)
+
     def get_message(self) -> tuple[int, object]:
         message = _Message()
         result = int(self._user32.GetMessageW(ctypes.byref(message), None, 0, 0))
@@ -304,9 +315,10 @@ class WindowsKeyboardHook:
     """Non-blocking Windows ``WH_KEYBOARD_LL`` keyboard event source.
 
     The hook thread only deduplicates and queues mapped key transitions. The
-    supplied callback runs serially on a separate dispatcher thread, so it may
-    forward events to Qt or a device worker without delaying the system hook.
-    ``Escape`` is always captured in addition to the configured Qt keys.
+    supplied callback receives ``(qt_key, down, control_down)`` serially on a
+    separate dispatcher thread, so it may forward events to Qt or a device
+    worker without delaying the system hook. ``Escape`` is always captured in
+    addition to the configured Qt keys.
     ``hook_stopped`` runs on the dispatcher after any synthetic key releases;
     its argument is ``None`` for an explicit clean stop, otherwise the error
     that ended the hook. Both callbacks must marshal UI work to the Qt thread.
@@ -314,7 +326,7 @@ class WindowsKeyboardHook:
 
     def __init__(
         self,
-        key_event: Callable[[int, bool], None],
+        key_event: Callable[[int, bool, bool], None],
         *,
         hook_stopped: Callable[[BaseException | None], None] | None = None,
         _api: _HookApi | None = None,
@@ -329,8 +341,11 @@ class WindowsKeyboardHook:
         self._state_lock = threading.RLock()
         self._pressed_lock = threading.Lock()
         self._pressed_vks: set[int] = set()
+        self._passthrough_pressed_vks: set[int] = set()
+        self._control_pressed_vks: set[int] = set()
         self._vk_to_qt: dict[int, int] = {}
-        self._event_queue: queue.Queue[tuple[int, bool] | object] | None = None
+        self._capture_mapped_keys = True
+        self._event_queue: queue.Queue[tuple[int, bool, bool] | object] | None = None
         self._hook_thread: threading.Thread | None = None
         self._dispatch_thread: threading.Thread | None = None
         self._thread_id: int | None = None
@@ -390,6 +405,9 @@ class WindowsKeyboardHook:
 
             self._vk_to_qt = _build_vk_mapping(mapped_qt_keys)
             self._pressed_vks.clear()
+            self._passthrough_pressed_vks.clear()
+            self._control_pressed_vks.clear()
+            self._capture_mapped_keys = True
             self._ready.clear()
             self._startup_error = None
             self._last_error = None
@@ -423,6 +441,28 @@ class WindowsKeyboardHook:
                 raise startup_error
             raise KeyboardHookError(f"Failed to start the Windows keyboard hook: {startup_error}") from startup_error
         return True
+
+    def set_mapped_keys_enabled(self, enabled: bool) -> None:
+        """Toggle mapped-key capture while always retaining Escape."""
+
+        released_qt_keys: set[int] = set()
+        with self._state_lock:
+            event_queue = self._event_queue
+        with self._pressed_lock:
+            self._capture_mapped_keys = bool(enabled)
+            if enabled:
+                return
+            control_down = bool(self._control_pressed_vks)
+            for virtual_key in tuple(self._pressed_vks):
+                qt_key = self._vk_to_qt.get(virtual_key)
+                if qt_key is None or qt_key == _ESCAPE_QT_KEY:
+                    continue
+                self._pressed_vks.remove(virtual_key)
+                self._passthrough_pressed_vks.add(virtual_key)
+                released_qt_keys.add(qt_key)
+            if event_queue is not None:
+                for qt_key in sorted(released_qt_keys):
+                    event_queue.put_nowait((qt_key, False, control_down))
 
     def stop(self) -> bool:
         with self._state_lock:
@@ -614,17 +654,41 @@ class WindowsKeyboardHook:
         try:
             with self._state_lock:
                 stop_requested = self._stop_requested
+                event_queue = self._event_queue
             if stop_requested:
                 return api.call_next(hook_handle, n_code, int(w_param), int(l_param))
             message = int(w_param)
             if n_code >= 0 and message in _KEY_DOWN_MESSAGES | _KEY_UP_MESSAGES:
                 virtual_key = api.virtual_key_from_lparam(l_param)
-                qt_key = self._vk_to_qt.get(virtual_key)
-                if qt_key is not None:
-                    down = message in _KEY_DOWN_MESSAGES
-                    emit = False
-                    with self._pressed_lock:
-                        if down and virtual_key not in self._pressed_vks:
+                down = message in _KEY_DOWN_MESSAGES
+                physical_control_down = virtual_key == 0x1B and any(
+                    api.is_key_pressed(control_vk)
+                    for control_vk in _CONTROL_VIRTUAL_KEYS
+                )
+                pass_through = False
+                emit = False
+                with self._pressed_lock:
+                    if virtual_key in _CONTROL_VIRTUAL_KEYS:
+                        if down:
+                            self._control_pressed_vks.add(virtual_key)
+                        else:
+                            self._control_pressed_vks.discard(virtual_key)
+                    control_down = bool(self._control_pressed_vks) or physical_control_down
+                    qt_key = self._vk_to_qt.get(virtual_key)
+                    if qt_key is not None:
+                        capture_mapped_keys = self._capture_mapped_keys
+                        if qt_key != _ESCAPE_QT_KEY and virtual_key in self._passthrough_pressed_vks:
+                            if not down:
+                                self._passthrough_pressed_vks.remove(virtual_key)
+                            pass_through = True
+                        elif qt_key != _ESCAPE_QT_KEY and not capture_mapped_keys:
+                            self._pressed_vks.discard(virtual_key)
+                            if down:
+                                self._passthrough_pressed_vks.add(virtual_key)
+                            else:
+                                self._passthrough_pressed_vks.discard(virtual_key)
+                            pass_through = True
+                        elif down and virtual_key not in self._pressed_vks:
                             already_active = any(
                                 self._vk_to_qt.get(pressed_vk) == qt_key
                                 for pressed_vk in self._pressed_vks
@@ -637,10 +701,9 @@ class WindowsKeyboardHook:
                                 self._vk_to_qt.get(pressed_vk) == qt_key
                                 for pressed_vk in self._pressed_vks
                             )
-                    if emit:
-                        event_queue = self._event_queue
-                        if event_queue is not None:
-                            event_queue.put_nowait((qt_key, down))
+                        if not pass_through and emit and event_queue is not None:
+                            event_queue.put_nowait((qt_key, down, control_down))
+                if qt_key is not None and not pass_through:
                     return 1
         except BaseException as exc:
             with self._state_lock:
@@ -660,12 +723,15 @@ class WindowsKeyboardHook:
         with self._pressed_lock:
             pressed = sorted(self._pressed_vks)
             self._pressed_vks.clear()
+            self._passthrough_pressed_vks.clear()
+            control_down = bool(self._control_pressed_vks)
+            self._control_pressed_vks.clear()
         released_qt_keys: set[int] = set()
         for virtual_key in pressed:
             qt_key = self._vk_to_qt.get(virtual_key)
             if qt_key is not None and qt_key not in released_qt_keys:
                 released_qt_keys.add(qt_key)
-                event_queue.put_nowait((qt_key, False))
+                event_queue.put_nowait((qt_key, False, control_down))
 
     def _dispatch_events(self) -> None:
         event_queue = self._event_queue
@@ -682,9 +748,9 @@ class WindowsKeyboardHook:
                         with self._state_lock:
                             self._last_error = exc
                 return
-            qt_key, down = event
+            qt_key, down, control_down = event
             try:
-                self._key_event(qt_key, down)
+                self._key_event(qt_key, down, control_down)
             except BaseException as exc:
                 with self._state_lock:
                     self._last_error = exc

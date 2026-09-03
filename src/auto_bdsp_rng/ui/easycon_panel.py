@@ -400,6 +400,7 @@ class KeyMappingDialog(QDialog):
         self._dirty = False
         self._rejecting = False
         self._buttons: dict[str, QPushButton] = {}
+        self._delete_actions: dict[str, QAction] = {}
         self._build_ui()
         self._load_mapping()
 
@@ -441,7 +442,12 @@ class KeyMappingDialog(QDialog):
             btn.setProperty("label", label)
             btn.setToolTip(f"{label}: {_qt_key_name(self._mapping.get(name, 0)) or '未绑定'}")
             btn.clicked.connect(lambda checked, n=name: self._select_button(n))
+            delete_action = QAction("删除映射", btn)
+            delete_action.triggered.connect(lambda checked=False, n=name: self._set_mapping(n, 0))
+            btn.addAction(delete_action)
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
             self._buttons[name] = btn
+            self._delete_actions[name] = delete_action
 
         ok_btn = QPushButton("确定", self)
         ok_btn.setGeometry(239, 652, 223, 53)
@@ -465,13 +471,25 @@ class KeyMappingDialog(QDialog):
         self.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _load_mapping(self) -> None:
-        for name, key in self._mapping.items():
-            btn = self._buttons.get(name)
-            if btn is not None:
-                key_name = _qt_key_name(key)
-                label = btn.property("label") or name
-                btn.setText(key_name if key_name else "")
-                btn.setToolTip(f"{label}: {key_name or '未绑定'}")
+        for name in self._buttons:
+            self._refresh_mapping_button(name)
+
+    def _refresh_mapping_button(self, name: str) -> None:
+        key = int(self._mapping.get(name, 0))
+        btn = self._buttons[name]
+        key_name = _qt_key_name(key)
+        label = btn.property("label") or name
+        btn.setText(key_name)
+        btn.setToolTip(f"{label}: {key_name or '未绑定'}")
+        self._delete_actions[name].setEnabled(key != 0)
+
+    def _set_mapping(self, name: str, key: int) -> None:
+        self._mapping[name] = int(key)
+        self._dirty = True
+        self._refresh_mapping_button(name)
+        for btn in self._buttons.values():
+            btn.setChecked(False)
+        self._active_name = None
 
     def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if self._active_name is None:
@@ -480,15 +498,7 @@ class KeyMappingDialog(QDialog):
         key = event.key()
         if key == Qt.Key.Key_Escape:
             key = 0
-        self._mapping[self._active_name] = key
-        self._dirty = True
-        btn = self._buttons[self._active_name]
-        key_name = _qt_key_name(key)
-        label = btn.property("label") or self._active_name
-        btn.setText(key_name if key_name else "")
-        btn.setToolTip(f"{label}: {key_name or '未绑定'}")
-        btn.setChecked(False)
-        self._active_name = None
+        self._set_mapping(self._active_name, key)
 
     def reject(self) -> None:
         self._rejecting = True
@@ -508,7 +518,7 @@ class KeyMappingDialog(QDialog):
 class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
     capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
-    virtualControllerKeyEvent = Signal(int, bool, int)
+    virtualControllerKeyEvent = Signal(int, bool, bool, int)
     virtualControllerHookStopped = Signal(object, int)
     nativeScriptStarted = Signal()
     runLogRequested = Signal()
@@ -580,8 +590,10 @@ class EasyConPanel(QWidget):
         self._keyboard_hook: WindowsKeyboardHook | None = None
         self._vpad_input_source: str | None = None
         self._vpad_generation = 0
+        self._qt_passthrough_pressed_keys: set[int] = set()
         self._controller_overlay: ControllerStateOverlay | None = None
         self._vpad_hide_pending = False
+        self._escape_pressed = False
         self._recording = False
         self._recording_paused = False
         self._recorded_lines: list[str] = []
@@ -1257,7 +1269,9 @@ class EasyConPanel(QWidget):
     def _poll_native_connection_status(self) -> None:
         if self._shutting_down:
             return
-        if self._keyboard_hook is not None and not self.virtual_controller_enabled:
+        if self._keyboard_hook is not None and (
+            self._vpad_input_source != "hook" or not self._keyboard_hook.is_running
+        ):
             self._deactivate_virtual_controller(
                 hide_overlay=not self._controller_connection_active(),
                 log=False,
@@ -2900,7 +2914,10 @@ class EasyConPanel(QWidget):
 
     def open_key_mapping(self) -> None:
         restore_controller = self.virtual_controller_enabled
-        if restore_controller and not self._deactivate_virtual_controller(log=False):
+        restore_standby = (
+            not restore_controller and self._vpad_input_source in {"hook", "qt"}
+        )
+        if (restore_controller or restore_standby) and not self._deactivate_virtual_controller(log=False):
             self._append_log("error", "系统级键盘捕获尚未完全停止，无法打开按键映射")
             return
         dialog = KeyMappingDialog(self.key_mapping, self)
@@ -2911,6 +2928,8 @@ class EasyConPanel(QWidget):
             self._append_log("info", "按键映射已更新")
         if restore_controller:
             self._activate_virtual_controller()
+        elif restore_standby and self._activate_virtual_controller():
+            self._set_virtual_controller_standby(log=False)
 
     def set_keyboard_controller_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -3000,16 +3019,27 @@ class EasyConPanel(QWidget):
 
     def _toggle_virtual_controller_from_overlay(self) -> None:
         if self.virtual_controller_enabled:
-            self._deactivate_virtual_controller()
+            self._set_virtual_controller_standby()
         else:
             self._activate_virtual_controller()
 
     def _hide_controller_overlay(self) -> None:
         self._deactivate_virtual_controller(hide_overlay=True)
 
-    def _emit_hook_key_event(self, key: int, down: bool, generation: int) -> None:
+    def _emit_hook_key_event(
+        self,
+        key: int,
+        down: bool,
+        control_down: bool,
+        generation: int,
+    ) -> None:
         try:
-            self.virtualControllerKeyEvent.emit(int(key), bool(down), generation)
+            self.virtualControllerKeyEvent.emit(
+                int(key),
+                bool(down),
+                bool(control_down),
+                generation,
+            )
         except RuntimeError:
             pass
 
@@ -3033,6 +3063,31 @@ class EasyConPanel(QWidget):
             self._append_log("warn", "请先连接伊机控，再启用键盘虚拟手柄")
             return False
 
+        if self._vpad_input_source in {"hook", "qt"}:
+            source = self._vpad_input_source
+            if source == "hook":
+                hook = self._keyboard_hook
+                if hook is None or not hook.is_running:
+                    self._deactivate_virtual_controller(log=False)
+                    self._append_log("error", "系统级键盘捕获已停止，无法恢复虚拟手柄")
+                    return False
+                try:
+                    hook.set_mapped_keys_enabled(True)
+                except Exception as exc:
+                    self._deactivate_virtual_controller(log=False)
+                    self._append_log("error", f"恢复系统级键盘捕获失败: {exc}")
+                    return False
+            self.virtual_controller_enabled = True
+            self._set_keyboard_controller_checked(True)
+            if self._is_native_mode():
+                overlay = self._ensure_controller_overlay()
+                overlay.set_active(True)
+                overlay.show_overlay()
+            source_label = "系统级键盘捕获" if source == "hook" else "窗口内键盘捕获"
+            self._append_log("info", f"键盘虚拟手柄已启用（{source_label}）")
+            self.setFocus()
+            return True
+
         stale_hook = self._keyboard_hook
         if stale_hook is not None:
             try:
@@ -3053,7 +3108,12 @@ class EasyConPanel(QWidget):
             hook = None
             try:
                 hook = factory(
-                    lambda key, down: self._emit_hook_key_event(key, down, generation),
+                    lambda key, down, control_down: self._emit_hook_key_event(
+                        key,
+                        down,
+                        control_down,
+                        generation,
+                    ),
                     hook_stopped=lambda error: self._emit_hook_stopped(error, generation),
                 )
                 if not hook.start(self.key_mapping.values()):
@@ -3096,13 +3156,70 @@ class EasyConPanel(QWidget):
         self.setFocus()
         return True
 
+    def _set_virtual_controller_standby(self, *, log: bool = True) -> bool:
+        if not self.virtual_controller_enabled:
+            return self._vpad_input_source in {"hook", "qt"}
+
+        source = self._vpad_input_source
+        if source not in {"hook", "qt"}:
+            return self._deactivate_virtual_controller(log=log)
+
+        self.virtual_controller_enabled = False
+        self._set_keyboard_controller_checked(False)
+        if source == "hook":
+            hook = self._keyboard_hook
+            if hook is None:
+                self._deactivate_virtual_controller(log=False)
+                return False
+            try:
+                hook.set_mapped_keys_enabled(False)
+            except Exception as exc:
+                self._append_log("error", f"暂停系统级键盘捕获失败: {exc}")
+                self._deactivate_virtual_controller(log=False)
+                return False
+        else:
+            self._qt_passthrough_pressed_keys.update(self.virtual_controller_keys)
+
+        if self._recording:
+            self._stop_recording()
+        else:
+            self._release_virtual_controller_keys()
+
+        overlay = self._controller_overlay
+        if overlay is not None:
+            overlay.set_active(False)
+        if log:
+            self._append_log("info", "键盘虚拟手柄已切换为待机")
+        return True
+
+    def _handle_escape_key(self, down: bool, *, control_down: bool = False) -> bool:
+        if not down:
+            self._escape_pressed = False
+            return True
+        if self._escape_pressed:
+            return True
+
+        self._escape_pressed = True
+        if control_down:
+            self._deactivate_virtual_controller(hide_overlay=True)
+        elif self.virtual_controller_enabled:
+            self._set_virtual_controller_standby()
+        else:
+            self._activate_virtual_controller()
+        return True
+
     def _deactivate_virtual_controller(
         self,
         *,
         hide_overlay: bool = False,
         log: bool = True,
     ) -> bool:
-        was_active = self.virtual_controller_enabled
+        had_controller = (
+            self.virtual_controller_enabled
+            or self._vpad_input_source in {"hook", "qt"}
+            or self._keyboard_hook is not None
+        )
+        self._escape_pressed = False
         self._vpad_hide_pending = self._vpad_hide_pending or hide_overlay
         self._vpad_generation += 1
         self.virtual_controller_enabled = False
@@ -3113,6 +3230,7 @@ class EasyConPanel(QWidget):
         app = QApplication.instance()
         if source == "qt" and app is not None:
             app.removeEventFilter(self)
+        self._qt_passthrough_pressed_keys.clear()
 
         stopped = True
         hook = self._keyboard_hook
@@ -3136,7 +3254,7 @@ class EasyConPanel(QWidget):
             if self._vpad_hide_pending and stopped:
                 overlay.hide()
                 self._vpad_hide_pending = False
-        if was_active and log:
+        if had_controller and log:
             self._append_log("info", "键盘虚拟手柄已关闭")
         return stopped
 
@@ -3146,10 +3264,21 @@ class EasyConPanel(QWidget):
         self._append_log("error", "系统级键盘捕获尚未完全停止，已取消脚本启动")
         return False
 
-    def _dispatch_virtual_controller_key(self, key: int, down: bool, generation: int) -> None:
+    def _dispatch_virtual_controller_key(
+        self,
+        key: int,
+        down: bool,
+        control_down: bool,
+        generation: int,
+    ) -> None:
         if self._vpad_input_source != "hook":
             return
-        self._handle_virtual_controller_key(key, down, generation=generation)
+        self._handle_virtual_controller_key(
+            key,
+            down,
+            control_down=control_down,
+            generation=generation,
+        )
 
     def _handle_virtual_controller_hook_stopped(
         self,
@@ -3163,25 +3292,40 @@ class EasyConPanel(QWidget):
         self._append_log("error", f"系统级键盘捕获已意外停止{detail}")
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if not self.virtual_controller_enabled or self._vpad_input_source != "qt":
+        if self._vpad_input_source != "qt":
             return super().eventFilter(watched, event)
-        if event.type() == QEvent.Type.KeyPress:
-            if event.isAutoRepeat():  # type: ignore[attr-defined]
-                key = event.key()  # type: ignore[attr-defined]
-                return (
-                    key == Qt.Key.Key_Escape
-                    or _resolve_vpad_button(key, self.key_mapping) is not None
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            key = event.key()  # type: ignore[attr-defined]
+            down = event.type() == QEvent.Type.KeyPress
+            auto_repeat = event.isAutoRepeat()  # type: ignore[attr-defined]
+            if key == Qt.Key.Key_Escape:
+                if auto_repeat:
+                    return True
+                control_down = bool(
+                    event.modifiers() & Qt.KeyboardModifier.ControlModifier  # type: ignore[attr-defined]
                 )
-            return self._handle_virtual_controller_key(event.key(), down=True)  # type: ignore[attr-defined]
-        if event.type() == QEvent.Type.KeyRelease:
-            if event.isAutoRepeat():  # type: ignore[attr-defined]
-                key = event.key()  # type: ignore[attr-defined]
-                return (
-                    key == Qt.Key.Key_Escape
-                    or _resolve_vpad_button(key, self.key_mapping) is not None
+                return self._handle_virtual_controller_key(
+                    key,
+                    down=down,
+                    control_down=control_down,
                 )
-            return self._handle_virtual_controller_key(event.key(), down=False)  # type: ignore[attr-defined]
+
+            action = _resolve_vpad_button(key, self.key_mapping)
+            if key in self._qt_passthrough_pressed_keys:
+                if not down and not auto_repeat:
+                    self._qt_passthrough_pressed_keys.remove(key)
+                return super().eventFilter(watched, event)
+            if not self.virtual_controller_enabled:
+                if action is not None and down and not auto_repeat:
+                    self._qt_passthrough_pressed_keys.add(key)
+                return super().eventFilter(watched, event)
+            if auto_repeat:
+                return action is not None
+            return self._handle_virtual_controller_key(key, down=down)
         if event.type() in (QEvent.Type.ApplicationDeactivate, QEvent.Type.WindowDeactivate):
+            self._escape_pressed = False
+            if event.type() == QEvent.Type.ApplicationDeactivate:
+                self._qt_passthrough_pressed_keys.clear()
             self._release_virtual_controller_keys()
         return super().eventFilter(watched, event)
 
@@ -3190,17 +3334,17 @@ class EasyConPanel(QWidget):
         key: int,
         down: bool,
         *,
+        control_down: bool = False,
         generation: int | None = None,
     ) -> bool:
         action = _resolve_vpad_button(key, self.key_mapping)
         captured = key == Qt.Key.Key_Escape or action is not None
         if generation is not None and generation != self._vpad_generation:
             return captured
+        if key == Qt.Key.Key_Escape:
+            return self._handle_escape_key(down, control_down=control_down)
         if not self.virtual_controller_enabled:
             return False
-        if key == Qt.Key.Key_Escape:
-            self._deactivate_virtual_controller()
-            return True
         if action is None:
             return False
         if self._controller_script_running() or not self._controller_connection_active():
