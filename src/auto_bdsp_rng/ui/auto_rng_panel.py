@@ -137,14 +137,14 @@ class AutoRngStrategyDialog(QDialog):
         self.form.setHorizontalSpacing(18)
         self.form.setVerticalSpacing(12)
 
-        self.reseed_threshold_frames = self._spin(0, DEFAULT_RESEED_THRESHOLD_FRAMES, " 帧")
-        self.reidentify_max_attempts = self._spin(1, DEFAULT_REIDENTIFY_MAX_ATTEMPTS, " 次")
+        self.reseed_threshold_frames = self._spin(0, DEFAULT_RESEED_THRESHOLD_FRAMES)
+        self.reidentify_max_attempts = self._spin(1, DEFAULT_REIDENTIFY_MAX_ATTEMPTS)
         self.reidentify_failure_policy = QComboBox()
         self.reidentify_failure_policy.addItem("进入下一轮", "next_round")
         self.reidentify_failure_policy.addItem("先重测 Seed", "recapture_seed")
         self.reidentify_failure_policy.setFixedSize(215, 34)
-        self.reidentify_seed_max_attempts = self._spin(1, DEFAULT_REIDENTIFY_SEED_MAX_ATTEMPTS, " 次")
-        self.reseeding_threshold = self._spin(0, DEFAULT_RESEEDING_THRESHOLD_FRAMES, " 帧")
+        self.reidentify_seed_max_attempts = self._spin(1, DEFAULT_REIDENTIFY_SEED_MAX_ATTEMPTS)
+        self.reseeding_threshold = self._spin(0, DEFAULT_RESEEDING_THRESHOLD_FRAMES)
 
         rows = (
             (
@@ -166,7 +166,7 @@ class AutoRngStrategyDialog(QDialog):
             (
                 "重测 Seed 最大尝试次数",
                 self.reidentify_seed_max_attempts,
-                "仅在失败策略为“先重测 Seed”时生效。",
+                "可随时预先设置；仅在失败策略为“先重测 Seed”时生效。",
             ),
             (
                 "过场预留帧数",
@@ -180,7 +180,6 @@ class AutoRngStrategyDialog(QDialog):
             label = self.form.labelForField(field)
             if label is not None:
                 label.setToolTip(tooltip)
-        self.reidentify_seed_attempts_label = self.form.labelForField(self.reidentify_seed_max_attempts)
         layout.addLayout(self.form)
 
         self.button_box = QDialogButtonBox(
@@ -200,15 +199,11 @@ class AutoRngStrategyDialog(QDialog):
         self.button_box.rejected.connect(self.reject)
         layout.addWidget(self.button_box)
 
-        self.reidentify_failure_policy.currentIndexChanged.connect(self._sync_seed_attempts_enabled)
-        self._sync_seed_attempts_enabled()
-
     @staticmethod
-    def _spin(minimum: int, value: int, suffix: str) -> QSpinBox:
+    def _spin(minimum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(minimum, QT_INT_MAX)
         spin.setValue(value)
-        spin.setSuffix(suffix)
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spin.setFixedSize(215, 34)
         set_c_locale(spin)
@@ -253,14 +248,6 @@ class AutoRngStrategyDialog(QDialog):
             DEFAULT_REIDENTIFY_SEED_MAX_ATTEMPTS,
             DEFAULT_RESEEDING_THRESHOLD_FRAMES,
         )
-
-    @Slot()
-    def _sync_seed_attempts_enabled(self) -> None:
-        enabled = self.policy() == "recapture_seed"
-        self.reidentify_seed_max_attempts.setEnabled(enabled)
-        if self.reidentify_seed_attempts_label is not None:
-            self.reidentify_seed_attempts_label.setEnabled(enabled)
-
 
 class AutoRngPanel(QWidget):
     startRequested = Signal(object)

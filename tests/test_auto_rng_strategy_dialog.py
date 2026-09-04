@@ -33,7 +33,7 @@ def test_strategy_dialog_defaults_and_row_order(app, tmp_path):
     assert dialog.reidentify_max_attempts.value() == 2
     assert dialog.policy() == "next_round"
     assert dialog.reidentify_seed_max_attempts.value() == 1
-    assert not dialog.reidentify_seed_max_attempts.isEnabled()
+    assert dialog.reidentify_seed_max_attempts.isEnabled()
     assert dialog.reseeding_threshold.value() == 500_000
     assert [
         dialog.form.labelForField(field).text()
@@ -58,18 +58,19 @@ def test_strategy_dialog_defaults_and_row_order(app, tmp_path):
     assert dialog.cancel_button.text() == "取消"
 
 
-def test_strategy_dialog_only_enables_seed_attempts_for_recapture_policy(app, tmp_path):
+def test_strategy_dialog_keeps_seed_attempts_editable_for_all_policies(app, tmp_path):
     panel = AutoRngPanel(script_dir=tmp_path, settings=_settings(tmp_path / "auto-rng.ini"))
     dialog = panel.strategy_dialog
+    label = dialog.form.labelForField(dialog.reidentify_seed_max_attempts)
 
-    dialog.set_policy("recapture_seed")
+    dialog.set_policy("next_round")
     assert dialog.reidentify_seed_max_attempts.isEnabled()
-    assert dialog.reidentify_seed_attempts_label.isEnabled()
+    assert label.isEnabled()
 
     dialog.reidentify_seed_max_attempts.setValue(8)
-    dialog.set_policy("next_round")
-    assert not dialog.reidentify_seed_max_attempts.isEnabled()
-    assert not dialog.reidentify_seed_attempts_label.isEnabled()
+    dialog.set_policy("recapture_seed")
+    assert dialog.reidentify_seed_max_attempts.isEnabled()
+    assert label.isEnabled()
     assert dialog.reidentify_seed_max_attempts.value() == 8
 
 
@@ -198,6 +199,8 @@ def test_strategy_numeric_fields_use_c_locale_and_qt_integer_limit(app, tmp_path
         assert field.locale().name() == "C"
         assert field.lineEdit().locale().name() == "C"
         assert field.maximum() == QT_INT_MAX
+        assert field.suffix() == ""
+        assert field.lineEdit().text() == str(field.value())
     assert panel.reidentify_max_attempts.minimum() == 1
     assert panel.reidentify_seed_max_attempts.minimum() == 1
 
