@@ -2034,7 +2034,6 @@ def test_auto_rng_strategy_parameters_have_hover_explanations(app, tmp_path):
         (panel.max_advances, "过 100 万帧大约需要 10 分钟"),
         (panel.fixed_delay, "delay 越大，撞闪脚本启动得越早"),
         (panel.max_wait_frames, "越依赖过帧脚本接近目标"),
-        (panel.reseeding_threshold, "若重测 Seed 或校正后"),
         (panel.shiny_threshold_seconds, "判定为疑似闪光并停止自动流程"),
     )
     for field, expected_text in explained_rows:
@@ -2045,6 +2044,8 @@ def test_auto_rng_strategy_parameters_have_hover_explanations(app, tmp_path):
 
     assert form.labelForField(panel.max_advances).text() == "搜索范围"
     assert form.labelForField(panel.shiny_threshold_seconds).text() == "闪光阈值（秒）"
+    assert form.indexOf(panel.reseeding_threshold) == -1
+    assert panel.strategy_dialog.form.labelForField(panel.reseeding_threshold).text() == "过场预留帧数"
     for control in (
         panel.sync_combo,
         panel.sync_nature_input,
@@ -3485,6 +3486,49 @@ def test_history_panel_distinguishes_no_candidate_and_preserves_trigger(app, mon
     assert "脚本启动 Adv: 1234" in result_text
     assert "使用 delay: 100" in result_text
     assert run_logs[-1] == "本轮结果：未出闪；间隔 2.345；启动 Adv 1234；delay 100"
+
+
+def test_auto_rng_cycle_restart_closes_previous_history_round(app, monkeypatch):
+    window = MainWindow()
+    run_logs: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        window,
+        "_write_run_log",
+        lambda source, message, **_kwargs: run_logs.append((str(source), str(message))),
+    )
+    run_id = "auto-rng-retry"
+    window._active_auto_rng_run_id = run_id
+    window.history_tab.begin_run(run_id, "谢米")
+    window._handle_auto_history_event("cycle_start", (1,))
+
+    window._handle_auto_history_event("cycle_restart", ("补救测 Seed 失败，进入下一轮测种",))
+
+    record = window.history_tab._active_record()
+    assert record is not None
+    assert record.outcome == "继续重试"
+    assert record.detail_title == "本轮结束，继续重试"
+    assert run_logs[-1] == (
+        "历史记录",
+        "本轮结束，继续重试：补救测 Seed 失败，进入下一轮测种",
+    )
+
+
+def test_history_seed_recapture_clears_old_locked_summary(app):
+    panel = HistoryPanel()
+    panel.begin_run("run-reseed", "谢米")
+    panel.cycle_start(1)
+    panel.seed_captured("old seed", 0, 0, 100_000)
+    record = panel._active_record()
+    assert record is not None
+    record.locked_advances = 1_234
+    record.candidate_count = 5
+
+    panel.seed_captured("new seed", 0, 1, 100_000)
+
+    assert record.seed_text == "new seed"
+    assert record.locked_advances is None
+    assert record.candidate_count == 0
+    assert record.detail_title == "Seed 已重新捕获"
 
 
 def test_auto_rng_escape_attempt_history_includes_loop_and_attempt(app, monkeypatch):

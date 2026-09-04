@@ -654,7 +654,7 @@ class AutoRngRunner:
 
     def _capture_seed(self) -> None:
         try:
-            self._seed_result = self._with_measurement_time(self.services.capture_seed())
+            seed = self._with_measurement_time(self.services.capture_seed())
         except Exception as exc:
             if self._stop_requested:
                 return
@@ -665,14 +665,37 @@ class AutoRngRunner:
                 f"seed 捕获失败（连续 {self._seed_capture_failures}/5）: {exc}，进入下一轮测种"
             )
             return
+        if self.should_stop():
+            return
+        self._adopt_captured_seed(seed, message="seed 捕获完成")
+
+    def _adopt_captured_seed(self, seed: AutoRngSeedResult, *, message: str) -> None:
         self._seed_capture_failures = 0
-        seed = self._seed_result
+        self._seed_result = seed
+        self._locked_target = None
+        self._missed_target_advance = None
+        self._last_search_was_missed = False
+        self._requested_advances = 0
+        self._all_candidates = []
+        self._later_candidate_count = 0
+        self._reserved_exit_reseed_pending = False
+        self._exit_reseed_done = False
+        self._need_sync_switch = False
+        self._last_shiny_interval = None
+        self._last_used_delay = None
         self._reset_advance_counter(seed)
         self._history("seed_captured", seed.seed_text, seed.current_advances, seed.npc, self.config.max_advances)
         self._set_progress(
             AutoRngPhase.SEARCH_TARGET,
-            "seed 捕获完成",
+            message,
+            locked_target=None,
+            raw_target_advances=None,
+            fixed_delay=None,
+            trigger_advances=None,
             current_advances=seed.current_advances,
+            remaining_to_trigger=None,
+            final_flash_frames=None,
+            last_script_path=None,
             seed_text=seed.seed_text,
         )
 
@@ -863,25 +886,13 @@ class AutoRngRunner:
             max_wait_frames=self.config.max_wait_frames,
         )
         if (
-            seed.after_exit_reseed
-            and self._last_search_was_missed
+            (seed.after_exit_reseed or self._exit_reseed_done)
             and decision.kind == AutoRngDecisionKind.RUN_ADVANCE_SCRIPT
             and (decision.requested_advances or 0) > self.config.reseed_threshold_frames
         ):
-            self._reserved_exit_reseed_pending = False
-            self._exit_reseed_done = False
-            self._last_search_was_missed = False
-            self._missed_target_advance = None
-            self._locked_target = None
-            self._set_progress(
-                AutoRngPhase.RUN_SEED_SCRIPT,
-                f"过场后已错过目标，新目标需过 {decision.requested_advances} 帧，超过重测阈值 {self.config.reseed_threshold_frames}，进入下一轮测种",
-                locked_target=None,
-                raw_target_advances=decision.raw_target_advances,
-                fixed_delay=decision.fixed_delay,
-                trigger_advances=decision.trigger_advances,
-                current_advances=decision.current_advances,
-                remaining_to_trigger=decision.remaining_to_trigger,
+            self._restart_from_seed_script(
+                f"过场后新目标需过 {decision.requested_advances} 帧，超过重测阈值 "
+                f"{self.config.reseed_threshold_frames}，不直接重测 Seed，进入下一轮测种"
             )
             return
         decision = self._apply_exit_reseed_strategy(decision)
@@ -955,11 +966,28 @@ class AutoRngRunner:
             self._requested_advances,
             reseed_threshold_frames=self.config.reseed_threshold_frames,
         )
+        seed = self._require_seed()
+        if (
+            decision.kind == AutoRngDecisionKind.CAPTURE_SEED
+            and (seed.after_exit_reseed or self._exit_reseed_done)
+        ):
+            self._restart_from_seed_script(
+                f"过场后本次过帧 {self._requested_advances} 帧，超过重测阈值 "
+                f"{self.config.reseed_threshold_frames}，不直接重测 Seed，进入下一轮测种"
+            )
+            return
         self._set_progress_from_decision(decision, last_script_path=path)
 
     def _reidentify(self, next_phase: AutoRngPhase) -> None:
         seed = self._require_seed()
         prev_advances = seed.current_advances
+        is_exit_reidentify = seed.after_exit_reseed or self._exit_reseed_done
+        max_attempts = (
+            2
+            if is_exit_reidentify
+            else max(1, int(self.config.reidentify_max_attempts))
+        )
+        label = "过场后校正" if is_exit_reidentify else "校正"
         # 传递预期位置提示，用于约束 reidentify 搜索范围
         hint = seed.current_advances + self._requested_advances if self._requested_advances else None
         seed_with_hint = seed if hint is None else replace(seed, expected_advances_hint=hint)
@@ -968,13 +996,22 @@ class AutoRngRunner:
                 self._call_reidentify_with_retry(
                     self.services.reidentify,
                     seed_with_hint,
-                    label="校正",
+                    label=label,
+                    max_attempts=max_attempts,
                 )
             )
         except Exception as exc:
             if self.should_stop():
                 return
-            self._restart_from_seed_script(f"校正连续 2 次失败: {exc}，进入下一轮测种")
+            if (
+                not is_exit_reidentify
+                and self.config.reidentify_failure_policy == "recapture_seed"
+            ):
+                self._recover_seed_after_reidentify_failure(exc, max_attempts)
+                return
+            self._restart_from_seed_script(
+                f"{label}连续 {max_attempts} 次失败: {exc}，进入下一轮测种"
+            )
             return
         if self.should_stop():
             return
@@ -1013,6 +1050,7 @@ class AutoRngRunner:
                         service,
                         seed,
                         label="过场校正",
+                        max_attempts=2,
                     )
                 ),
                 after_exit_reseed=True,
@@ -1033,6 +1071,78 @@ class AutoRngRunner:
             current_advances=self._seed_result.current_advances,
             seed_text=self._seed_result.seed_text,
             last_script_path=path,
+        )
+
+    def _recover_seed_after_reidentify_failure(
+        self,
+        reidentify_error: Exception,
+        reidentify_attempts: int,
+    ) -> None:
+        recovery_attempts = max(1, int(self.config.reidentify_seed_max_attempts))
+        self._set_progress(
+            AutoRngPhase.CAPTURE_SEED,
+            f"校正连续 {reidentify_attempts} 次失败: {reidentify_error}，"
+            f"开始补救测 Seed（最多 {recovery_attempts} 次）",
+            locked_target=None,
+            raw_target_advances=None,
+            fixed_delay=None,
+            trigger_advances=None,
+            remaining_to_trigger=None,
+            final_flash_frames=None,
+            last_script_path=None,
+        )
+
+        last_error: Exception | None = None
+        for attempt in range(1, recovery_attempts + 1):
+            if self.should_stop():
+                return
+            try:
+                recovered_seed = self._with_measurement_time(self.services.capture_seed())
+            except Exception as exc:
+                last_error = exc
+                if self.should_stop():
+                    return
+                if attempt < recovery_attempts:
+                    self._set_progress(
+                        AutoRngPhase.CAPTURE_SEED,
+                        f"补救测 Seed 第 {attempt} 次失败（{attempt}/{recovery_attempts}）: "
+                        f"{exc}，继续尝试",
+                    )
+                continue
+
+            if self.should_stop():
+                return
+            self._adopt_captured_seed(
+                recovered_seed,
+                message=f"补救测 Seed 第 {attempt}/{recovery_attempts} 次成功，已清除旧目标并重新搜索",
+            )
+            return
+
+        assert last_error is not None
+        self._seed_capture_failures += 1
+        if self._seed_capture_failures >= 5:
+            message = (
+                "连续 5 次 seed 捕获失败，自动流程停止: "
+                f"补救测 Seed 连续 {recovery_attempts} 次失败: {last_error}"
+            )
+            self._clear_current_cycle_state()
+            self._set_progress(
+                AutoRngPhase.FAILED,
+                message,
+                locked_target=None,
+                raw_target_advances=None,
+                fixed_delay=None,
+                trigger_advances=None,
+                current_advances=None,
+                remaining_to_trigger=None,
+                final_flash_frames=None,
+                last_script_path=None,
+                seed_text="",
+            )
+            raise RuntimeError(message) from last_error
+        self._restart_from_seed_script(
+            f"校正连续 {reidentify_attempts} 次失败；补救测 Seed 连续 {recovery_attempts} 次失败"
+            f"（全局连续 {self._seed_capture_failures}/5）: {last_error}，进入下一轮测种"
         )
 
     def _final_calibrate(self) -> None:
@@ -1573,9 +1683,11 @@ class AutoRngRunner:
         seed: AutoRngSeedResult,
         *,
         label: str,
+        max_attempts: int,
     ) -> AutoRngSeedResult:
+        attempts = max(1, int(max_attempts))
         last_error: Exception | None = None
-        for attempt in range(1, 3):
+        for attempt in range(1, attempts + 1):
             if self.should_stop():
                 raise RuntimeError(f"{label}已取消")
             try:
@@ -1584,21 +1696,14 @@ class AutoRngRunner:
                 last_error = exc
                 if self.should_stop():
                     raise
-                if attempt == 1:
+                if attempt < attempts:
                     self._emit(
-                        AutoRngProgress(
-                            phase=self.progress.phase,
-                            loop_index=self.progress.loop_index,
-                            log_message=f"{label} 第 1 次失败: {exc}，重试一次",
-                            locked_target=self.progress.locked_target,
-                            raw_target_advances=self.progress.raw_target_advances,
-                            fixed_delay=self.progress.fixed_delay,
-                            trigger_advances=self.progress.trigger_advances,
-                            current_advances=self.progress.current_advances,
-                            remaining_to_trigger=self.progress.remaining_to_trigger,
-                            final_flash_frames=self.progress.final_flash_frames,
-                            last_script_path=self.progress.last_script_path,
-                            seed_text=self.progress.seed_text,
+                        replace(
+                            self.progress,
+                            log_message=(
+                                f"{label} 第 {attempt} 次失败（{attempt}/{attempts}）: "
+                                f"{exc}，继续尝试"
+                            ),
                         )
                     )
         assert last_error is not None
@@ -1607,17 +1712,37 @@ class AutoRngRunner:
     def _restart_from_seed_script(self, message: str) -> None:
         if self.should_stop():
             return
+        if self._cycle_started:
+            self._history("cycle_restart", message)
+        self._clear_current_cycle_state()
+        self._set_progress(
+            AutoRngPhase.RUN_SEED_SCRIPT,
+            message,
+            locked_target=None,
+            raw_target_advances=None,
+            fixed_delay=None,
+            trigger_advances=None,
+            current_advances=None,
+            remaining_to_trigger=None,
+            final_flash_frames=None,
+            last_script_path=None,
+            seed_text="",
+        )
+
+    def _clear_current_cycle_state(self) -> None:
         self._seed_result = None
         self._locked_target = None
         self._missed_target_advance = None
         self._last_search_was_missed = False
         self._requested_advances = 0
+        self._all_candidates = []
         self._later_candidate_count = 0
         self._reserved_exit_reseed_pending = False
         self._exit_reseed_done = False
         self._need_sync_switch = False
+        self._last_shiny_interval = None
+        self._last_used_delay = None
         self._cycle_started = False
-        self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, message, locked_target=None)
 
     def _reset_advance_counter(self, seed_result: AutoRngSeedResult) -> None:
         self._advance_counter = self._build_advance_counter(seed_result)

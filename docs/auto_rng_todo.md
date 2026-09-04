@@ -8,7 +8,9 @@
 - [x] 确认过帧脚本 `_目标帧数` 填 `remaining_to_trigger`，不额外扣脚本内部预留值。
 - [x] 确认撞闪脚本 `_闪帧` 固定为数字，自动流程读取该数字但不再动态改写。
 - [x] 确认默认 `max_wait_frames = 300`。
-- [x] 确认内置 `reseed_threshold_frames = 990_000`，不在 UI 展示。
+- [x] 确认 `reseed_threshold_frames` 默认 900,000，并在“校正策略设置”中由用户配置。
+- [x] 确认普通校正最大尝试次数默认 2、最小 1，失败后可选择进入下一轮或先完整重测 Seed。
+- [x] 确认补救测 Seed 最大尝试次数默认 1、最小 1；过场脚本运行后禁止使用该补救。
 - [x] 确认内置 `min_final_flash_frames = 5`，不在 UI 展示。
 
 ## 1. 数据模型
@@ -40,8 +42,11 @@
 - [x] 新增 runner 状态机：`Idle -> CaptureSeed -> SearchTarget -> DecideAdvance -> RunAdvanceScript/Reidentify/CaptureSeed/RunHitScript -> LoopCheck`。
 - [x] CaptureSeed 阶段复用 Project_Xs 捕捉与 `recover_seed_from_observation()`。
 - [x] Reidentify 阶段复用 `reidentify_seed_from_observation()`。
-- [x] 过帧后若请求过帧量 `> 990_000`，下一步走 CaptureSeed。
-- [x] 过帧后若请求过帧量 `<= 990_000`，下一步走 Reidentify。
+- [x] 普通流程过帧后若请求过帧量大于用户配置的校正帧数上限，下一步走 CaptureSeed。
+- [x] 普通流程过帧后若请求过帧量不超过用户配置的校正帧数上限，下一步走 Reidentify。
+- [x] 普通校正按配置次数重试；失败策略可直接进入下一轮，或在当前轮按配置次数完整重测 Seed。
+- [x] 补救测 Seed 成功后清除旧目标并重新搜索；全部失败后清空 Seed/目标并运行测种脚本进入下一轮。
+- [x] 过场校正及过场后的校正固定最多 2 次，且任何过场脚本运行后都禁止原地完整测 Seed。
 - [x] SearchTarget 无结果时运行测种脚本，然后回到 CaptureSeed。
 - [x] SearchTarget 有结果时锁定最低帧目标。
 - [x] DecideAdvance 计算 `trigger_advances = raw_target_advances - fixed_delay - fixed_flash_frames`。
@@ -66,7 +71,7 @@
 - [x] 新建 `AutoRngPanel`，不要把自动流程直接塞进 `MainWindow`。
 - [x] 顶部操作栏：循环模式、循环次数、开始、暂停、停止、状态徽标。
 - [x] 左侧配置区：目标、存档、Seed/最大帧、筛选项。
-- [x] 中间策略区：delay、最大等待帧数；重新测 seed 阈值和最终安全帧改为内部常量。
+- [x] 中间策略区：delay、最大等待帧数和“校正策略设置...”按钮；校正阈值、失败策略、相关尝试次数与过场预留帧数使用弹窗集中配置，最终安全帧保留为内部常量。
 - [x] 中间脚本区：测种脚本、过帧脚本、撞闪脚本、刷新脚本、参数预览。
 - [x] 右侧运行摘要：当前循环、阶段、seed、锁定目标、当前帧、剩余帧。
 - [x] 右侧运行摘要显示 delay、trigger advances、final flash frames。
@@ -86,8 +91,11 @@
 - [x] 单元测试：`flash_frames <= 0` 时不运行撞闪。
 - [x] 单元测试：`flash_frames < min_final_flash_frames` 时不运行撞闪。
 - [x] 单元测试：无候选时决策为运行测种脚本。
-- [x] 单元测试：过帧请求超过 990,000 后下一步为重新捕获 seed。
-- [x] 单元测试：过帧请求不超过 990,000 后下一步为 reidentify。
+- [x] 单元测试：普通流程过帧请求超过配置上限后下一步为重新捕获 Seed。
+- [x] 单元测试：普通流程过帧请求不超过配置上限后下一步为 reidentify。
+- [x] 单元测试：普通校正次数、补救测 Seed 次数、失败回到下一轮和停止时不重试。
+- [x] 单元测试：过场校正固定 2 次，过场后失败或过帧超上限都不直接完整测 Seed。
+- [x] UI 测试：策略按钮、弹窗默认值、禁用态、取消回滚、恢复默认值、持久化和无额外次数上限。
 - [x] 单元测试：runner 无候选时运行测种脚本并回到 CaptureSeed。
 - [x] 单元测试：runner 过帧脚本填 `_目标帧数` 后按阈值进入 reidentify。
 - [x] 单元测试：runner FinalCalibrate 后填 `_闪帧` 并运行撞闪脚本。
@@ -107,5 +115,5 @@
 
 - [ ] 明确“暂停”是否需要真正暂停状态机，还是第一版只支持停止。
 - [x] 明确撞闪脚本内部固定扣帧逻辑应移除；自动流程使用固定 `_闪帧`，并通过 `fixed_delay` 决定脚本启动点。
-- [ ] 明确重新捕获 seed 后是否必须重新锁定目标；当前方案建议重新搜索并锁定新最低帧。
+- [x] 明确重新捕获 Seed 后必须废弃旧锁定目标，并重新搜索、锁定新最低帧。
 - [ ] 后续补充循环停止条件，例如成功识别闪、用户确认、截图判定、脚本输出关键字。

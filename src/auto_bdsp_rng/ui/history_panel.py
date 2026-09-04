@@ -1354,6 +1354,9 @@ class HistoryPanel(QWidget):
             self._original_seed_advances = initial_advances
             self._ts(f"原始 Seed: {seed_text}  初始帧: {initial_advances}  NPC: {npc}  最大搜索: {max_advances}")
         else:
+            record.locked_advances = None
+            record.candidate_count = 0
+            record.detail_title = "Seed 已重新捕获"
             self._sep_thin()
             self._ts(f"重新测种，当前 Seed: {seed_text}  初始帧: {initial_advances}  (原始 Seed: {self._original_seed_text})")
             self._sep_thin()

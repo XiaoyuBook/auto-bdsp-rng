@@ -23,7 +23,10 @@
 | `remaining_to_trigger` | 距离运行撞闪脚本还剩多少帧，`trigger_advances - current_advances` | 300 |
 | `flash_frames` | 兼容旧脚本的脚本内等待量；新式脚本可以省略并交给 runner 等待 | 60 / 无 |
 | `max_wait_frames` | 最大等待帧数；剩余帧数小于等于它时，不再调用过帧脚本 | 300 |
-| `reseed_threshold_frames` | 单次过帧超过该值后不用 reidentify，改为重新捕获 seed | 内置 990,000，不在 UI 展示 |
+| `reseed_threshold_frames` | 单次过帧超过该值后不用普通校正，改为重新捕获 Seed | 默认 900,000，可在“校正策略设置”修改 |
+| `reidentify_max_attempts` | 普通校正的最大尝试次数 | 默认 2，最小 1 |
+| `reidentify_failure_policy` | 普通校正用尽次数后的处理 | 默认进入下一轮，也可先完整重测 Seed |
+| `reidentify_seed_max_attempts` | 补救测 Seed 的最大尝试次数 | 默认 1，最小 1 |
 | `min_final_flash_frames` | 最终撞闪前的最小安全剩余帧；太近则放弃本目标 | 内置 5，不在 UI 展示 |
 
 关键规则：
@@ -33,6 +36,8 @@
 - 进入撞闪阶段后必须做最终实时校准；有 `_闪帧` 的旧脚本沿用脚本内等待和动态调整，无 `_闪帧` 的脚本由 runner 等到启动点后原样运行。
 - 还没进入等待范围时，给过帧脚本填 `_目标帧数 = remaining_to_trigger`。
 - 过帧脚本本身已有内部预留逻辑，例如 `bdsp过帧.txt` 内部会用 `_目标帧数 - 300`，所以自动流程只填理论剩余帧，不额外替脚本扣预留值。
+- 普通校正用尽配置次数后，按失败策略直接进入下一轮，或先在当前轮完整重测 Seed；补救成功必须清除旧目标并重新搜索，补救次数全部失败后才清空 Seed/目标并进入下一轮。
+- 过场校正不使用普通校正的失败策略。任何过场脚本运行后都禁止原地完整重测 Seed，过场校正固定最多尝试 2 次，失败或后续过帧超过校正帧数上限时进入下一轮。
 
 ### delay 对 advances 的影响
 
@@ -135,11 +140,16 @@ remaining_to_trigger = trigger_advances - live_current_advances
 
 ### 中间：自动决策参数
 
-建议用一个紧凑的 `自动策略` 分组：
+使用一个紧凑的 `自动策略` 分组：
 - 最大帧数范围：默认可沿用用户填写，支持到 1,000,000,000。
 - 固定 delay：默认 100，可手动改。
 - 最大等待帧数：默认 300，可手动改。
-- 重新测 seed 阈值：内置 990,000，不在界面展示；超过就必须重新测 seed。
+- `校正策略设置...` 按钮：打开模态设置窗口，不在主表单逐项展开以下参数。
+  - 校正帧数上限：默认 900,000，可随时修改；当前运行使用启动时的配置快照。
+  - 普通校正最大尝试次数：默认 2，最小 1，无额外业务上限。
+  - 普通校正连续失败后：选择 `进入下一轮` 或 `先重测 Seed`。
+  - 重测 Seed 最大尝试次数：默认 1，最小 1，仅在选择补救策略时启用。
+  - 过场预留帧数：默认 500,000，设为 0 时关闭过场策略。
 - 最终撞闪安全下限：内置 5，不在界面展示。
 - 无目标处理：默认 `运行测种脚本后重新捕获 seed`。
 - 目标选择：默认 `最低帧数`，未来可扩展 `手动选择`。
@@ -215,7 +225,10 @@ stateDiagram-v2
     RunAdvanceScript --> Failed: script failed
     Reidentify --> DecideAdvance: target still locked
     Reidentify --> SearchTarget: target lock invalid
-    Reidentify --> Failed: reidentify failed
+    Reidentify --> CaptureSeed: ordinary failure and recapture policy
+    Reidentify --> RunSeedScript: ordinary failure and next-round policy
+    CaptureSeed --> SearchTarget: recovery succeeded in same cycle
+    CaptureSeed --> RunSeedScript: recovery attempts exhausted
     FinalCalibrate --> RunHitScript: remaining_to_trigger safe
     FinalCalibrate --> SearchTarget: missed or too close
     FinalCalibrate --> Failed: calibration failed
@@ -232,8 +245,9 @@ stateDiagram-v2
 推荐第一版采用“锁定目标 + 必要时重搜”的折中策略：
 
 - 初次测 seed 后搜索目标，选最低帧并锁定。
-- 过帧量不超过 99 万时，使用 reidentify；reidentify 返回的 advances 可继续用于同一个锁定目标，计算 `remaining_to_trigger`。
-- 过帧量超过 99 万时，重新捕获 seed；这时旧目标与当前 seed 的相对关系不再可靠，重新搜索目标并锁定新的最低帧。
+- 普通流程中过帧量不超过用户配置的校正帧数上限（默认 90 万）时，使用 reidentify；reidentify 返回的 advances 可继续用于同一个锁定目标，计算 `remaining_to_trigger`。
+- 普通流程中过帧量超过该上限时，重新捕获 Seed；旧目标与当前 Seed 的相对关系不再可靠，必须清除旧目标并重新搜索、锁定新的最低帧。
+- 过场脚本运行后是例外：无论校正失败还是后续过帧超过上限，都不得在当前位置完整重测 Seed，而是运行测种脚本进入下一轮。
 - 如果 reidentify 后发现 `remaining_to_trigger <= 0`，说明已经错过触发点，本轮标记为 `target_missed`，回到 `SearchTarget` 或进入下一循环。
 - 如果已经进入 `max_wait_frames`，先进入 `FinalCalibrate`，确认脚本启动点仍未错过，再运行固定 `_闪帧` 的撞闪脚本。
 
@@ -282,6 +296,8 @@ UI 职责：
 - `remaining_to_trigger < 0` 时判定已错过目标，不运行撞闪；无 `_闪帧` 模式允许恰好为 0 时启动。
 - 最终校准后若已经越过脚本启动点则不运行撞闪。
 - 最终校准后的 `remaining_to_trigger < min_final_flash_frames` 时判定距离太近，放弃本目标。
+- 普通校正和补救测 Seed 的尝试次数最小为 1；用户主动停止时立即退出，不计失败，也不再触发重试或下一轮脚本。
+- 过场脚本运行后只能使用固定 2 次的过场校正；不得调用完整 Seed 捕获作为失败补救。
 - `max_wait_frames` 建议最小 1，避免填入 0 导致脚本边界不清。
 - 每次脚本完成后必须记录 exit code、stdout、stderr。
 - 自动流程失败时保留日志、源脚本名称和本次使用的参数；不生成运行快照。
@@ -297,6 +313,8 @@ UI 职责：
 - 能按 `max_wait_frames` 决定过帧还是撞闪。
 - 过帧脚本运行前能填 `_目标帧数`。
 - 撞闪脚本运行前能做最终实时校准，并保持脚本内固定 `_闪帧` 不被自动流程改写。
-- 过帧脚本完成后能按内置 99 万阈值选择 reidentify 或重新捕获 seed。
+- 过帧脚本完成后能按用户配置的校正帧数上限（默认 90 万）选择普通校正或重新捕获 Seed。
+- 普通校正次数和失败策略可配置；补救测 Seed 成功后在同一轮清除旧目标并重新搜索，全部失败后进入下一轮。
+- 过场校正固定最多 2 次，过场脚本运行后所有失败和超阈值分支都不会原地完整测 Seed。
 - 支持单次、循环 N 次、无限循环。
 - 支持停止当前流程。

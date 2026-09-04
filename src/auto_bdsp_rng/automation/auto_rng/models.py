@@ -77,6 +77,9 @@ class AutoRngConfig:
     fixed_flash_frames: int = 60
     max_wait_frames: int = 300
     reseed_threshold_frames: int = 900_000
+    reidentify_max_attempts: int = 2
+    reidentify_failure_policy: str = "next_round"
+    reidentify_seed_max_attempts: int = 1
     reseeding_threshold: int = 10_000
     min_final_flash_frames: int = 5
     loop_mode: str = "single"

@@ -6824,6 +6824,19 @@ class MainWindow(QMainWindow):
             )
             self.run_records_tab.set_active_round(self._active_auto_rng_round_id)
             self._write_run_log("历史记录", f"自动定点第 {int(values[0])} 轮开始")
+        elif event == "cycle_restart":
+            run_id = self._active_auto_rng_run_id or h.current_run_id
+            round_id = self._active_auto_rng_round_id
+            if round_id is None:
+                round_id = h.current_round_id
+            h.finish_run(
+                run_id,
+                "继续重试",
+                round_id=round_id,
+                target_label=h.current_target_label,
+            )
+            reason = str(values[0]) if values else "本轮未能继续"
+            self._write_run_log("历史记录", f"本轮结束，继续重试：{reason}", level="WARNING")
         elif event == "seed_captured" and len(values) >= 4:
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
             self._write_run_log(

@@ -1151,6 +1151,321 @@ def test_runner_continues_when_second_reidentify_attempt_succeeds(tmp_path):
     assert runner.progress.current_advances == 600
 
 
+def test_runner_uses_configurable_ordinary_reidentify_attempts(tmp_path):
+    attempts = 0
+    messages: list[str] = []
+
+    def reidentify(seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError(f"temporary failure {attempts}")
+        return AutoRngSeedResult(seed=seed.seed, current_advances=700)
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reidentify_max_attempts=3,
+        ),
+        services=AutoRngServices(reidentify=reidentify),
+        progress_callback=lambda progress: messages.append(progress.log_message or ""),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.REIDENTIFY, loop_index=1)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+
+    runner._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+
+    assert attempts == 3
+    assert runner.progress.phase == AutoRngPhase.DECIDE_ADVANCE
+    assert runner.progress.current_advances == 700
+    assert any("第 1 次失败（1/3）" in message for message in messages)
+    assert any("第 2 次失败（2/3）" in message for message in messages)
+
+
+def test_runner_normalizes_ordinary_reidentify_attempts_to_at_least_one(tmp_path):
+    attempts = 0
+
+    def reidentify(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("failed")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reidentify_max_attempts=0,
+        ),
+        services=AutoRngServices(reidentify=reidentify),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.REIDENTIFY, loop_index=1)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+
+    runner._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+
+    assert attempts == 1
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+    assert runner.progress.log_message.startswith("校正连续 1 次失败:")
+
+
+def test_runner_recaptures_seed_in_same_round_after_ordinary_reidentify_failure(tmp_path):
+    old_target = AutoRngTarget(raw_target_advances=1_000, state=FakeState(1_000))
+    capture_attempts = 0
+    capture_phases: list[AutoRngPhase] = []
+    capture_targets: list[object | None] = []
+    scripts: list[str] = []
+    history: list[tuple[str, tuple[object, ...]]] = []
+    runner: AutoRngRunner | None = None
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal capture_attempts
+        capture_attempts += 1
+        assert runner is not None
+        capture_phases.append(runner.progress.phase)
+        capture_targets.append(runner.progress.locked_target)
+        if capture_attempts == 1:
+            raise RuntimeError("temporary seed failure")
+        return AutoRngSeedResult(
+            seed="seed-2",
+            seed_text="new seed",
+            current_advances=0,
+            npc=1,
+        )
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reidentify_max_attempts=1,
+            reidentify_failure_policy="recapture_seed",
+            reidentify_seed_max_attempts=3,
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            reidentify=lambda _seed: (_ for _ in ()).throw(RuntimeError("reidentify failed")),
+            run_script_text=lambda _text, name: scripts.append(name),
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.REIDENTIFY,
+        loop_index=4,
+        seed_text="old seed",
+        locked_target=old_target,
+        raw_target_advances=old_target.raw_target_advances,
+        fixed_delay=100,
+        trigger_advances=840,
+        current_advances=100,
+        remaining_to_trigger=740,
+        final_flash_frames=60,
+        last_script_path=tmp_path / "advance.txt",
+    )
+    runner._completed_loops = 4
+    runner._cycle_started = True
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", seed_text="old seed", current_advances=100)
+    runner._locked_target = old_target
+    runner._missed_target_advance = old_target.raw_target_advances
+    runner._last_search_was_missed = True
+    runner._requested_advances = 740
+    runner._later_candidate_count = 2
+    runner._seed_capture_failures = 4
+
+    runner._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+
+    assert capture_attempts == 2
+    assert capture_phases == [AutoRngPhase.CAPTURE_SEED, AutoRngPhase.CAPTURE_SEED]
+    assert capture_targets == [None, None]
+    assert scripts == []
+    assert runner._completed_loops == 4
+    assert runner._cycle_started is True
+    assert runner._seed_capture_failures == 0
+    assert runner._seed_result is not None
+    assert runner._seed_result.seed == "seed-2"
+    assert runner._advance_counter.current_advances == 0
+    assert runner._locked_target is None
+    assert runner._missed_target_advance is None
+    assert runner._requested_advances == 0
+    assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
+    assert runner.progress.loop_index == 4
+    assert runner.progress.seed_text == "new seed"
+    assert runner.progress.locked_target is None
+    assert runner.progress.raw_target_advances is None
+    assert runner.progress.fixed_delay is None
+    assert runner.progress.trigger_advances is None
+    assert runner.progress.remaining_to_trigger is None
+    assert runner.progress.final_flash_frames is None
+    assert runner.progress.last_script_path is None
+    assert ("seed_captured", ("new seed", 0, 1, 100_000)) in history
+
+
+def test_runner_counts_exhausted_seed_recovery_as_one_global_failure(tmp_path):
+    reidentify_attempts = 0
+    capture_attempts = 0
+    scripts: list[str] = []
+    history: list[tuple[str, tuple[object, ...]]] = []
+
+    def reidentify(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal reidentify_attempts
+        reidentify_attempts += 1
+        raise RuntimeError("reidentify failed")
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal capture_attempts
+        capture_attempts += 1
+        raise RuntimeError("seed failed")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reidentify_max_attempts=3,
+            reidentify_failure_policy="recapture_seed",
+            reidentify_seed_max_attempts=4,
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            reidentify=reidentify,
+            run_script_text=lambda _text, name: scripts.append(name),
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.REIDENTIFY,
+        loop_index=2,
+        seed_text="old seed",
+        locked_target=AutoRngTarget(raw_target_advances=1_000),
+        raw_target_advances=1_000,
+        fixed_delay=100,
+        trigger_advances=840,
+        current_advances=100,
+        remaining_to_trigger=740,
+        final_flash_frames=60,
+        last_script_path=tmp_path / "advance.txt",
+    )
+    runner._completed_loops = 2
+    runner._cycle_started = True
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+    runner._locked_target = AutoRngTarget(raw_target_advances=1_000)
+    runner._seed_capture_failures = 2
+
+    runner._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+
+    assert reidentify_attempts == 3
+    assert capture_attempts == 4
+    assert scripts == []
+    assert runner._seed_capture_failures == 3
+    assert runner._seed_result is None
+    assert runner._locked_target is None
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+    assert runner.progress.seed_text == ""
+    assert runner.progress.locked_target is None
+    assert runner.progress.raw_target_advances is None
+    assert runner.progress.fixed_delay is None
+    assert runner.progress.trigger_advances is None
+    assert runner.progress.current_advances is None
+    assert runner.progress.remaining_to_trigger is None
+    assert runner.progress.final_flash_frames is None
+    assert runner.progress.last_script_path is None
+    assert any(event == "cycle_restart" for event, _args in history)
+    assert "补救测 Seed 连续 4 次失败" in runner.progress.log_message
+    assert "全局连续 3/5" in runner.progress.log_message
+
+
+def test_runner_stops_on_fifth_exhausted_seed_recovery_sequence(tmp_path):
+    capture_attempts = 0
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal capture_attempts
+        capture_attempts += 1
+        raise RuntimeError("seed failed")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reidentify_max_attempts=1,
+            reidentify_failure_policy="recapture_seed",
+            reidentify_seed_max_attempts=3,
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            reidentify=lambda _seed: (_ for _ in ()).throw(RuntimeError("reidentify failed")),
+        ),
+    )
+    old_target = AutoRngTarget(raw_target_advances=1_000)
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.REIDENTIFY,
+        loop_index=5,
+        seed_text="old seed",
+        locked_target=old_target,
+        raw_target_advances=1_000,
+        fixed_delay=100,
+        trigger_advances=840,
+        current_advances=100,
+        remaining_to_trigger=740,
+        final_flash_frames=60,
+        last_script_path=tmp_path / "advance.txt",
+    )
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+    runner._locked_target = old_target
+    runner._requested_advances = 740
+    runner._cycle_started = True
+    runner._seed_capture_failures = 4
+
+    with pytest.raises(RuntimeError, match="连续 5 次 seed 捕获失败"):
+        runner._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+
+    assert capture_attempts == 3
+    assert runner._seed_capture_failures == 5
+    assert runner._seed_result is None
+    assert runner._locked_target is None
+    assert runner._requested_advances == 0
+    assert runner._cycle_started is False
+    assert runner.progress.phase == AutoRngPhase.FAILED
+    assert runner.progress.seed_text == ""
+    assert runner.progress.locked_target is None
+    assert runner.progress.raw_target_advances is None
+    assert runner.progress.fixed_delay is None
+    assert runner.progress.trigger_advances is None
+    assert runner.progress.current_advances is None
+    assert runner.progress.remaining_to_trigger is None
+    assert runner.progress.final_flash_frames is None
+    assert runner.progress.last_script_path is None
+
+
+def test_runner_stop_during_seed_recovery_suppresses_retries_and_fallback(tmp_path):
+    capture_attempts = 0
+    scripts: list[str] = []
+    runner: AutoRngRunner | None = None
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal capture_attempts
+        capture_attempts += 1
+        assert runner is not None
+        runner.stop()
+        raise RuntimeError("Blink capture stopped")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reidentify_max_attempts=1,
+            reidentify_failure_policy="recapture_seed",
+            reidentify_seed_max_attempts=100,
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            reidentify=lambda _seed: (_ for _ in ()).throw(RuntimeError("reidentify failed")),
+            run_script_text=lambda _text, name: scripts.append(name),
+        ),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.REIDENTIFY, loop_index=1)
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=100)
+
+    runner._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+
+    assert capture_attempts == 1
+    assert scripts == []
+    assert runner._seed_capture_failures == 0
+    assert runner.progress.phase == AutoRngPhase.IDLE
+    assert runner.progress.log_message == "已请求停止自动流程"
+
+
 def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
     seed_script = tmp_path / "seed.txt"
     hit_script = tmp_path / "hit.txt"
@@ -1177,6 +1492,9 @@ def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
             loop_mode="infinite",
             fixed_delay=0,
             reseeding_threshold=10_000,
+            reidentify_max_attempts=7,
+            reidentify_failure_policy="recapture_seed",
+            reidentify_seed_max_attempts=9,
         ),
         services=AutoRngServices(
             capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0),
@@ -1196,6 +1514,178 @@ def test_runner_exit_reidentify_failure_restarts_seed_script(tmp_path):
     assert attempts == 2
     assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
     assert any(message.startswith("过场校正连续 2 次失败:") for message in messages)
+
+
+def test_runner_post_exit_reidentify_never_recaptures_seed(tmp_path):
+    reidentify_attempts = 0
+    capture_attempts = 0
+
+    def reidentify(_seed: AutoRngSeedResult) -> AutoRngSeedResult:
+        nonlocal reidentify_attempts
+        reidentify_attempts += 1
+        raise RuntimeError("noisy reidentify failed")
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal capture_attempts
+        capture_attempts += 1
+        return AutoRngSeedResult(seed="forbidden")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reidentify_max_attempts=7,
+            reidentify_failure_policy="recapture_seed",
+            reidentify_seed_max_attempts=9,
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            reidentify=reidentify,
+        ),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.REIDENTIFY, loop_index=1)
+    runner._seed_result = AutoRngSeedResult(
+        seed="seed-after-exit",
+        current_advances=100,
+        after_exit_reseed=True,
+    )
+    runner._exit_reseed_done = True
+
+    runner._reidentify(AutoRngPhase.DECIDE_ADVANCE)
+
+    assert reidentify_attempts == 2
+    assert capture_attempts == 0
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+    assert runner.progress.log_message.startswith("过场后校正连续 2 次失败:")
+
+
+def test_runner_post_exit_large_advance_enters_next_round_instead_of_capturing_seed(tmp_path):
+    advance_script = tmp_path / "advance.txt"
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    scripts: list[str] = []
+    capture_attempts = 0
+
+    def capture_seed() -> AutoRngSeedResult:
+        nonlocal capture_attempts
+        capture_attempts += 1
+        return AutoRngSeedResult(seed="forbidden")
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            advance_script_path=advance_script,
+            reseed_threshold_frames=100,
+        ),
+        services=AutoRngServices(
+            capture_seed=capture_seed,
+            run_script_text=lambda _text, name: scripts.append(name),
+        ),
+    )
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.RUN_ADVANCE_SCRIPT, loop_index=3)
+    runner._completed_loops = 3
+    runner._seed_result = AutoRngSeedResult(
+        seed="seed-after-exit",
+        current_advances=500,
+        after_exit_reseed=True,
+    )
+    runner._requested_advances = 101
+    runner._exit_reseed_done = True
+
+    runner._run_advance_script()
+
+    assert scripts == [advance_script.name]
+    assert capture_attempts == 0
+    assert runner._completed_loops == 3
+    assert runner._seed_result is None
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+    assert "不直接重测 Seed" in runner.progress.log_message
+
+
+def test_runner_post_exit_large_advance_skips_advance_script_before_next_round(tmp_path):
+    advance_script = tmp_path / "advance.txt"
+    advance_script.write_text(f"{AUTO_ADVANCE_PARAMETER} = 0\n", encoding="utf-8")
+    scripts: list[str] = []
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            advance_script_path=advance_script,
+            fixed_delay=0,
+            fixed_flash_frames=0,
+            max_wait_frames=10,
+            reseed_threshold_frames=100,
+        ),
+        services=AutoRngServices(
+            run_script_text=lambda _text, name: scripts.append(name),
+        ),
+    )
+    target = AutoRngTarget(raw_target_advances=500)
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.DECIDE_ADVANCE,
+        loop_index=3,
+        locked_target=target,
+    )
+    runner._completed_loops = 3
+    runner._cycle_started = True
+    runner._seed_result = AutoRngSeedResult(
+        seed="seed-after-exit",
+        current_advances=0,
+        after_exit_reseed=False,
+    )
+    runner._locked_target = target
+    runner._exit_reseed_done = True
+
+    runner._decide_advance()
+
+    assert scripts == []
+    assert runner._seed_result is None
+    assert runner._locked_target is None
+    assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+    assert "不直接重测 Seed" in runner.progress.log_message
+
+
+def test_runner_full_seed_recapture_discards_previous_target_state(tmp_path):
+    old_target = AutoRngTarget(raw_target_advances=1_000)
+    runner = AutoRngRunner(
+        AutoRngConfig(script_dir=tmp_path),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(
+                seed="new-seed",
+                seed_text="new seed",
+                current_advances=0,
+            ),
+        ),
+    )
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.CAPTURE_SEED,
+        loop_index=2,
+        seed_text="old seed",
+        locked_target=old_target,
+        raw_target_advances=1_000,
+        fixed_delay=100,
+        trigger_advances=840,
+        current_advances=100,
+        remaining_to_trigger=740,
+        final_flash_frames=60,
+        last_script_path=tmp_path / "advance.txt",
+    )
+    runner._seed_result = AutoRngSeedResult(seed="old-seed", seed_text="old seed", current_advances=100)
+    runner._locked_target = old_target
+    runner._requested_advances = 740
+
+    runner._capture_seed()
+
+    assert runner._seed_result is not None
+    assert runner._seed_result.seed == "new-seed"
+    assert runner._locked_target is None
+    assert runner._requested_advances == 0
+    assert runner.progress.phase == AutoRngPhase.SEARCH_TARGET
+    assert runner.progress.seed_text == "new seed"
+    assert runner.progress.locked_target is None
+    assert runner.progress.raw_target_advances is None
+    assert runner.progress.trigger_advances is None
+    assert runner.progress.remaining_to_trigger is None
+    assert runner.progress.final_flash_frames is None
+    assert runner.progress.last_script_path is None
 
 
 def test_runner_retries_seed_capture_failures_until_fifth_failure(tmp_path):
