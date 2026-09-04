@@ -2032,7 +2032,7 @@ def test_auto_rng_strategy_parameters_have_hover_explanations(app, tmp_path):
 
     explained_rows = (
         (panel.max_advances, "过 100 万帧大约需要 10 分钟"),
-        (panel.fixed_delay, "delay 越大，撞闪脚本启动得越早"),
+        (panel.delay_settings_button, "delay 越大，撞闪脚本启动得越早"),
         (panel.max_wait_frames, "越依赖过帧脚本接近目标"),
         (panel.shiny_threshold_seconds, "判定为疑似闪光并停止自动流程"),
     )
@@ -2765,7 +2765,7 @@ def test_auto_rng_panel_emits_config_when_starting_with_valid_scripts(app, tmp_p
     (tmp_path / "BDSP测种.txt").write_text("A 100\n", encoding="utf-8")
     (tmp_path / "bdsp过帧.txt").write_text("_目标帧数 = 100\n", encoding="utf-8")
     (tmp_path / "谢米.txt").write_text("_瞬移精灵槽位 = 1\nA 100\n", encoding="utf-8")
-    panel = AutoRngPanel(script_dir=tmp_path)
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
     emitted: list[AutoRngConfig] = []
     panel.startRequested.connect(lambda config: emitted.append(config))
     panel.hit_script_combo.setCurrentIndex(panel.hit_script_combo.findText("谢米.txt"))
@@ -4807,9 +4807,9 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
         AutoRngConfig(script_dir=tmp_path, reverse_script_path=reverse_script)
     )
 
-    services.run_reverse_lookup(
+    observed_delays = services.run_reverse_lookup(
         AutoRngSeedResult(seed=SeedPair64(1, 2)),
-        AutoRngTarget(raw_target_advances=1204),
+        AutoRngTarget(raw_target_advances=1204, used_delay=1452),
     )
 
     assert expansion_levels == [0, 1, 2]
@@ -4818,21 +4818,24 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
     assert len(generated) == 1
     assert history_events[-1][0] == "reverse_lookup_results"
     assert history_events[-1][1][0] == [candidate]
+    assert history_events[-1][1][2] == [1452]
+    assert observed_delays == (1452,)
 
     expansion_levels.clear()
     fallback_flags.clear()
     history_events.clear()
     monkeypatch.setattr(native_module, "compute_iv_ranges", lambda *_args: [(31, 0)] * 6)
 
-    services.run_reverse_lookup(
+    observed_delays = services.run_reverse_lookup(
         AutoRngSeedResult(seed=SeedPair64(1, 2)),
-        AutoRngTarget(raw_target_advances=1204),
+        AutoRngTarget(raw_target_advances=1204, used_delay=1452),
     )
 
     assert expansion_levels == [0, 1, 2]
     assert fallback_flags == [False, False, False]
     assert history_events[-1][0] == "reverse_lookup_results"
     assert history_events[-1][1][0] == []
+    assert observed_delays == ()
     log_text = window.auto_rng_tab.log_view.toPlainText()
     assert "能力页 OCR 第1次（原始六项 ROI）" in log_text
     assert "能力页 OCR 第2次（六项 ROI 每边扩大约 12%（至少 4px））" in log_text

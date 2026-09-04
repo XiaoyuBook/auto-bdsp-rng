@@ -7774,7 +7774,7 @@ class MainWindow(QMainWindow):
                 second_event_text="战斗" if is_starter else "去吧",
             )
 
-        def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> None:
+        def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> tuple[int, ...]:
             import time
             try:
                 from auto_bdsp_rng.rng_core._native import compute_iv_ranges as _compute_iv_ranges
@@ -7785,6 +7785,8 @@ class MainWindow(QMainWindow):
             path = config.reverse_script_path
             if path is None:
                 raise RuntimeError("反查脚本未配置")
+            target_delay = getattr(target, "used_delay", None)
+            used_delay = int(config.fixed_delay if target_delay is None else target_delay)
             text = path.read_text(encoding="utf-8")
             log("[自动反查] 运行反查脚本…")
             run_script_text_service(text, path.name)
@@ -7968,8 +7970,9 @@ class MainWindow(QMainWindow):
             if not candidates:
                 log("[自动反查] 3次尝试均未找到匹配个体")
                 self.autoHistoryEvent.emit("reverse_lookup_results", ([], characteristic, None, last_ocr_stats))
+                return ()
             else:
-                delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + config.fixed_delay
+                delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + used_delay
                           if target.raw_target_advances else int(getattr(s, "advances", 0))
                           for s in candidates]
                 result_context = last_ocr_stats if characteristic_match_failed else None
@@ -7979,13 +7982,26 @@ class MainWindow(QMainWindow):
                 )
                 for state in candidates:
                     adv = int(getattr(state, "advances", 0))
-                    actual_delay = adv - target.raw_target_advances + config.fixed_delay if target.raw_target_advances else adv
+                    actual_delay = adv - target.raw_target_advances + used_delay if target.raw_target_advances else adv
                     state_ivs = getattr(state, "ivs", None)
                     iv_text = " / ".join(f"{name}={int(state_ivs[i])}" for i, name in enumerate(["HP","攻击","防御","特攻","特防","速度"])) if state_ivs is not None and len(state_ivs) == 6 else "?"
                     pid_val = int(getattr(state, "pid", 0))
                     species = getattr(state, "_reverse_species", "")
                     species_tag = f"[{_reverse_species_label(species)}] " if species else ""
                     log(f"[自动反查] {species_tag}advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
+                return tuple(sorted(set(delays)))
+
+        def resolve_round_delay_service() -> int:
+            def resolve() -> int:
+                value = int(self.auto_rng_tab.effective_delay_for_next_round())
+                self.auto_rng_tab.set_active_delay(value)
+                return value
+
+            return int(self._call_on_ui_thread(resolve))
+
+        def record_delay_observation_service(delays: Sequence[int]) -> None:
+            values = tuple(int(value) for value in delays)
+            self._call_on_ui_thread(lambda: self.auto_rng_tab.record_delay_sample(values))
 
         def recover_zoom_mode_service() -> bool:
             return self._recover_zoom_mode_with_preview_paused(
@@ -8003,6 +8019,8 @@ class MainWindow(QMainWindow):
             run_script_text=run_script_text_service,
             run_hit_script_with_shiny_check=run_hit_script_with_shiny_check,
             run_reverse_lookup=reverse_lookup_service,
+            resolve_round_delay=resolve_round_delay_service,
+            record_delay_observation=record_delay_observation_service,
             recover_zoom_mode=recover_zoom_mode_service,
             stop_current_script=stop_current_script_service,
         )

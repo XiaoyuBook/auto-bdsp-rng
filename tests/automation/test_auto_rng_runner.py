@@ -2187,6 +2187,160 @@ def _write_escape_runner_scripts(tmp_path: Path) -> tuple[Path, Path, Path, Path
     return hit_script, escape_script, reverse_script, exit_script
 
 
+def test_runner_freezes_delay_for_round_and_resolves_new_value_next_round(tmp_path):
+    seed_script = tmp_path / "seed.txt"
+    hit_script = tmp_path / "hit.txt"
+    reverse_script = tmp_path / "reverse.txt"
+    seed_script.write_text("SEED\n", encoding="utf-8")
+    hit_script.write_text("HIT\n", encoding="utf-8")
+    reverse_script.write_text("REVERSE\n", encoding="utf-8")
+    configured_delay = [100]
+    resolved_delays: list[int] = []
+    reverse_target_delays: list[int | None] = []
+    recorded_rounds: list[list[int]] = []
+
+    def resolve_round_delay() -> int:
+        value = configured_delay[0]
+        resolved_delays.append(value)
+        # A setting edit during the round must not affect the already frozen value.
+        configured_delay[0] = 999
+        return value
+
+    def reverse_lookup(_seed: AutoRngSeedResult, target: AutoRngTarget) -> list[int]:
+        reverse_target_delays.append(target.used_delay)
+        return [111, 110, 111]
+
+    def record_observation(values) -> None:
+        recorded_rounds.append(list(values))
+        configured_delay[0] = 110
+
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_script_path=seed_script,
+            hit_script_path=hit_script,
+            reverse_script_path=reverse_script,
+            auto_reverse=True,
+            start_phase=AutoRngPhase.CAPTURE_SEED,
+            fixed_delay=100,
+            max_wait_frames=300,
+            loop_mode="count",
+            loop_count=2,
+            shiny_threshold_seconds=2.8,
+        ),
+        services=AutoRngServices(
+            capture_seed=lambda: AutoRngSeedResult(seed="seed-1", current_advances=0, npc=0),
+            search_candidates=lambda _seed: [FakeState(100)],
+            run_script_text=lambda _text, _name: None,
+            run_hit_script_with_shiny_check=lambda _text, _name, _threshold: ShinyCheckResult(
+                is_shiny=False,
+                interval_seconds=2.3,
+            ),
+            run_reverse_lookup=reverse_lookup,
+            resolve_round_delay=resolve_round_delay,
+            record_delay_observation=record_observation,
+            monotonic=lambda: 10.0,
+        ),
+    )
+
+    runner.run(max_steps=7)
+
+    assert resolved_delays == [100, 110]
+    assert reverse_target_delays == [100]
+    assert recorded_rounds == [[110, 111]]
+    assert runner._active_delay == 110
+    assert runner.progress.phase == AutoRngPhase.CAPTURE_SEED
+
+
+def _runner_ready_for_reverse_lookup(
+    tmp_path: Path,
+    *,
+    reverse_lookup,
+    recorded_rounds: list[list[int]],
+    history: list[tuple[str, tuple[object, ...]]],
+) -> AutoRngRunner:
+    reverse_script = tmp_path / "reverse.txt"
+    reverse_script.write_text("REVERSE\n", encoding="utf-8")
+    runner = AutoRngRunner(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            reverse_script_path=reverse_script,
+            fixed_delay=100,
+        ),
+        services=AutoRngServices(
+            run_reverse_lookup=reverse_lookup,
+            record_delay_observation=lambda values: recorded_rounds.append(list(values)),
+        ),
+        history_callback=lambda event, args: history.append((event, args)),
+    )
+    runner._seed_result = AutoRngSeedResult(seed="seed-1", current_advances=0)
+    runner._locked_target = AutoRngTarget(raw_target_advances=2000, used_delay=1452)
+    runner._last_used_delay = None
+    runner._cycle_started = True
+    runner.progress = AutoRngProgress(
+        phase=AutoRngPhase.REVERSE_LOOKUP,
+        loop_index=1,
+        locked_target=runner._locked_target,
+        fixed_delay=1452,
+    )
+    return runner
+
+
+def test_runner_reverse_lookup_normalizes_one_candidate_set_and_records_once(tmp_path):
+    recorded_rounds: list[list[int]] = []
+    history: list[tuple[str, tuple[object, ...]]] = []
+    runner = _runner_ready_for_reverse_lookup(
+        tmp_path,
+        reverse_lookup=lambda _seed, _target: [1453, 1452, 1453, -1, 1451],
+        recorded_rounds=recorded_rounds,
+        history=history,
+    )
+
+    runner._reverse_lookup()
+
+    assert recorded_rounds == [[1451, 1452, 1453]]
+    cycle_result = next(args for event, args in history if event == "cycle_result")
+    assert cycle_result[3] == 1452
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+
+
+def test_runner_reverse_lookup_does_not_record_empty_candidate_set(tmp_path):
+    recorded_rounds: list[list[int]] = []
+    history: list[tuple[str, tuple[object, ...]]] = []
+    runner = _runner_ready_for_reverse_lookup(
+        tmp_path,
+        reverse_lookup=lambda _seed, _target: [],
+        recorded_rounds=recorded_rounds,
+        history=history,
+    )
+
+    runner._reverse_lookup()
+
+    assert recorded_rounds == []
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+
+
+def test_runner_reverse_lookup_does_not_record_failed_lookup(tmp_path):
+    recorded_rounds: list[list[int]] = []
+    history: list[tuple[str, tuple[object, ...]]] = []
+
+    def fail_reverse_lookup(_seed: AutoRngSeedResult, _target: AutoRngTarget) -> list[int]:
+        raise RuntimeError("lookup failed")
+
+    runner = _runner_ready_for_reverse_lookup(
+        tmp_path,
+        reverse_lookup=fail_reverse_lookup,
+        recorded_rounds=recorded_rounds,
+        history=history,
+    )
+
+    runner._reverse_lookup()
+
+    assert recorded_rounds == []
+    assert runner.progress.phase == AutoRngPhase.LOOP_CHECK
+    assert "反查失败" in runner.progress.log_message
+
+
 def test_runner_escape_continue_can_escape_twice_and_target_third_candidate_in_same_loop(tmp_path):
     hit_script, escape_script, _reverse_script, _exit_script = _write_escape_runner_scripts(tmp_path)
     first = FakeState(1300, ec=0x1001, pid=0x2001)

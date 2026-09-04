@@ -7,7 +7,7 @@
 
 新增一个同级 Tab：`自动定点乱数`，把 Project_Xs 测 seed、BDSP 定点结果搜索、EasyCon 过帧脚本、Project_Xs 重新识别/重新测 seed、撞闪脚本串成一个可观察、可停止、可循环的全自动流程。
 
-本轮只做 UI 与实现思路设计，不写业务代码。
+本文保留最初的界面与流程设计，并同步记录当前已经实现的行为约束。
 
 ## 核心概念
 
@@ -15,11 +15,12 @@
 
 | 名称 | 含义 | 示例 |
 |------|------|------|
-| `raw_target_advances` | BDSP 定点搜索结果中的目标帧，即 `State8.advances` | 1000 |
-| `fixed_delay` | 用户填写的固定 delay，表示脚本等待结束后（无 `_闪帧` 时为脚本启动后）到实际撞到之间的延迟 | 1400 |
+| `raw_target_advances` | BDSP 定点搜索结果中的目标帧，即 `State8.advances` | 1800 |
+| `fixed_delay` | 兼容字段，保存用户填写的基准 delay；固定策略直接使用，动态策略无有效样本时回退使用 | 1400 |
+| `round_delay` | 每个新轮次开始时按策略计算并冻结的实际 delay | 1400 |
 | `fixed_flash_frames` | 撞闪脚本声明的整数 `_闪帧`；脚本未声明时为 `None`，计算偏移按 0 | 60 / `None` |
-| `trigger_advances` | 撞闪脚本理论启动帧，`raw_target_advances - fixed_delay - (fixed_flash_frames or 0)` | 340 |
-| `current_advances` | 当前已前进帧数，初次测 seed 后为 0，reidentify 后更新 | 600 |
+| `trigger_advances` | 撞闪脚本理论启动帧，`raw_target_advances - round_delay - (fixed_flash_frames or 0)` | 340 |
+| `current_advances` | 当前已前进帧数，初次测 seed 后为 0，reidentify 后更新 | 40 |
 | `remaining_to_trigger` | 距离运行撞闪脚本还剩多少帧，`trigger_advances - current_advances` | 300 |
 | `flash_frames` | 兼容旧脚本的脚本内等待量；新式脚本可以省略并交给 runner 等待 | 60 / 无 |
 | `max_wait_frames` | 最大等待帧数；剩余帧数小于等于它时，不再调用过帧脚本 | 300 |
@@ -38,17 +39,20 @@
 - 过帧脚本本身已有内部预留逻辑，例如 `bdsp过帧.txt` 内部会用 `_目标帧数 - 300`，所以自动流程只填理论剩余帧，不额外替脚本扣预留值。
 - 普通校正用尽配置次数后，按失败策略直接进入下一轮，或先在当前轮完整重测 Seed；补救成功必须清除旧目标并重新搜索，补救次数全部失败后才清空 Seed/目标并进入下一轮。
 - 过场校正不使用普通校正的失败策略。任何过场脚本运行后都禁止原地完整重测 Seed，过场校正固定最多尝试 2 次，失败或后续过帧超过校正帧数上限时进入下一轮。
+- 每个新轮次只解析一次 delay 并冻结为 `round_delay`；同轮补救测 Seed、逃跑续搜、过场脚本和过场校正都不能改变它。
+- 自动反查成功且返回至少一个 delay 候选时才保存样本；新样本和运行中修改的策略从下一轮生效。
 
 ### delay 对 advances 的影响
 
-`fixed_delay` 不参与 seed 搜索，也不修改当前 advances。它表示脚本等待结束后（无 `_闪帧` 时为脚本启动后）到实际撞到之间的用户校准延迟；自动流程只在脚本声明 `_闪帧` 时额外扣除该等待量。
+`round_delay` 不参与 seed 搜索，也不修改当前 advances。它表示脚本等待结束后（无 `_闪帧` 时为脚本启动后）到实际撞到之间的用户校准延迟；自动流程只在脚本声明 `_闪帧` 时额外扣除该等待量。固定策略令 `round_delay = fixed_delay`，动态策略则从历史样本计算，无有效样本时也回退到 `fixed_delay`。
 
 严格公式：
 
 ```text
 raw_target_advances = state.advances
+round_delay = resolve_delay_strategy(fixed_delay, delay_sample_rounds)
 script_wait_frames = fixed_flash_frames if declared else 0
-trigger_advances = raw_target_advances - fixed_delay - script_wait_frames
+trigger_advances = raw_target_advances - round_delay - script_wait_frames
 remaining_to_trigger = trigger_advances - current_advances
 ```
 
@@ -56,7 +60,7 @@ remaining_to_trigger = trigger_advances - current_advances
 
 ```text
 raw_target_advances = 1800
-fixed_delay = 1400
+round_delay = 1400
 fixed_flash_frames = 60
 trigger_advances = 340
 
@@ -65,13 +69,32 @@ current_advances = 40 时，remaining_to_trigger = 300，可以进入最终撞�
 ```
 
 错误理解要避免：
-- 不要把 `fixed_delay` 加到 `current_advances`。
-- 不要用 `fixed_delay` 修改 seed 或搜索结果。
+- 不要把 `round_delay` 加到 `current_advances`。
+- 不要用 `round_delay` 修改 seed 或搜索结果。
 - 不要在 `_目标帧数` 里额外扣 delay；过帧阶段逼近的是 `trigger_advances`，不是 `raw_target_advances`。
+
+### 动态 delay 策略
+
+delay 设置窗口提供 8 种策略：
+
+| 策略 | 计算规则 |
+|------|----------|
+| 固定 delay | 始终使用基准 delay，不读取样本 |
+| 上次实际 delay | 向前查找最近一个只有唯一候选的有效轮次 |
+| 众数 | 选择最近 N 个有效轮次中权重最高的候选，并以参考 delay 消除并列 |
+| 中位数 | 取最近 N 个有效轮次的加权中位数 |
+| 滚动平均值 | 取最近 N 个有效轮次的加权平均值 |
+| 指数平滑 | 从基准 delay 开始，按配置权重依次融合最近 N 个有效轮次 |
+| 截尾平均 | 至少 5 个有效轮次时去掉两端各一轮权重后求平均，否则回退滚动平均 |
+| 密集区间 | 找出候选权重最集中的指定跨度区间，再取区间内加权中位数 |
+
+每次反查的 distinct、升序、非负候选保存为一个原始轮次。多候选策略为“忽略”时只使用单候选轮；选择“按轮加权”时每轮总权重恒为 1，轮内候选均分该权重，避免候选较多的单轮压过其他轮次。“上次实际 delay”无论全局设置如何都忽略多候选。统计窗口只截取最近 N 个有效轮次；完全没有有效样本时统一使用基准 delay。
+
+计算结果采用确定性的四舍五入，非负 delay 的 `.5` 向上。原始轮次持久化保存，因此切换策略可以直接重算历史；清空样本后动态策略立即显示基准 delay 作为下轮预计值。当前目标保存锁定时使用的 `round_delay`，反查公式也必须使用该值，不能被之后的设置修改覆盖。
 
 ### `_闪帧` 兼容模式
 
-撞闪脚本声明整数 `_闪帧` 时按旧模式运行：软件读取该等待量并用于 `trigger_advances` 计算，必要时仍可在过帧过头分支动态缩短本次提交文本中的 `_闪帧`。脚本未声明 `_闪帧` 时按新模式运行：等待偏移按 0 计算，runner 通过实时 advances 等到 `raw_target_advances - fixed_delay`，再原样启动脚本，不新增或改写 `_闪帧`。
+撞闪脚本声明整数 `_闪帧` 时按旧模式运行：软件读取该等待量并用于 `trigger_advances` 计算，必要时仍可在过帧过头分支动态缩短本次提交文本中的 `_闪帧`。脚本未声明 `_闪帧` 时按新模式运行：等待偏移按 0 计算，runner 通过实时 advances 等到 `raw_target_advances - round_delay`，再原样启动脚本，不新增或改写 `_闪帧`。
 
 因此进入 `max_wait_frames` 范围后，自动流程必须执行最终实时校准：
 
@@ -142,7 +165,7 @@ remaining_to_trigger = trigger_advances - live_current_advances
 
 使用一个紧凑的 `自动策略` 分组：
 - 最大帧数范围：默认可沿用用户填写，支持到 1,000,000,000。
-- 固定 delay：默认 100，可手动改。
+- delay 摘要按钮：显示当前策略和下轮预计值，点击后集中编辑基准 delay、8 种策略、多候选处理和策略专属参数，并查看本次冻结值、有效样本与最近五轮原始候选。
 - 最大等待帧数：默认 300，可手动改。
 - `校正策略设置...` 按钮：打开模态设置窗口，不在主表单逐项展开以下参数。
   - 校正帧数上限：默认 900,000，可随时修改；当前运行使用启动时的配置快照。
@@ -292,7 +315,7 @@ UI 职责：
 - 开始前校验三个脚本文件存在且编码为 UTF-8。
 - 开始前校验过帧脚本包含 `_目标帧数`。
 - 开始前校验撞闪脚本中的可选 `_闪帧`（若声明）是固定数字。
-- `raw_target_advances <= fixed_delay + (fixed_flash_frames or 0)` 时不允许启动撞闪，提示 delay 或脚本等待量过大。
+- `raw_target_advances <= round_delay + (fixed_flash_frames or 0)` 时不允许启动撞闪，提示 delay 或脚本等待量过大。
 - `remaining_to_trigger < 0` 时判定已错过目标，不运行撞闪；无 `_闪帧` 模式允许恰好为 0 时启动。
 - 最终校准后若已经越过脚本启动点则不运行撞闪。
 - 最终校准后的 `remaining_to_trigger < min_final_flash_frames` 时判定距离太近，放弃本目标。
@@ -309,7 +332,7 @@ UI 职责：
 - 自动页能用与 BDSP 页面一致的筛选条件得到候选结果。
 - 无目标时能运行测种脚本并回到测 seed。
 - 有目标时能按最低帧锁定目标。
-- 能按 `fixed_delay` 计算 `trigger_advances`。
+- 能按本轮冻结的 `round_delay` 计算 `trigger_advances`。
 - 能按 `max_wait_frames` 决定过帧还是撞闪。
 - 过帧脚本运行前能填 `_目标帧数`。
 - 撞闪脚本运行前能做最终实时校准，并保持脚本内固定 `_闪帧` 不被自动流程改写。

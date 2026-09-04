@@ -16,6 +16,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngTarget,
     ShinyCheckResult,
 )
+from auto_bdsp_rng.automation.auto_rng.delay_strategy import normalize_delay_candidates
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_HIT_PARAMETER,
     ROAMER_SPECIES,
@@ -496,7 +497,9 @@ class AutoRngServices:
     search_sync: Callable[[AutoRngSeedResult, int, int | None], list[object]] | None = None
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
     run_hit_script_with_shiny_check: Callable[[str, str, float], ShinyCheckResult] | None = None
-    run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], None] | None = None
+    run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], Sequence[int] | None] | None = None
+    resolve_round_delay: Callable[[], int] | None = None
+    record_delay_observation: Callable[[Sequence[int]], None] | None = None
     recover_zoom_mode: Callable[[], bool] | None = None
     stop_current_script: Callable[[], None] | None = None
     monotonic: Callable[[], float] = time.monotonic
@@ -539,6 +542,7 @@ class AutoRngRunner:
         self._later_candidate_count = 0
         self._last_shiny_interval: float | None = None
         self._last_used_delay: int | None = None
+        self._active_delay = max(0, int(config.fixed_delay))
         self._is_sync_active: bool = False  # 当前队首是否为同步精灵
         self._sync_initial: bool = False  # 本轮初始同步状态（每轮重置）
         self._need_sync_switch: bool = False  # 本次过帧是否需要切换同步状态
@@ -561,7 +565,7 @@ class AutoRngRunner:
         return decide_target_advance(
             target,
             current_advances=current_advances,
-            fixed_delay=self.config.fixed_delay,
+            fixed_delay=self._target_delay(target),
             fixed_flash_frames=self._fixed_flash_frames(),
             max_wait_frames=self.config.max_wait_frames,
         )
@@ -569,6 +573,7 @@ class AutoRngRunner:
     def run(self, *, max_steps: int = 10000) -> AutoRngProgress:
         if self.progress.phase == AutoRngPhase.IDLE:
             if self.config.start_phase == AutoRngPhase.CAPTURE_SEED:
+                self._freeze_round_delay()
                 self._completed_loops += 1
                 self._cycle_started = True
                 self._sync_initial = self.config.sync_mode >= 2
@@ -586,6 +591,7 @@ class AutoRngRunner:
             elif self.config.start_phase == AutoRngPhase.REIDENTIFY:
                 if self.services.current_seed is None:
                     raise RuntimeError("从校正开始需要当前 Seed")
+                self._freeze_round_delay()
                 self._completed_loops += 1
                 self._cycle_started = True
                 self._sync_initial = self.config.sync_mode >= 2
@@ -740,7 +746,8 @@ class AutoRngRunner:
         # 过滤已过帧和线性计数器无法到达的启动帧。过滤要先于去重，
         # 否则同一 PID+EC 的低帧不可达时会误删后面的可达帧。
         fixed_flash = self._fixed_flash_frames()
-        min_reachable = seed.current_advances + self.config.fixed_delay + (fixed_flash or 0)
+        round_delay = self._active_delay
+        min_reachable = seed.current_advances + round_delay + (fixed_flash or 0)
         if self._missed_target_advance is not None:
             min_reachable = max(min_reachable, self._missed_target_advance + 1)
 
@@ -754,7 +761,7 @@ class AutoRngRunner:
                 raw_advances,
                 current_advances=seed.current_advances,
                 npc=seed.npc,
-                fixed_delay=self.config.fixed_delay,
+                fixed_delay=round_delay,
                 fixed_flash_frames=fixed_flash,
             )
 
@@ -819,22 +826,23 @@ class AutoRngRunner:
                 self._locked_target,
                 sync_source=selected_source,
                 sync_nature=nature_idx if selected_source == "sync" else None,
+                used_delay=round_delay,
             )
         if was_missed:
             self._history("candidates_refiltered", reachable, locked_idx, reachable_flags)
         else:
             self._history("candidates_found", reachable, locked_idx, reachable_flags)
         flash = self._fixed_flash_frames()
-        trigger = decision.raw_target_advances - self.config.fixed_delay - (flash or 0)
+        trigger = decision.raw_target_advances - round_delay - (flash or 0)
         next_attempt_label = self._next_attempt_label()
         timing_label = "软件等待模式" if flash is None else f"撞闪_闪帧 {flash}"
         self._set_progress(
             AutoRngPhase.DECIDE_ADVANCE,
-            f"{next_attempt_label} 锁定原始目标帧 {decision.raw_target_advances}，delay {self.config.fixed_delay}，"
+            f"{next_attempt_label} 锁定原始目标帧 {decision.raw_target_advances}，delay {round_delay}，"
             f"{timing_label}，脚本启动帧 {trigger}",
             locked_target=self._locked_target,
             raw_target_advances=decision.raw_target_advances,
-            fixed_delay=self.config.fixed_delay,
+            fixed_delay=round_delay,
             trigger_advances=trigger,
             current_advances=seed.current_advances,
         )
@@ -856,6 +864,7 @@ class AutoRngRunner:
         if self.should_stop():
             return
         self._missed_target_advance = None
+        self._freeze_round_delay()
         self._completed_loops += 1
         self._cycle_started = True
         self._sync_initial = self.config.sync_mode >= 2  # 首位同步精灵
@@ -881,7 +890,7 @@ class AutoRngRunner:
         decision = decide_target_advance(
             target,
             current_advances=seed.current_advances,
-            fixed_delay=self.config.fixed_delay,
+            fixed_delay=self._target_delay(target),
             fixed_flash_frames=self._fixed_flash_frames(),
             max_wait_frames=self.config.max_wait_frames,
         )
@@ -1150,7 +1159,7 @@ class AutoRngRunner:
         target = self._require_target()
         decision = finalize_flash_frames(
             target,
-            fixed_delay=self.config.fixed_delay,
+            fixed_delay=self._target_delay(target),
             fixed_flash_frames=self._fixed_flash_frames(),
             current_advances_at_ref=seed.current_advances,
             ref_time=self._seed_measured_at(seed),
@@ -1171,7 +1180,8 @@ class AutoRngRunner:
 
         trigger = self.progress.trigger_advances
         if trigger is None:
-            trigger = self._require_target().raw_target_advances - self.config.fixed_delay - (fixed_flash or 0)
+            target = self._require_target()
+            trigger = target.raw_target_advances - self._target_delay(target) - (fixed_flash or 0)
         wait_seconds = remaining * 1.018 / max(1, seed.npc + 1)
         self._set_progress(
             AutoRngPhase.FINAL_WAIT,
@@ -1282,7 +1292,7 @@ class AutoRngRunner:
         # 无闪符检测结果时，若开启了自动反查仍然执行
         if self.config.auto_reverse and self.config.reverse_script_path is not None:
             self._last_shiny_interval = None
-            self._last_used_delay = None
+            self._last_used_delay = self._target_delay()
             self._set_progress(
                 AutoRngPhase.REVERSE_LOOKUP,
                 "未出闪(无OCR检测)，启动自动反查",
@@ -1316,7 +1326,7 @@ class AutoRngRunner:
         diag_frames_since_ref = int(elapsed_since_ref / 1.018) * (seed.npc + 1)
         decision = finalize_flash_frames(
             target,
-            fixed_delay=self.config.fixed_delay,
+            fixed_delay=self._target_delay(target),
             fixed_flash_frames=fixed_flash,
             current_advances_at_ref=seed.current_advances,
             ref_time=ref_time,
@@ -1365,7 +1375,7 @@ class AutoRngRunner:
         # 无闪符检测结果时，若开启了自动反查仍然执行
         if self.config.auto_reverse and self.config.reverse_script_path is not None:
             self._last_shiny_interval = None
-            self._last_used_delay = None
+            self._last_used_delay = self._target_delay(target)
             self._set_progress(
                 AutoRngPhase.REVERSE_LOOKUP,
                 "未出闪(无OCR检测)，启动自动反查",
@@ -1417,7 +1427,8 @@ class AutoRngRunner:
             else f"未出闪，间隔 {interval_text}"
         )
         trigger = self.progress.trigger_advances
-        used_delay = self.config.fixed_delay
+        target = self._require_target()
+        used_delay = self._target_delay(target)
         attempt_label = self._attempt_label()
         if result.is_shiny:
             self._locked_target = None
@@ -1557,7 +1568,11 @@ class AutoRngRunner:
             return
         service = self.services.run_reverse_lookup
         interval = self._last_shiny_interval
-        used_delay = self._last_used_delay
+        used_delay = (
+            self._last_used_delay
+            if self._last_used_delay is not None
+            else self._target_delay(target)
+        )
         if service is None:
             self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
@@ -1569,13 +1584,24 @@ class AutoRngRunner:
             self._set_progress(AutoRngPhase.LOOP_CHECK, "未配置反查脚本，跳过反查")
             return
         try:
-            service(seed, target)
+            observed_delays = service(seed, target)
         except Exception as exc:
             self._locked_target = None
             self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, f"反查失败: {exc}")
             return
+        normalized_delays = normalize_delay_candidates(observed_delays or ())
+        if normalized_delays and self.services.record_delay_observation is not None:
+            try:
+                self.services.record_delay_observation(normalized_delays)
+            except Exception as exc:
+                self._emit(
+                    replace(
+                        self.progress,
+                        log_message=f"delay 样本保存失败，本轮继续使用原策略: {exc}",
+                    )
+                )
         self._locked_target = None
         self._history("cycle_result", False, interval, None, used_delay)
         self._cycle_started = False
@@ -1594,6 +1620,23 @@ class AutoRngRunner:
 
     def _attempt_label(self) -> str:
         return f"[第 {self._completed_loops} 轮 / 第 {self._attempt_index} 次]"
+
+    def _freeze_round_delay(self) -> None:
+        value = self.config.fixed_delay
+        if self.services.resolve_round_delay is not None:
+            try:
+                value = int(self.services.resolve_round_delay())
+            except Exception as exc:
+                raise RuntimeError(f"读取 delay 策略失败: {exc}") from exc
+        if value < 0:
+            raise RuntimeError(f"delay 不能为负数: {value}")
+        self._active_delay = value
+
+    def _target_delay(self, target: AutoRngTarget | None = None) -> int:
+        candidate = target if target is not None else self._locked_target
+        if candidate is not None and candidate.used_delay is not None:
+            return int(candidate.used_delay)
+        return self._active_delay
 
     def _next_attempt_label(self) -> str:
         return f"[第 {self._completed_loops} 轮 / 第 {self._attempt_index + 1} 次]"

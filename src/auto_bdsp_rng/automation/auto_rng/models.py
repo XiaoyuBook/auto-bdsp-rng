@@ -48,6 +48,7 @@ class AutoRngTarget:
     label: str = ""
     sync_source: str | None = None
     sync_nature: int | None = None
+    used_delay: int | None = None
 
     @classmethod
     def from_state(cls, state: Any, label: str = "") -> "AutoRngTarget":
@@ -74,6 +75,12 @@ class AutoRngConfig:
     target_species: int | None = None  # 当前目标物种编号，用于物种专属脚本参数
     has_body_filters: bool = False  # 是否有体型筛选（身高/体重）
     fixed_delay: int = 100
+    delay_strategy: str = "fixed"
+    delay_multi_candidate_policy: str = "ignore"
+    delay_sample_window: int = 5
+    delay_ewma_alpha: float = 0.5
+    delay_dense_interval_width: int = 2
+    delay_sample_rounds: tuple[tuple[int, ...], ...] = ()
     fixed_flash_frames: int = 60
     max_wait_frames: int = 300
     reseed_threshold_frames: int = 900_000
