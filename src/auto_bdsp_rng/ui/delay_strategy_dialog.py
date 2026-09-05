@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHeaderView,
     QHBoxLayout,
@@ -50,6 +49,7 @@ from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 
 QT_INT_MAX = 2_147_483_647
 DELAY_HISTORY_PAGE_SIZE = 10
+DELAY_DIALOG_WIDTH = 636
 DELAY_STRATEGY_LABELS = (
     (DelayStrategy.FIXED, "固定 delay"),
     (DelayStrategy.LAST, "上次实际 delay"),
@@ -617,11 +617,9 @@ class DelayStrategyDialog(QDialog):
         self.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumHeight(500)
-        self.setMinimumWidth(684)
-        self.setMaximumWidth(684)
-        self.resize(684, 884)
+        self.setFixedWidth(DELAY_DIALOG_WIDTH)
+        self.resize(DELAY_DIALOG_WIDTH, 836)
 
         self._sample_rounds: list[DelaySampleRound] = []
         self._sample_statuses: dict[int, DelaySampleStatus] = {}
@@ -642,7 +640,7 @@ class DelayStrategyDialog(QDialog):
 
         self.setStyleSheet(self._stylesheet())
         window_layout = QVBoxLayout(self)
-        window_layout.setContentsMargins(24, 24, 24, 24)
+        window_layout.setContentsMargins(0, 0, 0, 0)
         window_layout.setSpacing(0)
 
         self.surface = QFrame()
@@ -651,12 +649,6 @@ class DelayStrategyDialog(QDialog):
         surface_layout.setContentsMargins(0, 0, 0, 0)
         surface_layout.setSpacing(0)
         window_layout.addWidget(self.surface)
-
-        shadow = QGraphicsDropShadowEffect(self.surface)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 6)
-        shadow.setColor(QColor(24, 47, 33, 24))
-        self.surface.setGraphicsEffect(shadow)
 
         self.title_bar = _TitleBar()
         self.title_bar.setObjectName("DelayTitleBar")
@@ -1010,7 +1002,7 @@ class DelayStrategyDialog(QDialog):
     @staticmethod
     def _stylesheet() -> str:
         return """
-            QDialog#DelayStrategyDialog { background: transparent; }
+            QDialog#DelayStrategyDialog { background: #FFFFFF; }
             QFrame#DelayDialogSurface {
                 background: #FFFFFF;
                 border: 1px solid #DCE4DF;
@@ -1642,7 +1634,7 @@ class DelayStrategyDialog(QDialog):
         )
         if self.page_stack.currentWidget() is self.history_page:
             self.history_page.layout().activate()
-            desired = 56 + self.history_page.sizeHint().height() + 48
+            desired = 56 + self.history_page.sizeHint().height() + 2
         else:
             self._fit_strategy_description()
             self.body_widget.layout().activate()
@@ -1654,7 +1646,7 @@ class DelayStrategyDialog(QDialog):
                 56
                 + body_height
                 + self.footer.sizeHint().height()
-                + 50
+                + 2
             )
             self.body_scroll.setVerticalScrollBarPolicy(
                 Qt.ScrollBarPolicy.ScrollBarAlwaysOff
@@ -1663,7 +1655,7 @@ class DelayStrategyDialog(QDialog):
             )
         self.page_stack.updateGeometry()
         self.layout().activate()
-        self.resize(684, min(max(500, desired), max(500, available_height)))
+        self.resize(DELAY_DIALOG_WIDTH, min(max(500, desired), max(500, available_height)))
         if self.isVisible() and screen is not None:
             work_area = screen.availableGeometry()
             self.move(

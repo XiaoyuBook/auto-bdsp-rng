@@ -89,6 +89,24 @@ def test_delay_refreshes_do_not_accumulate_description_height(app, tmp_path):
     assert dialog.body_widget.sizeHint().height() == initial_body_height
 
 
+def test_delay_dialog_has_no_transparent_outer_shell(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_new_settings(tmp_path / "window-shell.ini"))
+    MainWindow._apply_theme(panel)
+    dialog = panel.delay_strategy_dialog
+    dialog.show()
+    app.processEvents()
+
+    assert dialog.surface.geometry() == dialog.rect()
+    snapshot = dialog.grab().toImage()
+    for x, y in (
+        (0, 0),
+        (snapshot.width() - 1, 0),
+        (0, snapshot.height() - 1),
+        (snapshot.width() - 1, snapshot.height() - 1),
+    ):
+        assert snapshot.pixelColor(x, y).alpha() == 255
+
+
 def test_full_history_remains_usable_on_a_short_screen(app, tmp_path, monkeypatch):
     panel = AutoRngPanel(script_dir=tmp_path, settings=_new_settings(tmp_path / "short-screen.ini"))
     MainWindow._apply_theme(panel)
