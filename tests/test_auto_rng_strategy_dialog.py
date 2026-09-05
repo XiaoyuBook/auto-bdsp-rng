@@ -7,10 +7,11 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QSettings, QTimer
-from PySide6.QtWidgets import QApplication, QFormLayout, QMessageBox
+from PySide6.QtWidgets import QApplication, QFormLayout
 
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import (
     DelayStrategy,
+    DelayStrategyConfig,
     MultiCandidatePolicy,
 )
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, QT_INT_MAX
@@ -224,11 +225,11 @@ def test_delay_strategy_button_and_dialog_defaults(app, tmp_path):
     dialog = panel.delay_strategy_dialog
     form = panel.strategy_group.layout()
 
-    assert form.labelForField(panel.delay_settings_button).text() == "delay"
+    assert form.labelForField(panel.delay_settings_field).text() == "delay"
     assert form.indexOf(panel.fixed_delay) == -1
     assert panel.fixed_delay.isHidden()
     assert panel.fixed_delay.value() == 100
-    assert panel.delay_settings_button.text() == "固定 delay · 100"
+    assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
     assert panel.delay_settings_button.size().width() == 215
     assert panel.delay_settings_button.size().height() == 34
     assert dialog.windowTitle() == "delay 策略设置"
@@ -248,9 +249,14 @@ def test_delay_strategy_button_and_dialog_defaults(app, tmp_path):
     assert dialog.values().ewma_alpha == 0.5
     assert dialog.values().dense_interval_width == 2
     assert dialog.multi_candidate_widget.isHidden()
-    _description_row, description_role = dialog.form.getWidgetPosition(dialog.strategy_description)
-    assert description_role is QFormLayout.ItemRole.SpanningRole
-    assert "不会随反查样本自动调整" in dialog.strategy_description.text()
+    assert dialog._form_rows[dialog.strategy_combo].label.text() == "delay 策略"
+    assert dialog._form_rows[dialog.strategy_combo].label.width() == 132
+    assert dialog.strategy_description.text() == "始终使用基准 delay；样本会继续保留。"
+    runtime_layout = dialog.runtime_summary.layout()
+    assert runtime_layout.count() == 3
+    assert runtime_layout.stretch(0) == 100
+    assert runtime_layout.stretch(2) == 145
+    assert dialog.valid_sample_count.isHidden()
 
 
 def test_delay_strategy_dialog_only_shows_strategy_specific_parameters(app, tmp_path):
@@ -263,8 +269,7 @@ def test_delay_strategy_dialog_only_shows_strategy_specific_parameters(app, tmp_
 
     dialog.strategy_combo.setCurrentIndex(dialog.strategy_combo.findData("last"))
     assert dialog.multi_candidate_widget.isHidden()
-    assert "多候选轮次一律跳过" in dialog.strategy_description.text()
-    assert "没有单候选样本时使用基准 delay" in dialog.strategy_description.text()
+    assert dialog.strategy_description.text() == "使用最近一次唯一候选；多个候选的轮次自动跳过。"
 
     dialog.strategy_combo.setCurrentIndex(dialog.strategy_combo.findData("ema"))
     assert not dialog.multi_candidate_widget.isHidden()
@@ -291,14 +296,14 @@ def test_delay_strategy_dialog_only_shows_strategy_specific_parameters(app, tmp_
 @pytest.mark.parametrize(
     ("strategy", "description_fragment"),
     [
-        ("fixed", "不会随反查样本自动调整"),
+        ("fixed", "样本会继续保留"),
         ("last", "最近一次唯一候选"),
         ("mode", "累计权重最高"),
-        ("median", "加权中位数"),
-        ("mean", "按轮加权平均值"),
+        ("median", "中间值"),
+        ("mean", "平均值，每轮权重相同"),
         ("ema", "逐轮融合"),
-        ("trimmed_mean", "两端各一轮权重"),
-        ("dense_interval", "候选群"),
+        ("trimmed_mean", "两端各去掉一轮权重"),
+        ("dense_interval", "最集中的候选"),
     ],
 )
 def test_delay_strategy_dialog_shows_effect_for_every_strategy(
@@ -346,9 +351,9 @@ def test_delay_strategy_numeric_fields_use_plain_c_locale_values(app, tmp_path):
         assert field.locale().name() == "C"
         assert field.lineEdit().locale().name() == "C"
         assert field.suffix() == ""
-    assert dialog.form.labelForField(dialog.baseline_delay).text() == "基准 delay（帧）"
-    assert dialog.form.labelForField(dialog.ewma_weight_percent).text() == "指数平滑权重（%）"
-    assert dialog.form.labelForField(dialog.dense_interval_width).text() == "密集区间跨度（帧）"
+    assert dialog._form_rows[dialog.baseline_delay].label.text() == "基准 delay"
+    assert dialog._form_rows[dialog.ewma_weight_percent].label.text() == "最新样本权重"
+    assert dialog._form_rows[dialog.dense_interval_width].label.text() == "密集区间跨度"
 
 
 def test_delay_strategy_dialog_cancel_keeps_committed_configuration(app, tmp_path):
@@ -368,8 +373,73 @@ def test_delay_strategy_dialog_cancel_keeps_committed_configuration(app, tmp_pat
 
     assert panel.delay_strategy_config().strategy is DelayStrategy.FIXED
     assert panel.fixed_delay.value() == 100
-    assert panel.delay_settings_button.text() == "固定 delay · 100"
+    assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
     assert not settings.contains("delay_strategy")
+
+
+def test_delay_strategy_save_stays_open_and_close_actions_restore_latest_save(
+    app,
+    tmp_path,
+):
+    settings_path = tmp_path / "delay-save-flow.ini"
+    settings = _settings(settings_path)
+    panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
+    dialog = panel.delay_strategy_dialog
+    expected = DelayStrategyConfig(
+        strategy=DelayStrategy.MEDIAN,
+        baseline_delay=1450,
+        multi_candidate_policy=MultiCandidatePolicy.WEIGHTED,
+        window_size=9,
+    )
+
+    def save_then_cancel_later_edit() -> None:
+        dialog.strategy_combo.setCurrentIndex(dialog.strategy_combo.findData("median"))
+        dialog.baseline_delay.setValue(1450)
+        dialog.window_size.setValue(9)
+        dialog.multi_candidate_widget.setCurrentIndex(
+            dialog.multi_candidate_widget.findData("weighted")
+        )
+        dialog.ok_button.click()
+
+        assert dialog.isVisible()
+        assert panel.delay_strategy_config() == expected
+        assert "已保存" in dialog.apply_status.text()
+
+        dialog.strategy_combo.setCurrentIndex(dialog.strategy_combo.findData("mean"))
+        dialog.baseline_delay.setValue(1499)
+        dialog.cancel_button.click()
+
+    QTimer.singleShot(0, save_then_cancel_later_edit)
+    panel.delay_settings_button.click()
+    assert panel.delay_strategy_config() == expected
+    assert dialog.values() == expected
+
+    def verify_cancel_rollback_then_close_with_x() -> None:
+        assert dialog.values() == expected
+        dialog.strategy_combo.setCurrentIndex(
+            dialog.strategy_combo.findData("dense_interval")
+        )
+        dialog.baseline_delay.setValue(1600)
+        dialog.close_button.click()
+
+    QTimer.singleShot(0, verify_cancel_rollback_then_close_with_x)
+    panel.delay_settings_button.click()
+    assert panel.delay_strategy_config() == expected
+    assert dialog.values() == expected
+
+    def verify_x_rollback_on_next_open() -> None:
+        assert dialog.values() == expected
+        dialog.cancel_button.click()
+
+    QTimer.singleShot(0, verify_x_rollback_on_next_open)
+    panel.delay_settings_button.click()
+
+    settings.sync()
+    restored = AutoRngPanel(
+        script_dir=tmp_path,
+        settings=QSettings(str(settings_path), QSettings.Format.IniFormat),
+    )
+    assert restored.delay_strategy_config() == expected
 
 
 def test_delay_strategy_dialog_accepts_and_persists_all_configuration(app, tmp_path):
@@ -403,7 +473,7 @@ def test_delay_strategy_dialog_accepts_and_persists_all_configuration(app, tmp_p
     assert config.ewma_alpha == 0.35
     assert config.dense_interval_width == 3
     assert restored.fixed_delay.value() == 1450
-    assert restored.delay_settings_button.text() == "密集区间 · 1450"
+    assert restored.delay_settings_button.text() == "密集区间 · 下轮 1450"
     built = restored.build_config()
     assert built.delay_strategy == "dense_interval"
     assert built.delay_multi_candidate_policy == "weighted"
@@ -433,10 +503,16 @@ def test_delay_samples_stay_grouped_persist_and_update_runtime_preview(app, tmp_
 
     assert panel.delay_samples() == [(1450,), (1451, 1453), (1452,)]
     assert panel.effective_delay_for_next_round() == 1451
-    assert panel.delay_settings_button.text() == "滚动平均值 · 1451"
+    assert panel.delay_settings_button.text() == "滚动平均值 · 下轮 1451"
     assert panel.delay_strategy_dialog.current_delay_value.text() == "1449"
     assert panel.delay_strategy_dialog.next_delay_value.text() == "1451"
     assert panel.delay_strategy_dialog.valid_sample_count.text() == "3 轮"
+    assert panel.delay_strategy_dialog.valid_sample_count.isHidden()
+    assert panel.delay_strategy_dialog.current_delay_note.text() == "本轮已锁定"
+    assert (
+        panel.delay_strategy_dialog.next_delay_note.text()
+        == "滚动平均值 · 使用 3 个有效轮次"
+    )
     assert panel.delay_strategy_dialog.recent_samples.text() == "1450 / 1451,1453 / 1452"
 
     settings.sync()
@@ -454,23 +530,23 @@ def test_delay_samples_stay_grouped_persist_and_update_runtime_preview(app, tmp_
     assert panel.delay_strategy_dialog.recent_samples.text() == "暂无样本"
 
 
-def test_delay_sample_clear_button_requires_confirmation(app, tmp_path, monkeypatch):
+def test_delay_sample_clear_button_uses_inline_confirmation(app, tmp_path):
     panel = AutoRngPanel(script_dir=tmp_path, settings=_settings(tmp_path / "auto-rng.ini"))
     panel.record_delay_sample([1452])
+    dialog = panel.delay_strategy_dialog
 
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *_args, **_kwargs: QMessageBox.StandardButton.Cancel,
-    )
-    panel.delay_strategy_dialog.clear_samples_button.click()
+    assert dialog.clear_confirm_frame.isHidden()
+    dialog.clear_samples_button.click()
+    assert not dialog.clear_confirm_frame.isHidden()
     assert panel.delay_samples() == [(1452,)]
 
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
-    )
-    panel.delay_strategy_dialog.clear_samples_button.click()
+    dialog.keep_samples_button.click()
+    assert dialog.clear_confirm_frame.isHidden()
+    assert panel.delay_samples() == [(1452,)]
+
+    dialog.clear_samples_button.click()
+    assert not dialog.clear_confirm_frame.isHidden()
+    dialog.confirm_clear_button.click()
+    assert dialog.clear_confirm_frame.isHidden()
     app.processEvents()
     assert panel.delay_samples() == []

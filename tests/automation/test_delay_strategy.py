@@ -3,11 +3,14 @@ from __future__ import annotations
 import pytest
 
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import (
+    DelaySampleEvaluation,
     DelaySampleRound,
+    DelaySampleStatus,
     DelayStrategy,
     DelayStrategyConfig,
     calculate_delay,
     estimate_delay,
+    evaluate_delay_samples,
     normalize_delay_candidates,
 )
 
@@ -34,6 +37,41 @@ def test_normalizes_each_round_to_distinct_sorted_non_negative_integers():
     assert DelaySampleRound.from_candidates(None).candidates == ()
 
 
+def test_sample_round_preserves_normalized_metadata_without_breaking_old_calls():
+    legacy = DelaySampleRound((1452, 1451, 1452))
+    recorded = DelaySampleRound.from_candidates(
+        [1453, 1452],
+        round_number=11,
+        observed_at="2026-09-05T19:35:52",
+        excluded=True,
+    )
+
+    assert legacy == DelaySampleRound(candidates=(1451, 1452))
+    assert legacy.round_number == 0
+    assert legacy.observed_at is None
+    assert legacy.excluded is False
+    assert recorded == DelaySampleRound(
+        candidates=(1452, 1453),
+        round_number=11,
+        observed_at="2026-09-05T19:35:52",
+        excluded=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"round_number": -1}, "round_number"),
+        ({"round_number": True}, "round_number"),
+        ({"observed_at": "not-a-time"}, "observed_at"),
+        ({"excluded": "false"}, "excluded"),
+    ],
+)
+def test_sample_round_rejects_invalid_metadata(updates: dict[str, object], message: str):
+    with pytest.raises(ValueError, match=message):
+        DelaySampleRound(candidates=(1452,), **updates)
+
+
 def test_fixed_strategy_ignores_history():
     result = estimate_delay(_config("fixed"), [[1400], [1500, 1501]])
 
@@ -41,6 +79,24 @@ def test_fixed_strategy_ignores_history():
     assert result.valid_round_count == 0
     assert result.candidate_count == 0
     assert result.used_fallback is False
+
+
+def test_fixed_strategy_reports_samples_as_unused_and_keeps_exclusions_distinct():
+    evaluations = evaluate_delay_samples(
+        _config("fixed"),
+        [
+            DelaySampleRound((1400,), round_number=1),
+            DelaySampleRound((1500,), round_number=2, excluded=True),
+            DelaySampleRound((), round_number=3),
+        ],
+    )
+
+    assert [evaluation.status for evaluation in evaluations] == [
+        DelaySampleStatus.FIXED_STRATEGY,
+        DelaySampleStatus.EXCLUDED,
+        DelaySampleStatus.EMPTY,
+    ]
+    assert not any(evaluation.eligible or evaluation.in_window for evaluation in evaluations)
 
 
 @pytest.mark.parametrize(
@@ -67,6 +123,32 @@ def test_ignore_policy_skips_ambiguous_rounds_without_consuming_the_valid_window
     assert result.candidate_count == 2
 
 
+def test_sample_evaluation_matches_ignore_policy_and_window_selection():
+    rounds = [
+        DelaySampleRound((1400,), round_number=1),
+        DelaySampleRound((1500, 1501), round_number=2),
+        DelaySampleRound((1410,), round_number=3),
+        DelaySampleRound((9999,), round_number=4, excluded=True),
+        DelaySampleRound((), round_number=5),
+    ]
+
+    evaluations = evaluate_delay_samples(
+        _config("mean", multi_candidate_policy="ignore", window_size=1),
+        rounds,
+    )
+
+    assert all(isinstance(evaluation, DelaySampleEvaluation) for evaluation in evaluations)
+    assert [evaluation.status for evaluation in evaluations] == [
+        DelaySampleStatus.OUTSIDE_WINDOW,
+        DelaySampleStatus.AMBIGUOUS,
+        DelaySampleStatus.USED,
+        DelaySampleStatus.EXCLUDED,
+        DelaySampleStatus.EMPTY,
+    ]
+    assert [evaluation.eligible for evaluation in evaluations] == [True, False, True, False, False]
+    assert [evaluation.in_window for evaluation in evaluations] == [False, False, True, False, False]
+
+
 def test_weighted_policy_gives_each_round_total_weight_one():
     config = _config("mean")
 
@@ -75,6 +157,20 @@ def test_weighted_policy_gives_each_round_total_weight_one():
     assert result.value == 1455
     assert result.valid_round_count == 2
     assert result.candidate_count == 3
+
+
+def test_weighted_policy_marks_ambiguous_rounds_inside_the_window():
+    evaluations = evaluate_delay_samples(
+        _config("mean", multi_candidate_policy="weighted", window_size=2),
+        [[1400], [1500, 1501], [1460]],
+    )
+
+    assert [evaluation.status for evaluation in evaluations] == [
+        DelaySampleStatus.OUTSIDE_WINDOW,
+        DelaySampleStatus.USED,
+        DelaySampleStatus.USED,
+    ]
+    assert [evaluation.in_window for evaluation in evaluations] == [False, True, True]
 
 
 @pytest.mark.parametrize("policy", ["ignore", "weighted"])
@@ -93,6 +189,41 @@ def test_last_always_skips_multi_candidate_rounds(policy: str):
     assert result.candidate_count == 1
     assert result.used_fallback is False
     assert calculate_delay(config, [[1452, 1452]]) == 1452
+
+
+def test_last_sample_evaluation_uses_only_latest_single_candidate_round():
+    evaluations = evaluate_delay_samples(
+        _config("last", multi_candidate_policy="weighted", window_size=99),
+        [[1400], [1451, 1452], [1410], [1453, 1454]],
+    )
+
+    assert [evaluation.status for evaluation in evaluations] == [
+        DelaySampleStatus.OUTSIDE_WINDOW,
+        DelaySampleStatus.AMBIGUOUS,
+        DelaySampleStatus.USED,
+        DelaySampleStatus.AMBIGUOUS,
+    ]
+    assert [evaluation.in_window for evaluation in evaluations] == [False, False, True, False]
+
+
+def test_excluded_rounds_do_not_participate_or_consume_the_window():
+    rounds = [
+        DelaySampleRound((1400,), round_number=1),
+        DelaySampleRound((9000,), round_number=2, excluded=True),
+        DelaySampleRound((1410,), round_number=3),
+    ]
+
+    result = estimate_delay(_config("mean", window_size=2), rounds)
+    evaluations = evaluate_delay_samples(_config("mean", window_size=2), rounds)
+
+    assert result.value == 1405
+    assert result.valid_round_count == 2
+    assert result.candidate_count == 2
+    assert [evaluation.status for evaluation in evaluations] == [
+        DelaySampleStatus.USED,
+        DelaySampleStatus.EXCLUDED,
+        DelaySampleStatus.USED,
+    ]
 
 
 def test_last_falls_back_to_baseline_when_only_multi_candidate_rounds_exist():

@@ -73,6 +73,10 @@ class StaticEncounterRecord:
 
 _PERSONAL_BDSP_RECORD_SIZE = 0x44
 
+# Only add values that have been verified on the maintained setup. Missing
+# species intentionally have no recommendation in the delay settings UI.
+RECOMMENDED_DELAY_BY_SPECIES: dict[int, int] = {}
+
 _STATIC_TEMPLATE_ROWS: tuple[tuple[str, str, str, int, int, Shiny, int, int, int, bool, bool], ...] = (
     ("starters", "Turtwig", "BDSP", 387, 0, Shiny.RANDOM, 255, 255, 0, False, False),
     ("starters", "Chimchar", "BDSP", 390, 0, Shiny.RANDOM, 255, 255, 0, False, False),
@@ -285,6 +289,13 @@ def get_static_templates(
     return tuple(record.template for record in get_static_encounters(category, version))
 
 
+def get_recommended_delay(species: int | None) -> int | None:
+    if species is None:
+        return None
+    value = RECOMMENDED_DELAY_BY_SPECIES.get(int(species))
+    return None if value is None else max(0, int(value))
+
+
 def validate_data(records: Iterable[StaticEncounterRecord] | None = None) -> None:
     encounter_records = tuple(load_static_encounters() if records is None else records)
     if not encounter_records:
@@ -309,10 +320,12 @@ def validate_data(records: Iterable[StaticEncounterRecord] | None = None) -> Non
 
 __all__ = [
     "GameVersion",
+    "RECOMMENDED_DELAY_BY_SPECIES",
     "SpeciesInfo8",
     "StaticEncounterCategory",
     "StaticEncounterRecord",
     "get_species_info",
+    "get_recommended_delay",
     "get_static_encounters",
     "get_static_templates",
     "load_species_info",

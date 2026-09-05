@@ -7993,15 +7993,25 @@ class MainWindow(QMainWindow):
 
         def resolve_round_delay_service() -> int:
             def resolve() -> int:
-                value = int(self.auto_rng_tab.effective_delay_for_next_round())
-                self.auto_rng_tab.set_active_delay(value)
+                value = int(
+                    self.auto_rng_tab.effective_delay_for_species(config.target_species)
+                )
+                self.auto_rng_tab.set_active_delay(
+                    value,
+                    species_id=config.target_species,
+                )
                 return value
 
             return int(self._call_on_ui_thread(resolve))
 
         def record_delay_observation_service(delays: Sequence[int]) -> None:
             values = tuple(int(value) for value in delays)
-            self._call_on_ui_thread(lambda: self.auto_rng_tab.record_delay_sample(values))
+            self._call_on_ui_thread(
+                lambda: self.auto_rng_tab.record_delay_sample(
+                    values,
+                    species_id=config.target_species,
+                )
+            )
 
         def recover_zoom_mode_service() -> bool:
             return self._recover_zoom_mode_with_preview_paused(

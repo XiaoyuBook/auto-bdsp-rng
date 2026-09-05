@@ -2038,7 +2038,12 @@ def test_auto_rng_strategy_parameters_have_hover_explanations(app, tmp_path):
     )
     for field, expected_text in explained_rows:
         assert expected_text in field.toolTip()
-        label = form.labelForField(field)
+        form_field = (
+            panel.delay_settings_field
+            if field is panel.delay_settings_button
+            else field
+        )
+        label = form.labelForField(form_field)
         assert label is not None
         assert label.toolTip() == field.toolTip()
 
@@ -4150,6 +4155,75 @@ def test_main_window_auto_rng_services_search_with_bdsp_snapshot(app, tmp_path):
 
     assert [state.advances for state in candidates] == [0, 1, 2]
     assert "搜索目标" in window.auto_rng_tab.log_view.toPlainText()
+
+
+def test_main_window_auto_rng_delay_services_stay_bound_to_started_species(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    from auto_bdsp_rng.automation.auto_rng.delay_strategy import DelayStrategyConfig
+    from auto_bdsp_rng.data import get_static_encounters
+
+    species_a = 480
+    species_b = 482
+    records = {
+        record.template.species: record
+        for record in get_static_encounters()
+        if record.template.species in (species_a, species_b)
+    }
+    assert set(records) == {species_a, species_b}
+
+    window = MainWindow(profile_settings=_profile_settings(tmp_path))
+    panel = window.auto_rng_tab
+    panel._settings = _auto_rng_settings(tmp_path)
+    panel._delay_profiles.clear()
+    panel._active_delay_by_species.clear()
+
+    def select_species(species: int) -> None:
+        panel.set_targets([(records[species], StateFilter(), "any")])
+
+    select_species(species_a)
+    panel._commit_delay_strategy_config(
+        DelayStrategyConfig(strategy="last", baseline_delay=1400),
+        persist=True,
+        emit=False,
+    )
+    panel.record_delay_sample(
+        [1401],
+        observed_at="2026-09-05T19:30:00+08:00",
+    )
+    services = window._build_auto_rng_services(
+        AutoRngConfig(script_dir=tmp_path, target_species=species_a)
+    )
+
+    select_species(species_b)
+    panel._commit_delay_strategy_config(
+        DelayStrategyConfig(strategy="last", baseline_delay=1500),
+        persist=True,
+        emit=False,
+    )
+    panel.record_delay_sample(
+        [1501],
+        observed_at="2026-09-05T19:35:00+08:00",
+    )
+    monkeypatch.setattr(window, "_call_on_ui_thread", lambda callback: callback())
+
+    assert services.resolve_round_delay() == 1401
+    assert panel._active_delay_by_species == {species_a: 1401}
+    assert panel.delay_strategy_dialog.current_delay_value.text() == "—"
+
+    services.record_delay_observation([1402])
+
+    assert [sample.candidates for sample in panel.delay_sample_records(species_a)] == [
+        (1401,),
+        (1402,),
+    ]
+    assert [sample.candidates for sample in panel.delay_sample_records(species_b)] == [
+        (1501,),
+    ]
+    assert panel.effective_delay_for_species(species_a) == 1402
+    assert panel.effective_delay_for_next_round() == 1501
 
 
 def test_zoom_recovery_pauses_preview_and_waits_before_capturing(app, monkeypatch):

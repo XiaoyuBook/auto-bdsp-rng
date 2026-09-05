@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QSettings, QTimer
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import (
     DelayStrategy,
@@ -75,7 +75,7 @@ def test_panel_restores_each_strategy_and_updates_summary_button(
     assert config.ewma_alpha == 0.5
     assert config.dense_interval_width == 2
     assert panel.effective_delay_for_next_round() == expected_delay
-    assert panel.delay_settings_button.text() == f"{label} · {expected_delay}"
+    assert panel.delay_settings_button.text() == f"{label} · 下轮 {expected_delay}"
     assert "下轮预计" in panel.delay_settings_button.toolTip()
     assert str(expected_delay) in panel.delay_settings_button.toolTip()
 
@@ -191,21 +191,28 @@ def test_cancel_discards_all_draft_fields_and_leaves_saved_config_unchanged(app,
 def test_clear_samples_is_immediate_and_is_not_rolled_back_by_cancel(
     app,
     tmp_path,
-    monkeypatch,
 ):
     settings = _settings(tmp_path / "clear.ini")
     panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
     panel.record_delay_sample([1451, 1452])
     panel.record_delay_sample([1450])
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
-    )
-
     def clear_then_cancel() -> None:
         dialog = panel.delay_strategy_dialog
+
         dialog.clear_samples_button.click()
+        assert dialog.clear_confirm_frame.isVisible()
+        assert panel.delay_samples() == [(1451, 1452), (1450,)]
+
+        dialog.keep_samples_button.click()
+        assert dialog.clear_confirm_frame.isHidden()
+        assert panel.delay_samples() == [(1451, 1452), (1450,)]
+
+        dialog.clear_samples_button.click()
+        assert dialog.clear_confirm_frame.isVisible()
+        dialog.confirm_clear_button.click()
+        assert dialog.clear_confirm_frame.isHidden()
+        app.processEvents()
+        assert panel.delay_samples() == []
         dialog.reject()
 
     QTimer.singleShot(0, clear_then_cancel)
@@ -217,4 +224,4 @@ def test_clear_samples_is_immediate_and_is_not_rolled_back_by_cancel(
     assert json.loads(str(settings.value("delay_sample_rounds_json"))) == []
     assert panel.delay_strategy_dialog.recent_samples.text() == "暂无样本"
     assert not panel.delay_strategy_dialog.clear_samples_button.isEnabled()
-    assert panel.delay_settings_button.text() == "固定 delay · 100"
+    assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"

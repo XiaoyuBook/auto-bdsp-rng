@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from fractions import Fraction
 from typing import Iterable
@@ -20,6 +21,15 @@ class DelayStrategy(str, Enum):
 class MultiCandidatePolicy(str, Enum):
     IGNORE = "ignore"
     WEIGHTED = "weighted"
+
+
+class DelaySampleStatus(str, Enum):
+    EXCLUDED = "excluded"
+    EMPTY = "empty"
+    FIXED_STRATEGY = "fixed_strategy"
+    AMBIGUOUS = "ambiguous"
+    OUTSIDE_WINDOW = "outside_window"
+    USED = "used"
 
 
 _STRATEGY_ALIASES = {
@@ -79,13 +89,52 @@ class DelaySampleRound:
     """One reverse-lookup result, kept as an atomic equal-weight sample."""
 
     candidates: tuple[int, ...] = ()
+    round_number: int = 0
+    observed_at: str | None = None
+    excluded: bool = False
 
     def __post_init__(self) -> None:
+        if isinstance(self.round_number, bool):
+            raise ValueError("round_number must be a non-negative integer")
+        try:
+            round_number = int(self.round_number)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("round_number must be a non-negative integer") from exc
+        if round_number < 0:
+            raise ValueError("round_number must be a non-negative integer")
+
+        observed_at = self.observed_at
+        if observed_at is not None:
+            if not isinstance(observed_at, str):
+                raise ValueError("observed_at must be an ISO datetime string or None")
+            observed_at = observed_at.strip() or None
+            if observed_at is not None:
+                try:
+                    datetime.fromisoformat(observed_at)
+                except ValueError as exc:
+                    raise ValueError("observed_at must be an ISO datetime string or None") from exc
+        if not isinstance(self.excluded, bool):
+            raise ValueError("excluded must be a boolean")
+
         object.__setattr__(self, "candidates", normalize_delay_candidates(self.candidates))
+        object.__setattr__(self, "round_number", round_number)
+        object.__setattr__(self, "observed_at", observed_at)
 
     @classmethod
-    def from_candidates(cls, candidates: Iterable[object] | object) -> DelaySampleRound:
-        return cls(normalize_delay_candidates(candidates))
+    def from_candidates(
+        cls,
+        candidates: Iterable[object] | object,
+        *,
+        round_number: int = 0,
+        observed_at: str | None = None,
+        excluded: bool = False,
+    ) -> DelaySampleRound:
+        return cls(
+            normalize_delay_candidates(candidates),
+            round_number=round_number,
+            observed_at=observed_at,
+            excluded=excluded,
+        )
 
 
 @dataclass(frozen=True)
@@ -134,6 +183,68 @@ class DelayEstimate:
     used_fallback: bool = False
 
 
+@dataclass(frozen=True)
+class DelaySampleEvaluation:
+    """How one stored sample participates in the current strategy."""
+
+    sample: DelaySampleRound
+    status: DelaySampleStatus
+    eligible: bool = False
+    in_window: bool = False
+
+
+def evaluate_delay_samples(
+    config: DelayStrategyConfig,
+    rounds: Iterable[DelaySampleRound | Iterable[object] | object],
+) -> tuple[DelaySampleEvaluation, ...]:
+    """Classify every sample using the same eligibility and window rules as estimation."""
+
+    strategy = normalize_delay_strategy(config.strategy)
+    normalized_rounds = [_coerce_round(round_value) for round_value in rounds]
+    statuses: list[DelaySampleStatus | None] = []
+    eligible_indices: list[int] = []
+    allow_ambiguous_rounds = (
+        strategy is not DelayStrategy.LAST
+        and config.multi_candidate_policy is MultiCandidatePolicy.WEIGHTED
+    )
+
+    for index, sample in enumerate(normalized_rounds):
+        if sample.excluded:
+            statuses.append(DelaySampleStatus.EXCLUDED)
+        elif not sample.candidates:
+            statuses.append(DelaySampleStatus.EMPTY)
+        elif strategy is DelayStrategy.FIXED:
+            statuses.append(DelaySampleStatus.FIXED_STRATEGY)
+        elif len(sample.candidates) > 1 and not allow_ambiguous_rounds:
+            statuses.append(DelaySampleStatus.AMBIGUOUS)
+        else:
+            statuses.append(None)
+            eligible_indices.append(index)
+
+    window_size = 1 if strategy is DelayStrategy.LAST else config.window_size
+    used_indices = set(eligible_indices[-window_size:])
+    evaluations: list[DelaySampleEvaluation] = []
+    for index, (sample, status) in enumerate(zip(normalized_rounds, statuses)):
+        if status is None:
+            eligible = True
+            status = (
+                DelaySampleStatus.USED
+                if index in used_indices
+                else DelaySampleStatus.OUTSIDE_WINDOW
+            )
+        else:
+            eligible = False
+        evaluations.append(
+            DelaySampleEvaluation(
+                sample=sample,
+                status=status,
+                eligible=eligible,
+                in_window=index in used_indices,
+            )
+        )
+    return tuple(evaluations)
+
+
 def estimate_delay(
     config: DelayStrategyConfig,
     rounds: Iterable[DelaySampleRound | Iterable[object] | object],
@@ -160,24 +271,8 @@ def estimate_delay(
             candidate_count=0,
         )
 
-    normalized_rounds = [_coerce_round(round_value) for round_value in rounds]
-    allow_ambiguous_rounds = (
-        strategy is not DelayStrategy.LAST
-        and config.multi_candidate_policy is MultiCandidatePolicy.WEIGHTED
-    )
-    eligible = [
-        sample
-        for sample in normalized_rounds
-        if sample.candidates
-        and (
-            allow_ambiguous_rounds
-            or len(sample.candidates) == 1
-        )
-    ]
-    if strategy is DelayStrategy.LAST:
-        used_rounds = eligible[-1:]
-    else:
-        used_rounds = eligible[-config.window_size :]
+    evaluations = evaluate_delay_samples(config, rounds)
+    used_rounds = [evaluation.sample for evaluation in evaluations if evaluation.in_window]
 
     if not used_rounds:
         return DelayEstimate(
@@ -356,12 +451,15 @@ def _dense_interval_median(
 
 __all__ = [
     "DelayEstimate",
+    "DelaySampleEvaluation",
     "DelaySampleRound",
+    "DelaySampleStatus",
     "DelayStrategy",
     "DelayStrategyConfig",
     "MultiCandidatePolicy",
     "calculate_delay",
     "estimate_delay",
+    "evaluate_delay_samples",
     "normalize_delay_candidates",
     "normalize_delay_strategy",
     "normalize_multi_candidate_policy",

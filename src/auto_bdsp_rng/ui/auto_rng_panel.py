@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -24,14 +24,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QSplitter,
-    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -40,10 +37,13 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import (
     DelayEstimate,
     DelaySampleRound,
-    DelayStrategy,
     DelayStrategyConfig,
-    MultiCandidatePolicy,
     estimate_delay,
+)
+from auto_bdsp_rng.automation.auto_rng.delay_profiles import (
+    DelayProfile,
+    decode_delay_profiles,
+    encode_delay_profiles,
 )
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_rng.scripts import (
@@ -55,9 +55,20 @@ from auto_bdsp_rng.automation.auto_rng.scripts import (
     list_auto_scripts,
     validate_auto_scripts,
 )
-from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord, get_static_encounters
+from auto_bdsp_rng.data import (
+    GameVersion,
+    StaticEncounterRecord,
+    get_recommended_delay,
+    get_static_encounters,
+)
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.ui.delay_strategy_dialog import (
+    DELAY_STRATEGY_LABEL_BY_ID,
+    DelaySummaryButton,
+    DelayStrategyDialog,
+    delay_lucide_icon,
+)
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
@@ -101,49 +112,6 @@ DEFAULT_REIDENTIFY_FAILURE_POLICY = "next_round"
 DEFAULT_REIDENTIFY_SEED_MAX_ATTEMPTS = 1
 QT_INT_MAX = 2_147_483_647
 _TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
-
-DELAY_STRATEGY_LABELS = (
-    (DelayStrategy.FIXED, "固定 delay"),
-    (DelayStrategy.LAST, "上次实际 delay"),
-    (DelayStrategy.MODE, "众数"),
-    (DelayStrategy.MEDIAN, "中位数"),
-    (DelayStrategy.ROLLING_MEAN, "滚动平均值"),
-    (DelayStrategy.EWMA, "指数平滑"),
-    (DelayStrategy.TRIMMED_MEAN, "截尾平均"),
-    (DelayStrategy.DENSE_INTERVAL, "密集区间"),
-)
-DELAY_STRATEGY_LABEL_BY_ID = {strategy.value: label for strategy, label in DELAY_STRATEGY_LABELS}
-DELAY_STRATEGY_TOOLTIPS = {
-    DelayStrategy.FIXED: "始终使用基准 delay；结果最稳定，不会随反查样本自动调整。",
-    DelayStrategy.LAST: (
-        "使用最近一次唯一候选；多候选轮次一律跳过。响应最快，但容易受单次误差影响；"
-        "没有单候选样本时使用基准 delay。"
-    ),
-    DelayStrategy.MODE: (
-        "取最近 N 轮累计权重最高的 delay，适合实际值长期稳定在同一帧附近；"
-        "没有有效样本时使用基准 delay。"
-    ),
-    DelayStrategy.MEDIAN: (
-        "取最近 N 轮的加权中位数，能抵抗偶发异常值，通常比平均值稳健；"
-        "没有有效样本时使用基准 delay。"
-    ),
-    DelayStrategy.ROLLING_MEAN: (
-        "取最近 N 轮的按轮加权平均值，变化平滑，但容易被异常值拉偏；"
-        "没有有效样本时使用基准 delay。"
-    ),
-    DelayStrategy.EWMA: (
-        "从基准值开始逐轮融合；权重越高越跟随最新结果，适合缓慢漂移；"
-        "没有有效样本时使用基准 delay。"
-    ),
-    DelayStrategy.TRIMMED_MEAN: (
-        "去掉最近 N 轮两端各一轮权重后求平均，能减弱异常值影响；"
-        "不足 5 个有效轮次时使用滚动平均，没有样本时使用基准 delay。"
-    ),
-    DelayStrategy.DENSE_INTERVAL: (
-        "寻找跨度内权重最集中的候选群并取加权中位数，适合 1451/1452/1453 这类相邻帧抖动；"
-        "没有有效样本时使用基准 delay。"
-    ),
-}
 
 
 class AutoRngWorker(QObject):
@@ -304,368 +272,6 @@ class AutoRngStrategyDialog(QDialog):
         )
 
 
-class DelayStrategyDialog(QDialog):
-    """Edit the delay estimator without changing the active round."""
-
-    settingsEdited = Signal()
-    clearSamplesRequested = Signal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("DelayStrategyDialog")
-        self.setWindowTitle("delay 策略设置")
-        self.setMinimumWidth(520)
-        self.setStyleSheet(
-            "QDialog#DelayStrategyDialog QComboBox,"
-            " QDialog#DelayStrategyDialog QSpinBox,"
-            " QDialog#DelayStrategyDialog QLineEdit { min-height: 34px; max-height: 34px;"
-            " padding-top: 0; padding-bottom: 0; }"
-            " QDialog#DelayStrategyDialog QDialogButtonBox QPushButton { min-height: 34px;"
-            " max-height: 34px; padding-top: 0; padding-bottom: 0; }"
-            " QDialog#DelayStrategyDialog QToolButton#DelayClearSamplesButton { min-width: 34px;"
-            " max-width: 34px; min-height: 34px; max-height: 34px; }"
-        )
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 14)
-        layout.setSpacing(14)
-
-        self.form = QFormLayout()
-        self.form.setHorizontalSpacing(18)
-        self.form.setVerticalSpacing(10)
-
-        self.strategy_combo = QComboBox()
-        for strategy, label in DELAY_STRATEGY_LABELS:
-            self.strategy_combo.addItem(label, strategy.value)
-        self.strategy_combo.setFixedSize(250, 34)
-        self.strategy_description = QLabel()
-        self.strategy_description.setObjectName("DelayStrategyDescription")
-        self.strategy_description.setWordWrap(True)
-        self.strategy_description.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-        self.strategy_description.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
-        self.strategy_description.setStyleSheet(
-            "color: palette(window-text); font-size: 12px;"
-        )
-
-        self.baseline_delay = self._spin(0, DelayStrategyConfig().baseline_delay)
-        self.window_size = self._spin(1, DelayStrategyConfig().window_size)
-        self.ewma_weight_percent = self._spin(
-            1,
-            round(DelayStrategyConfig().ewma_alpha * 100),
-            maximum=100,
-        )
-        self.dense_interval_width = self._spin(0, DelayStrategyConfig().dense_interval_width)
-
-        self.multi_candidate_widget = QFrame()
-        self.multi_candidate_widget.setObjectName("DelayCandidatePolicy")
-        self.multi_candidate_widget.setFixedSize(250, 34)
-        candidate_row = QHBoxLayout(self.multi_candidate_widget)
-        candidate_row.setContentsMargins(1, 1, 1, 1)
-        candidate_row.setSpacing(0)
-        self.multi_candidate_group = QButtonGroup(self)
-        self.multi_candidate_group.setExclusive(True)
-        self.ignore_multi_candidate_button = QPushButton("忽略该轮")
-        self.weight_multi_candidate_button = QPushButton("按轮加权")
-        for button, policy in (
-            (self.ignore_multi_candidate_button, MultiCandidatePolicy.IGNORE),
-            (self.weight_multi_candidate_button, MultiCandidatePolicy.WEIGHTED),
-        ):
-            button.setCheckable(True)
-            button.setProperty("delayPolicy", policy.value)
-            button.setFixedHeight(32)
-            candidate_row.addWidget(button, 1)
-            self.multi_candidate_group.addButton(button)
-        self.ignore_multi_candidate_button.setChecked(True)
-        self.multi_candidate_widget.setStyleSheet(
-            "QFrame#DelayCandidatePolicy { background: palette(base); border: 1px solid palette(mid);"
-            " border-radius: 8px; }"
-            " QFrame#DelayCandidatePolicy QPushButton { background: transparent; border: 0; border-radius: 6px;"
-            " min-height: 30px; max-height: 30px; padding: 0 8px; color: palette(window-text); }"
-            " QFrame#DelayCandidatePolicy QPushButton:hover { background: palette(alternate-base); }"
-            " QFrame#DelayCandidatePolicy QPushButton:checked { background: #10A37F; color: #FFFFFF; }"
-        )
-
-        rows = (
-            (
-                "delay 策略",
-                self.strategy_combo,
-                "选择下一轮使用的 delay 计算方式；本轮已经锁定的值不会改变。",
-            ),
-            (
-                "基准 delay（帧）",
-                self.baseline_delay,
-                "固定策略直接使用此值；动态策略没有有效样本时回退到此值。",
-            ),
-            (
-                "多候选轮次",
-                self.multi_candidate_widget,
-                "忽略该轮：一轮得到多个候选时不计入统计。\n"
-                "按轮加权：每轮总权重为 1，由本轮所有候选平均分配。",
-            ),
-            (
-                "统计窗口（轮）",
-                self.window_size,
-                "使用最近 N 个有效轮次；上次实际 delay 策略始终只看最近一轮。",
-            ),
-            (
-                "指数平滑权重（%）",
-                self.ewma_weight_percent,
-                "新一轮实际 delay 在指数平滑结果中所占的比例。",
-            ),
-            (
-                "密集区间跨度（帧）",
-                self.dense_interval_width,
-                "密集区间允许的最大候选跨度；设为 2 可覆盖 1451、1452、1453。",
-            ),
-        )
-        for label_text, field, tooltip in rows:
-            self.form.addRow(label_text, field)
-            field.setToolTip(tooltip)
-            label = self.form.labelForField(field)
-            if label is not None:
-                label.setToolTip(tooltip)
-            if field is self.strategy_combo:
-                self.form.addRow(self.strategy_description)
-        layout.addLayout(self.form)
-
-        runtime_title = QLabel("运行状态")
-        runtime_title.setObjectName("DelaySectionTitle")
-        runtime_title.setStyleSheet("font-weight: 600;")
-        layout.addWidget(runtime_title)
-        self.runtime_summary = QFrame()
-        self.runtime_summary.setObjectName("DelayRuntimeSummary")
-        runtime_row = QHBoxLayout(self.runtime_summary)
-        runtime_row.setContentsMargins(14, 10, 14, 10)
-        runtime_row.setSpacing(12)
-        self.current_delay_value = QLabel("-")
-        self.next_delay_value = QLabel(str(DelayStrategyConfig().baseline_delay))
-        self.valid_sample_count = QLabel("0 轮")
-        for index, (caption, value_label) in enumerate(
-            (
-                ("本次使用", self.current_delay_value),
-                ("下轮预计", self.next_delay_value),
-                ("有效样本", self.valid_sample_count),
-            )
-        ):
-            column = QVBoxLayout()
-            column.setContentsMargins(0, 0, 0, 0)
-            column.setSpacing(3)
-            caption_label = QLabel(caption)
-            caption_label.setObjectName("DelayRuntimeCaption")
-            value_label.setObjectName("DelayRuntimeValue")
-            column.addWidget(caption_label)
-            column.addWidget(value_label)
-            runtime_row.addLayout(column, 1)
-            if index < 2:
-                divider = QFrame()
-                divider.setObjectName("DelayRuntimeDivider")
-                divider.setFixedWidth(1)
-                runtime_row.addWidget(divider)
-        self.runtime_summary.setStyleSheet(
-            "QFrame#DelayRuntimeSummary { background: palette(alternate-base); border: 1px solid palette(mid);"
-            " border-radius: 8px; }"
-            " QLabel#DelayRuntimeCaption { color: palette(window-text); font-size: 12px; }"
-            " QLabel#DelayRuntimeValue { color: palette(window-text); font-size: 16px; font-weight: 700; }"
-            " QFrame#DelayRuntimeDivider { background: palette(mid); border: 0; }"
-        )
-        layout.addWidget(self.runtime_summary)
-
-        recent_row = QHBoxLayout()
-        recent_row.setSpacing(8)
-        recent_label = QLabel("最近样本")
-        recent_label.setFixedWidth(138)
-        self.recent_samples = QLineEdit("暂无样本")
-        self.recent_samples.setReadOnly(True)
-        self.recent_samples.setFixedHeight(34)
-        self.clear_samples_button = QToolButton()
-        self.clear_samples_button.setObjectName("DelayClearSamplesButton")
-        self.clear_samples_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-        self.clear_samples_button.setFixedSize(34, 34)
-        self.clear_samples_button.setToolTip("立即清空统计样本")
-        recent_row.addWidget(recent_label)
-        recent_row.addWidget(self.recent_samples, 1)
-        recent_row.addWidget(self.clear_samples_button)
-        layout.addLayout(recent_row)
-
-        self.apply_status = QLabel("设置确认后从下一轮开始使用")
-        self.apply_status.setObjectName("DelayApplyStatus")
-        self.apply_status.setWordWrap(True)
-        self.apply_status.setStyleSheet("color: palette(window-text); font-size: 12px;")
-        layout.addWidget(self.apply_status)
-
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.RestoreDefaults
-            | QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        self.restore_defaults_button = self.button_box.button(QDialogButtonBox.StandardButton.RestoreDefaults)
-        self.ok_button = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
-        self.cancel_button = self.button_box.button(QDialogButtonBox.StandardButton.Cancel)
-        self.restore_defaults_button.setText("恢复默认值")
-        self.ok_button.setText("确定")
-        self.cancel_button.setText("取消")
-        self.ok_button.setObjectName("PrimaryButton")
-        layout.addWidget(self.button_box)
-
-        self.strategy_combo.currentIndexChanged.connect(self._strategy_changed)
-        for spin in (
-            self.baseline_delay,
-            self.window_size,
-            self.ewma_weight_percent,
-            self.dense_interval_width,
-        ):
-            spin.valueChanged.connect(lambda _value: self.settingsEdited.emit())
-        self.multi_candidate_group.buttonClicked.connect(lambda _button: self.settingsEdited.emit())
-        self.clear_samples_button.clicked.connect(self.clearSamplesRequested.emit)
-        self.restore_defaults_button.clicked.connect(self.restore_defaults)
-        self.button_box.accepted.connect(self.accept)
-        self.button_box.rejected.connect(self.reject)
-        self._update_strategy_rows()
-
-    @staticmethod
-    def _spin(minimum: int, value: int, *, maximum: int = QT_INT_MAX) -> QSpinBox:
-        spin = QSpinBox()
-        spin.setRange(minimum, maximum)
-        spin.setValue(value)
-        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        spin.setFixedSize(250, 34)
-        set_c_locale(spin)
-        return spin
-
-    def values(self) -> DelayStrategyConfig:
-        checked_button = self.multi_candidate_group.checkedButton()
-        policy = (
-            str(checked_button.property("delayPolicy"))
-            if checked_button is not None
-            else MultiCandidatePolicy.IGNORE.value
-        )
-        return DelayStrategyConfig(
-            strategy=str(self.strategy_combo.currentData()),
-            baseline_delay=self.baseline_delay.value(),
-            multi_candidate_policy=policy,
-            window_size=self.window_size.value(),
-            ewma_alpha=self.ewma_weight_percent.value() / 100.0,
-            dense_interval_width=self.dense_interval_width.value(),
-        )
-
-    def set_values(self, config: DelayStrategyConfig) -> None:
-        controls = (
-            self.strategy_combo,
-            self.baseline_delay,
-            self.window_size,
-            self.ewma_weight_percent,
-            self.dense_interval_width,
-            self.ignore_multi_candidate_button,
-            self.weight_multi_candidate_button,
-        )
-        for control in controls:
-            control.blockSignals(True)
-        try:
-            strategy_id = config.strategy.value
-            index = self.strategy_combo.findData(strategy_id)
-            self.strategy_combo.setCurrentIndex(index if index >= 0 else 0)
-            self.baseline_delay.setValue(config.baseline_delay)
-            self.window_size.setValue(config.window_size)
-            self.ewma_weight_percent.setValue(round(config.ewma_alpha * 100))
-            self.dense_interval_width.setValue(config.dense_interval_width)
-            policy_buttons = {
-                MultiCandidatePolicy.IGNORE: self.ignore_multi_candidate_button,
-                MultiCandidatePolicy.WEIGHTED: self.weight_multi_candidate_button,
-            }
-            policy_buttons[config.multi_candidate_policy].setChecked(True)
-        finally:
-            for control in controls:
-                control.blockSignals(False)
-        self._update_strategy_rows()
-        self.settingsEdited.emit()
-
-    @Slot()
-    def restore_defaults(self) -> None:
-        self.set_values(DelayStrategyConfig())
-
-    @Slot(int)
-    def _strategy_changed(self, _index: int) -> None:
-        self._update_strategy_rows()
-        self.settingsEdited.emit()
-
-    def _update_strategy_rows(self) -> None:
-        strategy = DelayStrategy(str(self.strategy_combo.currentData()))
-        strategy_tooltip = DELAY_STRATEGY_TOOLTIPS[strategy]
-        self.strategy_description.setMinimumHeight(0)
-        self.strategy_description.setText(strategy_tooltip)
-        self.strategy_description.updateGeometry()
-        self.strategy_combo.setToolTip(strategy_tooltip)
-        strategy_label = self.form.labelForField(self.strategy_combo)
-        if strategy_label is not None:
-            strategy_label.setToolTip(strategy_tooltip)
-        self._set_form_row_visible(
-            self.multi_candidate_widget,
-            strategy not in (DelayStrategy.FIXED, DelayStrategy.LAST),
-        )
-        self._set_form_row_visible(
-            self.window_size,
-            strategy not in (DelayStrategy.FIXED, DelayStrategy.LAST),
-        )
-        self._set_form_row_visible(self.ewma_weight_percent, strategy is DelayStrategy.EWMA)
-        self._set_form_row_visible(self.dense_interval_width, strategy is DelayStrategy.DENSE_INTERVAL)
-        self._fit_strategy_description()
-
-    def _fit_strategy_description(self) -> None:
-        description_width = self.strategy_description.width() if self.isVisible() else 0
-        if description_width <= 0:
-            left, _top, right, _bottom = self.layout().getContentsMargins()
-            description_width = max(1, self.minimumWidth() - left - right)
-        required_height = self.strategy_description.heightForWidth(description_width)
-        if required_height >= 0:
-            self.strategy_description.setMinimumHeight(required_height + 1)
-        self.strategy_description.updateGeometry()
-        self.form.invalidate()
-        self.layout().activate()
-        self.adjustSize()
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        QTimer.singleShot(0, self._fit_strategy_description)
-
-    def _set_form_row_visible(self, field: QWidget, visible: bool) -> None:
-        field.setVisible(visible)
-        label = self.form.labelForField(field)
-        if label is not None:
-            label.setVisible(visible)
-
-    def set_runtime_state(
-        self,
-        *,
-        active_delay: int | None,
-        estimate: DelayEstimate,
-        sample_rounds: list[tuple[int, ...]],
-    ) -> None:
-        self.current_delay_value.setText("-" if active_delay is None else str(active_delay))
-        self.next_delay_value.setText(str(estimate.value))
-        self.valid_sample_count.setText(f"{estimate.valid_round_count} 轮")
-        recent_text = " / ".join(self._format_sample_round(row) for row in sample_rounds[-5:])
-        self.recent_samples.setText(recent_text or "暂无样本")
-        self.recent_samples.setToolTip(recent_text)
-        self.clear_samples_button.setEnabled(bool(sample_rounds))
-        if active_delay is None:
-            self.apply_status.setText("设置确认后从下一轮开始使用")
-        else:
-            self.apply_status.setText(f"当前目标继续使用 {active_delay}；新设置从下一轮生效")
-
-    @staticmethod
-    def _format_sample_round(candidates: tuple[int, ...]) -> str:
-        if len(candidates) <= 1:
-            return str(candidates[0]) if candidates else "-"
-        if candidates == tuple(range(candidates[0], candidates[-1] + 1)):
-            return f"{candidates[0]}~{candidates[-1]}"
-        return ",".join(str(value) for value in candidates)
-
-
 class AutoRngPanel(QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
@@ -698,8 +304,12 @@ class AutoRngPanel(QWidget):
         self._last_failed_progress_message: str | None = None
         self._target_version = GameVersion.BD
         self._targets: list[tuple[StaticEncounterRecord, StateFilter, str]] = []
+        self._delay_profiles: dict[int, DelayProfile] = {}
+        self._delay_species_id: int | None = None
         self._delay_strategy_config = DelayStrategyConfig()
-        self._delay_sample_rounds: list[tuple[int, ...]] = []
+        self._delay_sample_rounds: list[DelaySampleRound] = []
+        self._delay_show_sample_time = False
+        self._active_delay_by_species: dict[int, int] = {}
         self._active_delay: int | None = None
         self._updating_fixed_delay = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
@@ -842,12 +452,49 @@ class AutoRngPanel(QWidget):
         self.fixed_delay.hide()
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
         self.delay_strategy_dialog = DelayStrategyDialog(self)
-        self.delay_settings_button = QPushButton()
+        self.delay_settings_button = DelaySummaryButton()
         self.delay_settings_button.setObjectName("SecondaryButton")
         self.delay_settings_button.setFixedSize(215, 34)
+        self.delay_settings_button.setIcon(
+            delay_lucide_icon("settings-2", "#5F6C66", 16)
+        )
+        self.delay_settings_button.setIconSize(QSize(16, 16))
+        self.delay_settings_button.setStyleSheet(
+            "QPushButton { min-height: 32px; max-height: 32px; "
+            "padding: 0; border: 1px solid #DCE4DF; border-radius: 6px; "
+            "font-weight: 400; background: #FFFFFF; }"
+            "QPushButton:hover { background: #F3F6F4; }"
+            "QPushButton:focus { border-color: #087958; }"
+        )
+        self.delay_active_label = QLabel("本轮 -")
+        self.delay_active_label.setObjectName("DelayActiveLabel")
+        self.delay_active_label.setStyleSheet(
+            "color: #5F6C66; font-size: 12px;"
+        )
+        self.delay_settings_field = QWidget()
+        self.delay_settings_field.setObjectName("DelaySettingsField")
+        self.delay_settings_field.setStyleSheet(
+            "QWidget#DelaySettingsField { background: transparent; }"
+        )
+        self.delay_settings_field.setFixedHeight(34)
+        delay_field_layout = QHBoxLayout(self.delay_settings_field)
+        delay_field_layout.setContentsMargins(0, 0, 0, 0)
+        delay_field_layout.setSpacing(10)
+        delay_field_layout.addWidget(self.delay_settings_button)
+        delay_field_layout.addWidget(self.delay_active_label)
+        delay_field_layout.addStretch(1)
         self.delay_settings_button.clicked.connect(self.open_delay_strategy_dialog)
         self.delay_strategy_dialog.settingsEdited.connect(self._refresh_delay_dialog_preview)
+        self.delay_strategy_dialog.settingsSaveRequested.connect(
+            self._save_delay_strategy_draft
+        )
         self.delay_strategy_dialog.clearSamplesRequested.connect(self._confirm_clear_delay_samples)
+        self.delay_strategy_dialog.sampleExclusionRequested.connect(
+            self.set_delay_sample_excluded
+        )
+        self.delay_strategy_dialog.showSampleTimeChanged.connect(
+            self._set_delay_show_sample_time
+        )
         self.fixed_delay.valueChanged.connect(self._legacy_fixed_delay_changed)
         self.strategy_dialog = AutoRngStrategyDialog(self)
         self.reseed_threshold_frames = self.strategy_dialog.reseed_threshold_frames
@@ -878,7 +525,7 @@ class AutoRngPanel(QWidget):
             ),
             (
                 "delay",
-                self.delay_settings_button,
+                self.delay_settings_field,
                 "表示脚本等待结束后（无 _闪帧时为脚本启动后）到实际撞到目标之间经过的帧数。\n"
                 "含 _闪帧的旧脚本按“目标帧 - delay - _闪帧”启动；无 _闪帧时由软件等待到“目标帧 - delay”再启动；"
                 "delay 越大，撞闪脚本启动得越早。\n点击编辑固定或动态 delay 策略。",
@@ -908,9 +555,10 @@ class AutoRngPanel(QWidget):
             label = form.labelForField(field)
             if label is not None:
                 label.setToolTip(tooltip)
-            if field is self.delay_settings_button:
+            if field is self.delay_settings_field:
                 self.delay_settings_label = label
                 self.fixed_delay.setToolTip(tooltip)
+                self.delay_settings_button.setToolTip(tooltip)
         # 同步开关（三态下拉框 + 性格输入）
         sync_row = QHBoxLayout()
         self.sync_combo = QComboBox()
@@ -931,6 +579,9 @@ class AutoRngPanel(QWidget):
         self.auto_reverse_combo.addItems(["自动反查：关闭", "自动反查：开启"])
         self.auto_reverse_combo.setFixedHeight(34)
         self.auto_reverse_combo.setMinimumWidth(150)
+        self.auto_reverse_combo.currentIndexChanged.connect(
+            lambda _index: self._refresh_delay_ui()
+        )
         self.reverse_lookup_window = QSpinBox()
         self.reverse_lookup_window.setRange(0, 10_000)
         self.reverse_lookup_window.setValue(500)
@@ -949,6 +600,7 @@ class AutoRngPanel(QWidget):
 
     def open_delay_strategy_dialog(self) -> None:
         self.delay_strategy_dialog.set_values(self._delay_strategy_config)
+        self.delay_strategy_dialog.set_show_time(self._delay_show_sample_time)
         self._refresh_delay_dialog_preview()
         if self.delay_strategy_dialog.exec() != QDialog.DialogCode.Accepted:
             self.delay_strategy_dialog.set_values(self._delay_strategy_config)
@@ -960,30 +612,90 @@ class AutoRngPanel(QWidget):
             emit=True,
         )
 
+    @Slot(object)
+    def _save_delay_strategy_draft(self, config: object) -> None:
+        if not isinstance(config, DelayStrategyConfig):
+            return
+        self._commit_delay_strategy_config(config, persist=True, emit=True)
+
     def delay_strategy_config(self) -> DelayStrategyConfig:
         return self._delay_strategy_config
 
     def delay_samples(self) -> list[tuple[int, ...]]:
-        return list(self._delay_sample_rounds)
+        return [sample.candidates for sample in self._delay_sample_rounds if not sample.excluded]
+
+    def delay_sample_records(self, species_id: int | None = None) -> list[DelaySampleRound]:
+        target_species = self._delay_species_id if species_id is None else int(species_id)
+        if target_species is None:
+            return []
+        profile = self._delay_profiles.get(target_species)
+        return [] if profile is None else list(profile.samples)
 
     def effective_delay_for_next_round(self) -> int:
         return self._estimate_delay(self._delay_strategy_config).value
 
+    def effective_delay_for_species(self, species_id: int | None) -> int:
+        if species_id is None:
+            return self.effective_delay_for_next_round()
+        profile = self._profile_for_species(int(species_id))
+        return estimate_delay(
+            profile.config,
+            profile.samples,
+            reference_delay=self._active_delay_by_species.get(int(species_id)),
+        ).value
+
     @Slot(object)
-    def record_delay_sample(self, candidates: object) -> None:
-        sample = DelaySampleRound.from_candidates(candidates)
+    def record_delay_sample(
+        self,
+        candidates: object,
+        *,
+        species_id: int | None = None,
+        observed_at: str | None = None,
+    ) -> None:
+        target_species = self._delay_species_id if species_id is None else int(species_id)
+        if target_species is None:
+            return
+        profile = self._profile_for_species(target_species)
+        sample = DelaySampleRound.from_candidates(
+            candidates,
+            round_number=profile.next_round_number,
+            observed_at=observed_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
         if not sample.candidates:
             return
-        self._delay_sample_rounds.append(sample.candidates)
+        profile.samples.append(sample)
+        profile.next_round_number += 1
+        if target_species == self._delay_species_id:
+            self._delay_sample_rounds = profile.samples
         self._save_delay_samples()
         self._refresh_delay_ui()
-        self.delaySamplesChanged.emit(self.delay_samples())
+        self.delaySamplesChanged.emit(
+            [row.candidates for row in profile.samples if not row.excluded]
+        )
+
+    @Slot(int, bool)
+    def set_delay_sample_excluded(self, round_number: int, excluded: bool) -> None:
+        if self._delay_species_id is None:
+            return
+        profile = self._profile_for_species(self._delay_species_id)
+        for index, sample in enumerate(profile.samples):
+            if sample.round_number != int(round_number) or sample.excluded == bool(excluded):
+                continue
+            profile.samples[index] = replace(sample, excluded=bool(excluded))
+            self._delay_sample_rounds = profile.samples
+            self._save_delay_samples()
+            self._refresh_delay_ui()
+            self.delaySamplesChanged.emit(self.delay_samples())
+            return
 
     @Slot()
     def clear_delay_samples(self) -> None:
         if not self._delay_sample_rounds:
             return
         self._delay_sample_rounds.clear()
+        if self._delay_species_id is not None:
+            profile = self._profile_for_species(self._delay_species_id)
+            profile.next_round_number = 1
         self._save_delay_samples()
         self._refresh_delay_ui()
         self.delaySamplesChanged.emit([])
@@ -993,22 +705,22 @@ class AutoRngPanel(QWidget):
     def _confirm_clear_delay_samples(self) -> None:
         if not self._delay_sample_rounds:
             return
-        answer = QMessageBox.question(
-            self.delay_strategy_dialog,
-            "清空 delay 样本",
-            "确定清空全部 delay 统计样本吗？\n清空后立即生效，无法通过“取消”恢复。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            # Let the tool button finish dispatching ``clicked`` before the
-            # refresh disables it after the sample list becomes empty.
-            QTimer.singleShot(0, self.clear_delay_samples)
+        # The dialog already collected confirmation inline. Let the sending
+        # button finish dispatching before the refresh disables it.
+        QTimer.singleShot(0, self.clear_delay_samples)
 
     @Slot(object)
-    def set_active_delay(self, value: object) -> None:
-        self._active_delay = None if value is None else max(0, int(value))
-        self._refresh_delay_ui()
+    def set_active_delay(self, value: object, *, species_id: int | None = None) -> None:
+        target_species = self._delay_species_id if species_id is None else int(species_id)
+        if target_species is None:
+            return
+        if value is None:
+            self._active_delay_by_species.pop(target_species, None)
+        else:
+            self._active_delay_by_species[target_species] = max(0, int(value))
+        if target_species == self._delay_species_id:
+            self._active_delay = self._active_delay_by_species.get(target_species)
+            self._refresh_delay_ui()
 
     def _estimate_delay(self, config: DelayStrategyConfig) -> DelayEstimate:
         return estimate_delay(
@@ -1021,6 +733,9 @@ class AutoRngPanel(QWidget):
     def _refresh_delay_dialog_preview(self) -> None:
         estimate = self._estimate_delay(self.delay_strategy_dialog.values())
         self.delay_strategy_dialog.set_runtime_state(
+            species_name=self._current_delay_species_name(),
+            recommended_delay=get_recommended_delay(self._delay_species_id),
+            auto_reverse_enabled=self.auto_reverse_combo.currentIndex() == 1,
             active_delay=self._active_delay,
             estimate=estimate,
             sample_rounds=self._delay_sample_rounds,
@@ -1030,10 +745,13 @@ class AutoRngPanel(QWidget):
         estimate = self._estimate_delay(self._delay_strategy_config)
         strategy_id = self._delay_strategy_config.strategy.value
         label = DELAY_STRATEGY_LABEL_BY_ID[strategy_id]
-        self.delay_settings_button.setText(f"{label} · {estimate.value}")
+        self.delay_settings_button.setText(f"{label} · 下轮 {estimate.value}")
+        if hasattr(self, "delay_active_label"):
+            active_text = "-" if self._active_delay is None else str(self._active_delay)
+            self.delay_active_label.setText(f"本轮 {active_text}")
         tooltip = (
             "delay 越大，撞闪脚本启动得越早。点击编辑固定或动态 delay 策略。\n"
-            f"本次使用：{'-' if self._active_delay is None else self._active_delay}\n"
+            f"本轮使用：{'-' if self._active_delay is None else self._active_delay}\n"
             f"下轮预计：{estimate.value}\n"
             f"有效样本：{estimate.valid_round_count} 轮"
         )
@@ -1050,6 +768,8 @@ class AutoRngPanel(QWidget):
         emit: bool,
     ) -> None:
         self._delay_strategy_config = config
+        if self._delay_species_id is not None:
+            self._profile_for_species(self._delay_species_id).config = config
         self._updating_fixed_delay = True
         try:
             self.fixed_delay.setValue(config.baseline_delay)
@@ -1075,8 +795,62 @@ class AutoRngPanel(QWidget):
             ewma_alpha=current.ewma_alpha,
             dense_interval_width=current.dense_interval_width,
         )
+        if self._delay_species_id is not None:
+            self._profile_for_species(self._delay_species_id).config = self._delay_strategy_config
         if not self.delay_strategy_dialog.isVisible():
             self.delay_strategy_dialog.set_values(self._delay_strategy_config)
+        self._refresh_delay_ui()
+
+    @Slot(bool)
+    def _set_delay_show_sample_time(self, checked: bool) -> None:
+        self._delay_show_sample_time = bool(checked)
+        self._settings.setValue("delay_show_sample_time", self._delay_show_sample_time)
+
+    def _current_delay_species(self) -> int | None:
+        if not hasattr(self, "target_form"):
+            return None
+        try:
+            targets = self.targets()
+        except (TypeError, ValueError):
+            return None
+        if not targets:
+            return None
+        return int(targets[0][0].template.species)
+
+    def _current_delay_species_name(self) -> str:
+        if not hasattr(self, "target_form"):
+            return "未选择"
+        try:
+            targets = self.targets()
+        except (TypeError, ValueError):
+            return "未选择"
+        if not targets:
+            return "未选择"
+        record = targets[0][0]
+        return POKEMON_LABELS_ZH.get(record.description, record.description)
+
+    def _profile_for_species(self, species_id: int) -> DelayProfile:
+        profile = self._delay_profiles.get(int(species_id))
+        if profile is None:
+            profile = DelayProfile()
+            self._delay_profiles[int(species_id)] = profile
+        return profile
+
+    def _activate_delay_profile(self, species_id: int | None) -> None:
+        if species_id is None:
+            return
+        species_id = int(species_id)
+        profile = self._profile_for_species(species_id)
+        self._delay_species_id = species_id
+        self._delay_strategy_config = profile.config
+        self._delay_sample_rounds = profile.samples
+        self._active_delay = self._active_delay_by_species.get(species_id)
+        self._updating_fixed_delay = True
+        try:
+            self.fixed_delay.setValue(profile.config.baseline_delay)
+        finally:
+            self._updating_fixed_delay = False
+        self.delay_strategy_dialog.set_values(profile.config)
         self._refresh_delay_ui()
 
     def open_strategy_dialog(self) -> None:
@@ -1300,10 +1074,13 @@ class AutoRngPanel(QWidget):
     def set_target_version(self, version: GameVersion) -> None:
         self._target_version = version
         self.target_form.set_version(version)
+        self._activate_delay_profile(self._current_delay_species())
         self._refresh_target_summary()
 
     def set_targets(self, targets: list[tuple[StaticEncounterRecord, StateFilter, str]]) -> None:
         self._targets = list(targets)
+        self._activate_delay_profile(self._current_delay_species())
+        self._save_delay_profiles()
         self._refresh_target_summary()
 
     def targets(self) -> list[tuple[StaticEncounterRecord, StateFilter, str]]:
@@ -1420,7 +1197,7 @@ class AutoRngPanel(QWidget):
             delay_sample_window=self._delay_strategy_config.window_size,
             delay_ewma_alpha=self._delay_strategy_config.ewma_alpha,
             delay_dense_interval_width=self._delay_strategy_config.dense_interval_width,
-            delay_sample_rounds=tuple(self._delay_sample_rounds),
+            delay_sample_rounds=tuple(self.delay_samples()),
             max_wait_frames=self.max_wait_frames.value(),
             reseed_threshold_frames=self.reseed_threshold_frames.value(),
             reidentify_max_attempts=self.reidentify_max_attempts.value(),
@@ -1645,6 +1422,9 @@ class AutoRngPanel(QWidget):
     def _save_delay_settings(self) -> None:
         s = self._settings
         config = self._delay_strategy_config
+        if self._delay_species_id is not None:
+            self._profile_for_species(self._delay_species_id).config = config
+        self._save_delay_profiles()
         # Keep fixed_delay as the baseline key for compatibility with older releases.
         s.setValue("fixed_delay", config.baseline_delay)
         s.setValue("delay_strategy", config.strategy.value)
@@ -1654,17 +1434,25 @@ class AutoRngPanel(QWidget):
         s.setValue("delay_dense_interval_width", config.dense_interval_width)
 
     def _save_delay_samples(self) -> None:
+        self._save_delay_profiles()
         self._settings.setValue(
             "delay_sample_rounds_json",
-            json.dumps(self._delay_sample_rounds, separators=(",", ":")),
+            json.dumps(self.delay_samples(), separators=(",", ":")),
         )
 
-    def _restore_delay_settings(self) -> None:
+    def _save_delay_profiles(self) -> None:
+        if self._delay_profiles:
+            self._settings.setValue(
+                "delay_profiles_json",
+                encode_delay_profiles(self._delay_profiles),
+            )
+
+    def _legacy_delay_config(self) -> DelayStrategyConfig:
         s = self._settings
         defaults = DelayStrategyConfig()
         window_key = "delay_sample_window" if s.contains("delay_sample_window") else "delay_window_size"
         try:
-            config = DelayStrategyConfig(
+            return DelayStrategyConfig(
                 strategy=str(s.value("delay_strategy", defaults.strategy.value)),
                 baseline_delay=int(s.value("fixed_delay", defaults.baseline_delay)),
                 multi_candidate_policy=str(
@@ -1677,23 +1465,51 @@ class AutoRngPanel(QWidget):
                 ),
             )
         except (TypeError, ValueError, OverflowError):
-            config = defaults
-        self._commit_delay_strategy_config(config, persist=False, emit=False)
+            return defaults
 
-    def _restore_delay_samples(self) -> None:
+    def _legacy_delay_samples(self) -> list[DelaySampleRound]:
         raw_value = self._settings.value("delay_sample_rounds_json", "[]")
         try:
             decoded = json.loads(str(raw_value))
         except (TypeError, ValueError, json.JSONDecodeError):
             decoded = []
-        restored: list[tuple[int, ...]] = []
+        restored: list[DelaySampleRound] = []
         if isinstance(decoded, list):
-            for raw_round in decoded:
-                sample = DelaySampleRound.from_candidates(raw_round)
+            for round_number, raw_round in enumerate(decoded, start=1):
+                sample = DelaySampleRound.from_candidates(
+                    raw_round,
+                    round_number=round_number,
+                )
                 if sample.candidates:
-                    restored.append(sample.candidates)
-        self._delay_sample_rounds = restored
-        self._refresh_delay_ui()
+                    restored.append(sample)
+        return restored
+
+    def _restore_delay_settings(self, *, allow_legacy_migration: bool) -> None:
+        s = self._settings
+        profiles = decode_delay_profiles(s.value("delay_profiles_json", ""))
+        if profiles:
+            self._delay_profiles = profiles
+            self._activate_delay_profile(self._current_delay_species())
+            return
+
+        species_id = self._current_delay_species()
+        if species_id is None:
+            self._delay_profiles = {}
+            self._delay_species_id = None
+            self._delay_strategy_config = self._legacy_delay_config()
+            self._delay_sample_rounds = []
+            self._refresh_delay_ui()
+            return
+
+        samples = self._legacy_delay_samples() if allow_legacy_migration else []
+        profile = DelayProfile(
+            config=self._legacy_delay_config(),
+            samples=samples,
+            next_round_number=len(samples) + 1,
+        )
+        self._delay_profiles = {species_id: profile}
+        self._activate_delay_profile(species_id)
+        self._save_delay_profiles()
 
     def _restore_panel_state(self) -> None:
         """恢复上次持久化的面板设置。"""
@@ -1706,8 +1522,14 @@ class AutoRngPanel(QWidget):
             self.loop_count.setValue(int(s.value("loop_count", 1)))
         if s.contains("max_advances"):
             self.max_advances.setValue(int(s.value("max_advances", 100_000)))
-        self._restore_delay_settings()
-        self._restore_delay_samples()
+        target_restore_ok = self._restore_target_state()
+        self._delay_show_sample_time = s.value(
+            "delay_show_sample_time",
+            False,
+            type=bool,
+        )
+        self.delay_strategy_dialog.set_show_time(self._delay_show_sample_time)
+        self._restore_delay_settings(allow_legacy_migration=target_restore_ok)
         if s.contains("max_wait_frames"):
             self.max_wait_frames.setValue(int(s.value("max_wait_frames", 300)))
         if s.contains("reseed_threshold_frames"):
@@ -1758,9 +1580,11 @@ class AutoRngPanel(QWidget):
         self.escape_continue_check.setChecked(s.value("escape_continue", False, type=bool))
         if s.contains("reverse_lookup_window"):
             self.reverse_lookup_window.setValue(int(s.value("reverse_lookup_window", 500)))
-        if s.contains("target_list_json"):
-            self._restore_targets_json(str(s.value("target_list_json", "")))
-        # 目标精灵设置
+        self._refresh_target_summary()
+        self._refresh_delay_ui()
+
+    def _restore_target_state(self) -> bool:
+        s = self._settings
         tf = self.target_form
         if s.contains("target_category"):
             idx = int(s.value("target_category", 0))
@@ -1788,7 +1612,9 @@ class AutoRngPanel(QWidget):
                 tf.nature_combo.setCurrentIndex(idx)
         if s.contains("target_skip_filter"):
             tf.skip_filter.setChecked(s.value("target_skip_filter") == "true")
-        self._refresh_target_summary()
+        if not s.contains("target_list_json"):
+            return True
+        return self._restore_targets_json(str(s.value("target_list_json", "")))
 
     def _select_script_by_path(self, combo: QComboBox, path_str: str) -> Path | None:
         if not path_str:
