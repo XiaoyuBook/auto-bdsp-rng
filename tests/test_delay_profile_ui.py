@@ -147,6 +147,67 @@ def test_full_history_remains_usable_on_a_short_screen(app, tmp_path, monkeypatc
     assert not history.next_button.isEnabled()
 
 
+def test_median_recent_samples_keep_footer_visible_with_bounded_viewport(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    """The compact settings page must not grow past the 900px work area."""
+
+    panel = AutoRngPanel(
+        script_dir=tmp_path,
+        settings=_new_settings(tmp_path / "median-height.ini"),
+    )
+    _commit_config(
+        panel,
+        DelayStrategyConfig(
+            strategy=DelayStrategy.MEDIAN,
+            baseline_delay=1450,
+            window_size=5,
+        ),
+    )
+    for value in (1450, 1452, 1988, 1451, 1453, 1452):
+        panel.record_delay_sample(
+            [value],
+            observed_at="2026-09-05T19:30:00+08:00",
+        )
+    panel.set_delay_sample_excluded(3, True)
+
+    dialog = panel.delay_strategy_dialog
+    work_area = QRect(0, 0, 1280, 900)
+
+    class Screen:
+        def availableGeometry(self):
+            return work_area
+
+    monkeypatch.setattr(dialog, "screen", lambda: Screen())
+    dialog.show()
+    app.processEvents()
+    dialog._resize_for_current_page()
+    app.processEvents()
+
+    assert dialog.maximumHeight() == 840
+    assert dialog.height() <= 840
+    assert work_area.contains(dialog.geometry())
+    footer_rect = QRect(dialog.footer.mapTo(dialog, QPoint()), dialog.footer.size())
+    assert dialog.rect().contains(footer_rect)
+    assert dialog.ok_button.isVisible()
+    assert dialog.recent_samples_table.rowCount() == 5
+    assert dialog.recent_samples_table.height() <= 286
+
+    # Timestamp rows are taller than the stable recent-list viewport, so the
+    # list itself must scroll while the footer remains anchored below it.
+    dialog.show_sample_time_check.setChecked(True)
+    app.processEvents()
+    dialog._resize_for_current_page()
+    app.processEvents()
+    assert dialog.height() <= 840
+    assert dialog.recent_samples_table.height() <= 286
+    assert dialog.recent_samples_table.verticalScrollBar().maximum() > 0
+    footer_rect = QRect(dialog.footer.mapTo(dialog, QPoint()), dialog.footer.size())
+    assert dialog.rect().contains(footer_rect)
+
+
 def test_species_profiles_are_isolated_and_survive_restart(
     app,
     tmp_path,
@@ -294,6 +355,16 @@ def test_round_metadata_and_soft_exclusion_restore_through_the_table(
     delete_button = restored_dialog.recent_samples_table.cellWidget(restored_row, 3)
     assert isinstance(delete_button, QToolButton)
     assert delete_button.accessibleName() == "删除第 2 轮样本"
+
+    restored._settings.sync()
+    restored_again = AutoRngPanel(
+        script_dir=tmp_path,
+        settings=QSettings(str(settings_path), QSettings.Format.IniFormat),
+    )
+    restored_again_records = restored_again.delay_sample_records()
+    assert [sample.round_number for sample in restored_again_records] == [1, 2, 3]
+    assert restored_again_records[1].observed_at == timestamps[1]
+    assert not restored_again_records[1].excluded
 
 
 def test_excluding_and_clearing_samples_preserves_active_delay_and_other_species(

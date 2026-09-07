@@ -19,7 +19,19 @@ class MarkdownViewerDialog(QDialog):
     def __init__(self, title: str, text: str, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
+        self.setObjectName("MarkdownViewerDialog")
         self.resize(720, 520)
+        self.setStyleSheet(
+            "QDialog#MarkdownViewerDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#MarkdownViewerDialog QPlainTextEdit {"
+            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; padding: 8px; }"
+            " QDialog#MarkdownViewerDialog QDialogButtonBox QPushButton {"
+            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#MarkdownViewerDialog QDialogButtonBox QPushButton:hover {"
+            " background: #f6f8f7; border-color: #bfcfc6; }"
+        )
 
         layout = QVBoxLayout(self)
         self.text_view = QPlainTextEdit()

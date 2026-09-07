@@ -29,9 +29,22 @@ class TidOcrDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("TID OCR 设置")
+        self.setObjectName("TidOcrDialog")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(420, 180)
+        self.setStyleSheet(
+            "QDialog#TidOcrDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#TidOcrDialog QLabel { background: transparent; color: #24312d; }"
+            " QDialog#TidOcrDialog QPushButton {"
+            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; min-height: 32px; padding: 0 10px; }"
+            " QDialog#TidOcrDialog QPushButton:hover {"
+            " background: #f6f8f7; border-color: #bfcfc6; }"
+            " QDialog#TidOcrDialog QLabel#TidOcrValue {"
+            " background: #f6f8f7; border: 1px solid #e2e8e4; border-radius: 4px;"
+            " padding: 0 8px; }"
+        )
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoTidRngOcr")
         self._recognizer = recognizer
         self.region = load_tid_ocr_region(self._settings)
@@ -44,6 +57,7 @@ class TidOcrDialog(QDialog):
         layout.setSpacing(10)
 
         self.region_value = QLabel("ROI：未设置")
+        self.region_value.setObjectName("TidOcrValue")
         self.region_value.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
@@ -52,6 +66,7 @@ class TidOcrDialog(QDialog):
         result_row = QHBoxLayout()
         result_row.addWidget(QLabel("识别结果"))
         self.result_value = QLabel("-")
+        self.result_value.setObjectName("TidOcrValue")
         self.result_value.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )

@@ -27,6 +27,7 @@ from PySide6.QtGui import (
     QAction,
     QColor,
     QDesktopServices,
+    QFont,
     QGuiApplication,
     QIcon,
     QImage,
@@ -39,7 +40,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -157,6 +157,7 @@ from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
+from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.easycon_panel import (
     CAPTURE_KEEP_AWAKE_BUTTON,
     MOCK_PORT,
@@ -220,8 +221,9 @@ MAIN_WINDOW_GEOMETRY_KEYS = (
 )
 MAIN_WINDOW_UI_SCALE_KEY = "window/ui_scale_percent"
 MAIN_WINDOW_CURRENT_TAB_KEY = "window/current_tab"
-PROJECT_XS_HORIZONTAL_LEFT_WIDTH = 550
+PROJECT_XS_HORIZONTAL_LEFT_WIDTH = 520
 PROJECT_XS_PREVIEW_MIN_HEIGHT = 260
+_AUTO_HEADER_TERMINAL_PHASES = frozenset(("空闲", "已停止", "已完成", "失败"))
 
 
 def _exception_chain_text(error: BaseException) -> str:
@@ -1496,6 +1498,10 @@ class MainWindow(QMainWindow):
         self._active_auto_rng_round_id: int | None = None
         self._active_auto_tid_run_id: str | None = None
         self._active_auto_tid_round_id: int | None = None
+        self._header_task_label = "定点"
+        self._header_loop_index = 0
+        self._header_phase_text = "空闲"
+        self._header_advances = 0
         self._profile_settings = profile_settings or QSettings("auto-bdsp-rng", "MainWindowProfile")
         self._window_geometry_restored = False
         self._window_restore_maximized = False
@@ -1713,17 +1719,19 @@ class MainWindow(QMainWindow):
         from auto_bdsp_rng.ui.id_panel import IdPanel
 
         root = QWidget()
+        root.setObjectName("AppRoot")
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(14, 12, 14, 12)
-        root_layout.setSpacing(10)
+        root_layout.setContentsMargins(12, 10, 12, 8)
+        root_layout.setSpacing(0)
 
         self.video_source_dialog = self._build_video_source_dialog()
 
         header = QFrame()
         header.setObjectName("Header")
+        header.setFixedHeight(56)
         self.header = header
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 10, 16, 10)
+        header_layout.setContentsMargins(16, 8, 12, 8)
         header_layout.setSpacing(8)
         self.header_layout = header_layout
         self.title_label = QLabel()
@@ -1766,15 +1774,29 @@ class MainWindow(QMainWindow):
         self.help_button.setCursor(Qt.CursorShape.PointingHandCursor)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
-        header_layout.addWidget(self.auto_loop_badge)
-        header_layout.addWidget(self.auto_phase_badge)
-        header_layout.addWidget(self.auto_advance_badge)
+        # Keep the existing progress labels as compatibility/state surfaces,
+        # while presenting their combined state in the navigation row.
+        for badge in (
+            self.auto_loop_badge,
+            self.auto_phase_badge,
+            self.auto_advance_badge,
+        ):
+            badge.hide()
         header_layout.addWidget(self.video_source_header_button)
         header_layout.addWidget(self.easycon_header_button)
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("WorkspaceTabs")
+        self.tabs.tabBar().setExpanding(False)
+        self.navigation_status = QLabel("● 定点 · 空闲")
+        self.navigation_status.setObjectName("NavigationStatus")
+        self.navigation_status.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.navigation_status.setMinimumWidth(150)
+        self.tabs.setCornerWidget(self.navigation_status, Qt.Corner.TopRightCorner)
         self.project_xs_tab = self._build_project_xs_tab()
         self.bdsp_tab = self._build_bdsp_tab()
         self.easycon_tab = EasyConPanel(
@@ -1842,7 +1864,16 @@ class MainWindow(QMainWindow):
         _make_labels_copyable(self.tabs)
 
         self.setCentralWidget(root)
-        self.setStatusBar(QStatusBar())
+        status_bar = QStatusBar()
+        status_bar.setObjectName("WorkspaceStatusBar")
+        status_bar.setFixedHeight(30)
+        self.view_status_logs_button = QToolButton()
+        self.view_status_logs_button.setObjectName("StatusLogButton")
+        self.view_status_logs_button.setText("查看日志")
+        self.view_status_logs_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.view_status_logs_button.clicked.connect(lambda: self._show_run_logs(None))
+        status_bar.addPermanentWidget(self.view_status_logs_button)
+        self.setStatusBar(status_bar)
         self.update_controller = UpdateController(self)
         self.help_menu_controller = HelpMenuController(
             self,
@@ -2094,9 +2125,10 @@ class MainWindow(QMainWindow):
 
         # Left side follows the compact single-column layout from 0940b1b.
         left = QWidget()
+        left.setObjectName("ProjectXsConfigPanel")
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 8, 0)
-        left_layout.setSpacing(10)
+        left_layout.setContentsMargins(14, 12, 14, 12)
+        left_layout.setSpacing(8)
         self.capture_group = self._build_blink_group()
         self.seed_group = self._build_seed_group()
         left_layout.addWidget(self.capture_group)
@@ -2106,9 +2138,10 @@ class MainWindow(QMainWindow):
         # 右侧：状态条（紧凑） + 预览（下部）
         self.status_group = self._build_project_status_group()
         right = QWidget()
+        right.setObjectName("ProjectXsPreviewPanel")
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(6)
+        right_layout.setContentsMargins(16, 12, 8, 12)
+        right_layout.setSpacing(8)
         right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
 
@@ -2121,17 +2154,19 @@ class MainWindow(QMainWindow):
 
     def _build_bdsp_tab(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("BdspWorkspace")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
         # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
-        self.profile_group.setMaximumHeight(106)
+        self.profile_group.setMaximumHeight(72)
         layout.addWidget(self.profile_group)
 
         # 第 2 行：参数区（三列：乱数信息 + 设置 + 筛选项）
         params_widget = QWidget()
+        params_widget.setObjectName("BdspParameters")
         params_row = QHBoxLayout(params_widget)
         params_row.setContentsMargins(0, 0, 0, 0)
         params_row.setSpacing(10)
@@ -2152,6 +2187,7 @@ class MainWindow(QMainWindow):
 
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox("配置")
+        group.setObjectName("ProjectXsStatusGroup")
         group.setMaximumHeight(150)
         group.setMaximumWidth(740)
 
@@ -2204,6 +2240,7 @@ class MainWindow(QMainWindow):
 
     def _build_blink_group(self) -> QGroupBox:
         group = QGroupBox("捕捉配置")
+        group.setObjectName("CaptureConfigGroup")
         layout = QGridLayout(group)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setHorizontalSpacing(8)
@@ -2346,6 +2383,7 @@ class MainWindow(QMainWindow):
 
     def _build_seed_group(self) -> QGroupBox:
         group = QGroupBox("Seed")
+        group.setObjectName("CapturedSeedGroup")
         layout = QGridLayout(group)
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setHorizontalSpacing(8)
@@ -2361,6 +2399,7 @@ class MainWindow(QMainWindow):
             output.setReadOnly(True)
             output.setObjectName("Readonly")
             output.setFixedHeight(32)
+            output.setFont(QFont("Cascadia Mono", 10))
 
         layout.addWidget(QLabel("Seed0"), 0, 0)
         layout.addWidget(self.seed64_outputs[0], 0, 1, 1, 3)
@@ -2370,6 +2409,7 @@ class MainWindow(QMainWindow):
 
     def _build_rng_info_group(self) -> QGroupBox:
         group = QGroupBox("乱数信息")
+        group.setObjectName("BdspRngGroup")
         group.setMinimumWidth(240)
         grid = QGridLayout(group)
         grid.setContentsMargins(12, 10, 12, 10)
@@ -2386,6 +2426,8 @@ class MainWindow(QMainWindow):
             input_box.setMaxLength(16)
             input_box.editingFinished.connect(self._sync_state32_from_bdsp_seed64)
             input_box.setFixedHeight(30)
+            input_box.setObjectName("SeedField")
+            input_box.setFont(QFont("Cascadia Mono", 10))
 
         self.initial_advances = self._spin(0, 10_000_000, 0)
         self.initial_advances.setFixedHeight(30)
@@ -2411,6 +2453,7 @@ class MainWindow(QMainWindow):
 
     def _build_static_group(self) -> QGroupBox:
         group = QGroupBox("设置")
+        group.setObjectName("BdspEncounterGroup")
         group.setMinimumWidth(260)
         grid = QGridLayout(group)
         grid.setContentsMargins(12, 10, 12, 10)
@@ -2462,11 +2505,11 @@ class MainWindow(QMainWindow):
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
         group.setObjectName("ProfileGroup")
-        group.setMinimumHeight(96)
-        group.setMaximumHeight(106)
+        group.setMinimumHeight(64)
+        group.setMaximumHeight(72)
 
         outer = QHBoxLayout(group)
-        outer.setContentsMargins(12, 8, 12, 12)
+        outer.setContentsMargins(12, 4, 12, 6)
         outer.setSpacing(10)
         outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -2520,6 +2563,7 @@ class MainWindow(QMainWindow):
 
     def _build_filter_group(self) -> QGroupBox:
         group = QGroupBox("筛选项")
+        group.setObjectName("BdspFilterGroup")
         outer = QHBoxLayout(group)
         outer.setContentsMargins(12, 10, 12, 10)
         outer.setSpacing(18)
@@ -2546,8 +2590,13 @@ class MainWindow(QMainWindow):
             self.iv_min.append(min_spin)
             self.iv_max.append(max_spin)
             iv_grid.addWidget(lbl,       i, 0)
+            separator = QLabel("-")
+            separator.setObjectName("RangeSeparator")
+            separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            separator.setFixedWidth(10)
             iv_grid.addWidget(min_spin,  i, 1)
-            iv_grid.addWidget(max_spin,  i, 2)
+            iv_grid.addWidget(separator, i, 2)
+            iv_grid.addWidget(max_spin,  i, 3)
 
         left_col.addLayout(iv_grid)
         left_col.addSpacing(10)
@@ -2620,6 +2669,7 @@ class MainWindow(QMainWindow):
         ht_row = QHBoxLayout()
         ht_row.setSpacing(8)
         ht_row.addWidget(self.height_min)
+        ht_row.addWidget(QLabel("-"))
         ht_row.addWidget(self.height_max)
         ht_row.addStretch()
         right_form.addLayout(ht_row, 4, 1)
@@ -2629,6 +2679,7 @@ class MainWindow(QMainWindow):
         wt_row = QHBoxLayout()
         wt_row.setSpacing(8)
         wt_row.addWidget(self.weight_min)
+        wt_row.addWidget(QLabel("-"))
         wt_row.addWidget(self.weight_max)
         wt_row.addStretch()
         right_form.addLayout(wt_row, 5, 1)
@@ -2772,8 +2823,11 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(10)
         self.preview_group = QGroupBox()
+        self.preview_group.setObjectName("CapturePreviewGroup")
         self.preview_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         preview_layout = QVBoxLayout(self.preview_group)
+        preview_layout.setContentsMargins(0, 6, 0, 0)
+        preview_layout.setSpacing(8)
 
         preview_controls = QHBoxLayout()
         preview_controls.setContentsMargins(0, 0, 0, 0)
@@ -2859,10 +2913,13 @@ class MainWindow(QMainWindow):
             """
             /* ── 全局基础 ── */
             QWidget {
-                background: #F7F8FA;
-                color: #111827;
+                background: #FFFFFF;
+                color: #1D2924;
                 font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
                 font-size: 13px;
+            }
+            QWidget#AppRoot {
+                background: #FFFFFF;
             }
             QLabel {
                 background: transparent;
@@ -2873,46 +2930,47 @@ class MainWindow(QMainWindow):
             /* ── Header ── */
             QFrame#Header {
                 background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                border-radius: 0;
             }
             QLabel#WindowTitle {
-                font-size: 22px;
-                font-weight: 700;
-                color: #111827;
+                font-size: 18px;
+                font-weight: 600;
+                color: #1D2924;
             }
             QToolButton#VideoSourceHeaderButton,
             QToolButton#EasyConHeaderButton {
-                background: #F9FAFB;
-                border: 1px solid #D1D5DB;
-                border-radius: 7px;
-                color: #374151;
-                font-weight: 600;
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                color: #33453E;
+                font-weight: 400;
                 padding: 0 10px;
             }
             QToolButton#VideoSourceHeaderButton:hover,
             QToolButton#EasyConHeaderButton:hover {
-                background: #F3F4F6;
-                border-color: #9CA3AF;
+                background: #F6F8F7;
+                border-color: #BFCBC5;
             }
             QToolButton#VideoSourceHeaderButton:pressed,
             QToolButton#EasyConHeaderButton:pressed {
-                background: #E5E7EB;
+                background: #EDF2EF;
             }
             QToolButton#EasyConHeaderButton:disabled {
-                background: #F3F4F6;
-                color: #9CA3AF;
-                border-color: #E5E7EB;
+                background: #F6F8F7;
+                color: #9AA9A2;
+                border-color: #E2E8E4;
             }
 
             /* ── Badge ── */
             QLabel#Badge {
-                background: #EAF8F3;
-                color: #0E8F70;
-                font-weight: 600;
+                background: #EFF7F3;
+                color: #087C58;
+                font-weight: 500;
                 font-size: 12px;
                 padding: 4px 8px;
-                border-radius: 999px;
+                border-radius: 3px;
             }
             QLabel#BadgeDanger {
                 background: #FEE2E2;
@@ -2926,86 +2984,106 @@ class MainWindow(QMainWindow):
 
             /* ── Tab ── */
             QTabWidget::pane {
-                border: 1px solid #E5E7EB;
-                border-radius: 0 8px 8px 8px;
+                border: 0;
+                border-top: 1px solid #E2E8E4;
                 top: -1px;
                 background: #FFFFFF;
             }
             QTabBar::tab {
-                background: #F3F4F6;
-                border: 1px solid #E5E7EB;
+                background: #FFFFFF;
+                border: 0;
                 border-bottom: 2px solid transparent;
-                color: #6B7280;
-                min-width: 150px;
-                padding: 10px 18px;
-                font-weight: 600;
-                font-size: 14px;
+                color: #66776F;
+                min-width: 104px;
+                padding: 10px 14px;
+                font-weight: 400;
+                font-size: 13px;
             }
             QTabBar::tab:selected {
                 background: #FFFFFF;
-                color: #0E8F70;
-                border-bottom: 2px solid #10A37F;
+                color: #087C58;
+                border-bottom: 2px solid #087C58;
             }
             QTabBar::tab:hover:!selected {
-                background: #E5E7EB;
-                color: #111827;
+                background: #F6F8F7;
+                color: #1D2924;
             }
 
             /* ── Card (替代 GroupBox) ── */
             QGroupBox {
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 10px;
-                margin-top: 18px;
-                padding: 18px 16px 16px 16px;
-                font-weight: 700;
-                font-size: 14px;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                margin-top: 16px;
+                padding: 14px 10px 10px 10px;
+                font-weight: 600;
+                font-size: 13px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 14px;
-                top: 2px;
-                padding: 0 6px;
-                color: #111827;
+                left: 8px;
+                top: 1px;
+                padding: 0 3px;
+                color: #26362F;
             }
             QGroupBox#ProfileGroup {
-                margin-top: 12px;
-                padding: 12px 16px 12px 16px;
+                background: #F6F8F7;
+                border-bottom: 1px solid #E2E8E4;
+                margin-top: 0;
+                padding: 4px 10px;
             }
             QGroupBox#ProfileGroup::title {
-                top: 0;
+                color: transparent;
             }
             QGroupBox#ProfileGroup QLineEdit,
             QGroupBox#ProfileGroup QPushButton {
-                min-height: 34px;
-                max-height: 34px;
-                padding: 0 12px;
+                min-height: 30px;
+                max-height: 30px;
+                padding: 0 10px;
             }
             QGroupBox#ProfileGroup QCheckBox {
-                min-height: 34px;
-                max-height: 34px;
+                min-height: 30px;
+                max-height: 30px;
                 padding: 0;
+            }
+            QWidget#ProjectXsConfigPanel {
+                background: #F6F8F7;
+                border-right: 1px solid #E2E8E4;
+            }
+            QWidget#ProjectXsPreviewPanel,
+            QWidget#BdspWorkspace,
+            QWidget#BdspParameters {
+                background: #FFFFFF;
+            }
+            QGroupBox#BdspRngGroup,
+            QGroupBox#BdspEncounterGroup {
+                border-right: 1px solid #E2E8E4;
             }
 
             /* ── 输入框 / 下拉框 / 列表 ── */
             QLineEdit, QDoubleSpinBox, QComboBox, QListWidget {
                 background: #FFFFFF;
-                border: 1px solid #D1D5DB;
-                border-radius: 8px;
-                min-height: 36px;
-                padding: 4px 12px;
-                color: #111827;
+                border: 1px solid #DCE4DF;
+                border-radius: 5px;
+                min-height: 30px;
+                padding: 0 10px;
+                color: #1D2924;
                 font-size: 13px;
-                selection-background-color: #D1F1E7;
+                selection-background-color: #DDEFE8;
             }
             QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus {
-                border-color: #10A37F;
+                border-color: #087C58;
             }
             QLineEdit[readOnly="true"] {
-                color: #0E8F70;
-                background: #F9FAFB;
+                color: #61756C;
+                background: #F1F4F2;
+            }
+            QLineEdit#SeedField,
+            QLineEdit#Readonly {
+                font-family: "Cascadia Mono", "Consolas", monospace;
             }
             QComboBox::drop-down {
+                width: 28px;
                 border: none;
             }
             QDialog#VideoSourceDialog QComboBox,
@@ -3018,13 +3096,13 @@ class MainWindow(QMainWindow):
             QComboBox#CaptureDeviceCombo::drop-down,
             QComboBox#CaptureApiCombo::drop-down {
                 width: 26px;
-                border-left: 1px solid #E5E7EB;
+                border-left: 1px solid #E2E8E4;
             }
             QMenu#VideoSourceComboMenu,
             QMenu#LeadComboMenu {
                 background: #FFFFFF;
-                color: #111827;
-                border: 1px solid #D1D5DB;
+                color: #24312D;
+                border: 1px solid #E2E8E4;
                 padding: 4px;
             }
             QMenu#VideoSourceComboMenu::item,
@@ -3035,30 +3113,30 @@ class MainWindow(QMainWindow):
             }
             QMenu#VideoSourceComboMenu::item:selected,
             QMenu#LeadComboMenu::item:selected {
-                background: #F3F4F6;
-                color: #111827;
+                background: #F6F8F7;
+                color: #24312D;
             }
             QMenu#VideoSourceComboMenu::item:checked,
             QMenu#LeadComboMenu::item:checked {
-                background: #E6F6F0;
-                color: #0E8F70;
+                background: #EFF7F3;
+                color: #087C58;
                 font-weight: 600;
             }
             QToolButton#CaptureDeviceRefreshButton {
                 background: #FFFFFF;
-                border: 1px solid #D1D5DB;
-                border-radius: 8px;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
             }
             QToolButton#CaptureDeviceRefreshButton:hover {
-                background: #F3F4F6;
-                border-color: #9CA3AF;
+                background: #F6F8F7;
+                border-color: #BFCFC6;
             }
             QToolButton#CaptureDeviceRefreshButton:disabled {
-                background: #F3F4F6;
-                border-color: #E5E7EB;
+                background: #F6F8F7;
+                border-color: #E2E8E4;
             }
             QLabel#VideoSourceStatus {
-                color: #374151;
+                color: #24312D;
                 font-weight: 600;
             }
             QFrame#VideoSourceStatusDot {
@@ -3068,13 +3146,13 @@ class MainWindow(QMainWindow):
                 max-height: 10px;
                 border: none;
                 border-radius: 5px;
-                background: #9CA3AF;
+                background: #9AA9A2;
             }
             QFrame#VideoSourceStatusDot[state="connecting"] {
                 background: #D97706;
             }
             QFrame#VideoSourceStatusDot[state="connected"] {
-                background: #0E8F70;
+                background: #087C58;
             }
             QFrame#VideoSourceStatusDot[state="failed"] {
                 background: #DC2626;
@@ -3083,41 +3161,41 @@ class MainWindow(QMainWindow):
             /* ── SpinBox 微调按钮 ── */
             QSpinBox {
                 background: #FFFFFF;
-                border: 1px solid #D1D5DB;
-                border-radius: 8px;
-                min-height: 36px;
-                padding: 4px 12px;
-                color: #111827;
+                border: 1px solid #DCE4DF;
+                border-radius: 5px;
+                min-height: 30px;
+                padding: 0 10px;
+                color: #1D2924;
                 font-size: 13px;
             }
 
             /* ── 多行文本框 ── */
             QPlainTextEdit {
                 background: #FFFFFF;
-                border: 1px solid #D1D5DB;
-                border-radius: 8px;
-                color: #111827;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                color: #1D2924;
                 font-family: "Cascadia Mono", "Consolas", "JetBrains Mono", monospace;
                 font-size: 13px;
                 padding: 10px;
-                selection-background-color: #D1F1E7;
+                selection-background-color: #DDEFE8;
             }
             QPlainTextEdit#LogView {
-                background: #FBFBFC;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
+                background: #FAFBFA;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
                 font-family: "Cascadia Mono", "Consolas", "JetBrains Mono", monospace;
                 font-size: 13px;
                 padding: 10px;
-                color: #374151;
+                color: #33453E;
             }
 
-            /* ── 伊机控暗色日志 ── */
+            /* ── 伊机控运行输出 ── */
             QTextEdit#EasyConLog {
-                background: #282826;
-                border: 1px solid #E5E7EB;
+                background: #FFFFFF;
+                border: 0;
                 border-radius: 0;
-                color: #e7ece9;
+                color: #33453E;
                 font-family: "Cascadia Mono", "Consolas", "JetBrains Mono", monospace;
                 font-size: 12px;
                 padding: 10px;
@@ -3126,13 +3204,15 @@ class MainWindow(QMainWindow):
             /* ── 工具栏 ── */
             QFrame#EasyConToolbar {
                 background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                border-radius: 0;
             }
             QFrame#AutoRngToolbar {
                 background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                border-radius: 0;
             }
             QFrame#AutoRngToolbar QComboBox,
             QFrame#AutoRngToolbar QSpinBox {
@@ -3161,104 +3241,104 @@ class MainWindow(QMainWindow):
                 padding: 0 14px;
             }
             QWidget#InlinePanel {
-                background: #F9FAFB;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
+                background: #F6F8F7;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
             }
             QListWidget#TargetPool {
                 background: #FFFFFF;
-                border: 1px solid #D1D5DB;
-                border-radius: 8px;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
                 min-height: 116px;
                 max-height: 140px;
                 padding: 8px;
             }
             QListWidget#TargetPool::item {
                 background: #FFFFFF;
-                border: 1px solid #D1D5DB;
-                border-radius: 12px;
+                border: 1px solid #DCE4DF;
+                border-radius: 4px;
                 padding: 4px 10px;
                 margin: 2px;
             }
             QListWidget#TargetPool::item:selected {
-                background: #E6F6F0;
-                border-color: #10A37F;
-                color: #0E8F70;
+                background: #EAF6F1;
+                border-color: #087C58;
+                color: #087C58;
             }
             QListWidget#TargetPool::item:hover:!selected {
-                background: #F3F4F6;
-                border-color: #9CA3AF;
+                background: #F6F8F7;
+                border-color: #BFCBC5;
             }
             QLabel#SectionTitle {
-                color: #111827;
-                font-weight: 700;
+                color: #26362F;
+                font-weight: 600;
                 font-size: 13px;
             }
 
             /* ── 预览 ── */
             QLabel#Preview {
-                background: #F3F4F6;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                color: #6B7280;
+                background: #24312C;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                color: #A8BBB2;
             }
 
             /* ── 状态栏 ── */
             QStatusBar {
-                background: #F3F4F6;
-                border-top: 1px solid #E5E7EB;
-                color: #6B7280;
+                background: #FFFFFF;
+                border-top: 1px solid #E2E8E4;
+                color: #697A73;
                 font-size: 12px;
             }
 
             /* ── 只读 Seed 显示 ── */
             QLineEdit#Readonly {
-                color: #0E8F70;
-                background: #F9FAFB;
+                color: #61756C;
+                background: #F1F4F2;
             }
 
             /* ── 通用按钮 ── */
             QPushButton {
                 background: #FFFFFF;
-                border: 1px solid #D1D5DB;
-                border-radius: 8px;
-                min-height: 36px;
-                padding: 4px 12px;
-                font-weight: 600;
+                border: 1px solid #DCE4DF;
+                border-radius: 5px;
+                min-height: 30px;
+                padding: 0 11px;
+                font-weight: 400;
                 font-size: 13px;
-                color: #111827;
+                color: #1D2924;
             }
             QPushButton:hover {
-                background: #F3F4F6;
-                border-color: #9CA3AF;
+                background: #F6F8F7;
+                border-color: #BFCBC5;
             }
             QPushButton:pressed {
-                background: #E5E7EB;
+                background: #EDF2EF;
             }
             QPushButton:disabled {
-                background: #F3F4F6;
-                color: #9CA3AF;
-                border-color: #E5E7EB;
+                background: #F8F9F8;
+                color: #A8B2AD;
+                border-color: #EEF1EF;
             }
 
             /* ── 主按钮（绿色） ── */
             QPushButton#PrimaryButton {
-                background: #10A37F;
+                background: #087C58;
                 color: #FFFFFF;
-                border-color: #10A37F;
-                font-weight: 700;
+                border-color: #087C58;
+                font-weight: 500;
             }
             QPushButton#PrimaryButton:hover {
-                background: #0E8F70;
-                border-color: #0E8F70;
+                background: #066F4F;
+                border-color: #066F4F;
             }
             QPushButton#PrimaryButton:pressed {
-                background: #0B7A5E;
-                border-color: #0B7A5E;
+                background: #055F44;
+                border-color: #055F44;
             }
             QPushButton#PrimaryButton:disabled {
                 background: #9CA3AF;
-                color: #F3F4F6;
+                color: #F6F8F7;
                 border-color: #9CA3AF;
             }
 
@@ -3270,9 +3350,9 @@ class MainWindow(QMainWindow):
             }
             QPushButton#DangerButton {
                 background: #FFFFFF;
-                color: #DC2626;
-                border-color: #DC2626;
-                font-weight: 700;
+                color: #B94A48;
+                border-color: #E1B4B2;
+                font-weight: 500;
             }
             QPushButton#DangerButton:hover {
                 background: #FEF2F2;
@@ -3280,25 +3360,25 @@ class MainWindow(QMainWindow):
 
             /* ── ToolButton 主按钮 ── */
             QToolButton#PrimaryButton {
-                background: #10A37F;
+                background: #087C58;
                 color: #FFFFFF;
-                border: 1px solid #10A37F;
-                border-radius: 8px;
+                border: 1px solid #087C58;
+                border-radius: 5px;
                 padding: 4px 18px 4px 12px;
-                font-weight: 700;
+                font-weight: 500;
                 font-size: 13px;
             }
             QToolButton#PrimaryButton:hover {
-                background: #0E8F70;
-                border-color: #0E8F70;
+                background: #066F4F;
+                border-color: #066F4F;
             }
             QToolButton#PrimaryButton:pressed {
-                background: #0B7A5E;
-                border-color: #0B7A5E;
+                background: #055F44;
+                border-color: #055F44;
             }
             QToolButton#PrimaryButton:disabled {
                 background: #9CA3AF;
-                color: #F3F4F6;
+                color: #F6F8F7;
                 border-color: #9CA3AF;
             }
             QToolButton#PrimaryButton::menu-button {
@@ -3310,17 +3390,17 @@ class MainWindow(QMainWindow):
             QToolButton#HelpMenuButton {
                 background: transparent;
                 border: 1px solid transparent;
-                border-radius: 6px;
-                color: #6B7280;
+                border-radius: 4px;
+                color: #697A73;
                 min-height: 28px;
                 padding: 4px 10px;
-                font-weight: 700;
+                font-weight: 400;
                 font-size: 13px;
             }
             QToolButton#HelpMenuButton:hover {
-                background: #F3F4F6;
-                border-color: #E5E7EB;
-                color: #111827;
+                background: #F6F8F7;
+                border-color: #E2E8E4;
+                color: #1D2924;
             }
             QToolButton#HelpMenuButton::menu-indicator {
                 image: none;
@@ -3330,24 +3410,25 @@ class MainWindow(QMainWindow):
             /* ── 表格 ── */
             QTableWidget {
                 background: #FFFFFF;
-                alternate-background-color: #F9FAFB;
-                border: 1px solid #E5E7EB;
-                gridline-color: #F3F4F6;
-                color: #111827;
+                alternate-background-color: #FAFBFA;
+                border: 0;
+                border-top: 1px solid #E2E8E4;
+                border-bottom: 1px solid #E2E8E4;
+                gridline-color: #E9EEEB;
+                color: #1D2924;
                 font-size: 13px;
             }
             QTableWidget::item:selected {
-                background: #10A37F;
-                color: #FFFFFF;
+                background: #EAF6F1;
+                color: #087C58;
             }
             QHeaderView::section {
-                background: #F9FAFB;
-                color: #6B7280;
+                background: #F6F8F7;
+                color: #66776F;
                 border: 0;
-                border-right: 1px solid #E5E7EB;
-                border-bottom: 1px solid #E5E7EB;
+                border-bottom: 1px solid #E2E8E4;
                 padding: 8px 6px;
-                font-weight: 700;
+                font-weight: 500;
                 font-size: 12px;
             }
 
@@ -3358,12 +3439,12 @@ class MainWindow(QMainWindow):
                 margin: 0;
             }
             QScrollBar::handle:vertical {
-                background: #D1D5DB;
+                background: #CBD5D0;
                 border-radius: 4px;
                 min-height: 30px;
             }
             QScrollBar::handle:vertical:hover {
-                background: #9CA3AF;
+                background: #AAB8B1;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0;
@@ -3373,15 +3454,326 @@ class MainWindow(QMainWindow):
                 height: 8px;
             }
             QScrollBar::handle:horizontal {
-                background: #D1D5DB;
+                background: #CBD5D0;
                 border-radius: 4px;
                 min-width: 30px;
             }
             QScrollBar::handle:horizontal:hover {
-                background: #9CA3AF;
+                background: #AAB8B1;
             }
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
                 width: 0;
+            }
+
+            /* Confirmed compact workspace visual system. */
+            QWidget {
+                background: #FFFFFF;
+                color: #24312D;
+                font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
+                font-size: 13px;
+            }
+            QWidget#AppRoot {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 8px;
+            }
+            QLabel {
+                background: transparent;
+            }
+            QFrame#Header {
+                background: #FFFFFF;
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                border-radius: 0;
+            }
+            QLabel#WindowTitle {
+                color: #24312D;
+                font-size: 17px;
+                font-weight: 600;
+            }
+            QToolButton#VideoSourceHeaderButton,
+            QToolButton#EasyConHeaderButton {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                color: #24312D;
+                font-weight: 400;
+                padding: 0 10px;
+            }
+            QToolButton#VideoSourceHeaderButton:hover,
+            QToolButton#EasyConHeaderButton:hover {
+                background: #F6F8F7;
+                border-color: #B9C8C0;
+            }
+            QLabel#NavigationStatus {
+                color: #68766F;
+                min-height: 38px;
+                padding: 0 12px;
+                font-size: 12px;
+            }
+            QLabel#NavigationStatus[state="running"] {
+                color: #087C58;
+            }
+            QLabel#NavigationStatus[state="failed"] {
+                color: #AC4B42;
+            }
+            QTabWidget#WorkspaceTabs::pane {
+                background: #FFFFFF;
+                border: 0;
+                border-top: 1px solid #E2E8E4;
+                border-radius: 0;
+                top: -1px;
+            }
+            QTabWidget#WorkspaceTabs QTabBar::tab {
+                background: #FFFFFF;
+                border: 0;
+                border-bottom: 2px solid transparent;
+                color: #68766F;
+                min-width: 96px;
+                min-height: 38px;
+                padding: 0 10px;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QTabWidget#WorkspaceTabs QTabBar::tab:selected {
+                background: #FFFFFF;
+                color: #087C58;
+                border-bottom: 2px solid #087C58;
+                font-weight: 500;
+            }
+            QTabWidget#WorkspaceTabs QTabBar::tab:hover:!selected {
+                background: #F6F8F7;
+                color: #24312D;
+            }
+
+            QGroupBox {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                margin-top: 14px;
+                padding: 10px 10px 8px 10px;
+                color: #24312D;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                top: 0;
+                padding: 0 3px;
+                color: #24312D;
+                background: transparent;
+            }
+            QLineEdit,
+            QSpinBox,
+            QDoubleSpinBox,
+            QComboBox,
+            QListWidget {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                min-height: 30px;
+                max-height: 32px;
+                padding: 0 8px;
+                color: #24312D;
+                font-size: 13px;
+                selection-background-color: #DCEFE7;
+            }
+            QLineEdit:focus,
+            QSpinBox:focus,
+            QDoubleSpinBox:focus,
+            QComboBox:focus {
+                border-color: #087C58;
+            }
+            QLineEdit[readOnly="true"] {
+                background: #F2F5F3;
+                color: #68766F;
+            }
+            QLineEdit#SeedField,
+            QLineEdit#Readonly {
+                font-family: "Cascadia Mono", "Consolas", monospace;
+                letter-spacing: 0;
+            }
+            QPushButton {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                min-height: 30px;
+                max-height: 32px;
+                padding: 0 11px;
+                color: #24312D;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QPushButton:hover {
+                background: #F6F8F7;
+                border-color: #B9C8C0;
+            }
+            QPushButton:pressed {
+                background: #EDF3F0;
+            }
+            QPushButton:disabled,
+            QToolButton:disabled {
+                background: #FAFBFA;
+                color: #A7B0AB;
+                border-color: #EEF1EF;
+            }
+            QPushButton#PrimaryButton,
+            QToolButton#PrimaryButton {
+                background: #087C58;
+                color: #FFFFFF;
+                border-color: #087C58;
+                border-radius: 5px;
+                font-weight: 500;
+            }
+            QPushButton#PrimaryButton:hover,
+            QToolButton#PrimaryButton:hover {
+                background: #066A4B;
+                border-color: #066A4B;
+            }
+            QPushButton#DangerButton {
+                background: #FFFFFF;
+                color: #AC4B42;
+                border-color: #E2E8E4;
+                font-weight: 500;
+            }
+            QPushButton#DangerButton:hover {
+                background: #FFF7F6;
+                border-color: #D9AAA6;
+            }
+            QLabel#Badge {
+                background: #EDF7F1;
+                color: #087C58;
+                border-radius: 4px;
+                padding: 3px 7px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QFrame#AutoRngToolbar,
+            QFrame#EasyConToolbar {
+                background: #FFFFFF;
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                border-radius: 0;
+            }
+
+            QSplitter#ProjectXsSplitter {
+                background: #FFFFFF;
+            }
+            QSplitter#ProjectXsSplitter::handle {
+                background: #E2E8E4;
+                width: 1px;
+            }
+            QWidget#ProjectXsConfigPanel {
+                background: #F6F8F7;
+            }
+            QWidget#ProjectXsPreviewPanel {
+                background: #FFFFFF;
+            }
+            QGroupBox#CaptureConfigGroup,
+            QGroupBox#CapturedSeedGroup,
+            QGroupBox#ProjectXsStatusGroup,
+            QGroupBox#CapturePreviewGroup {
+                border: 0;
+                border-radius: 0;
+                background: transparent;
+                padding: 9px 0 0 0;
+            }
+            QGroupBox#CaptureConfigGroup::title,
+            QGroupBox#CapturedSeedGroup::title,
+            QGroupBox#ProjectXsStatusGroup::title,
+            QGroupBox#CapturePreviewGroup::title {
+                left: 0;
+                padding: 0;
+                font-weight: 500;
+            }
+            QLabel#Preview {
+                background: #24312D;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                color: #AAB8B1;
+            }
+
+            QWidget#BdspWorkspace,
+            QWidget#BdspParameters {
+                background: #FFFFFF;
+            }
+            QGroupBox#ProfileGroup {
+                background: #F6F8F7;
+                border: 0;
+                border-radius: 0;
+                margin-top: 0;
+                padding: 4px 10px;
+            }
+            QGroupBox#ProfileGroup::title {
+                color: transparent;
+                padding: 0;
+            }
+            QGroupBox#ProfileGroup QLineEdit,
+            QGroupBox#ProfileGroup QPushButton,
+            QGroupBox#ProfileGroup QCheckBox {
+                min-height: 30px;
+                max-height: 32px;
+                padding-top: 0;
+                padding-bottom: 0;
+            }
+            QWidget#BdspParameters QGroupBox {
+                border: 0;
+                border-radius: 0;
+                margin-top: 16px;
+                padding: 8px 10px 4px 10px;
+            }
+            QWidget#BdspParameters QGroupBox#BdspEncounterGroup,
+            QWidget#BdspParameters QGroupBox#BdspFilterGroup {
+                border-left: 1px solid #E2E8E4;
+            }
+            QLabel#RangeSeparator {
+                color: #8A9891;
+            }
+            QWidget#ResultsToolbar {
+                background: #FFFFFF;
+                border-top: 1px solid #E2E8E4;
+            }
+            QTableWidget {
+                background: #FFFFFF;
+                alternate-background-color: #F6F8F7;
+                border: 0;
+                gridline-color: #E2E8E4;
+                color: #24312D;
+                font-size: 12px;
+            }
+            QTableWidget::item:selected {
+                background: #EDF7F1;
+                color: #087C58;
+            }
+            QHeaderView::section {
+                background: #F6F8F7;
+                color: #68766F;
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                padding: 6px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+
+            QStatusBar#WorkspaceStatusBar {
+                background: #FFFFFF;
+                border-top: 1px solid #E2E8E4;
+                color: #68766F;
+                font-size: 12px;
+                padding-left: 8px;
+            }
+            QToolButton#StatusLogButton {
+                background: transparent;
+                border: 0;
+                color: #087C58;
+                min-height: 24px;
+                padding: 0 10px;
+                font-size: 12px;
+            }
+            QToolButton#HelpMenuButton {
+                color: #68766F;
+                font-weight: 400;
             }
             """
         )
@@ -3391,7 +3783,7 @@ class MainWindow(QMainWindow):
         w.setValidator(QIntValidator(minimum, maximum))
         set_c_locale(w)
         w.setAlignment(Qt.AlignmentFlag.AlignRight)
-        w.setFixedHeight(36)
+        w.setFixedHeight(32)
         return w
 
     def _double_spin(self, minimum: float, maximum: float, value: float, decimals: int) -> QDoubleSpinBox:
@@ -3401,7 +3793,7 @@ class MainWindow(QMainWindow):
         spin.setSingleStep(0.1)
         set_c_locale(spin)
         spin.setValue(value)
-        spin.setFixedHeight(36)
+        spin.setFixedHeight(32)
         return spin
 
     def _text(self, key: str) -> str:
@@ -3618,6 +4010,21 @@ class MainWindow(QMainWindow):
 
     def open_profile_manager(self) -> None:
         dialog = QDialog(self)
+        dialog.setObjectName("ProfileManagerDialog")
+        dialog.setStyleSheet(
+            "QDialog#ProfileManagerDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#ProfileManagerDialog QLineEdit, QComboBox, QSpinBox {"
+            " background: #ffffff; color: #24312d; border: 1px solid #dce4df;"
+            " border-radius: 4px; min-height: 32px; padding: 0 8px; }"
+            " QDialog#ProfileManagerDialog QLineEdit:focus,"
+            " QDialog#ProfileManagerDialog QComboBox:focus,"
+            " QDialog#ProfileManagerDialog QSpinBox:focus { border-color: #087c58; }"
+            " QDialog#ProfileManagerDialog QDialogButtonBox QPushButton {"
+            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#ProfileManagerDialog QDialogButtonBox QPushButton:hover {"
+            " background: #f6f8f7; border-color: #bfcfc6; }"
+        )
         dialog.setWindowTitle("存档信息管理" if self.lang == "zh" else "Profile Manager")
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
@@ -4044,7 +4451,9 @@ class MainWindow(QMainWindow):
         self._apply_language()
 
     def _apply_language(self) -> None:
-        self.title_label.setText(self._text("title"))
+        self.title_label.setText(
+            APP_DISPLAY_TITLE if self.lang == "zh" else self._text("title")
+        )
         self.tabs.setTabText(0, self._text("auto_rng"))
         self.tabs.setTabText(1, self._text("auto_tid_rng"))
         self.tabs.setTabText(2, self._text("project_xs"))
@@ -4105,22 +4514,60 @@ class MainWindow(QMainWindow):
         loop_index: int | None = None,
         phase_text: str | None = None,
         advances: int | None = None,
+        task_label: str | None = None,
     ) -> None:
+        if task_label is not None:
+            self._header_task_label = str(task_label)
         if loop_index is not None:
+            self._header_loop_index = int(loop_index)
             self._set_header_badge_text(
                 self.auto_loop_badge,
                 f"循环 {loop_index}",
             )
         if phase_text is not None:
+            self._header_phase_text = str(phase_text).removeprefix("状态：").strip()
             self._set_header_badge_text(
                 self.auto_phase_badge,
-                f"阶段 {phase_text}",
+                f"阶段 {self._header_phase_text}",
             )
         if advances is not None:
+            self._header_advances = int(advances)
             self._set_header_badge_text(
                 self.auto_advance_badge,
                 f"advance {advances}",
             )
+        if hasattr(self, "navigation_status"):
+            current_task = getattr(self, "_header_task_label", "定点")
+            current_loop = getattr(self, "_header_loop_index", 0)
+            current_phase = getattr(self, "_header_phase_text", "空闲")
+            normalized_phase = str(current_phase).removeprefix("状态：").strip()
+            is_terminal = normalized_phase in _AUTO_HEADER_TERMINAL_PHASES
+            if current_loop > 0 and not is_terminal:
+                visible = f"● {current_task} · 第 {current_loop} 轮"
+            else:
+                visible = f"● {current_task} · {current_phase}"
+            current_advances = getattr(
+                self,
+                "_header_advances",
+                self._tracked_advances,
+            )
+            self.navigation_status.setText(visible)
+            self.navigation_status.setToolTip(
+                f"{visible} · 阶段 {current_phase} · advance {current_advances:,}"
+            )
+            status_state = (
+                "failed"
+                if normalized_phase == "失败"
+                else "idle"
+                if is_terminal
+                else "running"
+            )
+            if self.navigation_status.property("state") != status_state:
+                self.navigation_status.setProperty("state", status_state)
+                style = self.navigation_status.style()
+                style.unpolish(self.navigation_status)
+                style.polish(self.navigation_status)
+                self.navigation_status.update()
 
     @staticmethod
     def _set_header_badge_text(label: QLabel, full_text: str) -> None:
@@ -4139,24 +4586,34 @@ class MainWindow(QMainWindow):
         if self._active_auto_rng_run_id is not None and loop_index is not None and int(loop_index) > 0:
             self._active_auto_rng_round_id = int(loop_index)
             self.run_records_tab.set_active_round(self._active_auto_rng_round_id)
-        self._apply_common_auto_header_progress(progress, phase_text, loop_index)
+        self._apply_common_auto_header_progress(
+            progress,
+            phase_text,
+            loop_index,
+            task_label="定点",
+        )
 
     def _apply_common_auto_header_progress(
         self,
         progress: object,
         phase_text: str,
         loop_index: object,
+        *,
+        task_label: str,
     ) -> None:
         current_advances = getattr(progress, "current_advances", None)
         if current_advances is not None:
             self._display_tracked_advances(int(current_advances))
         advances = self._tracked_advances
+        normalized_phase = str(phase_text).removeprefix("状态：").strip()
+        header_loop_index = 0 if normalized_phase in _AUTO_HEADER_TERMINAL_PHASES else loop_index
         self._update_auto_rng_header(
-            loop_index=loop_index,
+            loop_index=header_loop_index,
             phase_text=phase_text,
             advances=advances,
+            task_label=task_label,
         )
-        if phase_text in {"已完成", "失败", "空闲"}:
+        if normalized_phase in _AUTO_HEADER_TERMINAL_PHASES:
             self._stop_advance_tracking()
 
     def _apply_auto_tid_header_progress(self, progress: object) -> None:
@@ -4183,7 +4640,12 @@ class MainWindow(QMainWindow):
         log_message = str(getattr(progress, "log_message", ""))
         if self._active_auto_tid_run_id is not None and log_message:
             self.history_tab.auto_tid_log(log_message)
-        self._apply_common_auto_header_progress(progress, phase_text, loop_index)
+        self._apply_common_auto_header_progress(
+            progress,
+            phase_text,
+            loop_index,
+            task_label="TID",
+        )
 
     def _refresh_config_list(self) -> None:
         previous_main = self.config_combo.currentData() if hasattr(self, "config_combo") else None
@@ -4412,7 +4874,7 @@ class MainWindow(QMainWindow):
         colors = {
             "disconnected": "#9CA3AF",
             "connecting": "#D97706",
-            "connected": "#0E8F70",
+            "connected": "#087C58",
             "failed": "#DC2626",
         }
         if state == "connected":
@@ -4449,7 +4911,7 @@ class MainWindow(QMainWindow):
         colors = {
             "disconnected": "#9CA3AF",
             "connecting": "#D97706",
-            "connected": "#0E8F70",
+            "connected": "#087C58",
             "failed": "#DC2626",
         }
         button.setText(
@@ -6367,6 +6829,19 @@ class MainWindow(QMainWindow):
     def _show_shiny_threshold_dialog(self, interval_seconds: float) -> None:
         suggested = suggested_shiny_threshold(interval_seconds)
         dialog = QDialog(self)
+        dialog.setObjectName("ShinyThresholdDialog")
+        dialog.setStyleSheet(
+            "QDialog#ShinyThresholdDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#ShinyThresholdDialog QDoubleSpinBox {"
+            " background: #ffffff; color: #24312d; border: 1px solid #dce4df;"
+            " border-radius: 4px; min-height: 32px; padding: 0 8px; }"
+            " QDialog#ShinyThresholdDialog QDoubleSpinBox:focus { border-color: #087c58; }"
+            " QDialog#ShinyThresholdDialog QDialogButtonBox QPushButton {"
+            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#ShinyThresholdDialog QDialogButtonBox QPushButton:hover {"
+            " background: #f6f8f7; border-color: #bfcfc6; }"
+        )
         dialog.setWindowTitle("闪光判定校准")
         layout = QVBoxLayout(dialog)
         message = QLabel(f"当前间隔 {interval_seconds:.3f}s，是否以 {suggested:.3f}s 作为闪光判定？")
@@ -6465,7 +6940,9 @@ class MainWindow(QMainWindow):
             "shiny": 1 | 2,
             "star": 1,
             "square": 2,
-            "none": 255,
+            # StateFilter uses zero as the explicit non-shiny sentinel;
+            # 255 means "any" and would silently disable this filter.
+            "none": 0,
         }[shiny_mode]
         nature_index = self.nature_combo.currentData() if hasattr(self, "nature_combo") else -1
         if nature_index == -1:
@@ -6645,9 +7122,23 @@ class MainWindow(QMainWindow):
 
     def _handle_auto_rng_run_state_changed(self, running: bool) -> None:
         if running:
+            if self._active_auto_rng_run_id is not None:
+                self._update_auto_rng_header(
+                    loop_index=0,
+                    phase_text="运行中",
+                    task_label="定点",
+                )
             return
         outcome = self._run_outcome_from_status(self.auto_rng_tab.status_badge.text())
         if self._active_auto_rng_run_id is not None:
+            # A worker may fail before it emits a terminal progress object.
+            # Update the shared header from the panel's final status so a
+            # previous round cannot remain visible indefinitely.
+            self._update_auto_rng_header(
+                loop_index=0,
+                phase_text=outcome,
+                task_label="定点",
+            )
             self.history_tab.finish_run(
                 self._active_auto_rng_run_id,
                 outcome,
@@ -6660,9 +7151,20 @@ class MainWindow(QMainWindow):
 
     def _handle_auto_tid_run_state_changed(self, running: bool) -> None:
         if running:
+            if self._active_auto_tid_run_id is not None:
+                self._update_auto_rng_header(
+                    loop_index=0,
+                    phase_text="运行中",
+                    task_label="TID",
+                )
             return
         outcome = self._run_outcome_from_status(self.auto_tid_rng_tab.status_badge.text())
         if self._active_auto_tid_run_id is not None:
+            self._update_auto_rng_header(
+                loop_index=0,
+                phase_text=outcome,
+                task_label="TID",
+            )
             self.history_tab.finish_run(
                 self._active_auto_tid_run_id,
                 outcome,
@@ -8901,9 +9403,21 @@ class _IVCalculatorDialog(QDialog):
         self._entry_grid = None
 
         self.setWindowTitle("个体值计算器")
+        self.setObjectName("IVCalculatorDialog")
         self.setMinimumSize(860, 580)
         self.resize(900, 620)
-        self.setStyleSheet("background: #f2f1ee;")
+        self.setStyleSheet(
+            "QDialog#IVCalculatorDialog { background: #ffffff; color: #24312d; }"
+            " QGroupBox { background: #ffffff; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; margin-top: 10px; padding: 12px 10px 10px; }"
+            " QGroupBox::title { subcontrol-origin: margin; left: 10px;"
+            " padding: 0 4px; color: #24312d; background: #ffffff; }"
+            " QLineEdit, QComboBox { background: #ffffff; color: #24312d;"
+            " border: 1px solid #dce4df; border-radius: 4px; padding: 0 8px; }"
+            " QLineEdit:focus, QComboBox:focus { border-color: #087c58; }"
+            " QScrollArea { background: #ffffff; border: 1px solid #e2e8e4; }"
+            " QScrollArea QWidget { background: #ffffff; }"
+        )
 
         self._build_ui()
         self._add_entry()
@@ -8931,15 +9445,15 @@ class _IVCalculatorDialog(QDialog):
         css_ctrl = "QComboBox, QLineEdit { min-height: 32px; max-height: 32px; }"
         css_btn = (
             "QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
-            " background: #ffffff; border: 1px solid #c8c6c0; border-radius: 3px; color: #1a1a1a;"
+            " background: #ffffff; border: 1px solid #e2e8e4; border-radius: 4px; color: #24312d;"
             " font-size: 12px; }"
-            " QPushButton:hover { background: #e8e6e1; }"
+            " QPushButton:hover { background: #f6f8f7; border-color: #bfcfc6; }"
         )
         css_primary = (
             "QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
-            " background: #159a6a; border: 1px solid #12845b; border-radius: 3px; color: #ffffff;"
+            " background: #087c58; border: 1px solid #087c58; border-radius: 4px; color: #ffffff;"
             " font-size: 12px; font-weight: 700; }"
-            " QPushButton:hover { background: #12845b; }"
+            " QPushButton:hover { background: #066a4b; border-color: #066a4b; }"
         )
         css_entry = "QLineEdit { min-height: 32px; max-height: 32px; max-width: 75px; }"
 
@@ -9088,12 +9602,12 @@ class _IVCalculatorDialog(QDialog):
             lbl.setFixedWidth(40)
             rl.addWidget(lbl, i, 0)
             val = QLabel("-")
-            val.setStyleSheet("font-weight: 600; color: #1a1a1a;")
+            val.setStyleSheet("font-weight: 600; color: #24312d;")
             self._result_labels[label] = val
             rl.addWidget(val, i, 1)
         rl.addWidget(QLabel("下一级"), 6, 0)
         self._next_level_label = QLabel("-")
-        self._next_level_label.setStyleSheet("font-weight: 600; color: #1a1a1a;")
+        self._next_level_label.setStyleSheet("font-weight: 600; color: #24312d;")
         self._next_level_label.setWordWrap(True)
         rl.addWidget(self._next_level_label, 6, 1)
         rl.setRowStretch(7, 1)
@@ -9102,8 +9616,8 @@ class _IVCalculatorDialog(QDialog):
         close_btn = QPushButton("关闭")
         close_btn.setStyleSheet(
             "QPushButton { min-height: 36px; max-height: 36px;"
-            " background: #ffffff; border: 1px solid #c8c6c0; border-radius: 3px; color: #1a1a1a; }"
-            " QPushButton:hover { background: #e8e6e1; }"
+            " background: #ffffff; border: 1px solid #e2e8e4; border-radius: 4px; color: #24312d; }"
+            " QPushButton:hover { background: #f6f8f7; border-color: #bfcfc6; }"
         )
         close_btn.clicked.connect(self.close)
         right.addWidget(close_btn)

@@ -44,7 +44,7 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     window.tabs.setCurrentWidget(auto_panel)
     app.processEvents()
     auto_button_rect = auto_panel.view_log_button.geometry()
-    assert auto_panel.view_log_button.height() == 34
+    assert auto_panel.view_log_button.height() == 30
     assert auto_panel.log_group.rect().contains(auto_button_rect)
     assert abs(auto_button_rect.center().y() - auto_panel.log_group.rect().center().y()) <= 5
 
@@ -66,17 +66,25 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     )
     side_panel = easycon_panel.overview_panel.parentWidget()
     assert easycon_panel.keyboard_control_group.parentWidget() is side_panel
-    assert easycon_panel.overview_panel.geometry().bottom() < easycon_panel.action_row.geometry().top()
-    assert easycon_panel.action_row.geometry().bottom() < easycon_panel.keyboard_control_group.geometry().top()
+    assert easycon_panel.overview_panel.geometry().bottom() < easycon_panel.keyboard_control_group.geometry().top()
+    assert easycon_panel.action_row.isHidden()
     assert easycon_panel.findChild(QWidget, "EasyConControlPanel") is None
+    toolbar = easycon_panel.findChild(QWidget, "EasyConToolbar")
+    assert toolbar is not None
+    assert easycon_panel.elapsed_label.parentWidget() is toolbar
+    assert easycon_panel.run_button.parentWidget() is toolbar
+    assert easycon_panel.stop_button.parentWidget() is toolbar
     elapsed_rect = easycon_panel.elapsed_label.geometry()
     run_rect = easycon_panel.run_button.geometry()
-    assert easycon_panel.action_row.rect().contains(elapsed_rect)
-    assert easycon_panel.action_row.rect().contains(run_rect)
+    stop_rect = easycon_panel.stop_button.geometry()
+    assert toolbar.rect().contains(elapsed_rect)
+    assert toolbar.rect().contains(run_rect)
+    assert toolbar.rect().contains(stop_rect)
     assert elapsed_rect.top() == run_rect.top()
-    assert elapsed_rect.bottom() == run_rect.bottom()
-    assert elapsed_rect.height() == run_rect.height() == 50
-    assert abs(elapsed_rect.width() - run_rect.width()) <= 1
+    assert run_rect.top() == stop_rect.top()
+    assert elapsed_rect.height() == run_rect.height() == stop_rect.height() == 32
+    assert elapsed_rect.right() < run_rect.left()
+    assert run_rect.right() < stop_rect.left()
 
     records_panel = window.run_records_tab
     window.tabs.setCurrentWidget(records_panel)
@@ -487,6 +495,9 @@ def test_run_state_finalizes_active_history_record(app, tmp_path, source, status
 
     assert window.history_tab.detail_status_label.text() == expected
     assert window.run_records_tab.live_status_label.text() == f"运行{expected}"
+    expected_task = "TID" if source == "auto_tid" else "定点"
+    assert window.navigation_status.text() == f"● {expected_task} · {expected}"
+    assert "第 1 轮" not in window.navigation_status.text()
 
 
 def test_auto_flows_are_mutually_exclusive_before_start_checks(app, tmp_path, monkeypatch):

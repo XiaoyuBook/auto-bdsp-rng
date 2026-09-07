@@ -53,7 +53,7 @@ class AboutDialog(QDialog):
         self._copy_text = copy_text
         self._sponsor_assets = sponsor_assets or find_sponsor_assets()
         self._dark = self.palette().window().color().lightness() < 128
-        self._link_color = "#9fc8ad" if self._dark else "#23936b"
+        self._link_color = "#9fc8ad" if self._dark else "#087c58"
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -276,9 +276,16 @@ class AboutDialog(QDialog):
     def _show_qr_popup(self, path: Path | None, title: str) -> None:
         pixmap = QPixmap(str(path)) if path is not None and path.exists() else QPixmap()
         dlg = QDialog(self)
+        dlg.setObjectName("AboutQrDialog")
         dlg.setWindowTitle(title)
         dlg.setMinimumSize(400, 440)
-        dlg.setStyleSheet("QDialog { background: #fff; }")
+        dlg.setStyleSheet(
+            "QDialog#AboutQrDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#AboutQrDialog QPushButton { background: #ffffff; color: #24312d;"
+            " border: 1px solid #e2e8e4; border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#AboutQrDialog QPushButton:hover { background: #f6f8f7;"
+            " border-color: #bfcfc6; }"
+        )
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 16, 16, 16)
         img = QLabel()
@@ -287,7 +294,7 @@ class AboutDialog(QDialog):
             message = "当前构建未包含此二维码" if path is None or not path.exists() else "二维码图片无法读取"
             img.setText(message)
             img.setWordWrap(True)
-            img.setStyleSheet("color: #666; padding: 32px; border: 1px solid #c8c6c0; background: #f7f6f3;")
+            img.setStyleSheet("color: #68766f; padding: 32px; border: 1px solid #e2e8e4; background: #f6f8f7;")
         else:
             img.setPixmap(pixmap.scaled(360, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         layout.addWidget(img, 1)
@@ -378,17 +385,17 @@ class AboutDialog(QDialog):
             logo_bg = "#324238"
             warning = "#f0b96b"
         else:
-            bg = "#f2f1ee"
+            bg = "#ffffff"
             panel = "#ffffff"
             card = "#ffffff"
-            border = "#c8c6c0"
-            text = "#1a1a1a"
-            muted = "#6f756f"
-            soft = "#23936b"
-            soft_bg = "#e8f2ec"
-            hover = "#e8e6e1"
-            logo_bg = "#e8f2ec"
-            warning = "#9b5b1f"
+            border = "#e2e8e4"
+            text = "#24312d"
+            muted = "#68766f"
+            soft = "#087c58"
+            soft_bg = "#eff7f3"
+            hover = "#f6f8f7"
+            logo_bg = "#eff7f3"
+            warning = "#8a6818"
 
         return f"""
         QDialog {{
@@ -547,7 +554,17 @@ class StartupNoticeDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("开源项目提示")
+        self.setObjectName("StartupNoticeDialog")
         self.resize(460, 220)
+        self.setStyleSheet(
+            "QDialog#StartupNoticeDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#StartupNoticeDialog QLabel { background: transparent; color: #24312d; }"
+            " QDialog#StartupNoticeDialog QPushButton { background: #087c58; color: #ffffff;"
+            " border: 1px solid #087c58; border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#StartupNoticeDialog QPushButton:hover { background: #066a4b;"
+            " border-color: #066a4b; }"
+            " QDialog#StartupNoticeDialog QCheckBox { color: #24312d; }"
+        )
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -557,7 +574,7 @@ class StartupNoticeDialog(QDialog):
             "任何付费售卖均非官方行为，请勿购买。"
         )
         message.setWordWrap(True)
-        message.setStyleSheet("font-size: 13px; color: #222;")
+        message.setStyleSheet("font-size: 13px; color: #24312d;")
         layout.addWidget(message, 1)
 
         self.dont_show_again = QCheckBox("不再提示")

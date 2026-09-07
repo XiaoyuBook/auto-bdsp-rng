@@ -93,7 +93,7 @@ class RunRecordsPanel(QWidget):
         self.live_status_label.setFixedHeight(28)
         self.live_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         heading_layout.addWidget(self.live_status_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        root.addWidget(heading)
+        heading.hide()
 
         self.view_tabs = QTabWidget(self)
         self.view_tabs.setObjectName("RunRecordsTabs")
@@ -108,6 +108,17 @@ class RunRecordsPanel(QWidget):
         )
         self.view_tabs.addTab(self.history_panel, "轮次记录")
         self.view_tabs.addTab(self.log_panel, "详细日志")
+        session_corner = QWidget(self.view_tabs)
+        session_corner.setObjectName("RunRecordsSessionCorner")
+        session_layout = QHBoxLayout(session_corner)
+        session_layout.setContentsMargins(0, 0, 6, 0)
+        session_layout.setSpacing(8)
+        self.subtitle_label.setParent(session_corner)
+        self.live_status_label.setParent(session_corner)
+        session_layout.addWidget(self.subtitle_label)
+        session_layout.addWidget(self.live_status_label)
+        self.session_corner = session_corner
+        self.view_tabs.setCornerWidget(session_corner, Qt.Corner.TopRightCorner)
         self.view_tabs.currentChanged.connect(self._on_view_changed)
         root.addWidget(self.view_tabs, 1)
 
@@ -129,21 +140,21 @@ class RunRecordsPanel(QWidget):
                 border: 0;
             }
             QLabel#RunRecordsSubtitle {
-                color: #6B7280;
+                color: #68766F;
                 font-size: 12px;
             }
             QLabel#RunRecordsLiveStatus {
-                color: #176F5C;
-                background: #ECFDF5;
-                border: 1px solid #A7F3D0;
+                color: #087C58;
+                background: transparent;
+                border: 0;
                 border-radius: 4px;
                 padding: 0 9px;
                 font-size: 12px;
-                font-weight: 600;
+                font-weight: 400;
             }
             QTabWidget#RunRecordsTabs::pane {
                 border: 0;
-                border-top: 1px solid #DFE3E8;
+                border-top: 1px solid #E2E8E4;
                 background: transparent;
                 top: -1px;
             }
@@ -155,17 +166,20 @@ class RunRecordsPanel(QWidget):
                 border: 0;
                 border-bottom: 2px solid transparent;
                 border-radius: 0;
-                color: #66707D;
+                color: #68766F;
                 background: transparent;
                 font-weight: 500;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab:selected {
-                color: #202225;
-                border-bottom-color: #0E8F70;
+                color: #087C58;
+                border-bottom-color: #087C58;
                 background: transparent;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab:hover:!selected {
-                color: #176F5C;
+                color: #087C58;
+                background: transparent;
+            }
+            QWidget#RunRecordsSessionCorner {
                 background: transparent;
             }
             """

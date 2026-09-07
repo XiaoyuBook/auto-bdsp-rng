@@ -36,8 +36,18 @@ class SponsorDialog(QDialog):
     def __init__(self, parent=None, assets: SponsorAssets | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("支持项目")
+        self.setObjectName("SponsorDialog")
         self.resize(820, 720)
         self.assets = assets or find_sponsor_assets()
+        self.setStyleSheet(
+            "QDialog#SponsorDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#SponsorDialog QLabel { background: transparent; }"
+            " QDialog#SponsorDialog QDialogButtonBox QPushButton {"
+            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#SponsorDialog QDialogButtonBox QPushButton:hover {"
+            " background: #f6f8f7; border-color: #bfcfc6; }"
+        )
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -52,7 +62,7 @@ class SponsorDialog(QDialog):
             "也欢迎通过“帮助 -> 作者联系”联系作者。"
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color: #333; font-size: 13px;")
+        intro.setStyleSheet("color: #24312d; font-size: 13px;")
         layout.addWidget(intro)
 
         if self.assets.available:
@@ -64,7 +74,7 @@ class SponsorDialog(QDialog):
         else:
             missing = QLabel("当前构建未包含赞助二维码。\n如需支持项目或联系作者，请通过“帮助 -> 作者联系”联系作者。")
             missing.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            missing.setStyleSheet("color: #666; padding: 32px; border: 1px solid #c8c6c0; background: #f7f6f3;")
+            missing.setStyleSheet("color: #68766f; padding: 32px; border: 1px solid #e2e8e4; background: #f6f8f7;")
             layout.addWidget(missing, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -77,13 +87,13 @@ class SponsorDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         label = QLabel(title)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("font-weight: 700; color: #222;")
+        label.setStyleSheet("font-weight: 700; color: #24312d;")
         layout.addWidget(label)
 
         image = QLabel()
         image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image.setMinimumSize(340, 440)
-        image.setStyleSheet("background: #fff; border: 1px solid #c8c6c0;")
+        image.setStyleSheet("background: #ffffff; border: 1px solid #e2e8e4;")
         if path is not None and path.exists():
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():

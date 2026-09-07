@@ -50,6 +50,15 @@ from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 QT_INT_MAX = 2_147_483_647
 DELAY_HISTORY_PAGE_SIZE = 10
 DELAY_DIALOG_WIDTH = 636
+# Keep the settings dialog compact enough to coexist with the fixed 1150x900
+# application canvas.  The body scrolls independently when optional content
+# (for example timestamps) needs more room than this limit allows.
+DELAY_DIALOG_MAX_HEIGHT = 840
+DELAY_DIALOG_MIN_HEIGHT = 500
+# Five recent rows are shown at their normal compact height.  When timestamps
+# are enabled (or font metrics grow), the table keeps this viewport and uses
+# its own vertical scrollbar instead of pushing the footer below the screen.
+DELAY_RECENT_TABLE_MAX_HEIGHT = 286
 DELAY_STRATEGY_LABELS = (
     (DelayStrategy.FIXED, "固定 delay"),
     (DelayStrategy.LAST, "上次实际 delay"),
@@ -93,7 +102,7 @@ _LUCIDE_PATHS = {
 }
 
 
-def delay_lucide_icon(name: str, color: str = "#5F6C66", size: int = 18) -> QIcon:
+def delay_lucide_icon(name: str, color: str = "#68766F", size: int = 18) -> QIcon:
     """Render the small Lucide line icons used by the delay controls."""
 
     paths = _LUCIDE_PATHS[name]
@@ -151,7 +160,7 @@ class _DelayComboBox(QComboBox):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = "#202A28" if self.isEnabled() else "#A5AEA9"
+        color = "#24312D" if self.isEnabled() else "#A5AEA9"
         painter.setPen(QPen(QColor(color), 1.5))
         center_x = self.width() - 17
         center_y = self.height() // 2
@@ -233,7 +242,7 @@ class _SampleDelegate(QStyledItemDelegate):
             lines[0],
         )
         painter.setFont(time_font)
-        painter.setPen(QColor("#86918B" if main_font.strikeOut() else "#5F6C66"))
+        painter.setPen(QColor("#86918B" if main_font.strikeOut() else "#68766F"))
         top += main_height + 3
         for line in lines[1:]:
             painter.drawText(
@@ -318,7 +327,7 @@ def _populate_sample_table(
     table.clearContents()
     table.setRowCount(len(samples))
     muted_brush = QBrush(QColor("#86918b"))
-    accent_brush = QBrush(QColor("#087958"))
+    accent_brush = QBrush(QColor("#087C58"))
     for row, sample in enumerate(samples):
         round_text = f"第 {sample.round_number} 轮"
         if show_time:
@@ -356,7 +365,7 @@ def _populate_sample_table(
         action.setIcon(
             delay_lucide_icon(
                 "rotate-ccw" if sample.excluded else "trash-2",
-                "#087958" if sample.excluded else "#5F6C66",
+                "#087C58" if sample.excluded else "#68766F",
                 15,
             )
         )
@@ -443,13 +452,13 @@ class DelayHistoryPage(QWidget):
         self._page_index = 0
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 14, 22, 18)
+        layout.setContentsMargins(20, 14, 20, 16)
         layout.setSpacing(0)
 
         self.back_button = QPushButton("返回策略设置")
         self.back_button.setObjectName("DelayLinkButton")
         self.back_button.setAccessibleName("返回策略设置")
-        self.back_button.setIcon(delay_lucide_icon("arrow-left", "#087958", 14))
+        self.back_button.setIcon(delay_lucide_icon("arrow-left", "#087C58", 14))
         self.back_button.setIconSize(QSize(14, 14))
         self.back_button.setFixedHeight(29)
         back_row = QHBoxLayout()
@@ -479,7 +488,7 @@ class DelayHistoryPage(QWidget):
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 9)
         self.show_time_check = _DelayCheckBox("显示时间")
-        self.show_time_check.setFixedHeight(34)
+        self.show_time_check.setFixedHeight(32)
         controls.addWidget(self.show_time_check)
         controls.addStretch(1)
         order_label = QLabel("按记录时间倒序")
@@ -508,8 +517,8 @@ class DelayHistoryPage(QWidget):
         pagination.addStretch(1)
         self.previous_button = QPushButton("上一页")
         self.next_button = QPushButton("下一页")
-        self.previous_button.setFixedHeight(34)
-        self.next_button.setFixedHeight(34)
+        self.previous_button.setFixedHeight(32)
+        self.next_button.setFixedHeight(32)
         pagination.addWidget(self.previous_button)
         pagination.addWidget(self.next_button)
         layout.addLayout(pagination)
@@ -617,7 +626,8 @@ class DelayStrategyDialog(QDialog):
         self.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
         )
-        self.setMinimumHeight(500)
+        self.setMinimumHeight(DELAY_DIALOG_MIN_HEIGHT)
+        self.setMaximumHeight(DELAY_DIALOG_MAX_HEIGHT)
         self.setFixedWidth(DELAY_DIALOG_WIDTH)
         self.resize(DELAY_DIALOG_WIDTH, 836)
 
@@ -654,7 +664,7 @@ class DelayStrategyDialog(QDialog):
         self.title_bar.setObjectName("DelayTitleBar")
         self.title_bar.setFixedHeight(56)
         title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(22, 11, 15, 11)
+        title_layout.setContentsMargins(20, 12, 14, 12)
         title_layout.setSpacing(8)
         self.title_label = QLabel("delay 策略设置")
         self.title_label.setObjectName("DelayDialogTitle")
@@ -662,8 +672,8 @@ class DelayStrategyDialog(QDialog):
         title_layout.addStretch(1)
         self.close_button = QToolButton()
         self.close_button.setObjectName("DelayCloseButton")
-        self.close_button.setFixedSize(34, 34)
-        self.close_button.setIcon(delay_lucide_icon("x", "#202A28", 17))
+        self.close_button.setFixedSize(32, 32)
+        self.close_button.setIcon(delay_lucide_icon("x", "#24312D", 17))
         self.close_button.setIconSize(QSize(17, 17))
         self.close_button.setToolTip("关闭设置")
         self.close_button.setAccessibleName("关闭设置")
@@ -690,7 +700,7 @@ class DelayStrategyDialog(QDialog):
         self.body_widget = QWidget()
         self.body_widget.setObjectName("DelaySettingsBody")
         body_layout = QVBoxLayout(self.body_widget)
-        body_layout.setContentsMargins(22, 19, 22, 0)
+        body_layout.setContentsMargins(20, 16, 20, 0)
         body_layout.setSpacing(0)
         body_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.body_scroll.setWidget(self.body_widget)
@@ -710,15 +720,15 @@ class DelayStrategyDialog(QDialog):
         owner_row.addStretch(1)
         owner_row.addWidget(self.species_scope_label)
         body_layout.addLayout(owner_row)
-        body_layout.addSpacing(23)
+        body_layout.addSpacing(18)
 
         self.form = QVBoxLayout()
         self.form.setContentsMargins(0, 0, 0, 0)
-        self.form.setSpacing(14)
+        self.form.setSpacing(12)
         self._form_rows: dict[QWidget, _FieldRow] = {}
 
         self.strategy_combo = _DelayComboBox()
-        self.strategy_combo.setFixedHeight(34)
+        self.strategy_combo.setFixedHeight(32)
         for strategy, label in DELAY_STRATEGY_LABELS:
             self.strategy_combo.addItem(label, strategy.value)
         self.strategy_description = QLabel()
@@ -766,7 +776,7 @@ class DelayStrategyDialog(QDialog):
         )
 
         self.multi_candidate_widget = _DelayComboBox()
-        self.multi_candidate_widget.setFixedHeight(34)
+        self.multi_candidate_widget.setFixedHeight(32)
         self.multi_candidate_widget.addItem("忽略该轮", MultiCandidatePolicy.IGNORE.value)
         self.multi_candidate_widget.addItem("按轮加权", MultiCandidatePolicy.WEIGHTED.value)
         self._add_field_row(
@@ -809,11 +819,11 @@ class DelayStrategyDialog(QDialog):
         self.weight_multi_candidate_button.setCheckable(True)
         self.weight_multi_candidate_button.hide()
 
-        body_layout.addSpacing(23)
+        body_layout.addSpacing(18)
         self.runtime_summary = QFrame()
         self.runtime_summary.setObjectName("DelayRuntimeSummary")
         runtime_layout = QHBoxLayout(self.runtime_summary)
-        runtime_layout.setContentsMargins(0, 14, 0, 14)
+        runtime_layout.setContentsMargins(0, 12, 0, 12)
         runtime_layout.setSpacing(0)
         current_column = self._runtime_column("本轮使用", next_value=False)
         next_column = self._runtime_column("下轮预计", next_value=True)
@@ -824,7 +834,7 @@ class DelayStrategyDialog(QDialog):
         runtime_layout.addWidget(divider)
         runtime_layout.addWidget(next_column, 145)
         body_layout.addWidget(self.runtime_summary)
-        body_layout.addSpacing(13)
+        body_layout.addSpacing(12)
 
         self.valid_sample_count = QLabel("0 轮", self)
         self.valid_sample_count.hide()
@@ -844,7 +854,7 @@ class DelayStrategyDialog(QDialog):
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
         self.samples_toggle.setIcon(
-            delay_lucide_icon("chevron-down", "#5F6C66", 14)
+            delay_lucide_icon("chevron-down", "#68766F", 14)
         )
         self.samples_toggle.setIconSize(QSize(14, 14))
         self.samples_toggle.setCheckable(True)
@@ -865,12 +875,12 @@ class DelayStrategyDialog(QDialog):
         sample_controls.setContentsMargins(0, 0, 0, 9)
         sample_controls.setSpacing(12)
         self.show_sample_time_check = _DelayCheckBox("显示时间")
-        self.show_sample_time_check.setFixedHeight(34)
+        self.show_sample_time_check.setFixedHeight(32)
         self.view_all_samples_button = QPushButton("查看全部 0 轮")
         self.view_all_samples_button.setObjectName("DelayLinkButton")
         self.view_all_samples_button.setFixedHeight(29)
         self.view_all_samples_button.setIcon(
-            delay_lucide_icon("arrow-up-right", "#087958", 14)
+            delay_lucide_icon("arrow-up-right", "#087C58", 14)
         )
         self.view_all_samples_button.setIconSize(QSize(14, 14))
         self.view_all_samples_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -882,7 +892,10 @@ class DelayStrategyDialog(QDialog):
         self.recent_samples_table = _SampleTable()
         self.recent_samples_table.setObjectName("DelayRecentSamplesTable")
         self.recent_samples_table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.recent_samples_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         details_layout.addWidget(self.recent_samples_table)
 
@@ -937,7 +950,7 @@ class DelayStrategyDialog(QDialog):
         self.footer = QFrame()
         self.footer.setObjectName("DelayFooter")
         footer_layout = QHBoxLayout(self.footer)
-        footer_layout.setContentsMargins(22, 13, 22, 13)
+        footer_layout.setContentsMargins(20, 12, 20, 12)
         footer_layout.setSpacing(9)
         self.save_state_label = QLabel("未选择的设置")
         self.save_state_label.setObjectName("DelayMutedLabel")
@@ -1005,31 +1018,33 @@ class DelayStrategyDialog(QDialog):
             QDialog#DelayStrategyDialog { background: #FFFFFF; }
             QFrame#DelayDialogSurface {
                 background: #FFFFFF;
-                border: 1px solid #DCE4DF;
-                border-radius: 10px;
+                border: 1px solid #E2E8E4;
+                border-radius: 8px;
             }
             QFrame#DelayDialogSurface QWidget {
                 background: transparent;
-                color: #202A28;
+                color: #24312D;
                 font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 400;
             }
             QFrame#DelayDialogSurface QLabel { background: transparent; border: 0; }
             QFrame#DelayTitleBar {
                 background: #FFFFFF;
                 border: 0;
-                border-bottom: 1px solid #DCE4DF;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
+                border-bottom: 1px solid #E2E8E4;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
             }
             QFrame#DelayDialogSurface QLabel#DelayDialogTitle {
                 font-size: 15px; font-weight: 500;
             }
             QToolButton#DelayCloseButton {
-                background: transparent; border: 0; border-radius: 6px; padding: 0;
+                background: transparent; border: 0; border-radius: 5px; padding: 0;
+                min-width: 32px; max-width: 32px;
+                min-height: 32px; max-height: 32px;
             }
-            QToolButton#DelayCloseButton:hover { background: #F3F6F4; }
+            QToolButton#DelayCloseButton:hover { background: #F6F8F7; }
             QScrollArea#DelaySettingsScroll, QScrollArea#DelaySettingsScroll > QWidget,
             QWidget#DelaySettingsBody, QWidget#DelaySettingsPage,
             QWidget#DelayHistoryPage, QStackedWidget#DelayPageStack {
@@ -1038,36 +1053,36 @@ class DelayStrategyDialog(QDialog):
             QFrame#DelayDialogSurface QLabel#DelayMutedLabel,
             QFrame#DelayDialogSurface QLabel#DelayFieldNote,
             QFrame#DelayDialogSurface QLabel#DelayApplyStatus {
-                color: #5F6C66; font-size: 12px;
+                color: #68766F; font-size: 12px;
             }
             QFrame#DelayDialogSurface QLabel#DelaySpeciesName,
             QFrame#DelayDialogSurface QLabel#DelayHistorySpecies {
                 font-size: 15px; font-weight: 500;
             }
-            QFrame#DelayDialogSurface QLabel#DelayFieldLabel { padding-top: 7px; }
+            QFrame#DelayDialogSurface QLabel#DelayFieldLabel { padding-top: 6px; }
             QFrame#DelayDialogSurface QComboBox,
             QFrame#DelayDialogSurface QSpinBox {
                 background: #FFFFFF;
-                border: 1px solid #DCE4DF;
-                border-radius: 6px;
-                min-height: 32px; max-height: 32px;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                min-height: 30px; max-height: 30px;
                 padding: 0 10px;
-                color: #202A28;
-                selection-background-color: #EAF6EF;
+                color: #24312D;
+                selection-background-color: #EDF7F1;
             }
             QFrame#DelayDialogSurface QComboBox:focus,
-            QFrame#DelayDialogSurface QSpinBox:focus { border-color: #087958; }
+            QFrame#DelayDialogSurface QSpinBox:focus { border-color: #087C58; }
             QFrame#DelayDialogSurface QComboBox::drop-down {
                 subcontrol-origin: border; subcontrol-position: top right;
-                width: 34px; border: 0;
-                border-top-right-radius: 6px; border-bottom-right-radius: 6px;
+                width: 32px; border: 0;
+                border-top-right-radius: 5px; border-bottom-right-radius: 5px;
             }
             QFrame#DelayDialogSurface QComboBox::down-arrow { image: none; }
             QFrame#DelayDialogSurface QComboBox QAbstractItemView {
-                background: #FFFFFF; color: #202A28;
-                border: 1px solid #DCE4DF;
-                selection-background-color: #EAF6EF;
-                selection-color: #087958;
+                background: #FFFFFF; color: #24312D;
+                border: 1px solid #E2E8E4;
+                selection-background-color: #EDF7F1;
+                selection-color: #087C58;
                 padding: 4px;
             }
             QFrame#DelayDialogSurface QComboBox QAbstractItemView::item {
@@ -1076,31 +1091,32 @@ class DelayStrategyDialog(QDialog):
             QFrame#DelayDialogSurface QSpinBox QLineEdit {
                 background: transparent; border: 0; padding: 0;
                 min-height: 0; max-height: 16777215px;
-                color: #202A28; font-size: 14px;
+                color: #24312D; font-size: 13px;
             }
             QFrame#DelayDialogSurface QPushButton {
                 background: #FFFFFF;
-                border: 1px solid #DCE4DF;
-                border-radius: 6px;
-                min-height: 32px;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                min-height: 30px;
+                max-height: 30px;
                 padding: 0 13px;
                 font-weight: 400;
-                color: #202A28;
+                color: #24312D;
             }
-            QFrame#DelayDialogSurface QPushButton:hover { background: #F3F6F4; }
+            QFrame#DelayDialogSurface QPushButton:hover { background: #F6F8F7; }
             QFrame#DelayDialogSurface QPushButton:disabled {
-                color: #A5AEA9; background: #F7F9F8;
+                color: #A5AEA9; background: #F6F8F7;
             }
             QFrame#DelayDialogSurface QPushButton:focus {
-                border-color: #087958;
+                border-color: #087C58;
             }
             QFrame#DelayDialogSurface QPushButton#DelayLinkButton,
             QFrame#DelayDialogSurface QPushButton#DelayDangerLinkButton {
                 background: transparent; border: 0; padding: 0;
                 min-height: 29px; max-height: 29px; font-size: 12px;
             }
-            QFrame#DelayDialogSurface QPushButton#DelayLinkButton { color: #087958; }
-            QFrame#DelayDialogSurface QPushButton#DelayDangerLinkButton { color: #B74536; }
+            QFrame#DelayDialogSurface QPushButton#DelayLinkButton { color: #087C58; }
+            QFrame#DelayDialogSurface QPushButton#DelayDangerLinkButton { color: #AC4B42; }
             QFrame#DelayDialogSurface QPushButton#DelayLinkButton:hover,
             QFrame#DelayDialogSurface QPushButton#DelayDangerLinkButton:hover {
                 background: transparent;
@@ -1110,27 +1126,27 @@ class DelayStrategyDialog(QDialog):
                 color: #A5AEA9; background: transparent;
             }
             QFrame#DelayDialogSurface QFrame#DelayRuntimeSummary {
-                background: #F3F6F4; border: 0; border-radius: 7px;
+                background: #F6F8F7; border: 0; border-radius: 5px;
             }
             QFrame#DelayDialogSurface QFrame#DelayRuntimeDivider {
-                background: #DCE4DF; border: 0;
+                background: #E2E8E4; border: 0;
             }
             QFrame#DelayDialogSurface QLabel#DelayRuntimeCaption,
             QFrame#DelayDialogSurface QLabel#DelayRuntimeNote,
             QFrame#DelayDialogSurface QLabel#DelayRuntimeUnit {
-                color: #5F6C66; font-size: 12px;
+                color: #68766F; font-size: 12px;
             }
             QFrame#DelayDialogSurface QLabel#DelayRuntimeValue,
             QFrame#DelayDialogSurface QLabel#DelayRuntimeNextValue {
-                font-size: 23px; font-weight: 500;
+                font-size: 20px; font-weight: 500;
             }
-            QFrame#DelayDialogSurface QLabel#DelayRuntimeNextValue { color: #087958; }
+            QFrame#DelayDialogSurface QLabel#DelayRuntimeNextValue { color: #087C58; }
             QFrame#DelaySamplesFrame {
-                background: #FFFFFF; border: 0; border-bottom: 1px solid #DCE4DF;
+                background: #FFFFFF; border: 0; border-bottom: 1px solid #E2E8E4;
             }
             QToolButton#DelaySampleToggle {
                 background: transparent; border: 0; padding: 0;
-                color: #202A28; font-weight: 400;
+                color: #24312D; font-weight: 400;
             }
             QFrame#DelayDialogSurface QCheckBox {
                 background: transparent; spacing: 7px; font-size: 12px;
@@ -1140,11 +1156,11 @@ class DelayStrategyDialog(QDialog):
                 border: 1px solid #A5AEA9; background: #FFFFFF;
             }
             QFrame#DelayDialogSurface QCheckBox::indicator:checked {
-                background: #087958; border-color: #087958;
+                background: #087C58; border-color: #087C58;
             }
             QFrame#DelayDialogSurface QCheckBox::indicator:hover,
             QFrame#DelayDialogSurface QCheckBox::indicator:focus {
-                border-color: #087958;
+                border-color: #087C58;
             }
             QFrame#DelayDialogSurface QTableWidget#DelayRecentSamplesTable,
             QFrame#DelayDialogSurface QTableWidget#DelayHistoryTable {
@@ -1152,56 +1168,70 @@ class DelayStrategyDialog(QDialog):
                 alternate-background-color: #FFFFFF;
                 border: 0;
                 gridline-color: transparent;
-                color: #202A28;
+                color: #24312D;
                 font-size: 12px;
             }
             QTableWidget#DelayRecentSamplesTable::item,
             QTableWidget#DelayHistoryTable::item {
                 padding: 5px 6px;
                 border: 0;
-                border-bottom: 1px solid #DCE4DF;
+                border-bottom: 1px solid #E2E8E4;
             }
             QTableWidget#DelayRecentSamplesTable QHeaderView::section,
             QTableWidget#DelayHistoryTable QHeaderView::section {
-                background: #F3F6F4;
-                color: #5F6C66;
+                background: #F6F8F7;
+                color: #68766F;
                 border: 0;
-                border-bottom: 1px solid #DCE4DF;
+                border-bottom: 1px solid #E2E8E4;
                 padding: 0 6px;
                 font-weight: 400;
                 font-size: 12px;
             }
             QToolButton#DelaySampleActionButton {
-                background: transparent; border: 0; border-radius: 6px;
-                color: #5F6C66; padding: 0; font-size: 20px;
+                background: transparent; border: 0; border-radius: 5px;
+                color: #68766F; padding: 0; font-size: 20px;
             }
-            QToolButton#DelaySampleActionButton:hover { background: #F3F6F4; }
+            QToolButton#DelaySampleActionButton:hover { background: #F6F8F7; }
             QToolButton#DelaySampleActionButton:focus {
-                background: #EAF6EF;
+                background: #EDF7F1;
             }
-            QToolButton#DelaySampleActionButton[restoreAction="true"] { color: #087958; }
+            QToolButton#DelaySampleActionButton[restoreAction="true"] { color: #087C58; }
             QFrame#DelayDialogSurface QLabel#DelayEmptyLabel {
-                color: #5F6C66; font-size: 12px; padding: 11px 0;
+                color: #68766F; font-size: 12px; padding: 11px 0;
             }
             QFrame#DelayClearConfirm {
-                background: #FFFFFF; border: 0; border-top: 1px solid #DCE4DF;
+                background: #FFFFFF; border: 0; border-top: 1px solid #E2E8E4;
             }
-            QFrame#DelayDialogSurface QPushButton#DelayDangerButton { color: #B74536; }
-            QFrame#DelayDialogSurface QLabel#DelayApplyStatus { padding: 12px 0; }
+            QFrame#DelayDialogSurface QPushButton#DelayDangerButton { color: #AC4B42; }
+            QFrame#DelayDialogSurface QLabel#DelayApplyStatus { padding: 10px 0; }
             QFrame#DelayFooter {
-                background: #FFFFFF; border: 0; border-top: 1px solid #DCE4DF;
-                border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;
+                background: #FFFFFF; border: 0; border-top: 1px solid #E2E8E4;
+                border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;
             }
             QFrame#DelayDialogSurface QPushButton#DelayPrimaryButton {
-                background: #09805C; border-color: #09805C;
+                background: #087C58; border-color: #087C58;
                 color: #FFFFFF; font-weight: 500;
             }
             QFrame#DelayDialogSurface QPushButton#DelayPrimaryButton:hover {
-                background: #087958; border-color: #087958;
+                background: #066E4E; border-color: #066E4E;
             }
             QFrame#DelayDialogSurface QLabel#DelayHistoryEstimate {
-                color: #5F6C66; background: #F3F6F4;
+                color: #68766F; background: #F6F8F7;
                 border: 0; border-radius: 5px; padding: 0 11px; font-size: 12px;
+            }
+            QFrame#DelayDialogSurface QScrollBar:vertical {
+                width: 8px;
+                margin: 0;
+                background: #F6F8F7;
+            }
+            QFrame#DelayDialogSurface QScrollBar::handle:vertical {
+                min-height: 24px;
+                background: #C9D4CE;
+                border-radius: 4px;
+            }
+            QFrame#DelayDialogSurface QScrollBar::add-line:vertical,
+            QFrame#DelayDialogSurface QScrollBar::sub-line:vertical {
+                height: 0;
             }
         """
 
@@ -1210,7 +1240,7 @@ class DelayStrategyDialog(QDialog):
         spin = QSpinBox()
         spin.setRange(minimum, maximum)
         spin.setValue(value)
-        spin.setFixedHeight(34)
+        spin.setFixedHeight(32)
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         set_c_locale(spin)
@@ -1549,7 +1579,7 @@ class DelayStrategyDialog(QDialog):
         self.samples_toggle.setIcon(
             delay_lucide_icon(
                 "chevron-down" if expanded else "chevron-right",
-                "#5F6C66",
+                "#68766F",
                 14,
             )
         )
@@ -1562,8 +1592,13 @@ class DelayStrategyDialog(QDialog):
         rows = min(5, len(self._sample_rounds))
         if not rows:
             return
+        # The recent list is intentionally a bounded viewport.  A timestamp
+        # adds a second line to every row; keeping the viewport stable makes
+        # the settings page predictable and lets the table, rather than the
+        # whole dialog, absorb the extra content.
+        content_height = self.recent_samples_table.content_height()
         self.recent_samples_table.setFixedHeight(
-            self.recent_samples_table.content_height()
+            min(DELAY_RECENT_TABLE_MAX_HEIGHT, content_height)
         )
         self.sample_details.layout().invalidate()
         self.samples_frame.layout().invalidate()
@@ -1629,8 +1664,16 @@ class DelayStrategyDialog(QDialog):
 
     def _resize_for_current_page(self) -> None:
         screen = self.screen()
-        available_height = (
-            screen.availableGeometry().height() - 8 if screen is not None else 950
+        screen_height = (
+            screen.availableGeometry().height()
+            if screen is not None
+            else DELAY_DIALOG_MAX_HEIGHT + 8
+        )
+        # Leave a small breathing room around the native window, while also
+        # enforcing the application-level compact-dialog cap on large screens.
+        available_height = max(
+            DELAY_DIALOG_MIN_HEIGHT,
+            min(DELAY_DIALOG_MAX_HEIGHT, screen_height - 8),
         )
         if self.page_stack.currentWidget() is self.history_page:
             self.history_page.layout().activate()
@@ -1655,7 +1698,13 @@ class DelayStrategyDialog(QDialog):
             )
         self.page_stack.updateGeometry()
         self.layout().activate()
-        self.resize(DELAY_DIALOG_WIDTH, min(max(500, desired), max(500, available_height)))
+        self.resize(
+            DELAY_DIALOG_WIDTH,
+            min(
+                max(DELAY_DIALOG_MIN_HEIGHT, desired),
+                available_height,
+            ),
+        )
         if self.isVisible() and screen is not None:
             work_area = screen.availableGeometry()
             self.move(

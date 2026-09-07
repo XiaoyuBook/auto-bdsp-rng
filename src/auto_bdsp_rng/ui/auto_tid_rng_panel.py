@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -44,6 +43,7 @@ from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPh
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
@@ -196,28 +196,140 @@ class AutoTidRngPanel(QWidget):
         self._refresh_ocr_region_text()
 
     def _build_ui(self) -> None:
+        self.setObjectName("AutoTidRngPanel")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        layout.addWidget(self._build_toolbar())
+        layout.setSpacing(0)
+        self.toolbar = self._build_toolbar()
+        layout.addWidget(self.toolbar)
 
         content = QWidget(self)
         content.setObjectName("AutoTidContent")
         grid = QGridLayout(content)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(10)
-        grid.addWidget(self._build_top_controls_group(), 0, 0, 1, 2)
+        grid.setContentsMargins(14, 4, 14, 8)
+        grid.setHorizontalSpacing(0)
+        grid.setVerticalSpacing(4)
+        self.top_controls_group = self._build_top_controls_group()
+        self.target_group = self._build_target_group()
+        self.id_table_group = self._build_id_table_group()
+        grid.addWidget(self.top_controls_group, 0, 0, 1, 2)
         self._legacy_log_group = self._build_log_group()
         self._legacy_log_group.setVisible(False)
-        grid.addWidget(self._build_target_group(), 1, 0, 1, 2)
-        grid.addWidget(self._build_id_table_group(), 2, 0, 1, 2)
-        grid.setColumnMinimumWidth(0, 360)
+        grid.addWidget(self.target_group, 1, 0, 1, 2)
+        grid.addWidget(self.id_table_group, 2, 0, 1, 2)
         grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 2)
         grid.setRowStretch(2, 1)
 
         layout.addWidget(content, 1)
+        self.setStyleSheet(
+            """
+            QWidget#AutoTidRngPanel,
+            QWidget#AutoTidContent {
+                background: #ffffff;
+                color: #24312d;
+            }
+            QFrame#AutoTidToolbar {
+                background: #ffffff;
+                border: 0;
+                border-bottom: 1px solid #e2e8e4;
+            }
+            QLabel#AutoTidTitle {
+                color: #24312d;
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QLabel#AutoTidSubtitle,
+            QLabel#AutoTidLatest {
+                color: #68766f;
+                font-size: 12px;
+            }
+            QLabel#AutoTidStatus {
+                color: #087c58;
+                background: #edf7f1;
+                border: 0;
+                border-radius: 4px;
+                padding: 0 9px;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QPushButton#AutoTidLogButton {
+                color: #087c58;
+                background: transparent;
+                border: 0;
+                padding: 0 5px;
+                font-size: 12px;
+            }
+            QPushButton#AutoTidLogButton:hover {
+                color: #066a4b;
+                background: #f6f8f7;
+            }
+            QGroupBox#AutoTidTopControls,
+            QGroupBox#AutoTidTargets,
+            QGroupBox#AutoTidResults {
+                background: #ffffff;
+                border: 0;
+                border-radius: 0;
+                margin-top: 18px;
+                padding: 10px 8px 6px 8px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QGroupBox#AutoTidTopControls,
+            QGroupBox#AutoTidTargets {
+                border-bottom: 1px solid #e2e8e4;
+            }
+            QGroupBox#AutoTidTopControls::title,
+            QGroupBox#AutoTidTargets::title,
+            QGroupBox#AutoTidResults::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                top: 0;
+                padding: 0;
+                color: #24312d;
+                background: transparent;
+            }
+            QWidget#AutoTidTargetPanel,
+            QWidget#TargetPoolActions {
+                background: #ffffff;
+                border: 0;
+            }
+            QListWidget#TargetPool {
+                background: #ffffff;
+                border: 1px solid #e2e8e4;
+                border-radius: 5px;
+                padding: 7px;
+            }
+            QListWidget#TargetPool::item {
+                background: #ffffff;
+                color: #24312d;
+                border: 1px solid #dce4df;
+                border-radius: 4px;
+                padding: 3px 8px;
+                margin: 1px;
+            }
+            QListWidget#TargetPool::item:selected {
+                background: #edf7f1;
+                color: #087c58;
+                border-color: #87b9a6;
+            }
+            QLineEdit#AutoTidSeed {
+                background: #f2f5f3;
+                color: #68766f;
+                font-family: "Cascadia Mono", "Consolas", monospace;
+                letter-spacing: 0;
+            }
+            QLabel#AutoTidResultCount,
+            QLabel#AutoTidTargetCount {
+                color: #68766f;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QFrame#AutoTidResultDivider {
+                background: #e2e8e4;
+                border: 0;
+            }
+            """
+        )
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_panel_state()
@@ -225,7 +337,7 @@ class AutoTidRngPanel(QWidget):
 
     def _build_toolbar(self) -> QWidget:
         toolbar = QFrame()
-        toolbar.setObjectName("AutoRngToolbar")
+        toolbar.setObjectName("AutoTidToolbar")
         toolbar.setFixedHeight(56)
         row = QHBoxLayout(toolbar)
         row.setContentsMargins(14, 0, 14, 0)
@@ -248,13 +360,13 @@ class AutoTidRngPanel(QWidget):
         self.debug_output_check.setVisible(False)
 
         self.status_badge = QLabel("状态：空闲")
-        self.status_badge.setObjectName("Badge")
-        self.status_badge.setFixedHeight(34)
+        self.status_badge.setObjectName("AutoTidStatus")
+        self.status_badge.setFixedHeight(32)
         self.start_button = QToolButton()
         self.start_button.setText("开始")
         self.start_button.setObjectName("PrimaryButton")
-        self.start_button.setFixedHeight(34)
-        self.start_button.setMinimumWidth(88)
+        self.start_button.setFixedHeight(32)
+        self.start_button.setFixedWidth(88)
         self.start_menu = QMenu(self.start_button)
         self.start_from_seed_action = QAction("从测种脚本开始", self.start_button)
         self.start_from_capture_action = QAction("从捕获 Seed 开始", self.start_button)
@@ -267,8 +379,8 @@ class AutoTidRngPanel(QWidget):
         self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("DangerButton")
-        self.stop_button.setFixedHeight(34)
-        self.stop_button.setMinimumWidth(80)
+        self.stop_button.setFixedHeight(32)
+        self.stop_button.setFixedWidth(80)
         self.stop_button.clicked.connect(self._stop_clicked)
         self.ocr_button = QPushButton("OCR 设置")
         self.ocr_button.setObjectName("SecondaryButton")
@@ -277,19 +389,22 @@ class AutoTidRngPanel(QWidget):
         self.ocr_button.clicked.connect(self.ocrSettingsRequested.emit)
         self.ocr_button.setVisible(False)
 
-        row.addWidget(QLabel("自动 TID：按 Display TID 命中后取名"))
-        row.addSpacing(8)
-        row.addWidget(QLabel("最近："))
+        self.title_label = QLabel("自动 TID 乱数")
+        self.title_label.setObjectName("AutoTidTitle")
+        row.addWidget(self.title_label)
+        self.subtitle_label = QLabel("按 Display TID 命中后取名")
+        self.subtitle_label.setObjectName("AutoTidSubtitle")
+        row.addWidget(self.subtitle_label)
+        row.addSpacing(10)
         self.latest_log_label = QLabel("暂无消息")
-        self.latest_log_label.setObjectName("LatestLogLabel")
-        self.latest_log_label.setMaximumHeight(34)
+        self.latest_log_label.setObjectName("AutoTidLatest")
+        self.latest_log_label.setMaximumHeight(32)
         self.latest_log_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         row.addWidget(self.latest_log_label, 1)
         self.view_log_button = QPushButton("查看日志")
-        self.view_log_button.setObjectName("SecondaryButton")
-        self.view_log_button.setFixedHeight(34)
-        self.view_log_button.setMinimumWidth(88)
+        self.view_log_button.setObjectName("AutoTidLogButton")
+        self.view_log_button.setFixedSize(76, 32)
         self.view_log_button.clicked.connect(self.runLogRequested.emit)
         row.addWidget(self.view_log_button)
         row.addWidget(self.status_badge)
@@ -330,8 +445,8 @@ class AutoTidRngPanel(QWidget):
         group.setObjectName("AutoTidTopControls")
         group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QGridLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setHorizontalSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 10)
+        layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
 
         self.frame_threshold = self._spin(0, 1_000_000_000, 300)
@@ -340,8 +455,8 @@ class AutoTidRngPanel(QWidget):
         self.reverse_lookup_window.setPrefix("±")
         self.reverse_lookup_window.setSuffix(" 帧")
         self.reverse_lookup_window.setVisible(False)
-        self.frame_threshold.setFixedWidth(130)
-        self.delay.setFixedWidth(110)
+        self.frame_threshold.setFixedWidth(112)
+        self.delay.setFixedWidth(88)
         self.reverse_lookup_window.setFixedWidth(110)
 
         self.seed_script_combo = QComboBox()
@@ -349,15 +464,15 @@ class AutoTidRngPanel(QWidget):
         self.reverse_id_script_combo = QComboBox()
         self.reverse_id_script_combo.setVisible(False)
         for combo, width in (
-            (self.seed_script_combo, 220),
-            (self.name_script_combo, 220),
+            (self.seed_script_combo, 208),
+            (self.name_script_combo, 208),
             (self.reverse_id_script_combo, 220),
         ):
-            combo.setFixedHeight(34)
+            combo.setFixedHeight(32)
             combo.setFixedWidth(width)
         self.refresh_scripts_button = QPushButton("刷新脚本列表")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        self.refresh_scripts_button.setFixedHeight(34)
+        self.refresh_scripts_button.setFixedHeight(32)
         self.refresh_scripts_button.setFixedWidth(116)
 
         layout.addWidget(QLabel("帧数阈值"), 0, 0)
@@ -399,20 +514,23 @@ class AutoTidRngPanel(QWidget):
 
     def _build_target_group(self) -> QGroupBox:
         group = QGroupBox("目标 Display TID")
+        group.setObjectName("AutoTidTargets")
+        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        group.setMaximumHeight(184)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 7, 8, 10)
+        layout.setSpacing(6)
 
         target_panel = QWidget()
-        target_panel.setObjectName("InlinePanel")
+        target_panel.setObjectName("AutoTidTargetPanel")
         target_layout = QGridLayout(target_panel)
-        target_layout.setContentsMargins(12, 10, 12, 12)
+        target_layout.setContentsMargins(0, 0, 0, 0)
         target_layout.setHorizontalSpacing(12)
-        target_layout.setVerticalSpacing(8)
+        target_layout.setVerticalSpacing(4)
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         self.target_count_label = QLabel("0 个目标")
-        self.target_count_label.setObjectName("MutedLabel")
+        self.target_count_label.setObjectName("AutoTidTargetCount")
         title_row.addStretch(1)
         title_row.addWidget(self.target_count_label)
         target_layout.addLayout(title_row, 0, 0, 1, 2)
@@ -426,8 +544,8 @@ class AutoTidRngPanel(QWidget):
         self.target_list.setSpacing(6)
         self.target_list.setGridSize(QSize(92, 32))
         self.target_list.setUniformItemSizes(True)
-        self.target_list.setMinimumHeight(116)
-        self.target_list.setMaximumHeight(140)
+        self.target_list.setMinimumHeight(100)
+        self.target_list.setMaximumHeight(108)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         self.target_list.targetRemoved.connect(self._refresh_target_count)
@@ -435,16 +553,16 @@ class AutoTidRngPanel(QWidget):
 
         action_panel = QWidget()
         action_panel.setObjectName("TargetPoolActions")
-        action_panel.setFixedWidth(360)
-        action_panel.setMinimumHeight(116)
-        action_panel.setMaximumHeight(140)
+        action_panel.setFixedWidth(300)
+        action_panel.setMinimumHeight(100)
+        action_panel.setMaximumHeight(108)
         action_layout = QVBoxLayout(action_panel)
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(8)
         self.target_input = QLineEdit()
         self.target_input.setPlaceholderText("000000-999999，可粘贴多个")
-        self.target_input.setFixedHeight(34)
-        self.target_input.setMaximumWidth(360)
+        self.target_input.setFixedHeight(32)
+        self.target_input.setMaximumWidth(300)
         self.add_target_button = QPushButton("添加")
         self.add_target_button.clicked.connect(self._add_target_from_input)
         self.update_target_button = QPushButton("更新")
@@ -456,12 +574,12 @@ class AutoTidRngPanel(QWidget):
         self.clear_targets_button = QPushButton("清空")
         self.clear_targets_button.clicked.connect(self._clear_targets)
         for button in (self.add_target_button, self.update_target_button, self.delete_target_button, self.clear_targets_button):
-            button.setFixedHeight(34)
+            button.setFixedHeight(32)
         action_layout.addWidget(self.target_input)
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
-        self.add_target_button.setFixedWidth(176)
-        self.clear_targets_button.setFixedWidth(176)
+        self.add_target_button.setFixedWidth(146)
+        self.clear_targets_button.setFixedWidth(146)
         button_row.addWidget(self.add_target_button)
         button_row.addWidget(self.clear_targets_button)
         action_layout.addLayout(button_row)
@@ -537,18 +655,19 @@ class AutoTidRngPanel(QWidget):
 
     def _build_id_table_group(self) -> QGroupBox:
         group = QGroupBox("ID 数据表")
+        group.setObjectName("AutoTidResults")
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 7, 8, 6)
+        layout.setSpacing(7)
 
-        toolbar = QHBoxLayout()
-        self.id_result_count = QLabel("0 条结果")
         seed_bar = QHBoxLayout()
-        seed_bar.setSpacing(6)
+        seed_bar.setContentsMargins(0, 0, 0, 0)
+        seed_bar.setSpacing(8)
         self.tid_seed_inputs: list[QLineEdit] = []
         for label_text in ("Seed0", "Seed1"):
             label = QLabel(label_text)
             seed_box = QLineEdit()
+            seed_box.setObjectName("AutoTidSeed")
             seed_box.setReadOnly(True)
             seed_box.setFixedHeight(32)
             seed_box.setMinimumWidth(230)
@@ -556,6 +675,17 @@ class AutoTidRngPanel(QWidget):
             self.tid_seed_inputs.append(seed_box)
             seed_bar.addWidget(label)
             seed_bar.addWidget(seed_box, 1)
+        layout.addLayout(seed_bar)
+
+        divider = QFrame()
+        divider.setObjectName("AutoTidResultDivider")
+        divider.setFixedHeight(1)
+        layout.addWidget(divider)
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        self.id_result_count = QLabel("0 条结果")
+        self.id_result_count.setObjectName("AutoTidResultCount")
         self.copy_button = QPushButton("复制")
         self.copy_button.setFixedHeight(32)
         self.copy_button.setFixedWidth(72)
@@ -565,9 +695,7 @@ class AutoTidRngPanel(QWidget):
         self.export_button.setFixedWidth(88)
         self.export_button.clicked.connect(self.export_results)
         toolbar.addWidget(self.id_result_count)
-        toolbar.addSpacing(18)
-        toolbar.addLayout(seed_bar, 1)
-        toolbar.addSpacing(18)
+        toolbar.addStretch(1)
         toolbar.addWidget(self.copy_button)
         toolbar.addWidget(self.export_button)
         layout.addLayout(toolbar)
@@ -584,7 +712,7 @@ class AutoTidRngPanel(QWidget):
         self.id_table.searchStatusChanged.connect(self.status_badge.setText)
         self.id_table.verticalHeader().setVisible(False)
         self.id_table.horizontalHeader().setStretchLastSection(True)
-        self.id_table.setMinimumHeight(360)
+        self.id_table.setMinimumHeight(320)
         layout.addWidget(self.id_table, 1)
         return group
 

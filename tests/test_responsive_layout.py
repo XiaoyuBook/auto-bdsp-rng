@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -154,9 +155,6 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
 
     controls = (
         window.title_label,
-        window.auto_loop_badge,
-        window.auto_phase_badge,
-        window.auto_advance_badge,
         window.video_source_header_button,
         window.easycon_header_button,
         window.help_button,
@@ -168,8 +166,102 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert window.header_layout.minimumSize().width() <= window.header.width()
     assert window.video_source_header_button.size() == QSize(150, 30)
     assert window.easycon_header_button.size() == QSize(150, 30)
+    assert not window.auto_loop_badge.isVisible()
+    assert not window.auto_phase_badge.isVisible()
+    assert not window.auto_advance_badge.isVisible()
+    assert window.navigation_status.isVisible()
+    assert window.navigation_status.text() == "● 定点 · 第 9999 轮"
+    assert window.navigation_status.geometry().right() <= window.tabs.width()
     assert window.auto_phase_badge.toolTip() == "阶段 搜索目标 Display TID"
     assert window.auto_advance_badge.toolTip() == "advance 1000000000"
+    assert "阶段 搜索目标 Display TID" in window.navigation_status.toolTip()
+    assert "advance 1,000,000,000" in window.navigation_status.toolTip()
+
+    window._apply_auto_tid_header_progress(
+        SimpleNamespace(
+            phase="等待取名",
+            loop_index=7,
+            current_advances=321,
+            log_message="",
+        )
+    )
+    assert window.navigation_status.text() == "● TID · 第 7 轮"
+    assert "阶段 等待取名" in window.navigation_status.toolTip()
+    assert "advance 321" in window.navigation_status.toolTip()
+
+
+@pytest.mark.parametrize("task", ("定点", "TID"))
+@pytest.mark.parametrize("terminal_phase", ("已完成", "失败", "空闲", "已停止"))
+def test_main_header_terminal_progress_does_not_keep_previous_round(
+    app,
+    tmp_path: Path,
+    task: str,
+    terminal_phase: str,
+) -> None:
+    window = MainWindow(profile_settings=_settings(tmp_path))
+    window._update_auto_rng_header(
+        loop_index=7,
+        phase_text="搜索目标",
+        advances=321,
+        task_label=task,
+    )
+    progress = SimpleNamespace(
+        phase=terminal_phase,
+        loop_index=7,
+        current_advances=None,
+        log_message="",
+    )
+
+    if task == "定点":
+        window._apply_auto_rng_header_progress(progress)
+    else:
+        window._apply_auto_tid_header_progress(progress)
+
+    assert window.navigation_status.text() == f"● {task} · {terminal_phase}"
+    assert window._header_loop_index == 0
+    assert window.navigation_status.property("state") == (
+        "failed" if terminal_phase == "失败" else "idle"
+    )
+
+
+@pytest.mark.parametrize(
+    ("task", "panel_status", "expected_phase"),
+    (
+        ("定点", "已完成", "已完成"),
+        ("定点", "失败", "失败"),
+        ("TID", "状态：空闲", "已停止"),
+    ),
+)
+def test_main_header_run_state_finalizes_without_final_progress(
+    app,
+    tmp_path: Path,
+    task: str,
+    panel_status: str,
+    expected_phase: str,
+) -> None:
+    window = MainWindow(profile_settings=_settings(tmp_path))
+    window._update_auto_rng_header(
+        loop_index=4,
+        phase_text="等待触发",
+        advances=88,
+        task_label=task,
+    )
+
+    if task == "定点":
+        window._active_auto_rng_run_id = "test-run"
+        window.auto_rng_tab.status_badge.setText(panel_status)
+        window._handle_auto_rng_run_state_changed(True)
+        assert window.navigation_status.text() == "● 定点 · 运行中"
+        window._handle_auto_rng_run_state_changed(False)
+    else:
+        window._active_auto_tid_run_id = "test-run"
+        window.auto_tid_rng_tab.status_badge.setText(panel_status)
+        window._handle_auto_tid_run_state_changed(True)
+        assert window.navigation_status.text() == "● TID · 运行中"
+        window._handle_auto_tid_run_state_changed(False)
+
+    assert window.navigation_status.text() == f"● {task} · {expected_phase}"
+    assert window._header_loop_index == 0
 
 
 def test_project_xs_never_reflows_to_vertical(app, monkeypatch, tmp_path: Path) -> None:

@@ -76,9 +76,28 @@ class OcrSettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("OCR区域设置")
+        self.setObjectName("OcrSettingsDialog")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(980, 680)
+        self.setStyleSheet(
+            "QDialog#OcrSettingsDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#OcrSettingsDialog QTableWidget {"
+            " background: #ffffff; alternate-background-color: #f6f8f7;"
+            " color: #24312d; border: 1px solid #e2e8e4; gridline-color: #e2e8e4; }"
+            " QDialog#OcrSettingsDialog QHeaderView::section {"
+            " background: #f6f8f7; color: #52615a; border: 0;"
+            " border-bottom: 1px solid #e2e8e4; padding: 6px 8px; }"
+            " QDialog#OcrSettingsDialog QPushButton {"
+            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
+            " border-radius: 4px; min-height: 32px; padding: 0 12px; }"
+            " QDialog#OcrSettingsDialog QPushButton:hover {"
+            " background: #f6f8f7; border-color: #bfcfc6; }"
+            " QDialog#OcrSettingsDialog QPushButton:disabled {"
+            " background: #f6f8f7; color: #9aa9a2; border-color: #e2e8e4; }"
+            " QDialog#OcrSettingsDialog QMessageBox { background: #ffffff; color: #24312d; }"
+            " QDialog#OcrSettingsDialog QMessageBox QPushButton { min-width: 76px; }"
+        )
         self._settings = settings or QSettings("auto-bdsp-rng", "OcrSettings")
         self._recognizer = recognizer
         self._warmup_active = False

@@ -109,6 +109,16 @@ def test_main_window_generates_static_results(app, tmp_path):
     assert window.table.item(0, 1).text()
 
 
+def test_main_window_non_shiny_filter_uses_state_filter_zero(app):
+    window = MainWindow()
+    window.shiny_filter.setCurrentIndex(window.shiny_filter.findData("none"))
+
+    state_filter, shiny_mode = window._current_filter()
+
+    assert shiny_mode == "none"
+    assert state_filter.shiny == 0
+
+
 def test_bdsp_lead_menu_exposes_all_synchronize_natures(app):
     window = MainWindow()
     combo = window.lead_combo
@@ -247,7 +257,7 @@ def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
     assert speed_min.geometry().bottom() < show_stats.geometry().top()
 
 
-def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
+def test_project_xs_controls_use_confirmed_split_layout(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.project_xs_tab)
     window.resize(1280, 760)
@@ -258,7 +268,7 @@ def test_project_xs_controls_use_commit_0940b1b_left_layout(app):
     seed = window.seed_group.geometry()
     capture_top = window.capture_group.mapTo(window.project_xs_tab, QPoint(0, 0)).y()
 
-    assert capture_top <= 5
+    assert 8 <= capture_top <= 16
     assert not hasattr(window, "video_source_group")
     assert window.video_source_dialog.parent() is window
     assert not window.video_source_dialog.isVisible()
@@ -2082,29 +2092,28 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     layout = panel.script_group.layout()
 
     assert layout.itemAtPosition(0, 0).widget().text() == "测种脚本"
-    assert layout.itemAtPosition(0, 1).widget() is panel.seed_script_combo
-    assert layout.itemAtPosition(0, 2).widget().text() == "过帧脚本"
-    assert layout.itemAtPosition(0, 3).widget() is panel.advance_script_combo
-    assert layout.itemAtPosition(1, 0).widget().text() == "撞闪脚本"
-    assert layout.itemAtPosition(1, 1).widget() is panel.hit_script_combo
-    assert layout.itemAtPosition(1, 2).widget() is panel.escape_continue_check
-    assert layout.itemAtPosition(1, 3).widget() is panel.escape_script_combo
-    assert layout.itemAtPosition(2, 0).widget().text() == "过场脚本"
-    assert layout.itemAtPosition(2, 1).widget() is panel.exit_script_combo
-    assert layout.itemAtPosition(2, 2).widget().text() == "反查脚本"
-    assert layout.itemAtPosition(2, 3).widget() is panel.reverse_script_combo
-    assert panel.escape_continue_check.text() == "逃跑续搜"
-    assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.RightToLeft
+    assert layout.itemAtPosition(1, 0).widget() is panel.seed_script_combo
+    assert layout.itemAtPosition(0, 1).widget().text() == "过帧脚本"
+    assert layout.itemAtPosition(1, 1).widget() is panel.advance_script_combo
+    assert layout.itemAtPosition(2, 0).widget().text() == "撞闪脚本"
+    assert layout.itemAtPosition(3, 0).widget() is panel.hit_script_combo
+    assert layout.itemAtPosition(2, 1).widget().text() == "过场脚本"
+    assert layout.itemAtPosition(3, 1).widget() is panel.exit_script_combo
+    assert layout.itemAtPosition(4, 0).widget().text() == "反查脚本"
+    assert layout.itemAtPosition(5, 0).widget() is panel.reverse_script_combo
+    assert layout.itemAtPosition(4, 1).widget().text() == "逃跑脚本"
+    assert layout.itemAtPosition(5, 1).widget() is panel.escape_script_combo
+    assert layout.itemAtPosition(6, 0).widget() is panel.escape_continue_check
+    assert panel.escape_continue_check.text() == "未命中时逃跑续搜"
+    assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.LeftToRight
     assert "background: transparent" in panel.escape_continue_check.styleSheet()
-    assert layout.itemAtPosition(1, 2).alignment() == (
-        Qt.AlignmentFlag.AlignLeft
-        | Qt.AlignmentFlag.AlignVCenter
-        | Qt.AlignmentFlag.AlignAbsolute
+    assert layout.itemAtPosition(6, 0).alignment() == (
+        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     )
     panel.resize(1000, 700)
     panel.show()
     app.processEvents()
-    advance_label = layout.itemAtPosition(0, 2).widget()
+    advance_label = layout.itemAtPosition(0, 0).widget()
     assert panel.escape_continue_check.geometry().left() == advance_label.geometry().left()
     assert not panel.escape_continue_check.isChecked()
     assert not panel.escape_script_combo.isEnabled()
@@ -2994,7 +3003,8 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     assert not hasattr(panel, "candidate_table")
     assert not hasattr(panel, "search_target_summary")
     assert hasattr(panel, "target_button")
-    assert panel.target_button.text() == "目标精灵设置..."
+    assert panel.target_button.text() == "设置"
+    assert panel.target_button.toolTip() == "打开目标精灵设置"
     assert not hasattr(panel, "parameter_preview")
     assert not hasattr(panel, "preview_button")
     assert panel.log_view.isReadOnly() is True
@@ -3003,30 +3013,23 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     assert "最小 final flash frames" not in labels
 
 
-def test_auto_rng_panel_uses_compact_current_message_without_summary_group(app):
+def test_auto_rng_panel_uses_compact_current_message_and_live_runtime_card(app):
     panel = AutoRngPanel()
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
-    visible_labels = {label.text() for label in panel.findChildren(QLabel)}
 
     assert "运行摘要" not in group_titles
-    assert "Seed" not in visible_labels
-    assert "触发帧" not in visible_labels
-    assert "剩余" not in visible_labels
-    assert "raw target" not in visible_labels
-    assert "trigger advances" not in visible_labels
-    assert "current advances" not in visible_labels
-    assert "remaining_to_trigger" not in visible_labels
-    assert "final flash_frames" not in visible_labels
-    assert not ({"当前循环", "当前阶段", "原始目标帧", "当前帧", "最终闪帧"} & visible_labels)
-    assert not hasattr(panel, "summary_seed")
-    assert not hasattr(panel, "summary_group")
-    assert not hasattr(panel, "summary_trigger")
-    assert not hasattr(panel, "summary_remaining")
-    assert not hasattr(panel, "summary_target")
+    assert panel.runtime_card.property("state") == "idle"
+    assert panel.runtime_phase_label.text() == "准备就绪"
+    assert panel.runtime_round_label.text() == "任务已停止"
+    assert panel.runtime_current_value.text() == "—"
+    assert panel.runtime_target_value.text() == "—"
+    assert panel.runtime_remaining_value.text() == "—"
+    assert panel.runtime_delay_value.text() == "—"
     assert panel.log_group.maximumWidth() == 16777215
-    assert len([group for group in panel.findChildren(QGroupBox) if group.title() == "当前消息"]) == 1
-    assert panel.log_group.height() <= 90
+    assert panel.log_group.title() == ""
+    assert panel.log_group.height() <= 44
     assert panel.log_view.isHidden()
+    assert panel.latest_log_time_label.text() == "—"
     assert panel.latest_log_label.text() == "暂无消息"
     assert panel.view_log_button.text() == "查看日志"
     assert panel.content_grid.itemAtPosition(1, 0).widget() is panel.log_group
@@ -3043,20 +3046,48 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
 
     assert 56 <= panel.toolbar.maximumHeight() <= 64
     assert panel.mode_combo.width() == 120
-    assert panel.loop_count.width() == 80
+    assert panel.loop_count.width() == 70
     assert panel.start_button.height() == 34
     assert panel.stop_button.height() == 34
-    assert panel.config_panel.minimumWidth() >= 430
+    assert panel.config_panel.minimumWidth() == 326
     assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
     assert panel.strategy_group.minimumHeight() < 400
     assert panel.strategy_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Preferred
     assert panel.strategy_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
-    assert panel.max_advances.width() >= 200
-    assert panel.seed_script_combo.width() <= 170
+    assert panel.max_advances.width() == 180
+    assert panel.delay_settings_button.size().toTuple() == (180, 32)
+    assert panel.seed_script_combo.minimumWidth() == 160
+    assert panel.more_strategy_button.isCheckable()
+    assert panel.shiny_threshold_seconds.isHidden()
     assert not hasattr(panel, "refresh_scripts_button")
     assert not any(button.text() == "刷新脚本列表" for button in panel.findChildren(QPushButton))
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
+
+
+def test_auto_rng_advanced_strategies_scroll_inside_fixed_sidebar(app):
+    panel = AutoRngPanel()
+    panel.resize(1126, 700)
+    panel.show()
+    panel.more_strategy_button.setChecked(True)
+    app.processEvents()
+
+    scroll_bar = panel.config_panel.verticalScrollBar()
+    assert panel.config_panel.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert panel.config_contents.minimumSizeHint().width() <= panel.config_panel.viewport().width()
+    for field in (
+        panel.shiny_threshold_seconds,
+        panel.sync_field,
+        panel.reverse_field,
+        panel.strategy_settings_button,
+    ):
+        assert not field.isHidden()
+
+    scroll_bar.setValue(scroll_bar.maximum())
+    app.processEvents()
+    save_top = panel.save_config_button.mapTo(panel.config_panel.viewport(), QPoint(0, 0)).y()
+    assert 0 <= save_top
+    assert save_top + panel.save_config_button.height() <= panel.config_panel.viewport().height()
 
 
 def test_auto_rng_content_is_added_directly_below_toolbar(app):
@@ -3197,7 +3228,18 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     )
 
     assert panel.status_badge.text() == "运行撞闪脚本"
+    assert panel.runtime_card.property("state") == "active"
+    assert panel.runtime_phase_label.text() == "运行撞闪脚本"
+    assert panel.runtime_round_label.text() == "第 2 轮"
+    assert panel.runtime_current_value.text() == "0"
+    assert panel.runtime_target_value.text() == "1,300"
+    assert panel.runtime_remaining_value.text() == "100"
+    assert panel.runtime_delay_value.text() == "1,200"
+    panel.set_live_advances(25)
+    assert panel.runtime_current_value.text() == "25"
+    assert panel.runtime_remaining_value.text() == "75"
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
+    assert panel.latest_log_time_label.text() != "—"
 
 
 def test_manual_reidentify_invalid_seed_uses_chinese_error_title(app, monkeypatch):

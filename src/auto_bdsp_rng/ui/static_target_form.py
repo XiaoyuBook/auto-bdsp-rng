@@ -5,7 +5,6 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Shiny, StateFilter
+from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 
 
@@ -117,25 +117,45 @@ POKEMON_LABELS_ZH = {
 class StaticTargetForm(QWidget):
     """Editable BDSP static target and filter form with independent widget state."""
 
-    def __init__(self, parent: QWidget | None = None, version: GameVersion = GameVersion.BD) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        version: GameVersion = GameVersion.BD,
+        *,
+        compact: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._version = version
+        self._compact = compact
+        self._control_height = 32 if compact else 36
+        self._setting_width = 180 if compact else 160
+        self._iv_width = 72 if compact else 80
+        self._misc_width = 222 if compact else 240
+        self._range_width = 98 if compact else 80
         self._records: tuple[StaticEncounterRecord, ...] = ()
+        self.setObjectName("StaticTargetForm")
         self._build_ui()
         self.refresh_encounters()
 
     def _build_ui(self) -> None:
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
+        root.setSpacing(22 if self._compact else 10)
         root.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         settings = QGroupBox("设置")
-        settings.setMaximumHeight(380)
-        settings.setMaximumWidth(260)
+        settings.setObjectName("TargetSettingsGroup" if self._compact else "")
+        settings.setMaximumHeight(292 if self._compact else 380)
+        if self._compact:
+            settings.setFixedWidth(245)
+        else:
+            settings.setMaximumWidth(260)
         self.settings_group = settings
         settings_layout = QGridLayout(settings)
-        settings_layout.setVerticalSpacing(8)
+        if self._compact:
+            settings_layout.setContentsMargins(0, 6, 0, 0)
+            settings_layout.setHorizontalSpacing(8)
+        settings_layout.setVerticalSpacing(7 if self._compact else 8)
         self.category_combo = QComboBox()
         self.category_combo.addItem("御三家", StaticEncounterCategory.STARTERS.value)
         self.category_combo.addItem("全部", None)
@@ -165,22 +185,29 @@ class StaticTargetForm(QWidget):
             ("IV Count", self.iv_count_display),
         )
         for row, (label, widget) in enumerate(rows):
-            widget.setFixedHeight(36)
-            widget.setFixedWidth(160)
+            widget.setFixedHeight(self._control_height)
+            widget.setFixedWidth(self._setting_width)
             settings_layout.addWidget(QLabel(label), row, 0)
             settings_layout.addWidget(widget, row, 1)
         root.addWidget(settings)
 
         filters = QGroupBox("筛选项")
-        filters.setMaximumHeight(380)
+        filters.setObjectName("TargetFiltersGroup" if self._compact else "")
+        filters.setMaximumHeight(292 if self._compact else 380)
         outer = QHBoxLayout(filters)
-        outer.setContentsMargins(12, 10, 12, 10)
-        outer.setSpacing(24)
+        if self._compact:
+            outer.setContentsMargins(0, 6, 0, 0)
+            outer.setSpacing(18)
+        else:
+            outer.setContentsMargins(12, 10, 12, 10)
+            outer.setSpacing(24)
         self._build_iv_filter_column(outer)
         sep = QFrame()
+        sep.setObjectName("TargetFilterDivider" if self._compact else "")
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #c8c6c0;")
-        sep.setMinimumHeight(240)
+        if not self._compact:
+            sep.setStyleSheet("color: #c8c6c0;")
+        sep.setMinimumHeight(220 if self._compact else 240)
         outer.addWidget(sep)
         self._build_misc_filter_column(outer)
         root.addWidget(filters, 3)
@@ -194,20 +221,33 @@ class StaticTargetForm(QWidget):
         self.iv_min: list[QSpinBox] = []
         self.iv_max: list[QSpinBox] = []
         for row, label in enumerate(("HP", "攻击", "防御", "特攻", "特防", "速度")):
-            iv_grid.addWidget(_filter_label(label, 50), row, 0)
+            iv_grid.addWidget(_filter_label(label, 46 if self._compact else 50), row, 0)
             min_spin = self._spin(0, 31, 0)
             max_spin = self._spin(0, 31, 31)
-            min_spin.setFixedWidth(80)
-            max_spin.setFixedWidth(80)
+            min_spin.setFixedWidth(self._iv_width)
+            max_spin.setFixedWidth(self._iv_width)
             self.iv_min.append(min_spin)
             self.iv_max.append(max_spin)
             iv_grid.addWidget(min_spin, row, 1)
-            iv_grid.addWidget(max_spin, row, 2)
+            if self._compact:
+                range_separator = QLabel("-")
+                range_separator.setObjectName("TargetRangeSeparator")
+                range_separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                iv_grid.addWidget(range_separator, row, 2)
+                max_column = 3
+            else:
+                max_column = 2
+            iv_grid.addWidget(max_spin, row, max_column)
         left_col.addLayout(iv_grid)
         self.show_stats_check = QCheckBox("显示能力值")
+        if self._compact:
+            self.show_stats_check.setFixedHeight(self._control_height)
         left_col.addWidget(self.show_stats_check)
         self.iv_calculator_button = QPushButton("个体值计算器")
-        self.iv_calculator_button.setMinimumHeight(30)
+        if self._compact:
+            self.iv_calculator_button.setFixedHeight(self._control_height)
+        else:
+            self.iv_calculator_button.setMinimumHeight(30)
         left_col.addWidget(self.iv_calculator_button)
         left_col.addStretch()
         outer.addLayout(left_col)
@@ -222,43 +262,64 @@ class StaticTargetForm(QWidget):
         self.ability_filter = QComboBox()
         for text, value in (("任意", 255), ("0", 0), ("1", 1), ("隐藏", 2)):
             self.ability_filter.addItem(text, value)
-        grid.addWidget(_filter_label("特性", 70), 0, 0)
+        label_width = 58 if self._compact else 70
+        grid.addWidget(_filter_label("特性", label_width), 0, 0)
         grid.addWidget(self.ability_filter, 0, 1)
 
         self.gender_filter = QComboBox()
         for text, value in (("任意", 255), ("雄性", 0), ("雌性", 1), ("无性别", 2)):
             self.gender_filter.addItem(text, value)
-        grid.addWidget(_filter_label("性别", 70), 1, 0)
+        grid.addWidget(_filter_label("性别", label_width), 1, 0)
         grid.addWidget(self.gender_filter, 1, 1)
 
         self.height_min = self._spin(0, 255, 0)
         self.height_max = self._spin(0, 255, 255)
-        grid.addWidget(_filter_label("Height", 70), 2, 0)
-        grid.addLayout(_range_row(self.height_min, self.height_max), 2, 1)
+        grid.addWidget(_filter_label("Height", label_width), 2, 0)
+        grid.addLayout(
+            _range_row(
+                self.height_min,
+                self.height_max,
+                self._range_width,
+                show_separator=self._compact,
+            ),
+            2,
+            1,
+        )
 
         self.nature_combo = QComboBox()
         self.nature_combo.addItem("任意", -1)
         for index, nature in enumerate(NATURES_ZH):
             self.nature_combo.addItem(nature, index)
-        grid.addWidget(_filter_label("性格", 70), 3, 0)
+        grid.addWidget(_filter_label("性格", label_width), 3, 0)
         grid.addWidget(self.nature_combo, 3, 1)
 
         self.shiny_filter = QComboBox()
         for text, value in (("任意", "any"), ("异色", "shiny"), ("Star", "star"), ("Square", "square"), ("非异色", "none")):
             self.shiny_filter.addItem(text, value)
-        grid.addWidget(_filter_label("异色", 70), 4, 0)
+        grid.addWidget(_filter_label("异色", label_width), 4, 0)
         grid.addWidget(self.shiny_filter, 4, 1)
 
         self.weight_min = self._spin(0, 255, 0)
         self.weight_max = self._spin(0, 255, 255)
-        grid.addWidget(_filter_label("Weight", 70), 5, 0)
-        grid.addLayout(_range_row(self.weight_min, self.weight_max), 5, 1)
+        grid.addWidget(_filter_label("Weight", label_width), 5, 0)
+        grid.addLayout(
+            _range_row(
+                self.weight_min,
+                self.weight_max,
+                self._range_width,
+                show_separator=self._compact,
+            ),
+            5,
+            1,
+        )
 
         right_col.addLayout(grid)
         for combo in (self.ability_filter, self.gender_filter, self.nature_combo, self.shiny_filter):
-            combo.setFixedHeight(36)
-            combo.setFixedWidth(240)
+            combo.setFixedHeight(self._control_height)
+            combo.setFixedWidth(self._misc_width)
         self.skip_filter = QCheckBox("取消筛选")
+        if self._compact:
+            self.skip_filter.setFixedHeight(self._control_height)
         right_col.addWidget(self.skip_filter)
         outer.addLayout(right_col, 1)
 
@@ -307,7 +368,9 @@ class StaticTargetForm(QWidget):
             "shiny": 1 | 2,
             "star": 1,
             "square": 2,
-            "none": 255,
+            # StateFilter uses zero as the explicit non-shiny sentinel;
+            # 255 means "any" and would silently disable this filter.
+            "none": 0,
         }[shiny_mode]
         nature_index = self.nature_combo.currentData()
         if nature_index == -1:
@@ -363,7 +426,7 @@ class StaticTargetForm(QWidget):
         spin.setValue(value)
         spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        spin.setFixedHeight(36)
+        spin.setFixedHeight(self._control_height)
         set_c_locale(spin)
         return spin
 
@@ -375,12 +438,23 @@ def _filter_label(text: str, width: int) -> QLabel:
     return label
 
 
-def _range_row(min_spin: QSpinBox, max_spin: QSpinBox) -> QHBoxLayout:
+def _range_row(
+    min_spin: QSpinBox,
+    max_spin: QSpinBox,
+    field_width: int = 80,
+    *,
+    show_separator: bool = False,
+) -> QHBoxLayout:
     row = QHBoxLayout()
-    row.setSpacing(6)
-    min_spin.setFixedWidth(80)
-    max_spin.setFixedWidth(80)
+    row.setSpacing(5 if show_separator else 6)
+    min_spin.setFixedWidth(field_width)
+    max_spin.setFixedWidth(field_width)
     row.addWidget(min_spin)
+    if show_separator:
+        separator = QLabel("-")
+        separator.setObjectName("TargetRangeSeparator")
+        separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(separator)
     row.addWidget(max_spin)
     row.addStretch()
     return row

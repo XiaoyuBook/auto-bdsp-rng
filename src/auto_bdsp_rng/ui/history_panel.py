@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QLayout,
     QPlainTextEdit,
     QPushButton,
-    QComboBox,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -33,6 +32,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 
 # ── 配色 ──────────────────────────────────────────────────
 CLR_SEP     = "#9CA3AF"   # 分隔线

@@ -180,15 +180,23 @@ def test_strategy_button_replaces_main_form_reserve_frames_row(app, tmp_path):
     button_row, button_role = form.getItemPosition(button_index)
     max_wait_row, _ = form.getWidgetPosition(panel.max_wait_frames)
     shiny_row, _ = form.getWidgetPosition(panel.shiny_threshold_seconds)
+    sync_row, _ = form.getWidgetPosition(panel.sync_field)
+    reverse_row, _ = form.getWidgetPosition(panel.reverse_field)
 
-    assert panel.strategy_settings_button.text() == "校正策略设置..."
+    assert panel.strategy_settings_button.text() == "设置"
     assert panel.strategy_settings_button.objectName() == "SecondaryButton"
-    assert panel.strategy_settings_button.size().width() == 215
-    assert panel.strategy_settings_button.size().height() == 34
+    assert panel.strategy_settings_button.size().width() == 180
+    assert panel.strategy_settings_button.size().height() == 32
     assert button_role == QFormLayout.ItemRole.FieldRole
-    assert button_row == max_wait_row + 1
-    assert shiny_row == button_row + 1
+    assert shiny_row > max_wait_row
+    assert shiny_row < sync_row < reverse_row < button_row
+    assert form.labelForField(panel.strategy_settings_button).text() == "校正策略"
     assert form.indexOf(panel.reseeding_threshold) == -1
+    assert panel.shiny_threshold_seconds.isHidden()
+    panel.more_strategy_button.setChecked(True)
+    assert not panel.shiny_threshold_seconds.isHidden()
+    assert not panel.sync_field.isHidden()
+    assert not panel.reverse_field.isHidden()
 
 
 def test_strategy_numeric_fields_use_c_locale_and_qt_integer_limit(app, tmp_path):
@@ -230,8 +238,8 @@ def test_delay_strategy_button_and_dialog_defaults(app, tmp_path):
     assert panel.fixed_delay.isHidden()
     assert panel.fixed_delay.value() == 100
     assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
-    assert panel.delay_settings_button.size().width() == 215
-    assert panel.delay_settings_button.size().height() == 34
+    assert panel.delay_settings_button.size().width() == 180
+    assert panel.delay_settings_button.size().height() == 32
     assert dialog.windowTitle() == "delay 策略设置"
     assert [dialog.strategy_combo.itemData(index) for index in range(dialog.strategy_combo.count())] == [
         "fixed",

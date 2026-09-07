@@ -12,7 +12,6 @@ from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -69,6 +68,7 @@ from auto_bdsp_rng.ui.delay_strategy_dialog import (
     DelayStrategyDialog,
     delay_lucide_icon,
 )
+from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
@@ -312,15 +312,21 @@ class AutoRngPanel(QWidget):
         self._active_delay_by_species: dict[int, int] = {}
         self._active_delay: int | None = None
         self._updating_fixed_delay = False
+        self._runtime_trigger_advances: int | None = None
+        self._config_state_tracking_ready = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
         self._build_ui()
         self.refresh_scripts()
         self._restore_panel_state()
+        self._connect_config_state_tracking()
+        self._config_state_tracking_ready = True
+        self._set_config_saved(True)
 
     def _build_ui(self) -> None:
+        self.setObjectName("AutoRngPanel")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
         self.toolbar = self._build_toolbar()
         layout.addWidget(self.toolbar)
 
@@ -328,8 +334,8 @@ class AutoRngPanel(QWidget):
         content.setObjectName("AutoRngContent")
         self.content_grid = QGridLayout(content)
         self.content_grid.setContentsMargins(0, 0, 0, 0)
-        self.content_grid.setHorizontalSpacing(12)
-        self.content_grid.setVerticalSpacing(12)
+        self.content_grid.setHorizontalSpacing(0)
+        self.content_grid.setVerticalSpacing(0)
         self.config_panel = self._build_config_panel()
         self.runtime_panel = self._build_runtime_panel()
         self.content_grid.addWidget(self.config_panel, 0, 0)
@@ -341,6 +347,7 @@ class AutoRngPanel(QWidget):
         self.content_grid.setRowStretch(1, 0)
 
         layout.addWidget(content, 1)
+        self._apply_panel_style()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_panel_state()
@@ -351,7 +358,7 @@ class AutoRngPanel(QWidget):
         toolbar.setObjectName("AutoRngToolbar")
         toolbar.setFixedHeight(56)
         row = QHBoxLayout(toolbar)
-        row.setContentsMargins(14, 0, 14, 0)
+        row.setContentsMargins(18, 0, 18, 0)
         row.setSpacing(0)
         row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.mode_combo = QComboBox()
@@ -375,39 +382,43 @@ class AutoRngPanel(QWidget):
         self.stop_button.setObjectName("DangerButton")
         self.status_badge = QLabel("状态：空闲")
         self.status_badge.setObjectName("Badge")
+        self.status_badge.hide()
         self.debug_output_check = QCheckBox("调试")
         self.debug_output_check.setToolTip("输出 CLI 耗时、时间戳等调试信息")
         self.debug_output_check.setFixedHeight(34)
 
-        # 统一控件尺寸：全部 34px
+        # 工具栏保留稍大的点击区域，工作区字段使用 32px 紧凑高度。
         self.status_badge.setFixedHeight(34)
         self.mode_combo.setFixedHeight(34)
         self.mode_combo.setFixedWidth(120)
         self.loop_count.setFixedHeight(34)
-        self.loop_count.setFixedWidth(80)
+        self.loop_count.setFixedWidth(70)
         self.start_button.setFixedHeight(34)
         self.start_button.setMinimumWidth(88)
         self.stop_button.setFixedHeight(34)
         self.stop_button.setMinimumWidth(80)
 
-        # 信号/槽（保持不变）
         self.start_button.clicked.connect(self._start_clicked)
         self.start_from_seed_action.triggered.connect(self._start_clicked)
         self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)
         self.start_from_reidentify_action.triggered.connect(self._start_from_reidentify_clicked)
         self.stop_button.clicked.connect(self._stop_clicked)
 
-        # ── 左分区：运行模式 + 次数 + 调试 ──
         left_layout = QHBoxLayout()
-        left_layout.setSpacing(12)
+        left_layout.setSpacing(10)
         left_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        left_layout.addWidget(QLabel("运行模式"))
+        mode_label = QLabel("运行模式")
+        mode_label.setObjectName("ToolbarFieldLabel")
+        left_layout.addWidget(mode_label)
         left_layout.addWidget(self.mode_combo)
-        left_layout.addWidget(QLabel("次数"))
+        self.loop_count_label = QLabel("次数")
+        self.loop_count_label.setObjectName("ToolbarFieldLabel")
+        left_layout.addWidget(self.loop_count_label)
         left_layout.addWidget(self.loop_count)
         left_layout.addWidget(self.debug_output_check)
+        self.mode_combo.currentIndexChanged.connect(self._update_loop_count_visibility)
+        self._update_loop_count_visibility()
 
-        # ── 右分区：状态 + 按钮 ──
         self.capture_info_button = QPushButton("OCR设置")
         self.capture_info_button.setObjectName("SecondaryButton")
         self.capture_info_button.setFixedHeight(34)
@@ -416,36 +427,82 @@ class AutoRngPanel(QWidget):
         self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
 
         right_layout = QHBoxLayout()
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(8)
         right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        right_layout.addWidget(self.status_badge)
-        right_layout.addSpacing(16)
+        right_layout.addWidget(self.capture_info_button)
         right_layout.addWidget(self.start_button)
         right_layout.addWidget(self.stop_button)
-        right_layout.addWidget(self.capture_info_button)
 
         row.addLayout(left_layout)
         row.addStretch(1)
         row.addLayout(right_layout)
         return toolbar
 
-    def _build_config_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setMinimumWidth(450)
-        panel.setMaximumWidth(450)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+    def _build_config_panel(self) -> QScrollArea:
+        panel = QScrollArea()
+        panel.setObjectName("AutoRngConfigPanel")
+        panel.setWidgetResizable(True)
+        panel.setFrameShape(QFrame.Shape.NoFrame)
+        panel.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        panel.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        panel.setMinimumWidth(326)
+        panel.setMaximumWidth(326)
+
+        contents = QWidget()
+        contents.setObjectName("AutoRngConfigContents")
+        contents.setMinimumWidth(300)
+        layout = QVBoxLayout(contents)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel("任务配置")
+        title.setObjectName("SectionTitle")
+        self.config_saved_label = QLabel("已保存")
+        self.config_saved_label.setObjectName("ConfigSavedLabel")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.config_saved_label)
+        layout.addLayout(header)
+
+        layout.addWidget(self._build_target_summary_group())
         self.strategy_group = self._build_strategy_group()
         layout.addWidget(self.strategy_group)
+        layout.addStretch(1)
+
+        footer = QFrame()
+        footer.setObjectName("ConfigFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 10, 0, 0)
+        footer_layout.setSpacing(8)
+        note = QLabel("修改后从下一轮生效")
+        note.setObjectName("MutedLabel")
+        self.save_config_button = QPushButton("保存")
+        self.save_config_button.setObjectName("ConfigSaveButton")
+        self.save_config_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_config_button.clicked.connect(self._save_panel_state)
+        footer_layout.addWidget(note)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.save_config_button)
+        layout.addWidget(footer)
+
+        panel.setWidget(contents)
+        self.config_contents = contents
         return panel
 
     def _build_strategy_group(self) -> QGroupBox:
-        group = QGroupBox("自动策略")
+        group = QGroupBox()
+        group.setObjectName("AutoRngStrategyGroup")
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form = QFormLayout(group)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setVerticalSpacing(8)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(9)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.strategy_form = form
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.fixed_delay = self._spin(0, QT_INT_MAX, 100)
         self.fixed_delay.setParent(group)
@@ -454,35 +511,21 @@ class AutoRngPanel(QWidget):
         self.delay_strategy_dialog = DelayStrategyDialog(self)
         self.delay_settings_button = DelaySummaryButton()
         self.delay_settings_button.setObjectName("SecondaryButton")
-        self.delay_settings_button.setFixedSize(215, 34)
+        self.delay_settings_button.setFixedSize(180, 32)
         self.delay_settings_button.setIcon(
             delay_lucide_icon("settings-2", "#5F6C66", 16)
         )
         self.delay_settings_button.setIconSize(QSize(16, 16))
-        self.delay_settings_button.setStyleSheet(
-            "QPushButton { min-height: 32px; max-height: 32px; "
-            "padding: 0; border: 1px solid #DCE4DF; border-radius: 6px; "
-            "font-weight: 400; background: #FFFFFF; }"
-            "QPushButton:hover { background: #F3F6F4; }"
-            "QPushButton:focus { border-color: #087958; }"
-        )
-        self.delay_active_label = QLabel("本轮 -")
+        self.delay_active_label = QLabel("下轮预计 - 帧")
         self.delay_active_label.setObjectName("DelayActiveLabel")
-        self.delay_active_label.setStyleSheet(
-            "color: #5F6C66; font-size: 12px;"
-        )
         self.delay_settings_field = QWidget()
         self.delay_settings_field.setObjectName("DelaySettingsField")
-        self.delay_settings_field.setStyleSheet(
-            "QWidget#DelaySettingsField { background: transparent; }"
-        )
-        self.delay_settings_field.setFixedHeight(34)
-        delay_field_layout = QHBoxLayout(self.delay_settings_field)
+        self.delay_settings_field.setFixedSize(180, 52)
+        delay_field_layout = QVBoxLayout(self.delay_settings_field)
         delay_field_layout.setContentsMargins(0, 0, 0, 0)
-        delay_field_layout.setSpacing(10)
+        delay_field_layout.setSpacing(3)
         delay_field_layout.addWidget(self.delay_settings_button)
         delay_field_layout.addWidget(self.delay_active_label)
-        delay_field_layout.addStretch(1)
         self.delay_settings_button.clicked.connect(self.open_delay_strategy_dialog)
         self.delay_strategy_dialog.settingsEdited.connect(self._refresh_delay_dialog_preview)
         self.delay_strategy_dialog.settingsSaveRequested.connect(
@@ -502,9 +545,9 @@ class AutoRngPanel(QWidget):
         self.reidentify_failure_policy = self.strategy_dialog.reidentify_failure_policy
         self.reidentify_seed_max_attempts = self.strategy_dialog.reidentify_seed_max_attempts
         self.reseeding_threshold = self.strategy_dialog.reseeding_threshold
-        self.strategy_settings_button = QPushButton("校正策略设置...")
+        self.strategy_settings_button = QPushButton("设置")
         self.strategy_settings_button.setObjectName("SecondaryButton")
-        self.strategy_settings_button.setFixedSize(215, 34)
+        self.strategy_settings_button.setFixedSize(180, 32)
         self.strategy_settings_button.clicked.connect(self.open_strategy_dialog)
         self.shiny_threshold_seconds = QDoubleSpinBox()
         self.shiny_threshold_seconds.setRange(0.0, 999.0)
@@ -513,8 +556,8 @@ class AutoRngPanel(QWidget):
         self.shiny_threshold_seconds.setValue(DEFAULT_SHINY_THRESHOLD_SECONDS)
         set_c_locale(self.shiny_threshold_seconds)
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
-            spin.setFixedWidth(215)
-        self.shiny_threshold_seconds.setFixedWidth(215)
+            spin.setFixedWidth(180)
+        self.shiny_threshold_seconds.setFixedSize(180, 32)
         explained_rows = (
             (
                 "搜索范围",
@@ -531,7 +574,7 @@ class AutoRngPanel(QWidget):
                 "delay 越大，撞闪脚本启动得越早。\n点击编辑固定或动态 delay 策略。",
             ),
             (
-                "最大等待窗口",
+                "最大等待",
                 self.max_wait_frames,
                 "决定何时停止运行过帧脚本，改为软件实时等待。\n"
                 "距离撞闪脚本启动帧不超过该帧数时，不再运行过帧脚本，而是根据当前活帧等待到启动时机。\n"
@@ -547,9 +590,7 @@ class AutoRngPanel(QWidget):
                 "设为 0 时关闭自动 OCR 判闪。",
             ),
         )
-        for row_index, (label_text, field, tooltip) in enumerate(explained_rows):
-            if row_index == 3:
-                form.addRow("", self.strategy_settings_button)
+        for label_text, field, tooltip in explained_rows[:3]:
             form.addRow(label_text, field)
             field.setToolTip(tooltip)
             label = form.labelForField(field)
@@ -559,26 +600,54 @@ class AutoRngPanel(QWidget):
                 self.delay_settings_label = label
                 self.fixed_delay.setToolTip(tooltip)
                 self.delay_settings_button.setToolTip(tooltip)
-        # 同步开关（三态下拉框 + 性格输入）
-        sync_row = QHBoxLayout()
+
+        self.more_strategy_button = QToolButton()
+        self.more_strategy_button.setObjectName("MoreStrategyButton")
+        self.more_strategy_button.setText("更多策略")
+        self.more_strategy_button.setCheckable(True)
+        self.more_strategy_button.setArrowType(Qt.ArrowType.RightArrow)
+        self.more_strategy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.more_strategy_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.more_strategy_button.setFixedHeight(30)
+        form.addRow(self.more_strategy_button)
+
+        shiny_tooltip = explained_rows[3][2]
+        form.addRow(explained_rows[3][0], self.shiny_threshold_seconds)
+        self.shiny_threshold_seconds.setToolTip(shiny_tooltip)
+        shiny_label = form.labelForField(self.shiny_threshold_seconds)
+        if shiny_label is not None:
+            shiny_label.setToolTip(shiny_tooltip)
+
+        self.sync_field = QWidget()
+        self.sync_field.setObjectName("CompactStrategyField")
+        self.sync_field.setFixedSize(180, 32)
+        sync_row = QHBoxLayout(self.sync_field)
+        sync_row.setContentsMargins(0, 0, 0, 0)
+        sync_row.setSpacing(6)
         self.sync_combo = QComboBox()
-        self.sync_combo.addItems(["同步：关闭", "同步：首位普通精灵", "同步：首位同步精灵"])
-        self.sync_combo.setFixedHeight(34)
-        self.sync_combo.setMinimumWidth(160)
+        self.sync_combo.addItems(["关闭", "首位普通精灵", "首位同步精灵"])
+        self.sync_combo.setFixedHeight(32)
+        self.sync_combo.setMinimumWidth(112)
         self.sync_combo.currentIndexChanged.connect(self._on_sync_changed)
         self.sync_nature_input = QLineEdit()
         self.sync_nature_input.setPlaceholderText("性格")
-        self.sync_nature_input.setFixedHeight(34)
-        self.sync_nature_input.setFixedWidth(72)
+        self.sync_nature_input.setFixedHeight(32)
+        self.sync_nature_input.setFixedWidth(62)
         self.sync_nature_input.setEnabled(False)
         sync_row.addWidget(self.sync_combo)
         sync_row.addWidget(self.sync_nature_input)
-        form.addRow(sync_row)
-        # 自动反查下拉框
+        form.addRow("同步", self.sync_field)
+
+        self.reverse_field = QWidget()
+        self.reverse_field.setObjectName("CompactStrategyField")
+        self.reverse_field.setFixedSize(180, 32)
+        reverse_row = QHBoxLayout(self.reverse_field)
+        reverse_row.setContentsMargins(0, 0, 0, 0)
+        reverse_row.setSpacing(6)
         self.auto_reverse_combo = QComboBox()
-        self.auto_reverse_combo.addItems(["自动反查：关闭", "自动反查：开启"])
-        self.auto_reverse_combo.setFixedHeight(34)
-        self.auto_reverse_combo.setMinimumWidth(150)
+        self.auto_reverse_combo.addItems(["关闭", "开启"])
+        self.auto_reverse_combo.setFixedHeight(32)
+        self.auto_reverse_combo.setMinimumWidth(88)
         self.auto_reverse_combo.currentIndexChanged.connect(
             lambda _index: self._refresh_delay_ui()
         )
@@ -588,13 +657,22 @@ class AutoRngPanel(QWidget):
         self.reverse_lookup_window.setPrefix("±")
         self.reverse_lookup_window.setSuffix(" 帧")
         self.reverse_lookup_window.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.reverse_lookup_window.setFixedHeight(34)
-        self.reverse_lookup_window.setFixedWidth(100)
+        self.reverse_lookup_window.setFixedHeight(32)
+        self.reverse_lookup_window.setFixedWidth(86)
         set_c_locale(self.reverse_lookup_window)
-        reverse_row = QHBoxLayout()
         reverse_row.addWidget(self.auto_reverse_combo)
         reverse_row.addWidget(self.reverse_lookup_window)
-        form.addRow(reverse_row)
+        form.addRow("自动反查", self.reverse_field)
+        form.addRow("校正策略", self.strategy_settings_button)
+
+        self._advanced_strategy_fields = (
+            self.shiny_threshold_seconds,
+            self.sync_field,
+            self.reverse_field,
+            self.strategy_settings_button,
+        )
+        self.more_strategy_button.toggled.connect(self._set_advanced_strategies_visible)
+        self._set_advanced_strategies_visible(False)
         self._refresh_delay_ui()
         return group
 
@@ -747,8 +825,10 @@ class AutoRngPanel(QWidget):
         label = DELAY_STRATEGY_LABEL_BY_ID[strategy_id]
         self.delay_settings_button.setText(f"{label} · 下轮 {estimate.value}")
         if hasattr(self, "delay_active_label"):
-            active_text = "-" if self._active_delay is None else str(self._active_delay)
-            self.delay_active_label.setText(f"本轮 {active_text}")
+            self.delay_active_label.setText(f"下轮预计 {estimate.value} 帧")
+        if hasattr(self, "runtime_delay_value"):
+            self.runtime_delay_value.setText(self._runtime_value(self._active_delay))
+        self._refresh_previous_delay_summary()
         tooltip = (
             "delay 越大，撞闪脚本启动得越早。点击编辑固定或动态 delay 策略。\n"
             f"本轮使用：{'-' if self._active_delay is None else self._active_delay}\n"
@@ -759,6 +839,19 @@ class AutoRngPanel(QWidget):
         if getattr(self, "delay_settings_label", None) is not None:
             self.delay_settings_label.setToolTip(tooltip)
         self._refresh_delay_dialog_preview()
+
+    def _refresh_previous_delay_summary(self) -> None:
+        if not hasattr(self, "previous_round_label"):
+            return
+        if not self._delay_sample_rounds:
+            self.previous_round_label.setText("暂无 delay 样本")
+            return
+        sample = self._delay_sample_rounds[-1]
+        values = ", ".join(str(value) for value in sample.candidates) or "—"
+        status = "已排除" if sample.excluded else "已纳入统计"
+        self.previous_round_label.setText(
+            f"最近样本 · 第 {sample.round_number} 轮 · delay {values} 帧 · {status}"
+        )
 
     def _commit_delay_strategy_config(
         self,
@@ -861,11 +954,14 @@ class AutoRngPanel(QWidget):
         self.strategy_dialog.set_values(*original_values)
 
     def _build_script_group(self) -> QGroupBox:
-        group = QGroupBox("脚本")
+        group = QGroupBox("任务脚本")
+        group.setObjectName("AutoRngScriptGroup")
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QGridLayout(group)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setHorizontalSpacing(16)
+        layout.setVerticalSpacing(4)
+
         def combo_factory() -> _RefreshingScriptComboBox:
             return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
 
@@ -876,11 +972,12 @@ class AutoRngPanel(QWidget):
         self.exit_script_combo = combo_factory()
         self.reverse_script_combo = combo_factory()
         for combo in self._script_combos():
-            combo.setFixedHeight(34)
-            combo.setFixedWidth(160)
-        self.escape_continue_check = QCheckBox("逃跑续搜")
-        self.escape_continue_check.setFixedHeight(34)
-        self.escape_continue_check.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            combo.setFixedHeight(32)
+            combo.setMinimumWidth(160)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.escape_continue_check = QCheckBox("未命中时逃跑续搜")
+        self.escape_continue_check.setFixedHeight(30)
+        self.escape_continue_check.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.escape_continue_check.setStyleSheet("background: transparent;")
         self.escape_continue_check.setToolTip(
             "OCR 明确判定未出闪，且当前搜索范围内仍有后续候选时，运行所选逃跑脚本；\n"
@@ -893,63 +990,183 @@ class AutoRngPanel(QWidget):
         )
         self.escape_script_combo.setEnabled(False)
         self.escape_continue_check.toggled.connect(self.escape_script_combo.setEnabled)
-        layout.addWidget(QLabel("测种脚本"), 0, 0)
-        layout.addWidget(self.seed_script_combo, 0, 1)
-        layout.addWidget(QLabel("过帧脚本"), 0, 2)
-        layout.addWidget(self.advance_script_combo, 0, 3)
-        layout.addWidget(QLabel("撞闪脚本"), 1, 0)
-        layout.addWidget(self.hit_script_combo, 1, 1)
+        script_fields = (
+            ("测种脚本", self.seed_script_combo, 0, 0),
+            ("过帧脚本", self.advance_script_combo, 0, 1),
+            ("撞闪脚本", self.hit_script_combo, 2, 0),
+            ("过场脚本", self.exit_script_combo, 2, 1),
+            ("反查脚本", self.reverse_script_combo, 4, 0),
+            ("逃跑脚本", self.escape_script_combo, 4, 1),
+        )
+        self.script_labels: dict[QComboBox, QLabel] = {}
+        for label_text, combo, row, column in script_fields:
+            label = QLabel(label_text)
+            label.setObjectName("ScriptFieldLabel")
+            self.script_labels[combo] = label
+            layout.addWidget(label, row, column)
+            layout.addWidget(combo, row + 1, column)
         layout.addWidget(
             self.escape_continue_check,
+            6,
+            0,
             1,
             2,
-            Qt.AlignmentFlag.AlignLeft
-            | Qt.AlignmentFlag.AlignVCenter
-            | Qt.AlignmentFlag.AlignAbsolute,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
-        layout.addWidget(self.escape_script_combo, 1, 3)
-        layout.addWidget(QLabel("过场脚本"), 2, 0)
-        layout.addWidget(self.exit_script_combo, 2, 1)
-        layout.addWidget(QLabel("反查脚本"), 2, 2)
-        layout.addWidget(self.reverse_script_combo, 2, 3)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
         return group
 
     def _build_runtime_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("AutoRngRuntimePanel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-        # 脚本区（从左侧移入，位于右侧顶部）
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        runtime_title = QLabel("运行现场")
+        runtime_title.setObjectName("SectionTitle")
+        self.runtime_log_button = QPushButton("轮次记录")
+        self.runtime_log_button.setObjectName("InlineLinkButton")
+        self.runtime_log_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.runtime_log_button.clicked.connect(self.runLogRequested.emit)
+        header.addWidget(runtime_title)
+        header.addStretch(1)
+        header.addWidget(self.runtime_log_button)
+        layout.addLayout(header)
+
+        self.runtime_card = QFrame()
+        self.runtime_card.setObjectName("RuntimeCard")
+        self.runtime_card.setProperty("state", "idle")
+        self.runtime_card.setMinimumHeight(188)
+        runtime_layout = QVBoxLayout(self.runtime_card)
+        runtime_layout.setContentsMargins(16, 13, 16, 12)
+        runtime_layout.setSpacing(7)
+
+        runtime_top = QHBoxLayout()
+        runtime_top.setSpacing(8)
+        self.runtime_state_dot = QLabel("●")
+        self.runtime_state_dot.setObjectName("RuntimeStateDot")
+        self.runtime_phase_label = QLabel("准备就绪")
+        self.runtime_phase_label.setObjectName("RuntimePhaseLabel")
+        self.runtime_round_label = QLabel("任务已停止")
+        self.runtime_round_label.setObjectName("RuntimeRoundLabel")
+        runtime_top.addWidget(self.runtime_state_dot)
+        runtime_top.addWidget(self.runtime_phase_label)
+        runtime_top.addStretch(1)
+        runtime_top.addWidget(self.runtime_round_label)
+        runtime_layout.addLayout(runtime_top)
+
+        self.runtime_description_label = QLabel("等待自动流程开始。")
+        self.runtime_description_label.setObjectName("RuntimeDescriptionLabel")
+        self.runtime_description_label.setWordWrap(True)
+        self.runtime_description_label.setMaximumHeight(38)
+        runtime_layout.addWidget(self.runtime_description_label)
+
+        metrics = QHBoxLayout()
+        metrics.setContentsMargins(0, 5, 0, 3)
+        metrics.setSpacing(16)
+        (
+            current_metric,
+            self.runtime_current_value,
+        ) = self._runtime_metric("当前推进")
+        (
+            target_metric,
+            self.runtime_target_value,
+        ) = self._runtime_metric("目标推进")
+        (
+            remaining_metric,
+            self.runtime_remaining_value,
+        ) = self._runtime_metric("距脚本启动（帧）", accent=True)
+        metrics.addWidget(current_metric, 105)
+        metrics.addWidget(target_metric, 100)
+        metrics.addWidget(remaining_metric, 90)
+        runtime_layout.addLayout(metrics)
+
+        runtime_footer = QFrame()
+        runtime_footer.setObjectName("RuntimeFooter")
+        runtime_footer_layout = QHBoxLayout(runtime_footer)
+        runtime_footer_layout.setContentsMargins(0, 8, 0, 0)
+        runtime_footer_layout.setSpacing(6)
+        runtime_delay_caption = QLabel("本轮 delay")
+        runtime_delay_caption.setObjectName("MutedLabel")
+        self.runtime_delay_value = QLabel("—")
+        self.runtime_delay_value.setObjectName("RuntimeMonoSmall")
+        runtime_footer_layout.addWidget(runtime_delay_caption)
+        runtime_footer_layout.addWidget(self.runtime_delay_value)
+        runtime_footer_layout.addWidget(QLabel("帧"))
+        runtime_footer_layout.addStretch(1)
+        runtime_layout.addWidget(runtime_footer)
+        layout.addWidget(self.runtime_card)
+
+        self.previous_round_label = QLabel("暂无 delay 样本")
+        self.previous_round_label.setObjectName("PreviousRoundLabel")
+        self.previous_round_label.setMinimumHeight(24)
+        self.previous_round_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        layout.addWidget(self.previous_round_label)
+
         self.script_group = self._build_script_group()
         layout.addWidget(self.script_group)
-        layout.addWidget(self._build_target_summary_group())
         layout.addStretch(1)
         return panel
 
     def _build_target_summary_group(self) -> QGroupBox:
         group = QGroupBox()
         group.setObjectName("TargetSummaryGroup")
-        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        group.setMaximumHeight(150)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        group.setMaximumHeight(176)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 6, 12, 8)
-        layout.setSpacing(5)
-        header = QHBoxLayout()
-        header.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+
+        target_card = QFrame()
+        target_card.setObjectName("TargetCard")
+        target_card.setMinimumHeight(66)
+        target_card_layout = QHBoxLayout(target_card)
+        target_card_layout.setContentsMargins(12, 8, 8, 8)
+        target_card_layout.setSpacing(8)
+        target_text_layout = QVBoxLayout()
+        target_text_layout.setContentsMargins(0, 0, 0, 0)
+        target_text_layout.setSpacing(0)
+        target_caption = QLabel("目标精灵")
+        target_caption.setObjectName("MutedLabel")
+        self.target_name_label = QLabel("-")
+        self.target_name_label.setObjectName("TargetNameLabel")
+        target_text_layout.addWidget(target_caption)
+        target_text_layout.addWidget(self.target_name_label)
+        target_card_layout.addLayout(target_text_layout, 1)
         self.target_summary_title = QLabel("精灵筛选列表：-")
-        self.target_button = QPushButton("目标精灵设置...")
-        self.target_button.setFixedHeight(34)
-        self.target_button.setMinimumWidth(150)
+        self.target_summary_title.hide()
+        self.target_button = QPushButton("设置")
+        self.target_button.setObjectName("TargetOpenButton")
+        self.target_button.setFixedSize(54, 32)
+        self.target_button.setToolTip("打开目标精灵设置")
         self.target_button.clicked.connect(self.open_target_dialog)
-        header.addWidget(self.target_summary_title)
-        header.addStretch(1)
-        header.addWidget(self.target_button)
-        layout.addLayout(header)
+        target_card_layout.addWidget(self.target_summary_title)
+        target_card_layout.addWidget(self.target_button)
+        layout.addWidget(target_card)
+
+        target_tags = QHBoxLayout()
+        target_tags.setSpacing(6)
+        self.target_count_label = QLabel("0 组目标条件")
+        self.target_count_label.setObjectName("GreenTag")
+        self.target_match_label = QLabel("匹配任一即可")
+        self.target_match_label.setObjectName("NeutralTag")
+        target_tags.addWidget(self.target_count_label)
+        target_tags.addWidget(self.target_match_label)
+        target_tags.addStretch(1)
+        layout.addLayout(target_tags)
 
         self.target_summary_scroll = QScrollArea()
+        self.target_summary_scroll.setObjectName("TargetSummaryScroll")
         self.target_summary_scroll.setWidgetResizable(True)
-        self.target_summary_scroll.setMinimumHeight(56)
-        self.target_summary_scroll.setMaximumHeight(62)
+        self.target_summary_scroll.setMinimumHeight(42)
+        self.target_summary_scroll.setMaximumHeight(70)
         self.target_summary_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.target_summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.target_summary_container = QWidget()
@@ -968,35 +1185,34 @@ class AutoRngPanel(QWidget):
         return group
 
     def _build_log_group(self) -> QGroupBox:
-        group = QGroupBox("当前消息")
+        group = QGroupBox()
         group.setObjectName("CurrentMessageGroup")
         group.setMaximumWidth(16777215)
-        group.setFixedHeight(90)
+        group.setFixedHeight(44)
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        group.setStyleSheet(
-            "QGroupBox#CurrentMessageGroup { margin-top: 12px; padding: 6px 10px 8px 10px; }"
-            "QGroupBox#CurrentMessageGroup::title { left: 12px; top: 0; padding: 0 4px; }"
-            "QGroupBox#CurrentMessageGroup QPushButton#SecondaryButton { "
-            "min-height: 32px; max-height: 32px; padding: 0 12px; }"
-        )
         self.log_group = group
         layout = QHBoxLayout(group)
-        layout.setContentsMargins(10, 4, 10, 6)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 5, 18, 5)
+        layout.setSpacing(9)
+
+        self.latest_log_time_label = QLabel("—")
+        self.latest_log_time_label.setObjectName("MessageTimeLabel")
+        self.latest_log_time_label.setFixedWidth(52)
+        layout.addWidget(self.latest_log_time_label)
 
         self.latest_log_label = QLabel("暂无消息")
         self.latest_log_label.setObjectName("LatestLogLabel")
         self.latest_log_label.setWordWrap(True)
-        self.latest_log_label.setMaximumHeight(42)
+        self.latest_log_label.setMaximumHeight(30)
         self.latest_log_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.latest_log_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.latest_log_label, 1)
 
         self.view_log_button = QPushButton("查看日志")
-        self.view_log_button.setObjectName("SecondaryButton")
-        self.view_log_button.setFixedHeight(34)
-        self.view_log_button.setMinimumWidth(96)
+        self.view_log_button.setObjectName("InlineLinkButton")
+        self.view_log_button.setFixedHeight(30)
+        self.view_log_button.setMinimumWidth(72)
         self.view_log_button.clicked.connect(self.runLogRequested.emit)
         layout.addWidget(self.view_log_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -1007,6 +1223,365 @@ class AutoRngPanel(QWidget):
         self.log_view.setVisible(False)
         layout.addWidget(self.log_view)
         return group
+
+    def _runtime_metric(self, caption: str, *, accent: bool = False) -> tuple[QWidget, QLabel]:
+        metric = QWidget()
+        metric.setObjectName("RuntimeMetric")
+        metric_layout = QVBoxLayout(metric)
+        metric_layout.setContentsMargins(0, 0, 0, 0)
+        metric_layout.setSpacing(1)
+        caption_label = QLabel(caption)
+        caption_label.setObjectName("RuntimeMetricCaption")
+        value_label = QLabel("—")
+        value_label.setObjectName("RuntimeMetricValueAccent" if accent else "RuntimeMetricValue")
+        value_label.setFont(QFont("Consolas", 17))
+        metric_layout.addWidget(caption_label)
+        metric_layout.addWidget(value_label)
+        return metric, value_label
+
+    def _update_loop_count_visibility(self, _index: int | None = None) -> None:
+        visible = self.mode_combo.currentData() == "count"
+        self.loop_count_label.setVisible(visible)
+        self.loop_count.setVisible(visible)
+
+    def _set_advanced_strategies_visible(self, visible: bool) -> None:
+        self.more_strategy_button.setArrowType(
+            Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow
+        )
+        for field in self._advanced_strategy_fields:
+            self.strategy_form.setRowVisible(field, visible)
+
+    def _connect_config_state_tracking(self) -> None:
+        for spin in (
+            self.max_advances,
+            self.max_wait_frames,
+            self.shiny_threshold_seconds,
+            self.reverse_lookup_window,
+            self.loop_count,
+        ):
+            spin.valueChanged.connect(self._mark_config_dirty)
+        for combo in (self.mode_combo, self.sync_combo, self.auto_reverse_combo):
+            combo.currentIndexChanged.connect(self._mark_config_dirty)
+        self.sync_nature_input.textEdited.connect(self._mark_config_dirty)
+        self.escape_continue_check.toggled.connect(self._mark_config_dirty)
+        self.debug_output_check.toggled.connect(self._mark_config_dirty)
+        for combo in self._script_combos():
+            combo.activated.connect(self._mark_config_dirty)
+
+    def _mark_config_dirty(self, *_args: object) -> None:
+        if self._config_state_tracking_ready:
+            self._set_config_saved(False)
+
+    def _set_config_saved(self, saved: bool) -> None:
+        if not hasattr(self, "config_saved_label"):
+            return
+        self.config_saved_label.setText("已保存" if saved else "有未保存修改")
+        self.config_saved_label.setProperty("saved", saved)
+        self.config_saved_label.style().unpolish(self.config_saved_label)
+        self.config_saved_label.style().polish(self.config_saved_label)
+
+    def _set_runtime_card_state(self, state: str) -> None:
+        if self.runtime_card.property("state") == state:
+            return
+        self.runtime_card.setProperty("state", state)
+        self.runtime_card.style().unpolish(self.runtime_card)
+        self.runtime_card.style().polish(self.runtime_card)
+
+    @staticmethod
+    def _runtime_value(value: object) -> str:
+        if value is None or isinstance(value, bool):
+            return "—"
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError, OverflowError):
+            return "—"
+
+    def _apply_panel_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QWidget#AutoRngPanel {
+                background: #FFFFFF;
+                color: #24312D;
+                font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+                font-size: 13px;
+            }
+            QFrame#AutoRngToolbar {
+                background: #FFFFFF;
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                border-radius: 0;
+            }
+            QFrame#AutoRngToolbar QComboBox,
+            QFrame#AutoRngToolbar QSpinBox,
+            QFrame#AutoRngToolbar QPushButton,
+            QFrame#AutoRngToolbar QToolButton {
+                min-height: 32px;
+                max-height: 34px;
+                border-radius: 5px;
+            }
+            QLabel#ToolbarFieldLabel,
+            QLabel#MutedLabel,
+            QLabel#RuntimeDescriptionLabel,
+            QLabel#RuntimeMetricCaption,
+            QLabel#PreviousRoundLabel,
+            QLabel#MessageTimeLabel,
+            QLabel#DelayActiveLabel,
+            QLabel#ScriptFieldLabel {
+                color: #68766F;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QLabel#SectionTitle {
+                color: #24312D;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            QScrollArea#AutoRngConfigPanel {
+                background: #F6F8F7;
+                border: 0;
+                border-right: 1px solid #E2E8E4;
+            }
+            QScrollArea#AutoRngConfigPanel > QWidget > QWidget,
+            QWidget#AutoRngConfigContents {
+                background: #F6F8F7;
+            }
+            QScrollArea#AutoRngConfigPanel QScrollBar:vertical {
+                width: 7px;
+                margin: 1px;
+                background: transparent;
+            }
+            QScrollArea#AutoRngConfigPanel QScrollBar::handle:vertical {
+                min-height: 28px;
+                border-radius: 3px;
+                background: #C8D2CD;
+            }
+            QScrollArea#AutoRngConfigPanel QScrollBar::add-line:vertical,
+            QScrollArea#AutoRngConfigPanel QScrollBar::sub-line:vertical {
+                height: 0;
+            }
+            QLabel#ConfigSavedLabel {
+                color: #68766F;
+                font-size: 12px;
+            }
+            QLabel#ConfigSavedLabel[saved="false"] {
+                color: #906423;
+            }
+            QGroupBox#TargetSummaryGroup,
+            QGroupBox#AutoRngStrategyGroup {
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                margin: 0;
+                padding: 0;
+                font-weight: 400;
+            }
+            QFrame#TargetCard {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+            }
+            QLabel#TargetNameLabel {
+                color: #24312D;
+                font-size: 18px;
+                font-weight: 500;
+            }
+            QLabel#GreenTag,
+            QLabel#NeutralTag,
+            QLabel#RuntimeRoundLabel {
+                border-radius: 4px;
+                padding: 2px 7px;
+                font-size: 11px;
+                font-weight: 400;
+            }
+            QLabel#GreenTag {
+                background: #EDF7F1;
+                color: #087C58;
+            }
+            QLabel#NeutralTag,
+            QLabel#RuntimeRoundLabel {
+                background: #F2F5F3;
+                color: #68766F;
+            }
+            QPushButton#TargetOpenButton,
+            QPushButton#ConfigSaveButton,
+            QPushButton#InlineLinkButton {
+                background: transparent;
+                border: 0;
+                color: #087C58;
+                padding: 0 4px;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QPushButton#TargetOpenButton:hover,
+            QPushButton#ConfigSaveButton:hover,
+            QPushButton#InlineLinkButton:hover {
+                color: #066A4B;
+                text-decoration: underline;
+            }
+            QScrollArea#TargetSummaryScroll {
+                background: transparent;
+                border: 0;
+            }
+            QScrollArea#TargetSummaryScroll > QWidget > QWidget {
+                background: transparent;
+            }
+            QGroupBox#AutoRngStrategyGroup QLabel {
+                font-weight: 400;
+            }
+            QGroupBox#AutoRngStrategyGroup QSpinBox,
+            QGroupBox#AutoRngStrategyGroup QDoubleSpinBox,
+            QGroupBox#AutoRngStrategyGroup QComboBox,
+            QGroupBox#AutoRngStrategyGroup QLineEdit,
+            QGroupBox#AutoRngStrategyGroup QPushButton#SecondaryButton {
+                min-height: 30px;
+                max-height: 32px;
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                padding: 0 8px;
+                color: #24312D;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QGroupBox#AutoRngStrategyGroup QSpinBox,
+            QGroupBox#AutoRngStrategyGroup QDoubleSpinBox {
+                font-family: "Consolas", "Cascadia Mono", monospace;
+            }
+            QWidget#DelaySettingsField,
+            QWidget#CompactStrategyField {
+                background: transparent;
+            }
+            QLabel#DelayActiveLabel {
+                padding-left: 1px;
+            }
+            QToolButton#MoreStrategyButton {
+                background: transparent;
+                border: 0;
+                border-top: 1px solid #E2E8E4;
+                border-radius: 0;
+                color: #68766F;
+                padding: 7px 0 0 0;
+                text-align: left;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QToolButton#MoreStrategyButton:hover {
+                color: #087C58;
+            }
+            QFrame#ConfigFooter {
+                background: transparent;
+                border: 0;
+                border-top: 1px solid #E2E8E4;
+            }
+            QWidget#AutoRngRuntimePanel {
+                background: #FFFFFF;
+            }
+            QFrame#RuntimeCard {
+                background: #F6F8F7;
+                border: 0;
+                border-radius: 7px;
+            }
+            QFrame#RuntimeCard[state="active"] {
+                background: #EDF7F1;
+            }
+            QFrame#RuntimeCard[state="failed"] {
+                background: #FFF4F1;
+            }
+            QWidget#RuntimeMetric {
+                background: transparent;
+            }
+            QLabel#RuntimeStateDot {
+                color: #95A39C;
+                font-size: 11px;
+            }
+            QFrame#RuntimeCard[state="active"] QLabel#RuntimeStateDot {
+                color: #087C58;
+            }
+            QFrame#RuntimeCard[state="failed"] QLabel#RuntimeStateDot {
+                color: #AC4B42;
+            }
+            QLabel#RuntimePhaseLabel {
+                color: #24312D;
+                font-size: 18px;
+                font-weight: 500;
+            }
+            QLabel#RuntimeMetricValue,
+            QLabel#RuntimeMetricValueAccent {
+                color: #24312D;
+                font-family: "Consolas", "Cascadia Mono", monospace;
+                font-size: 22px;
+                font-weight: 400;
+                letter-spacing: 0;
+            }
+            QLabel#RuntimeMetricValueAccent {
+                color: #087C58;
+            }
+            QLabel#RuntimeMonoSmall {
+                color: #24312D;
+                font-family: "Consolas", "Cascadia Mono", monospace;
+                font-size: 12px;
+                letter-spacing: 0;
+            }
+            QFrame#RuntimeFooter {
+                background: transparent;
+                border: 0;
+                border-top: 1px solid #D7E7DF;
+            }
+            QLabel#PreviousRoundLabel {
+                padding-left: 1px;
+            }
+            QLabel#TargetConditionLabel {
+                color: #5E6F67;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QGroupBox#AutoRngScriptGroup {
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                margin-top: 14px;
+                padding: 10px 0 0 0;
+                color: #24312D;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            QGroupBox#AutoRngScriptGroup::title {
+                subcontrol-origin: margin;
+                left: 0;
+                top: 0;
+                padding: 0;
+                background: transparent;
+            }
+            QGroupBox#AutoRngScriptGroup QComboBox {
+                min-height: 30px;
+                max-height: 32px;
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                padding: 0 8px;
+                color: #24312D;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QGroupBox#CurrentMessageGroup {
+                background: #FFFFFF;
+                border: 0;
+                border-top: 1px solid #E2E8E4;
+                border-radius: 0;
+                margin: 0;
+                padding: 0;
+                font-weight: 400;
+            }
+            QLabel#LatestLogLabel {
+                color: #3F5048;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QLabel#MessageTimeLabel {
+                font-family: "Consolas", "Cascadia Mono", monospace;
+            }
+            """
+        )
 
     def refresh_scripts(self) -> None:
         selected_paths = {
@@ -1031,13 +1606,61 @@ class AutoRngPanel(QWidget):
 
     def set_phase_text(self, text: str) -> None:
         self.status_badge.setText(text)
+        normalized = str(text).strip()
+        if normalized in {AutoRngPhase.IDLE.value, "已停止", "已完成"}:
+            self.runtime_phase_label.setText("准备就绪" if normalized == AutoRngPhase.IDLE.value else normalized)
+            self.runtime_round_label.setText("任务已停止")
+            self._set_runtime_card_state("idle")
+        elif "失败" in normalized or "错误" in normalized:
+            self.runtime_phase_label.setText(normalized or "失败")
+            self._set_runtime_card_state("failed")
+        else:
+            self.runtime_phase_label.setText(normalized or "运行中")
+            self._set_runtime_card_state("active")
 
     def set_live_advances(self, advances: int) -> None:
-        _ = advances
+        current = int(advances)
+        self.runtime_current_value.setText(self._runtime_value(current))
+        if self._runtime_trigger_advances is not None:
+            self.runtime_remaining_value.setText(
+                self._runtime_value(self._runtime_trigger_advances - current)
+            )
 
     def apply_progress(self, progress: AutoRngProgress) -> None:
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
-        self.status_badge.setText(phase_text)
+        self.set_phase_text(phase_text)
+        self._runtime_trigger_advances = progress.trigger_advances
+        target_advances = progress.raw_target_advances
+        if target_advances is None and progress.locked_target is not None:
+            target_advances = progress.locked_target.raw_target_advances
+        delay = progress.fixed_delay
+        if delay is None and progress.locked_target is not None:
+            delay = progress.locked_target.used_delay
+        self.runtime_current_value.setText(self._runtime_value(progress.current_advances))
+        self.runtime_target_value.setText(self._runtime_value(target_advances))
+        self.runtime_remaining_value.setText(self._runtime_value(progress.remaining_to_trigger))
+        self.runtime_delay_value.setText(self._runtime_value(delay))
+        if progress.loop_index > 0:
+            self.runtime_round_label.setText(f"第 {progress.loop_index} 轮")
+        elif progress.phase not in {
+            AutoRngPhase.IDLE,
+            AutoRngPhase.COMPLETED,
+            AutoRngPhase.FAILED,
+        }:
+            self.runtime_round_label.setText("准备第 1 轮")
+        if progress.log_message:
+            self.runtime_description_label.setText(progress.log_message)
+        elif progress.phase == AutoRngPhase.IDLE:
+            self.runtime_description_label.setText("等待自动流程开始。")
+        else:
+            self.runtime_description_label.setText("等待新的运行数据。")
+        runtime_tooltip = progress.log_message
+        if progress.seed_text:
+            runtime_tooltip = (
+                f"Seed: {progress.seed_text}"
+                + (f"\n{runtime_tooltip}" if runtime_tooltip else "")
+            )
+        self.runtime_card.setToolTip(runtime_tooltip)
         self.autoProgressChanged.emit(progress)
         self._last_failed_progress_message = (
             progress.log_message if progress.phase == AutoRngPhase.FAILED else None
@@ -1062,6 +1685,7 @@ class AutoRngPanel(QWidget):
         self.log_view.appendPlainText("\n".join(stamped))
         latest_line = next((line.strip() for line in reversed(lines) if line.strip()), None)
         if latest_line is not None:
+            self.latest_log_time_label.setText(timestamp)
             self.latest_log_label.setText(latest_line)
             self.latest_log_label.setToolTip(text)
 
@@ -1082,6 +1706,7 @@ class AutoRngPanel(QWidget):
         self._activate_delay_profile(self._current_delay_species())
         self._save_delay_profiles()
         self._refresh_target_summary()
+        self._mark_config_dirty()
 
     def targets(self) -> list[tuple[StaticEncounterRecord, StateFilter, str]]:
         if self._targets:
@@ -1111,12 +1736,17 @@ class AutoRngPanel(QWidget):
         targets = self.targets() if hasattr(self, "target_form") else []
         if not targets:
             self.target_summary_title.setText("精灵筛选列表：-")
+            self.target_name_label.setText("-")
+            self.target_count_label.setText("0 组目标条件")
             return
         record = targets[0][0]
         name = POKEMON_LABELS_ZH.get(record.description, record.description)
         self.target_summary_title.setText(f"精灵筛选列表：{name}")
+        self.target_name_label.setText(name)
+        self.target_count_label.setText(f"{len(targets)} 组目标条件")
         for index, (_record, state_filter, shiny_mode) in enumerate(targets, start=1):
             label = QLabel(f"{index}. {_target_condition_text(state_filter, shiny_mode)}")
+            label.setObjectName("TargetConditionLabel")
             label.setWordWrap(True)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
             self.target_summary_layout.addWidget(label)
@@ -1409,6 +2039,8 @@ class AutoRngPanel(QWidget):
         s.setValue("target_gender_filter", tf.gender_filter.currentIndex())
         s.setValue("target_nature", tf.nature_combo.currentIndex())
         s.setValue("target_skip_filter", tf.skip_filter.isChecked())
+        s.sync()
+        self._set_config_saved(True)
 
     def _save_strategy_settings(self) -> None:
         s = self._settings

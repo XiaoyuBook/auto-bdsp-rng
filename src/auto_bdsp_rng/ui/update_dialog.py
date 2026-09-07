@@ -99,9 +99,36 @@ class UpdateDialog(QDialog):
     def __init__(self, parent: QWidget | None = None, *, changelog_text: str | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("软件更新")
+        self.setObjectName("UpdateDialog")
         self.setMinimumWidth(560)
         self.resize(640, 500)
         self.setModal(False)
+        self.setStyleSheet(
+            "QDialog#UpdateDialog { background: #ffffff; color: #24312d; }"
+            " QDialog#UpdateDialog QLabel { background: transparent; color: #24312d; }"
+            " QDialog#UpdateDialog QTabWidget::pane { border: 1px solid #e2e8e4;"
+            " background: #ffffff; top: -1px; }"
+            " QDialog#UpdateDialog QTabBar::tab { background: #ffffff; color: #68766f;"
+            " border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; }"
+            " QDialog#UpdateDialog QTabBar::tab:selected { color: #087c58;"
+            " border-bottom-color: #087c58; }"
+            " QDialog#UpdateDialog QTextBrowser { background: #ffffff; color: #24312d;"
+            " border: 0; padding: 8px; }"
+            " QDialog#UpdateDialog QProgressBar { background: #f6f8f7; color: #24312d;"
+            " border: 1px solid #e2e8e4; border-radius: 4px; text-align: center; }"
+            " QDialog#UpdateDialog QProgressBar::chunk { background: #087c58; border-radius: 3px; }"
+            " QDialog#UpdateDialog QPushButton { background: #ffffff; color: #24312d;"
+            " border: 1px solid #e2e8e4; border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#UpdateDialog QPushButton:hover { background: #f6f8f7; border-color: #bfcfc6; }"
+            " QDialog#UpdateDialog QPushButton:disabled { background: #f6f8f7;"
+            " color: #9aa9a2; border-color: #e2e8e4; }"
+            " QDialog#UpdateDialog QPushButton#UpdatePrimaryButton { background: #087c58;"
+            " color: #ffffff; border-color: #087c58; }"
+            " QDialog#UpdateDialog QPushButton#UpdatePrimaryButton:hover { background: #066a4b;"
+            " border-color: #066a4b; }"
+            " QDialog#UpdateDialog QPushButton#UpdatePrimaryButton:disabled { background: #94c9b7;"
+            " color: #ffffff; border-color: #94c9b7; }"
+        )
         self._busy = False
         self._changelog_text = (
             read_markdown_text(app_path("CHANGELOG.md"))
@@ -167,14 +194,17 @@ class UpdateDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         self.release_button = QPushButton("打开 Release 页面")
+        self.release_button.setObjectName("UpdateReleaseButton")
         self.release_button.clicked.connect(self.openReleaseRequested.emit)
         self.release_button.hide()
         buttons.addWidget(self.release_button)
         self.download_button = QPushButton("下载并安装")
+        self.download_button.setObjectName("UpdatePrimaryButton")
         self.download_button.clicked.connect(self.downloadRequested.emit)
         self.download_button.hide()
         buttons.addWidget(self.download_button)
         self.close_button = QPushButton("关闭")
+        self.close_button.setObjectName("UpdateCloseButton")
         self.close_button.clicked.connect(self.reject)
         buttons.addWidget(self.close_button)
         layout.addLayout(buttons)
