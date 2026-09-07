@@ -13,7 +13,6 @@ from PySide6.QtGui import QAction, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
-    QCheckBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -31,7 +30,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
-    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -43,9 +41,11 @@ from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPh
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
 
@@ -237,8 +237,8 @@ class AutoTidRngPanel(QWidget):
             }
             QLabel#AutoTidTitle {
                 color: #24312d;
-                font-size: 14px;
-                font-weight: 600;
+                font-size: 16px;
+                font-weight: 500;
             }
             QLabel#AutoTidSubtitle,
             QLabel#AutoTidLatest {
@@ -274,7 +274,7 @@ class AutoTidRngPanel(QWidget):
                 margin-top: 18px;
                 padding: 10px 8px 6px 8px;
                 font-size: 13px;
-                font-weight: 600;
+                font-weight: 400;
             }
             QGroupBox#AutoTidTopControls,
             QGroupBox#AutoTidTargets {
@@ -289,6 +289,7 @@ class AutoTidRngPanel(QWidget):
                 padding: 0;
                 color: #24312d;
                 background: transparent;
+                font-weight: 500;
             }
             QWidget#AutoTidScriptPicker {
                 background: transparent;

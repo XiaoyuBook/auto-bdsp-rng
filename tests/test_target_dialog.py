@@ -82,6 +82,19 @@ def test_target_dialog_fits_canvas_and_keeps_complete_compact_form_visible(app):
     assert not form.show_stats_check.isVisible()
     assert not form.iv_calculator_button.isVisible()
     assert dialog.target_scroll.maximumHeight() <= 220
+    ordered_misc_controls = (
+        form.ability_filter,
+        form.gender_filter,
+        form.nature_combo,
+        form.shiny_filter,
+        form.height_min,
+        form.weight_min,
+    )
+    ordered_tops = [
+        control.mapTo(dialog, QPoint(0, 0)).y()
+        for control in ordered_misc_controls
+    ]
+    assert ordered_tops == sorted(ordered_tops)
 
     stylesheet = dialog.styleSheet().lower()
     assert "#087c58" in stylesheet

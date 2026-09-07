@@ -10,7 +10,6 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
-    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -22,7 +21,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QStackedWidget,
     QStyle,
     QStyledItemDelegate,
@@ -44,12 +42,14 @@ from auto_bdsp_rng.automation.auto_rng.delay_strategy import (
     MultiCandidatePolicy,
     evaluate_delay_samples,
 )
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 
 
 QT_INT_MAX = 2_147_483_647
 DELAY_HISTORY_PAGE_SIZE = 10
-DELAY_DIALOG_WIDTH = 636
+DELAY_DIALOG_WIDTH = 490
 # Keep the settings dialog compact enough to coexist with the fixed 1150x900
 # application canvas.  The body scrolls independently when optional content
 # (for example timestamps) needs more room than this limit allows.
@@ -173,25 +173,23 @@ class _DelayComboBox(QComboBox):
         painter.end()
 
 
-class _DelayCheckBox(QCheckBox):
-    def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
-        if self.isChecked():
-            option = QStyleOptionButton()
-            self.initStyleOption(option)
-            indicator = self.style().subElementRect(
-                QStyle.SubElement.SE_CheckBoxIndicator, option, self
-            )
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
-            left, top = indicator.x(), indicator.y()
-            painter.drawLine(left + 3, top + 7, left + 6, top + 10)
-            painter.drawLine(left + 6, top + 10, left + 11, top + 4)
+class _DelayCheckBox(CheckmarkCheckBox):
+    pass
 
 
 class DelaySummaryButton(QPushButton):
-    """Keep the settings icon at the trailing edge of the summary field."""
+    """Present the strategy and estimate as distinct text levels."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._strategy_text = ""
+        self._estimate_text = ""
+
+    def set_summary(self, strategy: str, estimate: int) -> None:
+        self._strategy_text = str(strategy)
+        self._estimate_text = str(int(estimate))
+        # Preserve the existing text contract for accessibility and callers.
+        self.setText(f"{self._strategy_text} · 下轮 {self._estimate_text}")
 
     def paintEvent(self, event) -> None:  # noqa: N802
         option = QStyleOptionButton()
@@ -201,13 +199,34 @@ class DelaySummaryButton(QPushButton):
         option.icon = QIcon()
         painter = QPainter(self)
         self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
-        text_rect = self.rect().adjusted(12, 0, -38, 0)
+        strategy = self._strategy_text
+        estimate = self._estimate_text
+        if not strategy:
+            strategy, separator, estimate = text.partition(" · 下轮 ")
+            if not separator:
+                strategy, estimate = text, ""
+        icon_left = self.width() - 26
+        estimate_width = min(48, self.fontMetrics().horizontalAdvance(estimate) + 4)
+        estimate_rect = QRect(
+            icon_left - estimate_width - 7,
+            0,
+            estimate_width,
+            self.height(),
+        )
+        text_rect = QRect(12, 0, max(1, estimate_rect.left() - 18), self.height())
         painter.setPen(option.palette.buttonText().color())
         painter.drawText(
             text_rect,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            self.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, text_rect.width()),
+            self.fontMetrics().elidedText(strategy, Qt.TextElideMode.ElideRight, text_rect.width()),
         )
+        if estimate:
+            painter.setPen(QColor("#087C58") if self.isEnabled() else QColor("#A5AEA9"))
+            painter.drawText(
+                estimate_rect,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                estimate,
+            )
         self.icon().paint(
             painter, QRect(self.width() - 26, (self.height() - 16) // 2, 16, 16)
         )
@@ -301,7 +320,10 @@ class _SampleTable(QTableWidget):
         )
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(590, self.content_height())
+        return QSize(450, self.content_height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, self.content_height())
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -427,12 +449,12 @@ class _FieldRow(QWidget):
         self.label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
-        self.label.setFixedWidth(132)
+        self.label.setFixedWidth(92)
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(12)
         layout.setVerticalSpacing(5)
-        layout.setColumnMinimumWidth(0, 132)
+        layout.setColumnMinimumWidth(0, 92)
         layout.setColumnStretch(1, 1)
         layout.addWidget(self.label, 0, 0)
         layout.addWidget(field, 0, 1)

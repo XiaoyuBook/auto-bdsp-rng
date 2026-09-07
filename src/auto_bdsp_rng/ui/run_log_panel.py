@@ -28,7 +28,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QFileDialog,
     QFrame,
     QHeaderView,
@@ -43,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 
 
 MAX_LOG_ENTRIES = 10_000

@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,6 +27,7 @@ from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui.main_window import PokeFinderTableWidget
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 
 
 ID_HEADERS = ("Adv", "TID", "SID", "TSV", "Display TID")

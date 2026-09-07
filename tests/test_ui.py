@@ -22,18 +22,23 @@ from auto_bdsp_rng.blink_detection import (
 from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, QThread, QTimer, Qt
 from PySide6.QtGui import QPaintEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QSizePolicy, QTableWidget
+from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton, QSizePolicy, QTableWidget, QWidget
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult, AutoRngTarget
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import DialogTimingResult
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion, OcrRegionConfig
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, ProjectXsMunchlaxAdvanceCounter
-from auto_bdsp_rng.automation.easycon import EasyConInstallation, EasyConRunResult, EasyConStatus
+from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConInstallation, EasyConRunResult, EasyConStatus
 from auto_bdsp_rng.gen8_static import State8, StateFilter
 from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
+import auto_bdsp_rng.ui.auto_rng_panel as auto_rng_panel_module
+import auto_bdsp_rng.ui.auto_tid_rng_panel as auto_tid_rng_panel_module
+import auto_bdsp_rng.ui.easycon_panel as easycon_panel_module
+import auto_bdsp_rng.ui.ocr_settings_dialog as ocr_settings_dialog_module
+import auto_bdsp_rng.ui.tid_ocr_dialog as tid_ocr_dialog_module
 from auto_bdsp_rng.automation.auto_rng.runner import _NATURE_MAP
 from auto_bdsp_rng.ui.main_window import (
     NATURES_ZH,
@@ -44,7 +49,82 @@ from auto_bdsp_rng.ui.main_window import (
     _reverse_species_label,
 )
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
+from auto_bdsp_rng.ui.spin_box import ChevronDoubleSpinBox
+
+
+@pytest.fixture(autouse=True)
+def isolated_ui_qsettings(monkeypatch, tmp_path: Path):
+    isolation_root = (tmp_path / ".ui-isolation").resolve()
+    isolation_root.mkdir()
+    applications = {
+        "MainWindowProfile": "main-window.ini",
+        "AutoRngPanel": "auto-rng.ini",
+        "AutoTidRngPanel": "auto-tid-rng.ini",
+        "OcrSettings": "ocr.ini",
+        "AutoTidRngOcr": "tid-ocr.ini",
+    }
+    settings = {
+        application: QSettings(
+            str((isolation_root / filename).resolve()),
+            QSettings.Format.IniFormat,
+        )
+        for application, filename in applications.items()
+    }
+    for value in settings.values():
+        value.clear()
+
+    def router(application: str):
+        def create(organization: str, requested_application: str) -> QSettings:
+            assert (organization, requested_application) == (
+                "auto-bdsp-rng",
+                application,
+            )
+            return settings[application]
+
+        return create
+
+    monkeypatch.setattr(main_window_module, "QSettings", router("MainWindowProfile"))
+    monkeypatch.setattr(auto_rng_panel_module, "QSettings", router("AutoRngPanel"))
+    monkeypatch.setattr(
+        auto_tid_rng_panel_module,
+        "QSettings",
+        router("AutoTidRngPanel"),
+    )
+    monkeypatch.setattr(
+        ocr_settings_dialog_module,
+        "QSettings",
+        router("OcrSettings"),
+    )
+    monkeypatch.setattr(
+        tid_ocr_dialog_module,
+        "QSettings",
+        router("AutoTidRngOcr"),
+    )
+    isolated_script_dir = isolation_root / "easycon-script"
+    isolated_script_dir.mkdir()
+    isolated_easycon_config = (isolation_root / "easycon.json").resolve()
+    monkeypatch.setattr(easycon_panel_module, "SCRIPT_DIR", isolated_script_dir)
+    monkeypatch.setattr(easycon_panel_module, "load_config", lambda: EasyConConfig())
+    monkeypatch.setattr(
+        easycon_panel_module,
+        "save_config",
+        lambda _config: isolated_easycon_config,
+    )
+    monkeypatch.setattr(main_window_module, "should_show_startup_notice", lambda: False)
+
+    yield settings
+
+    resolved_paths = set()
+    for value in settings.values():
+        value.sync()
+        path = Path(value.fileName()).resolve()
+        assert value.format() == QSettings.Format.IniFormat
+        assert value.status() == QSettings.Status.NoError
+        assert path.is_relative_to(isolation_root)
+        resolved_paths.add(path)
+    assert len(resolved_paths) == len(settings)
 
 
 @pytest.fixture
@@ -257,11 +337,17 @@ def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
     assert speed_min.geometry().bottom() < show_stats.geometry().top()
 
 
-def test_project_xs_controls_use_confirmed_split_layout(app):
-    window = MainWindow()
+def test_project_xs_controls_use_confirmed_split_layout(
+    app,
+    isolated_ui_qsettings,
+):
+    window = MainWindow(
+        profile_settings=isolated_ui_qsettings["MainWindowProfile"],
+    )
     window.tabs.setCurrentWidget(window.project_xs_tab)
     window.resize(1280, 760)
     window.show()
+    app.processEvents()
     app.processEvents()
 
     capture = window.capture_group.geometry()
@@ -306,6 +392,34 @@ def test_project_xs_controls_use_confirmed_split_layout(app):
     assert [label.text() for label in window.seed_group.findChildren(QLabel)] == ["Seed0", "Seed1"]
     assert window.threshold.height() <= 32
     assert window.capture_button.height() <= 34
+    assert isinstance(window.threshold, ChevronDoubleSpinBox)
+    assert isinstance(window.white_delay, ChevronDoubleSpinBox)
+    assert window.threshold.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.UpDownArrows
+    assert window.white_delay.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.UpDownArrows
+    assert window.preview_title_label.text() == "捕获预览"
+    assert window.picture_in_picture_button.objectName() == "InlineLinkButton"
+    assert window.calibrate_shiny_threshold_button.objectName() == "InlineLinkButton"
+    assert window.iv_calculator_button.objectName() == "InlineLinkButton"
+    assert window.picture_in_picture_button.toolTip()
+    assert window.preview_aspect_container.hasHeightForWidth()
+    assert window.preview_aspect_container.height() == (
+        window.preview_aspect_container.heightForWidth(
+            window.preview_aspect_container.width()
+        )
+    )
+    assert abs(
+        window.preview_aspect_container.width() * 9
+        - window.preview_aspect_container.height() * 16
+    ) <= 8
+    preview_controls = (
+        window.preview_title_label,
+        window.main_preview_overlay_check,
+        window.picture_in_picture_button,
+    )
+    assert preview_controls[0].geometry().right() < preview_controls[1].geometry().left()
+    assert preview_controls[1].geometry().right() < preview_controls[2].geometry().left()
+    centers = [widget.geometry().center().y() for widget in preview_controls]
+    assert max(centers) - min(centers) <= 3
 
 
 def test_easycon_header_uses_panel_connection_presentation(app):
@@ -2058,7 +2172,10 @@ def test_auto_rng_strategy_parameters_have_hover_explanations(app, tmp_path):
         assert label.toolTip() == field.toolTip()
 
     assert form.labelForField(panel.max_advances).text() == "搜索范围"
-    assert form.labelForField(panel.shiny_threshold_seconds).text() == "闪光阈值（秒）"
+    assert form.labelForField(panel.shiny_threshold_seconds).text() == "闪光阈值"
+    assert panel.max_advances.suffix() == " 帧"
+    assert panel.max_wait_frames.suffix() == " 帧"
+    assert panel.shiny_threshold_seconds.suffix() == " 秒"
     assert form.indexOf(panel.reseeding_threshold) == -1
     assert panel.strategy_dialog.form.labelForField(panel.reseeding_threshold).text() == "过场预留帧数"
     for control in (
@@ -2094,10 +2211,10 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     fields = (
         ("测种脚本", panel.seed_script_combo, 0, 0),
         ("过帧脚本", panel.advance_script_combo, 0, 1),
-        ("撞闪脚本", panel.hit_script_combo, 2, 0),
-        ("过场脚本", panel.exit_script_combo, 2, 1),
-        ("反查脚本", panel.reverse_script_combo, 4, 0),
-        ("逃跑脚本", panel.escape_script_combo, 4, 1),
+        ("撞闪脚本", panel.hit_script_combo, 3, 0),
+        ("过场脚本", panel.exit_script_combo, 3, 1),
+        ("反查脚本", panel.reverse_script_combo, 6, 0),
+        ("逃跑脚本", panel.escape_script_combo, 6, 1),
     )
     for label, combo, row, column in fields:
         assert layout.itemAtPosition(row, column).widget().text() == label
@@ -2109,11 +2226,11 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
         assert picker.layout().itemAt(0).widget() is combo
         assert picker.layout().itemAt(1).widget() is edit_button
         assert edit_button.toolTip() == f"编辑{label}"
-    assert layout.itemAtPosition(6, 0).widget() is panel.escape_continue_check
+    assert layout.itemAtPosition(9, 0).widget() is panel.escape_continue_check
     assert panel.escape_continue_check.text() == "未命中时逃跑续搜"
     assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.LeftToRight
     assert "background: transparent" in panel.escape_continue_check.styleSheet()
-    assert layout.itemAtPosition(6, 0).alignment() == (
+    assert layout.itemAtPosition(9, 0).alignment() == (
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     )
     panel.resize(1000, 700)
@@ -3219,8 +3336,11 @@ def test_automation_script_shortcut_honors_unsaved_choice(
     window.easycon_tab._saved_editor_text = window.easycon_tab.editor.toPlainText()
 
 
-def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
-    panel = AutoRngPanel()
+def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path):
+    panel = AutoRngPanel(
+        script_dir=tmp_path,
+        settings=_auto_rng_settings(tmp_path),
+    )
 
     assert 56 <= panel.toolbar.maximumHeight() <= 64
     assert panel.mode_combo.width() == 120
@@ -3235,7 +3355,25 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.max_advances.width() == 180
     assert panel.delay_settings_button.size().toTuple() == (180, 32)
+    assert panel.delay_settings_button._strategy_text == "固定 delay"
+    assert panel.delay_settings_button._estimate_text == "100"
+    assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
+    assert panel.delay_active_label.text() == "下轮预计 100 帧"
+    assert panel.runtime_card.height() == 226
+    assert isinstance(panel.debug_output_check, CheckmarkCheckBox)
+    assert isinstance(panel.escape_continue_check, CheckmarkCheckBox)
     assert panel.seed_script_combo.minimumWidth() == 160
+    assert panel.config_contents.layout().spacing() == 13
+    assert panel.strategy_form.verticalSpacing() == 13
+    script_layout = panel.script_group.layout()
+    assert script_layout.contentsMargins().top() == 10
+    assert [script_layout.rowMinimumHeight(row) for row in (2, 5, 8)] == [6, 6, 6]
+    target_tags = panel.findChild(QWidget, "TargetTags")
+    assert target_tags is not None
+    assert target_tags.layout().contentsMargins().bottom() == 10
+    config_layout = panel.config_contents.layout()
+    assert config_layout.itemAt(3).widget().objectName() == "ConfigFooter"
+    assert config_layout.itemAt(4).spacerItem() is not None
     assert panel.more_strategy_button.isCheckable()
     assert panel.shiny_threshold_seconds.isHidden()
     assert not hasattr(panel, "refresh_scripts_button")
@@ -3243,8 +3381,11 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
-def test_auto_rng_advanced_strategies_scroll_inside_fixed_sidebar(app):
-    panel = AutoRngPanel()
+def test_auto_rng_advanced_strategies_scroll_inside_fixed_sidebar(app, tmp_path):
+    panel = AutoRngPanel(
+        script_dir=tmp_path,
+        settings=_auto_rng_settings(tmp_path),
+    )
     panel.resize(1126, 700)
     panel.show()
     panel.more_strategy_button.setChecked(True)

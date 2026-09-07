@@ -7,7 +7,6 @@ from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDialog,
     QFrame,
     QGridLayout,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.resources import app_icon_path
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
 
 

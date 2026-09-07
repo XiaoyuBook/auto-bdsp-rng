@@ -10,8 +10,16 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QRect, QSettings, QSize, Qt
 from PySide6.QtWidgets import QApplication, QSplitter, QTabWidget
 
+from auto_bdsp_rng.automation.easycon import EasyConConfig
 from auto_bdsp_rng.ui import MainWindow
+import auto_bdsp_rng.ui.auto_rng_panel as auto_rng_panel_module
+import auto_bdsp_rng.ui.auto_tid_rng_panel as auto_tid_rng_panel_module
+import auto_bdsp_rng.ui.easycon_panel as easycon_panel_module
+import auto_bdsp_rng.ui.main_window as main_window_module
+import auto_bdsp_rng.ui.ocr_settings_dialog as ocr_settings_dialog_module
+import auto_bdsp_rng.ui.tid_ocr_dialog as tid_ocr_dialog_module
 from auto_bdsp_rng.ui.main_window import (
+    APP_TITLE,
     MAIN_WINDOW_CURRENT_TAB_KEY,
     MAIN_WINDOW_MIN_SIZE,
     MAIN_WINDOW_SCREEN_MARGIN,
@@ -19,6 +27,79 @@ from auto_bdsp_rng.ui.main_window import (
     _clamp_window_rect,
     _fit_window_rect,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_ui_qsettings(monkeypatch, tmp_path: Path):
+    isolation_root = (tmp_path / ".ui-isolation").resolve()
+    isolation_root.mkdir()
+    applications = {
+        "MainWindowProfile": "main-window.ini",
+        "AutoRngPanel": "auto-rng.ini",
+        "AutoTidRngPanel": "auto-tid-rng.ini",
+        "OcrSettings": "ocr.ini",
+        "AutoTidRngOcr": "tid-ocr.ini",
+    }
+    settings = {
+        application: QSettings(
+            str((isolation_root / filename).resolve()),
+            QSettings.Format.IniFormat,
+        )
+        for application, filename in applications.items()
+    }
+    for value in settings.values():
+        value.clear()
+
+    def router(application: str):
+        def create(organization: str, requested_application: str) -> QSettings:
+            assert (organization, requested_application) == (
+                "auto-bdsp-rng",
+                application,
+            )
+            return settings[application]
+
+        return create
+
+    monkeypatch.setattr(main_window_module, "QSettings", router("MainWindowProfile"))
+    monkeypatch.setattr(auto_rng_panel_module, "QSettings", router("AutoRngPanel"))
+    monkeypatch.setattr(
+        auto_tid_rng_panel_module,
+        "QSettings",
+        router("AutoTidRngPanel"),
+    )
+    monkeypatch.setattr(
+        ocr_settings_dialog_module,
+        "QSettings",
+        router("OcrSettings"),
+    )
+    monkeypatch.setattr(
+        tid_ocr_dialog_module,
+        "QSettings",
+        router("AutoTidRngOcr"),
+    )
+    isolated_script_dir = isolation_root / "easycon-script"
+    isolated_script_dir.mkdir()
+    isolated_easycon_config = (isolation_root / "easycon.json").resolve()
+    monkeypatch.setattr(easycon_panel_module, "SCRIPT_DIR", isolated_script_dir)
+    monkeypatch.setattr(easycon_panel_module, "load_config", lambda: EasyConConfig())
+    monkeypatch.setattr(
+        easycon_panel_module,
+        "save_config",
+        lambda _config: isolated_easycon_config,
+    )
+    monkeypatch.setattr(main_window_module, "should_show_startup_notice", lambda: False)
+
+    yield settings
+
+    resolved_paths = set()
+    for value in settings.values():
+        value.sync()
+        path = Path(value.fileName()).resolve()
+        assert value.format() == QSettings.Format.IniFormat
+        assert value.status() == QSettings.Status.NoError
+        assert path.is_relative_to(isolation_root)
+        resolved_paths.add(path)
+    assert len(resolved_paths) == len(settings)
 
 
 @pytest.fixture
@@ -130,14 +211,16 @@ def test_main_window_uses_design_geometry_when_screen_can_fit_it(app, monkeypatc
 def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     app,
     monkeypatch,
-    tmp_path: Path,
+    isolated_ui_qsettings,
 ) -> None:
     monkeypatch.setattr(
         MainWindow,
         "_screen_available_geometry",
         lambda _self: QRect(0, 0, 1920, 1080),
     )
-    window = MainWindow(profile_settings=_settings(tmp_path))
+    window = MainWindow(
+        profile_settings=isolated_ui_qsettings["MainWindowProfile"],
+    )
     window.resize(MAIN_WINDOW_MIN_SIZE)
     window._update_auto_rng_header(
         loop_index=9999,
@@ -155,6 +238,7 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
 
     controls = (
         window.title_label,
+        window.version_label,
         window.video_source_header_button,
         window.easycon_header_button,
         window.help_button,
@@ -164,6 +248,13 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert controls[0].geometry().left() >= window.header.contentsRect().left()
     assert controls[-1].geometry().right() <= window.header.contentsRect().right()
     assert window.header_layout.minimumSize().width() <= window.header.width()
+    assert window.title_label.text() == APP_TITLE
+    assert window.version_label.text().startswith("v")
+    assert window.version_label.text() not in window.title_label.text()
+    assert window.title_label.font().pixelSize() == 17
+    assert window.version_label.font().pixelSize() == 11
+    assert window.title_label.font().weight() == 500
+    assert window.version_label.font().weight() == 400
     assert window.video_source_header_button.size() == QSize(150, 30)
     assert window.easycon_header_button.size() == QSize(150, 30)
     assert not window.auto_loop_badge.isVisible()
@@ -188,6 +279,69 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert window.navigation_status.text() == "● TID · 第 7 轮"
     assert "阶段 等待取名" in window.navigation_status.toolTip()
     assert "advance 321" in window.navigation_status.toolTip()
+
+
+def test_confirmed_navigation_and_seed_preview_use_content_geometry(
+    app,
+    monkeypatch,
+    isolated_ui_qsettings,
+) -> None:
+    monkeypatch.setattr(
+        MainWindow,
+        "_screen_available_geometry",
+        lambda _self: QRect(0, 0, 1920, 1080),
+    )
+    window = MainWindow(
+        profile_settings=isolated_ui_qsettings["MainWindowProfile"],
+    )
+    window.resize(1150, 900)
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+
+    assert window.size() == QSize(1150, 900)
+    tab_bar = window.tabs.tabBar()
+    tab_widths = [tab_bar.tabRect(index).width() for index in range(tab_bar.count())]
+    text_widths = [
+        tab_bar.fontMetrics().horizontalAdvance(tab_bar.tabText(index))
+        for index in range(tab_bar.count())
+    ]
+    assert len(set(tab_widths)) > 1
+    assert all(
+        20 <= tab_width - text_width <= 40
+        for tab_width, text_width in zip(tab_widths, text_widths, strict=True)
+    )
+
+    stylesheet = " ".join(window.styleSheet().split())
+    assert "min-width: 0;" in stylesheet
+    assert "margin-right: 25px;" in stylesheet
+    assert "border-bottom: 2px solid #087C58;" in stylesheet
+    assert window.styleSheet().count("QLabel#WindowTitle {") == 1
+    assert window.styleSheet().count("QLabel#WindowVersion {") == 1
+    assert window.styleSheet().count("QGroupBox::title {") == 1
+    group_rule = stylesheet.split("QGroupBox {", 1)[1].split("}", 1)[0]
+    group_title_rule = stylesheet.split("QGroupBox::title {", 1)[1].split("}", 1)[0]
+    checkbox_rule = stylesheet.split("QCheckBox {", 1)[1].split("}", 1)[0]
+    assert "font-weight: 400;" in group_rule
+    assert "font-weight: 500;" in group_title_rule
+    assert "background: transparent;" in checkbox_rule
+
+    preview = window.preview_aspect_container
+    assert preview.parentWidget() is window.preview_group
+    assert window.preview_label.parentWidget() is preview
+    assert preview.heightForWidth(640) == 360
+    assert preview.height() == preview.heightForWidth(preview.width())
+    assert abs(preview.width() * 9 - preview.height() * 16) <= 8
+    controls = (
+        window.preview_title_label,
+        window.main_preview_overlay_check,
+        window.picture_in_picture_button,
+    )
+    centers = [control.geometry().center().y() for control in controls]
+    assert max(centers) - min(centers) <= 3
+    assert controls[0].geometry().right() < controls[1].geometry().left()
+    assert controls[1].geometry().right() < controls[2].geometry().left()
 
 
 @pytest.mark.parametrize("task", ("定点", "TID"))

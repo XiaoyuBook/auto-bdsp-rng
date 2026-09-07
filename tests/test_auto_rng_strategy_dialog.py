@@ -233,7 +233,7 @@ def test_delay_strategy_button_and_dialog_defaults(app, tmp_path):
     dialog = panel.delay_strategy_dialog
     form = panel.strategy_group.layout()
 
-    assert form.labelForField(panel.delay_settings_field).text() == "delay"
+    assert form.labelForField(panel.delay_settings_field).text() == "delay 策略"
     assert form.indexOf(panel.fixed_delay) == -1
     assert panel.fixed_delay.isHidden()
     assert panel.fixed_delay.value() == 100
@@ -258,7 +258,7 @@ def test_delay_strategy_button_and_dialog_defaults(app, tmp_path):
     assert dialog.values().dense_interval_width == 2
     assert dialog.multi_candidate_widget.isHidden()
     assert dialog._form_rows[dialog.strategy_combo].label.text() == "delay 策略"
-    assert dialog._form_rows[dialog.strategy_combo].label.width() == 132
+    assert dialog._form_rows[dialog.strategy_combo].label.width() == 92
     assert dialog.strategy_description.text() == "始终使用基准 delay；样本会继续保留。"
     runtime_layout = dialog.runtime_summary.layout()
     assert runtime_layout.count() == 3

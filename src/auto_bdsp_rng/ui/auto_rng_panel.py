@@ -11,10 +11,8 @@ from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signa
 from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -27,7 +25,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -62,6 +59,7 @@ from auto_bdsp_rng.data import (
 )
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import (
     DELAY_STRATEGY_LABEL_BY_ID,
     DelaySummaryButton,
@@ -70,6 +68,10 @@ from auto_bdsp_rng.ui.delay_strategy_dialog import (
 )
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.spin_box import (
+    ChevronDoubleSpinBox as QDoubleSpinBox,
+    ChevronSpinBox as QSpinBox,
+)
 from auto_bdsp_rng.ui.static_target_form import StaticTargetForm
 from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATURES_ZH
 
@@ -460,7 +462,7 @@ class AutoRngPanel(QWidget):
         contents.setMinimumWidth(300)
         layout = QVBoxLayout(contents)
         layout.setContentsMargins(18, 16, 18, 14)
-        layout.setSpacing(10)
+        layout.setSpacing(13)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -476,7 +478,6 @@ class AutoRngPanel(QWidget):
         layout.addWidget(self._build_target_summary_group())
         self.strategy_group = self._build_strategy_group()
         layout.addWidget(self.strategy_group)
-        layout.addStretch(1)
 
         footer = QFrame()
         footer.setObjectName("ConfigFooter")
@@ -493,6 +494,7 @@ class AutoRngPanel(QWidget):
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.save_config_button)
         layout.addWidget(footer)
+        layout.addStretch(1)
 
         panel.setWidget(contents)
         self.config_contents = contents
@@ -505,16 +507,18 @@ class AutoRngPanel(QWidget):
         form = QFormLayout(group)
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(9)
+        form.setVerticalSpacing(13)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.strategy_form = form
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
+        self.max_advances.setSuffix(" 帧")
         self.fixed_delay = self._spin(0, QT_INT_MAX, 100)
         self.fixed_delay.setParent(group)
         self.fixed_delay.hide()
         self.max_wait_frames = self._spin(1, 1_000_000_000, 300)
+        self.max_wait_frames.setSuffix(" 帧")
         self.delay_strategy_dialog = DelayStrategyDialog(self)
         self.delay_settings_button = DelaySummaryButton()
         self.delay_settings_button.setObjectName("SecondaryButton")
@@ -561,6 +565,7 @@ class AutoRngPanel(QWidget):
         self.shiny_threshold_seconds.setDecimals(3)
         self.shiny_threshold_seconds.setSingleStep(0.1)
         self.shiny_threshold_seconds.setValue(DEFAULT_SHINY_THRESHOLD_SECONDS)
+        self.shiny_threshold_seconds.setSuffix(" 秒")
         set_c_locale(self.shiny_threshold_seconds)
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
             spin.setFixedWidth(180)
@@ -574,7 +579,7 @@ class AutoRngPanel(QWidget):
                 "全国图鉴齐全的情况下，过 100 万帧大约需要 10 分钟。",
             ),
             (
-                "delay",
+                "delay 策略",
                 self.delay_settings_field,
                 "表示脚本等待结束后（无 _闪帧时为脚本启动后）到实际撞到目标之间经过的帧数。\n"
                 "含 _闪帧的旧脚本按“目标帧 - delay - _闪帧”启动；无 _闪帧时由软件等待到“目标帧 - delay”再启动；"
@@ -588,7 +593,7 @@ class AutoRngPanel(QWidget):
                 "数值越大，流程越早进入实时等待；数值越小，越依赖过帧脚本接近目标。",
             ),
             (
-                "闪光阈值（秒）",
+                "闪光阈值",
                 self.shiny_threshold_seconds,
                 "使用 OCR 测量战斗文本“出现了！”到“去吧/上吧”之间的时间间隔。\n"
                 "测得的间隔大于或等于该值时，判定为疑似闪光并停止自动流程。\n"
@@ -830,7 +835,7 @@ class AutoRngPanel(QWidget):
         estimate = self._estimate_delay(self._delay_strategy_config)
         strategy_id = self._delay_strategy_config.strategy.value
         label = DELAY_STRATEGY_LABEL_BY_ID[strategy_id]
-        self.delay_settings_button.setText(f"{label} · 下轮 {estimate.value}")
+        self.delay_settings_button.set_summary(label, estimate.value)
         if hasattr(self, "delay_active_label"):
             self.delay_active_label.setText(f"下轮预计 {estimate.value} 帧")
         if hasattr(self, "runtime_delay_value"):
@@ -965,7 +970,7 @@ class AutoRngPanel(QWidget):
         group.setObjectName("AutoRngScriptGroup")
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QGridLayout(group)
-        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setContentsMargins(0, 10, 0, 0)
         layout.setHorizontalSpacing(16)
         layout.setVerticalSpacing(4)
 
@@ -1002,10 +1007,10 @@ class AutoRngPanel(QWidget):
         script_fields = (
             ("测种脚本", self.seed_script_combo, 0, 0),
             ("过帧脚本", self.advance_script_combo, 0, 1),
-            ("撞闪脚本", self.hit_script_combo, 2, 0),
-            ("过场脚本", self.exit_script_combo, 2, 1),
-            ("反查脚本", self.reverse_script_combo, 4, 0),
-            ("逃跑脚本", self.escape_script_combo, 4, 1),
+            ("撞闪脚本", self.hit_script_combo, 3, 0),
+            ("过场脚本", self.exit_script_combo, 3, 1),
+            ("反查脚本", self.reverse_script_combo, 6, 0),
+            ("逃跑脚本", self.escape_script_combo, 6, 1),
         )
         self.script_labels: dict[QComboBox, QLabel] = {}
         for label_text, combo, row, column in script_fields:
@@ -1043,12 +1048,14 @@ class AutoRngPanel(QWidget):
             layout.addWidget(picker, row + 1, column)
         layout.addWidget(
             self.escape_continue_check,
-            6,
+            9,
             0,
             1,
             2,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
+        for spacer_row in (2, 5, 8):
+            layout.setRowMinimumHeight(spacer_row, 6)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
         return group
@@ -1077,7 +1084,7 @@ class AutoRngPanel(QWidget):
         self.runtime_card = QFrame()
         self.runtime_card.setObjectName("RuntimeCard")
         self.runtime_card.setProperty("state", "idle")
-        self.runtime_card.setMinimumHeight(188)
+        self.runtime_card.setFixedHeight(226)
         runtime_layout = QVBoxLayout(self.runtime_card)
         runtime_layout.setContentsMargins(16, 13, 16, 12)
         runtime_layout.setSpacing(7)
@@ -1153,6 +1160,7 @@ class AutoRngPanel(QWidget):
         layout.addWidget(self.previous_round_label)
 
         self.script_group = self._build_script_group()
+        layout.addSpacing(6)
         layout.addWidget(self.script_group)
         layout.addStretch(1)
         return panel
@@ -1164,7 +1172,7 @@ class AutoRngPanel(QWidget):
         group.setMaximumHeight(176)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(7)
+        layout.setSpacing(10)
 
         target_card = QFrame()
         target_card.setObjectName("TargetCard")
@@ -1193,7 +1201,10 @@ class AutoRngPanel(QWidget):
         target_card_layout.addWidget(self.target_button)
         layout.addWidget(target_card)
 
-        target_tags = QHBoxLayout()
+        target_tags_widget = QWidget(group)
+        target_tags_widget.setObjectName("TargetTags")
+        target_tags = QHBoxLayout(target_tags_widget)
+        target_tags.setContentsMargins(0, 0, 0, 10)
         target_tags.setSpacing(6)
         self.target_count_label = QLabel("0 组目标条件")
         self.target_count_label.setObjectName("GreenTag")
@@ -1202,7 +1213,7 @@ class AutoRngPanel(QWidget):
         target_tags.addWidget(self.target_count_label)
         target_tags.addWidget(self.target_match_label)
         target_tags.addStretch(1)
-        layout.addLayout(target_tags)
+        layout.addWidget(target_tags_widget)
 
         self.target_summary_scroll = QScrollArea()
         self.target_summary_scroll.setObjectName("TargetSummaryScroll")
@@ -1328,6 +1339,9 @@ class AutoRngPanel(QWidget):
         self.runtime_card.setProperty("state", state)
         self.runtime_card.style().unpolish(self.runtime_card)
         self.runtime_card.style().polish(self.runtime_card)
+        if hasattr(self, "runtime_state_dot"):
+            self.runtime_state_dot.style().unpolish(self.runtime_state_dot)
+            self.runtime_state_dot.style().polish(self.runtime_state_dot)
 
     @staticmethod
     def _runtime_value(value: object) -> str:
@@ -1421,6 +1435,9 @@ class AutoRngPanel(QWidget):
                 background: #FFFFFF;
                 border: 1px solid #E2E8E4;
                 border-radius: 5px;
+            }
+            QWidget#TargetTags {
+                background: transparent;
             }
             QLabel#TargetNameLabel {
                 color: #24312D;
@@ -1581,8 +1598,8 @@ class AutoRngPanel(QWidget):
                 background: transparent;
                 border: 0;
                 border-radius: 0;
-                margin-top: 14px;
-                padding: 10px 0 0 0;
+                margin-top: 20px;
+                padding: 13px 0 0 0;
                 color: #24312D;
                 font-size: 14px;
                 font-weight: 500;

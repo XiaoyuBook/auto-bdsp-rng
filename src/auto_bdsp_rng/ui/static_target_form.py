@@ -4,22 +4,22 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from auto_bdsp_rng.data import GameVersion, StaticEncounterCategory, StaticEncounterRecord, get_static_encounters
 from auto_bdsp_rng.gen8_static import Shiny, StateFilter
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 
 
 NATURES_ZH = (
@@ -272,9 +272,22 @@ class StaticTargetForm(QWidget):
         grid.addWidget(_filter_label("性别", label_width), 1, 0)
         grid.addWidget(self.gender_filter, 1, 1)
 
+        self.nature_combo = QComboBox()
+        self.nature_combo.addItem("任意", -1)
+        for index, nature in enumerate(NATURES_ZH):
+            self.nature_combo.addItem(nature, index)
+        grid.addWidget(_filter_label("性格", label_width), 2, 0)
+        grid.addWidget(self.nature_combo, 2, 1)
+
+        self.shiny_filter = QComboBox()
+        for text, value in (("任意", "any"), ("异色", "shiny"), ("Star", "star"), ("Square", "square"), ("非异色", "none")):
+            self.shiny_filter.addItem(text, value)
+        grid.addWidget(_filter_label("异色", label_width), 3, 0)
+        grid.addWidget(self.shiny_filter, 3, 1)
+
         self.height_min = self._spin(0, 255, 0)
         self.height_max = self._spin(0, 255, 255)
-        grid.addWidget(_filter_label("Height", label_width), 2, 0)
+        grid.addWidget(_filter_label("Height", label_width), 4, 0)
         grid.addLayout(
             _range_row(
                 self.height_min,
@@ -282,22 +295,9 @@ class StaticTargetForm(QWidget):
                 self._range_width,
                 show_separator=self._compact,
             ),
-            2,
+            4,
             1,
         )
-
-        self.nature_combo = QComboBox()
-        self.nature_combo.addItem("任意", -1)
-        for index, nature in enumerate(NATURES_ZH):
-            self.nature_combo.addItem(nature, index)
-        grid.addWidget(_filter_label("性格", label_width), 3, 0)
-        grid.addWidget(self.nature_combo, 3, 1)
-
-        self.shiny_filter = QComboBox()
-        for text, value in (("任意", "any"), ("异色", "shiny"), ("Star", "star"), ("Square", "square"), ("非异色", "none")):
-            self.shiny_filter.addItem(text, value)
-        grid.addWidget(_filter_label("异色", label_width), 4, 0)
-        grid.addWidget(self.shiny_filter, 4, 1)
 
         self.weight_min = self._spin(0, 255, 0)
         self.weight_max = self._spin(0, 255, 255)

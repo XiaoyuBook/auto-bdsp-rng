@@ -11,7 +11,6 @@ from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTi
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -31,7 +30,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QApplication,
     QSplitter,
     QStatusBar,
@@ -68,8 +66,10 @@ from auto_bdsp_rng.resources import (
     remap_legacy_script_path,
     script_directory,
 )
+from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.controller_overlay import ControllerStateOverlay
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
 
 
@@ -241,13 +241,25 @@ def _migrate_script_config(config: EasyConConfig, script_dir: Path) -> EasyConCo
 
 _KEY_TO_QT = {int(v): k for k, v in Qt.Key.__dict__.items() if isinstance(v, int) and not k.startswith("_")}
 
+
+_KEY_DISPLAY_NAMES = {
+    "Minus": "-",
+    "Plus": "+",
+    "Up": "\u2191",
+    "Down": "\u2193",
+    "Left": "\u2190",
+    "Right": "\u2192",
+}
+
+
 def _qt_key_name(key: int) -> str:
     if key == 0:
         return ""
     name = _KEY_TO_QT.get(key, "")
     if name.startswith("Key_"):
         name = name[4:]
-    return name
+    return _KEY_DISPLAY_NAMES.get(name, name)
+
 
 def _resolve_vpad_button(key: int, mapping: dict[str, int]) -> tuple[str, str, str] | None:
     """返回 (kind, side/direction) 或 None — kind 为 'button' 或 'stick'"""
@@ -441,7 +453,13 @@ class NativeScriptWorker(QObject):
 class KeyMappingDialog(QDialog):
     """按键映射对话框 — 手柄背景图 + 可点击按键位置绑定"""
 
-    _WINDOW_W, _WINDOW_H = 999, 830
+    _WINDOW_W, _WINDOW_H = 865, 700
+    _DESIGN_W = 999
+    _DIAGRAM_DESIGN_H = 610
+    _IMAGE_DESIGN_H = 830
+    _DIAGRAM_X, _DIAGRAM_Y = 20, 76
+    _DIAGRAM_W = 825
+    _DIAGRAM_H = round(_DIAGRAM_W * _DIAGRAM_DESIGN_H / _DESIGN_W)
 
     # Positions mirror the original EasyCon WinForms mapping dialog.
     _BTN_POSITIONS: list[tuple[int, int, int, int, str, str]] = [
@@ -482,15 +500,34 @@ class KeyMappingDialog(QDialog):
     def _build_ui(self) -> None:
         bg_path = str(Path(__file__).resolve().parent / "controller_bg.png")
         panel = QLabel(self)
-        panel.setGeometry(0, 0, self._WINDOW_W, self._WINDOW_H)
-        panel.setPixmap(QPixmap(bg_path).scaled(
-            self._WINDOW_W,
-            self._WINDOW_H,
+        panel.setObjectName("KeyMappingDiagram")
+        panel.setGeometry(
+            self._DIAGRAM_X,
+            self._DIAGRAM_Y,
+            self._DIAGRAM_W,
+            self._DIAGRAM_H,
+        )
+        panel.setStyleSheet(
+            "QLabel#KeyMappingDiagram { background: #f2f1ee; border: 0; border-radius: 5px; }"
+        )
+        image_height = round(
+            self._DIAGRAM_W * self._IMAGE_DESIGN_H / self._DESIGN_W
+        )
+        source = QPixmap(bg_path).scaled(
+            self._DIAGRAM_W,
+            image_height,
             Qt.AspectRatioMode.IgnoreAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
-        ))
-        panel.setScaledContents(True)
+        )
+        diagram = QPixmap(self._DIAGRAM_W, self._DIAGRAM_H)
+        diagram.fill(QColor("#F2F1EE"))
+        painter = QPainter(diagram)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
+        painter.drawPixmap(0, 0, source)
+        painter.end()
+        panel.setPixmap(diagram)
         panel.lower()
+        self.mapping_diagram = panel
 
         header = QFrame(self)
         header.setGeometry(0, 0, self._WINDOW_W, 58)
@@ -502,7 +539,7 @@ class KeyMappingDialog(QDialog):
         title = QLabel("按键设置", header)
         title.setStyleSheet(
             "QLabel { background: transparent; border: 0; color: #24312d;"
-            " font-family: 'Microsoft YaHei UI'; font-size: 16px; font-weight: 600; }"
+            " font-family: 'Microsoft YaHei UI'; font-size: 15px; font-weight: 500; }"
         )
         header_layout.addWidget(title)
         header_layout.addStretch(1)
@@ -523,10 +560,16 @@ class KeyMappingDialog(QDialog):
             "}"
         )
 
+        scale = self._DIAGRAM_W / self._DESIGN_W
         for x, y, w, h, name, label in self._BTN_POSITIONS:
             btn = QPushButton("", self)
             btn.setCheckable(True)
-            btn.setGeometry(x, y, w, h)
+            btn.setGeometry(
+                self._DIAGRAM_X + round(x * scale),
+                self._DIAGRAM_Y + round(y * scale),
+                max(1, round(w * scale)),
+                max(1, round(h * scale)),
+            )
             btn.setStyleSheet(btn_style)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -541,14 +584,20 @@ class KeyMappingDialog(QDialog):
             self._delete_actions[name] = delete_action
 
         instruction = QLabel("选择按键后，按下新的键盘按键。", self)
-        instruction.setGeometry(20, 690, 430, 28)
+        caption_y = self._DIAGRAM_Y + self._DIAGRAM_H + 10
+        instruction.setGeometry(20, caption_y, 430, 28)
         instruction.setStyleSheet(
             "QLabel { background: transparent; color: #68766f; border: 0; font-size: 12px; }"
         )
         self.mapping_instruction = instruction
 
         self.delete_mapping_button = QPushButton("删除映射", self)
-        self.delete_mapping_button.setGeometry(849, 688, 130, 30)
+        self.delete_mapping_button.setGeometry(
+            self._WINDOW_W - 150,
+            caption_y,
+            130,
+            28,
+        )
         self.delete_mapping_button.setEnabled(False)
         self.delete_mapping_button.setStyleSheet(
             "QPushButton { background: transparent; color: #087c58; border: 0;"
@@ -558,11 +607,11 @@ class KeyMappingDialog(QDialog):
         self.delete_mapping_button.clicked.connect(self._delete_active_mapping)
 
         footer_line = QFrame(self)
-        footer_line.setGeometry(0, 730, self._WINDOW_W, 1)
+        footer_line.setGeometry(0, 636, self._WINDOW_W, 1)
         footer_line.setStyleSheet("background: #e2e8e4; border: 0;")
 
         cancel_btn = QPushButton("取消", self)
-        cancel_btn.setGeometry(805, 758, 76, 36)
+        cancel_btn.setGeometry(675, 651, 76, 34)
         footer_button_style = (
             "QPushButton { background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
             " border-radius: 5px; font-size: 13px; }"
@@ -571,7 +620,7 @@ class KeyMappingDialog(QDialog):
         cancel_btn.setStyleSheet(footer_button_style)
         cancel_btn.clicked.connect(self.reject)
         ok_btn = QPushButton("确定", self)
-        ok_btn.setGeometry(893, 758, 86, 36)
+        ok_btn.setGeometry(759, 651, 86, 34)
         ok_btn.setStyleSheet(
             "QPushButton { background: #087c58; color: #ffffff; border: 1px solid #087c58;"
             " border-radius: 5px; font-size: 13px; font-weight: 500; }"
@@ -921,7 +970,7 @@ class EasyConPanel(QWidget):
 
         log_header = QLabel("运行概览")
         log_header.setStyleSheet(
-            f"font-weight: 600; font-size: 13px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};"
+            f"font-weight: 500; font-size: 13px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};"
         )
         layout.addWidget(log_header)
 
@@ -1475,7 +1524,7 @@ class EasyConPanel(QWidget):
         keyboard_header = QHBoxLayout()
         keyboard_header.setContentsMargins(0, 0, 0, 0)
         keyboard_title = QLabel("键盘控制")
-        keyboard_title.setStyleSheet(f"font-weight: 600; color: {self.CLR_TEXT};")
+        keyboard_title.setStyleSheet(f"font-weight: 500; color: {self.CLR_TEXT};")
         self.keyboard_controller_state_label = QLabel("不可用")
         self.keyboard_controller_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.keyboard_controller_state_label.setMinimumWidth(62)
@@ -1551,7 +1600,7 @@ class EasyConPanel(QWidget):
         recording_header = QHBoxLayout()
         recording_header.setContentsMargins(0, 0, 0, 0)
         recording_title = QLabel("操作录制")
-        recording_title.setStyleSheet(f"font-weight: 600; color: {self.CLR_TEXT};")
+        recording_title.setStyleSheet(f"font-weight: 500; color: {self.CLR_TEXT};")
         self.recording_state_label = QLabel("未录制")
         self.recording_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.recording_state_label.setMinimumWidth(62)

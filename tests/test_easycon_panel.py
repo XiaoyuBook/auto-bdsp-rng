@@ -373,18 +373,40 @@ def test_easycon_panel_connection_and_keyboard_presentations_follow_real_state(
     assert easycon_panel.connection_status_dot.property("state") == "disconnected"
 
 
-def test_key_mapping_dialog_uses_original_easycon_layout(app):
+def test_key_mapping_dialog_scales_original_easycon_layout_into_confirmed_canvas(app):
     dialog = KeyMappingDialog(DEFAULT_KEY_MAPPING)
 
-    assert dialog.size().width() == 999
-    assert dialog.size().height() == 830
-    assert dialog._buttons["ZL"].geometry().getRect() == (280, 134, 62, 41)
-    assert dialog._buttons["A"].geometry().getRect() == (758, 292, 62, 41)
-    assert dialog._buttons["RSUp"].geometry().getRect() == (571, 357, 62, 41)
+    assert dialog.size().toTuple() == (865, 700)
+    assert dialog.mapping_diagram.geometry().getRect() == (20, 76, 825, 504)
+
+    scale = dialog._DIAGRAM_W / dialog._DESIGN_W
+
+    def expected_geometry(x, y, width, height):
+        return (
+            dialog._DIAGRAM_X + round(x * scale),
+            dialog._DIAGRAM_Y + round(y * scale),
+            round(width * scale),
+            round(height * scale),
+        )
+
+    assert dialog._buttons["ZL"].geometry().getRect() == expected_geometry(
+        280, 134, 62, 41
+    )
+    assert dialog._buttons["A"].geometry().getRect() == expected_geometry(
+        758, 292, 62, 41
+    )
+    assert dialog._buttons["RSUp"].geometry().getRect() == expected_geometry(
+        571, 357, 62, 41
+    )
     assert dialog._buttons["ZL"].text() == "F"
     assert dialog._buttons["L"].text() == "G"
     assert dialog._buttons["A"].text() == "L"
-    assert dialog._buttons["RSUp"].text() == "Up"
+    assert dialog._buttons["Minus"].text() == "-"
+    assert dialog._buttons["Plus"].text() == "+"
+    assert dialog._buttons["RSUp"].text() == "\u2191"
+    assert dialog._buttons["RSDown"].text() == "\u2193"
+    assert dialog._buttons["RSLeft"].text() == "\u2190"
+    assert dialog._buttons["RSRight"].text() == "\u2192"
 
 
 def test_key_mapping_dialog_updates_visible_key_text(app):
