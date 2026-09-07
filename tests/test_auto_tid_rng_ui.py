@@ -302,13 +302,47 @@ def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: 
     assert top_controls is not None
     assert panel.frame_threshold.parentWidget() is top_controls
     assert panel.delay.parentWidget() is top_controls
-    assert panel.seed_script_combo.parentWidget() is top_controls
-    assert panel.name_script_combo.parentWidget() is top_controls
+    assert panel.seed_script_picker.parentWidget() is top_controls
+    assert panel.name_script_picker.parentWidget() is top_controls
+    assert panel.seed_script_combo.parentWidget() is panel.seed_script_picker
+    assert panel.name_script_combo.parentWidget() is panel.name_script_picker
     assert panel.refresh_scripts_button.parentWidget() is top_controls
     assert panel.frame_threshold.maximumWidth() <= 140
     assert panel.delay.maximumWidth() <= 120
     assert panel.seed_script_combo.maximumWidth() <= 220
     assert panel.name_script_combo.maximumWidth() <= 220
+    panel.resize(1150, 820)
+    panel.show()
+    app.processEvents()
+    for combo in (panel.seed_script_combo, panel.name_script_combo):
+        picker = panel.script_picker_widgets[combo]
+        edit_button = panel.script_edit_buttons[combo]
+        assert picker.layout().itemAt(0).widget() is combo
+        assert picker.layout().itemAt(1).widget() is edit_button
+        assert combo.geometry().right() < edit_button.geometry().left()
+
+
+def test_auto_tid_script_edit_buttons_emit_selected_paths(app, tmp_path: Path) -> None:
+    seed_script = tmp_path / "测种.txt"
+    name_script = tmp_path / "取名.txt"
+    seed_script.write_text("A 100\n", encoding="utf-8")
+    name_script.write_text("B 100\n", encoding="utf-8")
+    panel = AutoTidRngPanel(script_dir=tmp_path, settings=_settings(tmp_path))
+    panel.seed_script_combo.setCurrentIndex(
+        panel.seed_script_combo.findData(str(seed_script))
+    )
+    panel.name_script_combo.setCurrentIndex(
+        panel.name_script_combo.findData(str(name_script))
+    )
+    emitted = []
+    panel.scriptEditRequested.connect(emitted.append)
+
+    panel.script_edit_buttons[panel.seed_script_combo].click()
+    panel.script_edit_buttons[panel.name_script_combo].click()
+
+    assert emitted == [seed_script, name_script]
+    assert panel.script_edit_buttons[panel.seed_script_combo].toolTip() == "编辑测种脚本"
+    assert panel.script_edit_buttons[panel.name_script_combo].toolTip() == "编辑取名脚本"
 
 
 def test_auto_tid_panel_shows_target_count_in_wrapped_target_list(app, tmp_path: Path) -> None:

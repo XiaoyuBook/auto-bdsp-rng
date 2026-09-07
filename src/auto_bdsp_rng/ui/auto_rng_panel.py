@@ -278,6 +278,10 @@ class AutoRngPanel(QWidget):
     autoProgressChanged = Signal(object)
     runStateChanged = Signal(bool)
     runLogRequested = Signal()
+    roundRecordsRequested = Signal()
+    targetDataRequested = Signal()
+    scriptEditRequested = Signal(object)
+    latestMessageChanged = Signal(str)
     ivCalculatorRequested = Signal()
     captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
     captureLog = Signal(str)  # 临时：后台线程日志输出
@@ -340,7 +344,10 @@ class AutoRngPanel(QWidget):
         self.runtime_panel = self._build_runtime_panel()
         self.content_grid.addWidget(self.config_panel, 0, 0)
         self.content_grid.addWidget(self.runtime_panel, 0, 1)
+        # Keep the old message widgets as compatibility state surfaces.  The
+        # visible message and log entry now live in the main window footer.
         self.content_grid.addWidget(self._build_log_group(), 1, 0, 1, 2)
+        self.log_group.hide()
         self.content_grid.setColumnStretch(0, 0)
         self.content_grid.setColumnStretch(1, 1)
         self.content_grid.setRowStretch(0, 1)
@@ -971,6 +978,8 @@ class AutoRngPanel(QWidget):
         self.escape_script_combo = combo_factory()
         self.exit_script_combo = combo_factory()
         self.reverse_script_combo = combo_factory()
+        self.script_edit_buttons: dict[QComboBox, QToolButton] = {}
+        self.script_picker_widgets: dict[QComboBox, QWidget] = {}
         for combo in self._script_combos():
             combo.setFixedHeight(32)
             combo.setMinimumWidth(160)
@@ -1003,8 +1012,35 @@ class AutoRngPanel(QWidget):
             label = QLabel(label_text)
             label.setObjectName("ScriptFieldLabel")
             self.script_labels[combo] = label
+            picker = QWidget(group)
+            picker.setObjectName("ScriptPicker")
+            picker_layout = QHBoxLayout(picker)
+            picker_layout.setContentsMargins(0, 0, 0, 0)
+            picker_layout.setSpacing(5)
+            picker_layout.addWidget(combo, 1)
+            edit_button = QToolButton(picker)
+            edit_button.setObjectName("ScriptEditButton")
+            edit_button.setFixedSize(32, 32)
+            edit_button.setIcon(delay_lucide_icon("square-pen", "#5F6C66", 16))
+            edit_button.setIconSize(QSize(16, 16))
+            edit_button.setToolTip(f"编辑{label_text}")
+            edit_button.setAccessibleName(f"编辑{label_text}")
+            edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            edit_button.clicked.connect(
+                lambda _checked=False, selected_combo=combo: self._request_script_edit(
+                    selected_combo
+                )
+            )
+            combo.currentIndexChanged.connect(
+                lambda _index, selected_combo=combo: self._update_script_edit_button(
+                    selected_combo
+                )
+            )
+            picker_layout.addWidget(edit_button)
+            self.script_edit_buttons[combo] = edit_button
+            self.script_picker_widgets[combo] = picker
             layout.addWidget(label, row, column)
-            layout.addWidget(combo, row + 1, column)
+            layout.addWidget(picker, row + 1, column)
         layout.addWidget(
             self.escape_continue_check,
             6,
@@ -1029,9 +1065,10 @@ class AutoRngPanel(QWidget):
         runtime_title = QLabel("运行现场")
         runtime_title.setObjectName("SectionTitle")
         self.runtime_log_button = QPushButton("轮次记录")
+        self.view_round_button = self.runtime_log_button
         self.runtime_log_button.setObjectName("InlineLinkButton")
         self.runtime_log_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.runtime_log_button.clicked.connect(self.runLogRequested.emit)
+        self.runtime_log_button.clicked.connect(self.roundRecordsRequested.emit)
         header.addWidget(runtime_title)
         header.addStretch(1)
         header.addWidget(self.runtime_log_button)
@@ -1098,6 +1135,11 @@ class AutoRngPanel(QWidget):
         runtime_footer_layout.addWidget(self.runtime_delay_value)
         runtime_footer_layout.addWidget(QLabel("帧"))
         runtime_footer_layout.addStretch(1)
+        self.target_data_button = QPushButton("查看目标数据")
+        self.target_data_button.setObjectName("InlineLinkButton")
+        self.target_data_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.target_data_button.clicked.connect(self.targetDataRequested.emit)
+        runtime_footer_layout.addWidget(self.target_data_button)
         runtime_layout.addWidget(runtime_footer)
         layout.addWidget(self.runtime_card)
 
@@ -1563,6 +1605,23 @@ class AutoRngPanel(QWidget):
                 font-size: 13px;
                 font-weight: 400;
             }
+            QWidget#ScriptPicker {
+                background: transparent;
+            }
+            QToolButton#ScriptEditButton {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                padding: 0;
+            }
+            QToolButton#ScriptEditButton:hover {
+                background: #F6F8F7;
+                border-color: #B9C8C0;
+            }
+            QToolButton#ScriptEditButton:disabled {
+                background: #FAFBFA;
+                border-color: #EEF1EF;
+            }
             QGroupBox#CurrentMessageGroup {
                 background: #FFFFFF;
                 border: 0;
@@ -1603,6 +1662,18 @@ class AutoRngPanel(QWidget):
             self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
             self._select_script(self.advance_script_combo, choose_default_script(self._scripts, DEFAULT_ADVANCE_SCRIPT_NAME))
             self._scripts_initialized = True
+        for combo in self._script_combos():
+            self._update_script_edit_button(combo)
+
+    def _update_script_edit_button(self, combo: QComboBox) -> None:
+        button = self.script_edit_buttons.get(combo)
+        if button is not None:
+            button.setEnabled(self._selected_path(combo) is not None)
+
+    def _request_script_edit(self, combo: QComboBox) -> None:
+        path = self._selected_path(combo)
+        if path is not None:
+            self.scriptEditRequested.emit(path)
 
     def set_phase_text(self, text: str) -> None:
         self.status_badge.setText(text)
@@ -1688,6 +1759,7 @@ class AutoRngPanel(QWidget):
             self.latest_log_time_label.setText(timestamp)
             self.latest_log_label.setText(latest_line)
             self.latest_log_label.setToolTip(text)
+            self.latestMessageChanged.emit(latest_line)
 
     def set_candidates(self, rows: list[list[str]], locked_index: int | None = None) -> None:
         locked_text = ""

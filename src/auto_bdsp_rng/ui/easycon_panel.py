@@ -2014,13 +2014,13 @@ class EasyConPanel(QWidget):
         if path:
             self.load_script(Path(path))
 
-    def load_script(self, path: Path) -> None:
+    def load_script(self, path: Path) -> bool:
         path = remap_legacy_script_path(path, script_dir=SCRIPT_DIR)
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             QMessageBox.warning(self, "脚本编码不明确", "脚本不是 UTF-8 编码，暂不加载以避免乱码。")
-            return
+            return False
         parameters = parse_script_parameters(text)
         self.parameter_defaults = {parameter.name: parameter.default for parameter in parameters}
         saved_values = self.config.script_parameters.get(self._script_config_key(path), {})
@@ -2039,7 +2039,11 @@ class EasyConPanel(QWidget):
         self.template_mode_label.setText("模板副本" if any(value == "填入这里" for value in self.parameter_defaults.values()) else "普通脚本")
         self._update_run_enabled()
         self._append_log("info", f"已加载脚本: {path.name}")
-        self._remember_recent_script(path)
+        try:
+            self._remember_recent_script(path)
+        except OSError as exc:
+            self._append_log("warn", f"保存最近脚本记录失败: {exc}")
+        return True
 
     def _load_script_item(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)

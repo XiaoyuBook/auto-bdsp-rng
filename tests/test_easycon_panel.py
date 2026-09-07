@@ -956,6 +956,27 @@ def test_easycon_panel_loads_external_script_without_adding_to_builtin_list(monk
     assert saved_configs[-1].recent_scripts == (external.resolve(),)
 
 
+def test_easycon_panel_keeps_loaded_script_when_recent_config_save_fails(
+    monkeypatch,
+    tmp_path,
+    easycon_panel,
+):
+    external = tmp_path / "外部脚本.ecs"
+    external.write_text("A 100\n", encoding="utf-8")
+
+    def fail_save(_config):
+        raise OSError("read only")
+
+    monkeypatch.setattr(panel_module, "save_config", fail_save)
+
+    loaded = easycon_panel.load_script(external)
+
+    assert loaded is True
+    assert easycon_panel.current_script_path == external
+    assert easycon_panel.editor.toPlainText() == "A 100\n"
+    assert "保存最近脚本记录失败: read only" in easycon_panel.log_view.toPlainText()
+
+
 def test_easycon_panel_loads_legacy_internal_path_from_outer_script(monkeypatch, tmp_path, easycon_panel):
     saved_configs: list[EasyConConfig] = []
     monkeypatch.setattr(

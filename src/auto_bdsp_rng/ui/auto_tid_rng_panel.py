@@ -44,6 +44,7 @@ from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
+from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
@@ -173,6 +174,7 @@ class AutoTidRngPanel(QWidget):
     ocrSettingsRequested = Signal()
     runLogRequested = Signal()
     runStateChanged = Signal(bool)
+    scriptEditRequested = Signal(object)
 
     def __init__(
         self,
@@ -287,6 +289,23 @@ class AutoTidRngPanel(QWidget):
                 padding: 0;
                 color: #24312d;
                 background: transparent;
+            }
+            QWidget#AutoTidScriptPicker {
+                background: transparent;
+            }
+            QToolButton#AutoTidScriptEditButton {
+                background: #ffffff;
+                border: 1px solid #e2e8e4;
+                border-radius: 5px;
+                padding: 0;
+            }
+            QToolButton#AutoTidScriptEditButton:hover {
+                background: #f6f8f7;
+                border-color: #b9c8c0;
+            }
+            QToolButton#AutoTidScriptEditButton:disabled {
+                background: #fafbfa;
+                border-color: #eef1ef;
             }
             QWidget#AutoTidTargetPanel,
             QWidget#TargetPoolActions {
@@ -470,6 +489,18 @@ class AutoTidRngPanel(QWidget):
         ):
             combo.setFixedHeight(32)
             combo.setFixedWidth(width)
+        self.script_edit_buttons: dict[QComboBox, QToolButton] = {}
+        self.script_picker_widgets: dict[QComboBox, QWidget] = {}
+        self.seed_script_picker = self._build_script_picker(
+            group,
+            self.seed_script_combo,
+            "测种脚本",
+        )
+        self.name_script_picker = self._build_script_picker(
+            group,
+            self.name_script_combo,
+            "取名脚本",
+        )
         self.refresh_scripts_button = QPushButton("刷新脚本列表")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         self.refresh_scripts_button.setFixedHeight(32)
@@ -480,9 +511,9 @@ class AutoTidRngPanel(QWidget):
         layout.addWidget(QLabel("delay"), 0, 2)
         layout.addWidget(self.delay, 0, 3)
         layout.addWidget(QLabel("测种脚本"), 0, 4)
-        layout.addWidget(self.seed_script_combo, 0, 5)
+        layout.addWidget(self.seed_script_picker, 0, 5)
         layout.addWidget(QLabel("取名脚本"), 0, 6)
-        layout.addWidget(self.name_script_combo, 0, 7)
+        layout.addWidget(self.name_script_picker, 0, 7)
         layout.addWidget(self.refresh_scripts_button, 0, 8)
         layout.setColumnStretch(9, 1)
 
@@ -511,6 +542,41 @@ class AutoTidRngPanel(QWidget):
         result_form.addRow("实际 delay", self.actual_delay_result)
         layout.addWidget(result_group, 2, 0, 1, 9)
         return group
+
+    def _build_script_picker(
+        self,
+        parent: QWidget,
+        combo: QComboBox,
+        label: str,
+    ) -> QWidget:
+        picker = QWidget(parent)
+        picker.setObjectName("AutoTidScriptPicker")
+        picker_layout = QHBoxLayout(picker)
+        picker_layout.setContentsMargins(0, 0, 0, 0)
+        picker_layout.setSpacing(5)
+        picker_layout.addWidget(combo)
+        edit_button = QToolButton(picker)
+        edit_button.setObjectName("AutoTidScriptEditButton")
+        edit_button.setFixedSize(32, 32)
+        edit_button.setIcon(delay_lucide_icon("square-pen", "#5F6C66", 16))
+        edit_button.setIconSize(QSize(16, 16))
+        edit_button.setToolTip(f"编辑{label}")
+        edit_button.setAccessibleName(f"编辑{label}")
+        edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit_button.clicked.connect(
+            lambda _checked=False, selected_combo=combo: self._request_script_edit(
+                selected_combo
+            )
+        )
+        combo.currentIndexChanged.connect(
+            lambda _index, selected_combo=combo: self._update_script_edit_button(
+                selected_combo
+            )
+        )
+        picker_layout.addWidget(edit_button)
+        self.script_edit_buttons[combo] = edit_button
+        self.script_picker_widgets[combo] = picker
+        return picker
 
     def _build_target_group(self) -> QGroupBox:
         group = QGroupBox("目标 Display TID")
@@ -731,6 +797,18 @@ class AutoTidRngPanel(QWidget):
         self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
         self._select_script(self.name_script_combo, self._choose_script_by_keywords(("取名", "name")))
         self._select_script(self.reverse_id_script_combo, self._choose_script_by_keywords(("反查ID", "反查 ID", "id")))
+        for combo in (self.seed_script_combo, self.name_script_combo):
+            self._update_script_edit_button(combo)
+
+    def _update_script_edit_button(self, combo: QComboBox) -> None:
+        button = self.script_edit_buttons.get(combo)
+        if button is not None:
+            button.setEnabled(self._selected_path(combo) is not None)
+
+    def _request_script_edit(self, combo: QComboBox) -> None:
+        path = self._selected_path(combo)
+        if path is not None:
+            self.scriptEditRequested.emit(path)
 
     def add_target_display_tid(self, tid: int) -> None:
         tid = self._validate_display_tid_value(tid)

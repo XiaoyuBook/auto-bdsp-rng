@@ -2091,18 +2091,24 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
     layout = panel.script_group.layout()
 
-    assert layout.itemAtPosition(0, 0).widget().text() == "测种脚本"
-    assert layout.itemAtPosition(1, 0).widget() is panel.seed_script_combo
-    assert layout.itemAtPosition(0, 1).widget().text() == "过帧脚本"
-    assert layout.itemAtPosition(1, 1).widget() is panel.advance_script_combo
-    assert layout.itemAtPosition(2, 0).widget().text() == "撞闪脚本"
-    assert layout.itemAtPosition(3, 0).widget() is panel.hit_script_combo
-    assert layout.itemAtPosition(2, 1).widget().text() == "过场脚本"
-    assert layout.itemAtPosition(3, 1).widget() is panel.exit_script_combo
-    assert layout.itemAtPosition(4, 0).widget().text() == "反查脚本"
-    assert layout.itemAtPosition(5, 0).widget() is panel.reverse_script_combo
-    assert layout.itemAtPosition(4, 1).widget().text() == "逃跑脚本"
-    assert layout.itemAtPosition(5, 1).widget() is panel.escape_script_combo
+    fields = (
+        ("测种脚本", panel.seed_script_combo, 0, 0),
+        ("过帧脚本", panel.advance_script_combo, 0, 1),
+        ("撞闪脚本", panel.hit_script_combo, 2, 0),
+        ("过场脚本", panel.exit_script_combo, 2, 1),
+        ("反查脚本", panel.reverse_script_combo, 4, 0),
+        ("逃跑脚本", panel.escape_script_combo, 4, 1),
+    )
+    for label, combo, row, column in fields:
+        assert layout.itemAtPosition(row, column).widget().text() == label
+        picker = panel.script_picker_widgets[combo]
+        assert layout.itemAtPosition(row + 1, column).widget() is picker
+        assert combo.parentWidget() is picker
+        edit_button = panel.script_edit_buttons[combo]
+        assert edit_button.parentWidget() is picker
+        assert picker.layout().itemAt(0).widget() is combo
+        assert picker.layout().itemAt(1).widget() is edit_button
+        assert edit_button.toolTip() == f"编辑{label}"
     assert layout.itemAtPosition(6, 0).widget() is panel.escape_continue_check
     assert panel.escape_continue_check.text() == "未命中时逃跑续搜"
     assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.LeftToRight
@@ -2113,6 +2119,8 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     panel.resize(1000, 700)
     panel.show()
     app.processEvents()
+    for combo in panel._script_combos():
+        assert combo.geometry().right() < panel.script_edit_buttons[combo].geometry().left()
     advance_label = layout.itemAtPosition(0, 0).widget()
     assert panel.escape_continue_check.geometry().left() == advance_label.geometry().left()
     assert not panel.escape_continue_check.isChecked()
@@ -2177,6 +2185,30 @@ def test_auto_rng_script_combos_refresh_on_popup_and_preserve_each_selection(app
         selected_names[4],
         selected_names[5],
     ]
+
+
+def test_auto_rng_script_edit_buttons_emit_each_selected_path(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    combos = panel._script_combos()
+    expected_paths = []
+    for index, combo in enumerate(combos):
+        path = tmp_path / f"脚本-{index}.txt"
+        path.write_text("A 100\n", encoding="utf-8")
+        combo.addItem(path.name, str(path))
+        combo.setCurrentIndex(combo.findData(str(path)))
+        expected_paths.append(path)
+
+    emitted = []
+    panel.scriptEditRequested.connect(emitted.append)
+    for combo in combos:
+        button = panel.script_edit_buttons[combo]
+        assert button.isEnabled()
+        button.click()
+
+    assert emitted == expected_paths
+
+    panel.seed_script_combo.setCurrentIndex(0)
+    assert not panel.script_edit_buttons[panel.seed_script_combo].isEnabled()
 
 
 def test_auto_rng_panel_persists_escape_continue_and_script(app, tmp_path):
@@ -3013,7 +3045,7 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     assert "最小 final flash frames" not in labels
 
 
-def test_auto_rng_panel_uses_compact_current_message_and_live_runtime_card(app):
+def test_auto_rng_panel_keeps_hidden_message_mirror_and_live_runtime_card(app):
     panel = AutoRngPanel()
     group_titles = {group.title() for group in panel.findChildren(QGroupBox)}
 
@@ -3025,9 +3057,11 @@ def test_auto_rng_panel_uses_compact_current_message_and_live_runtime_card(app):
     assert panel.runtime_target_value.text() == "—"
     assert panel.runtime_remaining_value.text() == "—"
     assert panel.runtime_delay_value.text() == "—"
+    assert panel.target_data_button.text() == "查看目标数据"
+    assert panel.view_round_button is panel.runtime_log_button
     assert panel.log_group.maximumWidth() == 16777215
     assert panel.log_group.title() == ""
-    assert panel.log_group.height() <= 44
+    assert panel.log_group.isHidden()
     assert panel.log_view.isHidden()
     assert panel.latest_log_time_label.text() == "—"
     assert panel.latest_log_label.text() == "暂无消息"
@@ -3039,6 +3073,150 @@ def test_auto_rng_panel_uses_compact_current_message_and_live_runtime_card(app):
     assert (row, column, row_span, column_span) == (1, 0, 1, 2)
     assert panel.content_grid.itemAtPosition(0, 0).widget() is panel.config_panel
     assert panel.content_grid.itemAtPosition(0, 1).widget() is panel.runtime_panel
+
+
+def test_auto_rng_target_data_and_script_shortcuts_use_existing_workspaces(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = MainWindow(profile_settings=_profile_settings(tmp_path))
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+
+    window.auto_rng_tab.target_data_button.click()
+    assert window.tabs.currentWidget() is window.bdsp_tab
+
+    script = tmp_path / "快捷编辑.txt"
+    script.write_text("A 100\n", encoding="utf-8")
+    combo = window.auto_rng_tab.hit_script_combo
+    combo.addItem(script.name, str(script))
+    combo.setCurrentIndex(combo.findData(str(script)))
+    loaded = []
+    monkeypatch.setattr(window.easycon_tab, "load_script", loaded.append)
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+
+    window.auto_rng_tab.script_edit_buttons[combo].click()
+
+    assert loaded == [script]
+    assert window.tabs.currentWidget() is window.easycon_tab
+
+
+def test_automation_script_shortcut_keeps_dirty_same_script_and_honors_cancel(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = MainWindow(profile_settings=_profile_settings(tmp_path))
+    current = tmp_path / "当前.txt"
+    other = tmp_path / "其他.txt"
+    current.write_text("A 100\n", encoding="utf-8")
+    other.write_text("B 100\n", encoding="utf-8")
+    window.easycon_tab.current_script_path = current
+    window.easycon_tab.editor.setPlainText("尚未保存的内容")
+    loaded = []
+    monkeypatch.setattr(window.easycon_tab, "load_script", loaded.append)
+
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+    window._open_automation_script_editor(current)
+
+    assert loaded == []
+    assert window.tabs.currentWidget() is window.easycon_tab
+    assert window.easycon_tab.editor.toPlainText() == "尚未保存的内容"
+
+    monkeypatch.setattr(
+        window,
+        "_confirm_unsaved_easycon_script",
+        lambda *, action_text="关闭程序": action_text != "打开其他脚本",
+    )
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+    window._open_automation_script_editor(other)
+    editor_text = window.easycon_tab.editor.toPlainText()
+    window.easycon_tab._saved_editor_text = editor_text
+
+    assert loaded == []
+    assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert editor_text == "尚未保存的内容"
+
+
+def test_automation_script_shortcut_stays_put_when_script_is_not_utf8(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = MainWindow(profile_settings=_profile_settings(tmp_path))
+    current = tmp_path / "当前.txt"
+    invalid = tmp_path / "编码错误.txt"
+    current.write_text("A 100\n", encoding="utf-8")
+    invalid.write_bytes(b"\xff\xfe\x00")
+    window.easycon_tab.current_script_path = current
+    window.easycon_tab.current_script_name = current.name
+    window.easycon_tab._saved_editor_text = "A 100\n"
+    window.easycon_tab.editor.setPlainText("A 100\n")
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+
+    window._open_automation_script_editor(invalid)
+
+    assert warnings
+    assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert window.easycon_tab.current_script_path == current
+    assert window.easycon_tab.editor.toPlainText() == "A 100\n"
+
+
+@pytest.mark.parametrize(
+    ("choice", "should_save", "should_open"),
+    (
+        (QMessageBox.StandardButton.Save, True, True),
+        (QMessageBox.StandardButton.Discard, False, True),
+        (QMessageBox.StandardButton.Cancel, False, False),
+    ),
+)
+def test_automation_script_shortcut_honors_unsaved_choice(
+    app,
+    tmp_path,
+    monkeypatch,
+    choice,
+    should_save,
+    should_open,
+):
+    window = MainWindow(profile_settings=_profile_settings(tmp_path))
+    current = tmp_path / "当前.txt"
+    other = tmp_path / "其他.txt"
+    current.write_text("A 100\n", encoding="utf-8")
+    other.write_text("B 100\n", encoding="utf-8")
+    window.easycon_tab.current_script_path = current
+    window.easycon_tab._saved_editor_text = "A 100\n"
+    window.easycon_tab.editor.setPlainText("尚未保存的内容")
+    saved = []
+    loaded = []
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: choice)
+    monkeypatch.setattr(
+        window.easycon_tab,
+        "save_script",
+        lambda: saved.append(current) or current,
+    )
+
+    def load(path):
+        loaded.append(path)
+        window.easycon_tab.current_script_path = path
+        return True
+
+    monkeypatch.setattr(window.easycon_tab, "load_script", load)
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+
+    window._open_automation_script_editor(other)
+
+    assert bool(saved) is should_save
+    assert loaded == ([other] if should_open else [])
+    expected_page = window.easycon_tab if should_open else window.auto_rng_tab
+    assert window.tabs.currentWidget() is expected_page
+    window.easycon_tab._saved_editor_text = window.easycon_tab.editor.toPlainText()
 
 
 def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app):

@@ -206,6 +206,9 @@ class RunRecordsPanel(QWidget):
         self.log_panel.set_source_filter(source)
         self.view_tabs.setCurrentIndex(self.LOG_TAB)
 
+    def show_rounds(self) -> None:
+        self.view_tabs.setCurrentIndex(self.ROUND_TAB)
+
     @Slot(object, object)
     def show_round_logs(self, run_id: object, round_id: object) -> None:
         self.log_panel.set_source_filter(None)

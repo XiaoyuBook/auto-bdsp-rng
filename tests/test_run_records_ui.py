@@ -43,10 +43,9 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     auto_panel = window.auto_rng_tab
     window.tabs.setCurrentWidget(auto_panel)
     app.processEvents()
-    auto_button_rect = auto_panel.view_log_button.geometry()
-    assert auto_panel.view_log_button.height() == 30
-    assert auto_panel.log_group.rect().contains(auto_button_rect)
-    assert abs(auto_button_rect.center().y() - auto_panel.log_group.rect().center().y()) <= 5
+    assert auto_panel.log_group.isHidden()
+    assert window.view_status_logs_button.isVisible()
+    assert window.view_status_logs_button.height() <= window.statusBar().height()
 
     easycon_panel = window.easycon_tab
     window.tabs.setCurrentWidget(easycon_panel)
@@ -321,6 +320,55 @@ def test_business_page_log_request_opens_logs_with_its_source_selected(
     assert window.tabs.currentWidget() is window.run_records_tab
     assert window.run_records_tab.view_tabs.currentIndex() == window.run_records_tab.LOG_TAB
     assert window.run_records_tab.log_panel.source_combo.currentData() == source
+
+
+def test_auto_rng_round_button_opens_round_records_instead_of_detailed_logs(
+    app,
+    tmp_path,
+):
+    window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
+    window.run_records_tab.view_tabs.setCurrentIndex(window.run_records_tab.LOG_TAB)
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+
+    window.auto_rng_tab.runtime_log_button.click()
+    app.processEvents()
+
+    assert window.tabs.currentWidget() is window.run_records_tab
+    assert window.run_records_tab.view_tabs.currentIndex() == window.run_records_tab.ROUND_TAB
+
+
+def test_auto_rng_round_button_preserves_unread_detailed_log_count(app, tmp_path):
+    window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
+    records = window.run_records_tab
+    records.view_tabs.setCurrentIndex(records.LOG_TAB)
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+    window._run_log_buffer.publish("自动定点", "需要查看的错误", level="ERROR")
+    app.processEvents()
+    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志 (1)"
+
+    window.auto_rng_tab.runtime_log_button.click()
+    app.processEvents()
+
+    assert window.tabs.currentWidget() is records
+    assert records.view_tabs.currentIndex() == records.ROUND_TAB
+    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志 (1)"
+
+
+def test_auto_rng_latest_message_uses_only_the_workspace_footer(app, tmp_path):
+    window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+    before = len(window._run_log_buffer.snapshot())
+
+    window.auto_rng_tab.add_log("第一行\n最终消息")
+    app.processEvents()
+
+    assert window.auto_rng_tab.log_group.isHidden()
+    assert "第一行" in window.auto_rng_tab.log_view.toPlainText()
+    assert "最终消息" in window.auto_rng_tab.log_view.toPlainText()
+    assert window.statusBar().currentMessage() == "最终消息"
+    entries = window._run_log_buffer.snapshot()
+    assert len(entries) == before + 1
+    assert entries[-1].message == "第一行\n最终消息"
 
 
 def test_help_menu_opens_unfiltered_detailed_logs(app, tmp_path):

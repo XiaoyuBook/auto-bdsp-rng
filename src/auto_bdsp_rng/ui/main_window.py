@@ -1842,6 +1842,10 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.runLogRequested.connect(
             lambda: self._show_run_logs("自动定点")
         )
+        self.auto_rng_tab.roundRecordsRequested.connect(self._show_round_records)
+        self.auto_rng_tab.targetDataRequested.connect(self._show_auto_rng_target_data)
+        self.auto_rng_tab.scriptEditRequested.connect(self._open_automation_script_editor)
+        self.auto_rng_tab.latestMessageChanged.connect(self._show_workspace_message)
         self.auto_rng_tab.requestStatsCapture.connect(self._on_request_stats_capture)
         self.auto_tid_rng_tab.startRequested.connect(self._start_auto_tid_rng)
         self.auto_tid_rng_tab.progressChanged.connect(self._apply_auto_tid_header_progress)
@@ -1849,6 +1853,9 @@ class MainWindow(QMainWindow):
         self.auto_tid_rng_tab.ocrSettingsRequested.connect(self.open_tid_ocr_settings)
         self.auto_tid_rng_tab.runLogRequested.connect(
             lambda: self._show_run_logs("自动 TID")
+        )
+        self.auto_tid_rng_tab.scriptEditRequested.connect(
+            self._open_automation_script_editor
         )
         self.easycon_tab.runLogRequested.connect(
             lambda: self._show_run_logs("伊机控")
@@ -1908,6 +1915,44 @@ class MainWindow(QMainWindow):
     def _show_run_logs(self, source: str | None = None) -> None:
         self.tabs.setCurrentWidget(self.run_records_tab)
         self.run_records_tab.show_logs(source)
+
+    def _show_round_records(self) -> None:
+        self.run_records_tab.show_rounds()
+        self.tabs.setCurrentWidget(self.run_records_tab)
+
+    def _show_auto_rng_target_data(self) -> None:
+        self.tabs.setCurrentWidget(self.bdsp_tab)
+
+    def _show_workspace_message(self, message: str) -> None:
+        self.statusBar().showMessage(str(message))
+
+    def _open_automation_script_editor(self, path: object) -> None:
+        script_path = Path(path)
+        current_path = self.easycon_tab.current_script_path
+        if current_path is not None:
+            try:
+                already_loaded = current_path.resolve() == script_path.resolve()
+            except OSError:
+                already_loaded = current_path == script_path
+            if already_loaded:
+                self.tabs.setCurrentWidget(self.easycon_tab)
+                self.easycon_tab.editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
+                return
+        if not self._confirm_unsaved_easycon_script(action_text="打开其他脚本"):
+            return
+        try:
+            loaded = self.easycon_tab.load_script(script_path)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "无法打开脚本",
+                f"无法读取脚本：\n{script_path}\n\n{exc}",
+            )
+            return
+        if loaded is False:
+            return
+        self.tabs.setCurrentWidget(self.easycon_tab)
+        self.easycon_tab.editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def _run_log_context(self, source: str) -> tuple[str | None, int | None]:
         auto_sources = {"自动定点", "历史记录", "OCR", "Seed 捕捉", "伊机控"}
@@ -4174,13 +4219,13 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._handle_screen_geometry_change)
         return handled
 
-    def _confirm_unsaved_easycon_script(self) -> bool:
+    def _confirm_unsaved_easycon_script(self, *, action_text: str = "关闭程序") -> bool:
         if not self.easycon_tab.has_unsaved_script_changes():
             return True
         choice = QMessageBox.question(
             self,
             "未保存的伊机控脚本",
-            "伊机控脚本有未保存的修改。关闭程序前是否保存？",
+            f"伊机控脚本有未保存的修改。{action_text}前是否保存？",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,

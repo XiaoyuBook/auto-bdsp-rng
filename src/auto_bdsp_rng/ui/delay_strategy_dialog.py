@@ -92,6 +92,10 @@ _LUCIDE_PATHS = {
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
     "arrow-up-right": '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+    "square-pen": (
+        '<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>'
+        '<path d="M18.375 2.625a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/>'
+    ),
     "trash-2": (
         '<path d="M3 6h18"/><path d="M19 6l-1 14H6L5 6"/>'
         '<path d="M8 6V4h8v2"/><path d="M10 11v6"/><path d="M14 11v6"/>'
