@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -36,18 +37,29 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 
 # ── 配色 ──────────────────────────────────────────────────
-CLR_SEP     = "#9CA3AF"   # 分隔线
-CLR_TS      = "#6B7280"   # 时间戳
-CLR_BODY    = "#1F2937"   # 正文
-CLR_LOCK    = "#15803D"   # 锁定 / 成功
+CLR_SEP     = "#E2E8E4"   # 分隔线
+CLR_TS      = "#68766F"   # 时间戳
+CLR_BODY    = "#24312D"   # 正文
+CLR_LOCK    = "#087C58"   # 锁定 / 成功
 CLR_SHINY   = "#B45309"   # 出闪
-CLR_ERROR   = "#DC2626"   # 错过 / 失败
-CLR_LOCK_BG = "#DCFCE7"   # 锁定行背景
-CLR_LOCK_FG = "#166534"   # 锁定行文字
+CLR_ERROR   = "#AC4B42"   # 错过 / 失败
+CLR_LOCK_BG = "#EDF7F1"   # 锁定行背景
+CLR_LOCK_FG = "#087C58"   # 锁定行文字
 CLR_SYNC_BG = "#CFFAFE"   # 同步状态背景
 CLR_SYNC_FG = "#155E75"   # 同步状态文字
 CLR_SHINY_BG = "#FEF3C7"   # 异色单元格背景
 CLR_SHINY_FG = "#92400E"   # 异色单元格文字
+
+
+class _CandidateRowDelegate(QStyledItemDelegate):
+    """Draw row separators without overriding semantic item backgrounds."""
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, option, index)
+        painter.save()
+        painter.setPen(QColor(CLR_SEP))
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+        painter.restore()
 
 
 CANDIDATE_HEADERS = (
@@ -274,7 +286,7 @@ class _RoundListRow(QWidget):
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         self.title_label = QLabel(self)
-        self.title_label.setStyleSheet("font-weight: 600; color: #202225;")
+        self.title_label.setStyleSheet("font-weight: 500; color: #24312D;")
         self.status_label = QLabel(self)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         top.addWidget(self.title_label, 1)
@@ -283,10 +295,10 @@ class _RoundListRow(QWidget):
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
         self.target_label = QLabel(self)
-        self.target_label.setStyleSheet("color: #737C88; font-size: 12px;")
+        self.target_label.setStyleSheet("color: #68766F; font-size: 12px;")
         self.note_label = QLabel(self)
         self.note_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.note_label.setStyleSheet("color: #737C88; font-size: 12px;")
+        self.note_label.setStyleSheet("color: #68766F; font-size: 12px;")
         bottom.addWidget(self.target_label, 1)
         bottom.addWidget(self.note_label)
 
@@ -304,11 +316,11 @@ class _RoundListRow(QWidget):
             "有警告": "#A35F08",
             "疑似出闪": CLR_SHINY,
             "未出闪": CLR_LOCK,
-            "无候选": "#606A76",
-        }.get(status, "#176F5C")
+            "无候选": "#68766F",
+        }.get(status, "#087C58")
         self.title_label.setText(title)
         self.status_label.setText(status)
-        self.status_label.setStyleSheet(f"color: {status_color}; font-size: 12px; font-weight: 600;")
+        self.status_label.setStyleSheet(f"color: {status_color}; font-size: 12px; font-weight: 500;")
         self.target_label.setText(record.target_label)
         note = f"{record.candidate_count} 个候选" if record.candidate_count else record.updated_at.strftime("%H:%M:%S")
         self.note_label.setText(note)
@@ -364,7 +376,7 @@ class HistoryPanel(QWidget):
         toolbar = QHBoxLayout()
         self.summary_label = QLabel("0 轮 · 0 条候选")
         self.summary_label.setObjectName("HistorySummary")
-        self.summary_label.setStyleSheet("color: #6B7280; font-weight: 600;")
+        self.summary_label.setStyleSheet("color: #68766F; font-weight: 500;")
         self.copy_button = QPushButton("复制全部")
         self.copy_button.setFixedHeight(34)
         self.copy_button.setEnabled(False)
@@ -388,7 +400,7 @@ class HistoryPanel(QWidget):
         filters.setContentsMargins(0, 0, 0, 0)
         filters.setSpacing(8)
         result_label = QLabel("结果")
-        result_label.setStyleSheet("color: #68717E; font-size: 12px;")
+        result_label.setStyleSheet("color: #68766F; font-size: 12px;")
         self.result_filter = QComboBox(self)
         self.result_filter.setObjectName("HistoryResultFilter")
         self.result_filter.setMinimumWidth(126)
@@ -403,7 +415,7 @@ class HistoryPanel(QWidget):
             self.result_filter.addItem(text, value)
         self.result_filter.currentIndexChanged.connect(self._refresh_round_list)
         search_label = QLabel("搜索轮次")
-        search_label.setStyleSheet("color: #68717E; font-size: 12px;")
+        search_label.setStyleSheet("color: #68766F; font-size: 12px;")
         self.search_edit = QLineEdit(self)
         self.search_edit.setObjectName("HistoryRoundSearch")
         self.search_edit.setPlaceholderText("目标、Seed、Adv 或结果")
@@ -420,7 +432,7 @@ class HistoryPanel(QWidget):
         self.empty_state.setObjectName("HistoryEmptyState")
         self.empty_state.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.empty_state.setStyleSheet(
-            "QFrame#HistoryEmptyState { background: #FAFBFC; border: 1px solid #E5E7EB; "
+            "QFrame#HistoryEmptyState { background: #F6F8F7; border: 1px solid #E2E8E4; "
             "border-radius: 6px; }"
             "QFrame#HistoryEmptyState QLabel { background: transparent; border: 0; }"
         )
@@ -430,10 +442,10 @@ class HistoryPanel(QWidget):
         empty_layout.addStretch(1)
         self.empty_state_title = QLabel("暂无轮次记录", self.empty_state)
         self.empty_state_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_state_title.setStyleSheet("color: #4B5563; font-size: 16px; font-weight: 600;")
+        self.empty_state_title.setStyleSheet("color: #68766F; font-size: 16px; font-weight: 500;")
         self.empty_state_detail = QLabel("当前会话尚未产生运行结果", self.empty_state)
         self.empty_state_detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_state_detail.setStyleSheet("color: #8A939F; font-size: 12px;")
+        self.empty_state_detail.setStyleSheet("color: #8A9891; font-size: 12px;")
         empty_layout.addWidget(self.empty_state_title)
         empty_layout.addWidget(self.empty_state_detail)
         empty_layout.addStretch(1)
@@ -455,8 +467,8 @@ class HistoryPanel(QWidget):
         self.round_list_heading.setObjectName("HistoryRoundListHeading")
         self.round_list_heading.setFixedHeight(36)
         self.round_list_heading.setStyleSheet(
-            "color: #5E6773; background: #F7F8FA; border: 1px solid #D8DDE3; "
-            "border-bottom: 0; padding: 0 11px; font-size: 12px; font-weight: 600;"
+            "color: #68766F; background: #F6F8F7; border: 1px solid #E2E8E4; "
+            "border-bottom: 0; padding: 0 11px; font-size: 12px; font-weight: 500;"
         )
         self.round_list = QListWidget(list_panel)
         self.round_list.setObjectName("HistoryRoundList")
@@ -465,12 +477,12 @@ class HistoryPanel(QWidget):
         self.round_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.round_list.setSpacing(0)
         self.round_list.setStyleSheet(
-            "QListWidget#HistoryRoundList { background: #FAFBFC; color: #202225; "
-            "border: 1px solid #D8DDE3; outline: 0; }"
-            "QListWidget#HistoryRoundList::item { min-height: 62px; border-bottom: 1px solid #E6E9ED; }"
-            "QListWidget#HistoryRoundList::item:hover { background: #F0F3F5; }"
-            "QListWidget#HistoryRoundList::item:selected { background: #EAF6F2; "
-            "border-left: 3px solid #0E8F70; }"
+            "QListWidget#HistoryRoundList { background: #F6F8F7; color: #24312D; "
+            "border: 1px solid #E2E8E4; outline: 0; }"
+            "QListWidget#HistoryRoundList::item { min-height: 62px; border-bottom: 1px solid #E2E8E4; }"
+            "QListWidget#HistoryRoundList::item:hover { background: #F2F5F3; }"
+            "QListWidget#HistoryRoundList::item:selected { background: #EDF7F1; "
+            "border-left: 3px solid #087C58; }"
         )
         self.round_list.currentItemChanged.connect(self._on_round_selected)
         list_layout.addWidget(self.round_list_heading)
@@ -491,7 +503,7 @@ class HistoryPanel(QWidget):
         title_row.setContentsMargins(0, 0, 0, 0)
         self.detail_title_label = QLabel("请选择轮次", detail_panel)
         self.detail_title_label.setObjectName("HistoryDetailTitle")
-        self.detail_title_label.setStyleSheet("color: #202225; font-size: 16px; font-weight: 600;")
+        self.detail_title_label.setStyleSheet("color: #24312D; font-size: 16px; font-weight: 500;")
         self.detail_status_label = QLabel("", detail_panel)
         self.detail_status_label.setObjectName("HistoryDetailStatus")
         title_row.addWidget(self.detail_title_label)
@@ -499,7 +511,7 @@ class HistoryPanel(QWidget):
         title_row.addStretch()
         self.detail_time_label = QLabel("", detail_panel)
         self.detail_time_label.setObjectName("HistoryDetailTime")
-        self.detail_time_label.setStyleSheet("color: #707986; font-size: 12px;")
+        self.detail_time_label.setStyleSheet("color: #68766F; font-size: 12px;")
         detail_heading.addLayout(title_row)
         detail_heading.addWidget(self.detail_time_label)
         detail_header.addLayout(detail_heading, 1)
@@ -515,10 +527,10 @@ class HistoryPanel(QWidget):
         self.related_logs_button.setEnabled(False)
         self.related_logs_button.clicked.connect(self._request_related_logs)
         self.related_logs_button.setStyleSheet(
-            "QPushButton { color: #FFFFFF; background: #0E8F70; border: 1px solid #0E8F70; "
+            "QPushButton { color: #FFFFFF; background: #087C58; border: 1px solid #087C58; "
             "border-radius: 4px; padding: 0 10px; }"
-            "QPushButton:hover { background: #0B7C61; }"
-            "QPushButton:disabled { color: #9CA3AF; background: #E5E7EB; border-color: #D1D5DB; }"
+            "QPushButton:hover { background: #066A4B; }"
+            "QPushButton:disabled { color: #A5AEA9; background: #E2E8E4; border-color: #E2E8E4; }"
         )
         detail_header.addWidget(self.copy_round_button)
         detail_header.addWidget(self.related_logs_button)
@@ -527,8 +539,8 @@ class HistoryPanel(QWidget):
         meta_frame = QFrame(detail_panel)
         meta_frame.setObjectName("HistoryRoundMeta")
         meta_frame.setStyleSheet(
-            "QFrame#HistoryRoundMeta { border-top: 1px solid #E1E5E9; "
-            "border-bottom: 1px solid #E1E5E9; }"
+            "QFrame#HistoryRoundMeta { border-top: 1px solid #E2E8E4; "
+            "border-bottom: 1px solid #E2E8E4; }"
         )
         meta_layout = QGridLayout(meta_frame)
         meta_layout.setContentsMargins(0, 8, 0, 8)
@@ -560,9 +572,9 @@ class HistoryPanel(QWidget):
 
         feed_heading = QHBoxLayout()
         feed_title = QLabel("处理详情", detail_panel)
-        feed_title.setStyleSheet("color: #30353B; font-size: 13px; font-weight: 600;")
+        feed_title.setStyleSheet("color: #24312D; font-size: 13px; font-weight: 500;")
         feed_note = QLabel("候选数据为识别当时的快照", detail_panel)
-        feed_note.setStyleSheet("color: #717A86; font-size: 12px;")
+        feed_note.setStyleSheet("color: #68766F; font-size: 12px;")
         feed_heading.addWidget(feed_title)
         feed_heading.addStretch()
         feed_heading.addWidget(feed_note)
@@ -574,7 +586,7 @@ class HistoryPanel(QWidget):
         self.history_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.history_scroll.setStyleSheet(
-            "QScrollArea#HistoryScroll { background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 6px; }"
+            "QScrollArea#HistoryScroll { background: #FFFFFF; border: 1px solid #E2E8E4; border-radius: 6px; }"
             "QWidget#HistoryFeed { background: #FFFFFF; }"
         )
         self._feed_body = QWidget(self.history_scroll)
@@ -609,11 +621,11 @@ class HistoryPanel(QWidget):
     @staticmethod
     def _add_meta_column(layout: QGridLayout, column: int, title: str) -> QLabel:
         title_label = QLabel(title)
-        title_label.setStyleSheet("color: #737C88; font-size: 12px;")
+        title_label.setStyleSheet("color: #68766F; font-size: 12px;")
         value_label = QLabel("-")
         value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         value_label.setWordWrap(True)
-        value_label.setStyleSheet("color: #202225; font-weight: 600;")
+        value_label.setStyleSheet("color: #24312D; font-weight: 500;")
         layout.addWidget(title_label, 0, column)
         layout.addWidget(value_label, 1, column)
         return value_label
@@ -891,12 +903,12 @@ class HistoryPanel(QWidget):
             "有警告": "#A35F08",
             "疑似出闪": CLR_SHINY,
             "未出闪": CLR_LOCK,
-            "无候选": "#606A76",
-        }.get(status, "#176F5C")
+            "无候选": "#68766F",
+        }.get(status, "#087C58")
         self.detail_status_label.setText(status)
         self.detail_status_label.setStyleSheet(
-            f"color: {status_color}; background: #F3F4F6; border-radius: 3px; "
-            "padding: 2px 6px; font-size: 12px; font-weight: 600;"
+            f"color: {status_color}; background: #F2F5F3; border-radius: 3px; "
+            "padding: 2px 6px; font-size: 12px; font-weight: 500;"
         )
         start = record.started_at.strftime("%Y-%m-%d %H:%M:%S")
         if record.updated_at.replace(microsecond=0) == record.started_at.replace(microsecond=0):
@@ -950,7 +962,7 @@ class HistoryPanel(QWidget):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             label.setWordWrap(True)
-            weight = "font-weight: 700;" if entry.bold else ""
+            weight = "font-weight: 500;" if entry.bold else ""
             label.setStyleSheet(f"color: {entry.color}; padding: 1px 4px; {weight}")
             self._append_widget(label)
         elif entry.kind == "divider":
@@ -1244,6 +1256,8 @@ class HistoryPanel(QWidget):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
+        table.setItemDelegate(_CandidateRowDelegate(table))
         table.setWordWrap(False)
         table.setTextElideMode(Qt.TextElideMode.ElideNone)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -1293,13 +1307,13 @@ class HistoryPanel(QWidget):
         table.setMinimumWidth(0)
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.setStyleSheet(
-            "QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #F9FAFB; "
-            "border: 1px solid #E5E7EB; gridline-color: #EEF0F3; color: #111827; }"
+            "QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #F6F8F7; "
+            "border: 0; color: #24312D; }"
             "QTableWidget#HistoryCandidateTable::item { padding: 3px 6px; }"
-            "QTableWidget#HistoryCandidateTable::item:selected { background: #0E8F70; color: #FFFFFF; }"
-            "QTableWidget#HistoryCandidateTable QHeaderView::section { background: #F3F4F6; color: #4B5563; "
-            "border: 0; border-right: 1px solid #E5E7EB; border-bottom: 1px solid #D1D5DB; "
-            "padding: 6px; font-weight: 700; }"
+            "QTableWidget#HistoryCandidateTable::item:selected { background: #087C58; color: #FFFFFF; }"
+            "QTableWidget#HistoryCandidateTable QHeaderView::section { background: #F2F5F3; color: #68766F; "
+            "border: 0; border-bottom: 1px solid #E2E8E4; "
+            "padding: 6px; font-weight: 500; }"
         )
         return table
 

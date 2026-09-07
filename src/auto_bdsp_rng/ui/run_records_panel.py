@@ -64,7 +64,7 @@ class RunRecordsPanel(QWidget):
         open_log_dir: Callable[[], object] | None,
     ) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(18, 0, 18, 14)
         root.setSpacing(10)
 
         heading = QFrame(self)
@@ -157,6 +157,11 @@ class RunRecordsPanel(QWidget):
                 border-top: 1px solid #E2E8E4;
                 background: transparent;
                 top: -1px;
+            }
+            QTabWidget#RunRecordsTabs > QTabBar {
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                background: transparent;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab {
                 min-width: 96px;

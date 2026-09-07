@@ -583,7 +583,7 @@ class AutoTidRngPanel(QWidget):
         group = QGroupBox("目标 Display TID")
         group.setObjectName("AutoTidTargets")
         group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        group.setMaximumHeight(184)
+        group.setMaximumHeight(200)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(8, 7, 8, 10)
         layout.setSpacing(6)
@@ -611,8 +611,9 @@ class AutoTidRngPanel(QWidget):
         self.target_list.setSpacing(6)
         self.target_list.setGridSize(QSize(92, 32))
         self.target_list.setUniformItemSizes(True)
-        self.target_list.setMinimumHeight(100)
-        self.target_list.setMaximumHeight(108)
+        # Reserve three complete chip rows in addition to the frame and padding.
+        self.target_list.setMinimumHeight(116)
+        self.target_list.setMaximumHeight(124)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         self.target_list.targetRemoved.connect(self._refresh_target_count)
@@ -621,8 +622,8 @@ class AutoTidRngPanel(QWidget):
         action_panel = QWidget()
         action_panel.setObjectName("TargetPoolActions")
         action_panel.setFixedWidth(300)
-        action_panel.setMinimumHeight(100)
-        action_panel.setMaximumHeight(108)
+        action_panel.setMinimumHeight(116)
+        action_panel.setMaximumHeight(124)
         action_layout = QVBoxLayout(action_panel)
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(8)
@@ -769,6 +770,8 @@ class AutoTidRngPanel(QWidget):
 
         self._id_states: list[IDState8] = []
         self.id_table = _IdResultTable()
+        self.id_table.setObjectName("TidResultsTable")
+        self.id_table.setShowGrid(False)
         self.id_table.setColumnCount(5)
         self.id_table.setHorizontalHeaderLabels(("Adv", "TID", "SID", "TSV", "Display TID"))
         self.id_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
@@ -779,6 +782,9 @@ class AutoTidRngPanel(QWidget):
         self.id_table.searchStatusChanged.connect(self.status_badge.setText)
         self.id_table.verticalHeader().setVisible(False)
         self.id_table.horizontalHeader().setStretchLastSection(True)
+        self.id_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self.id_table.setMinimumHeight(320)
         layout.addWidget(self.id_table, 1)
         return group

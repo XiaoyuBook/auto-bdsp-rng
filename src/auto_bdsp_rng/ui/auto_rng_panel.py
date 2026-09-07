@@ -621,6 +621,7 @@ class AutoRngPanel(QWidget):
         self.more_strategy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.more_strategy_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.more_strategy_button.setFixedHeight(30)
+        self.more_strategy_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         form.addRow(self.more_strategy_button)
 
         shiny_tooltip = explained_rows[3][2]
@@ -1097,16 +1098,17 @@ class AutoRngPanel(QWidget):
         self.runtime_phase_label.setObjectName("RuntimePhaseLabel")
         self.runtime_round_label = QLabel("任务已停止")
         self.runtime_round_label.setObjectName("RuntimeRoundLabel")
-        runtime_top.addWidget(self.runtime_state_dot)
-        runtime_top.addWidget(self.runtime_phase_label)
+        runtime_top.addWidget(self.runtime_state_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        runtime_top.addWidget(self.runtime_phase_label, 0, Qt.AlignmentFlag.AlignVCenter)
         runtime_top.addStretch(1)
-        runtime_top.addWidget(self.runtime_round_label)
+        runtime_top.addWidget(self.runtime_round_label, 0, Qt.AlignmentFlag.AlignVCenter)
         runtime_layout.addLayout(runtime_top)
 
         self.runtime_description_label = QLabel("等待自动流程开始。")
         self.runtime_description_label.setObjectName("RuntimeDescriptionLabel")
         self.runtime_description_label.setWordWrap(True)
         self.runtime_description_label.setMaximumHeight(38)
+        self.runtime_description_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         runtime_layout.addWidget(self.runtime_description_label)
 
         metrics = QHBoxLayout()
@@ -1506,6 +1508,14 @@ class AutoRngPanel(QWidget):
             QGroupBox#AutoRngStrategyGroup QDoubleSpinBox {
                 font-family: "Consolas", "Cascadia Mono", monospace;
             }
+            QGroupBox#AutoRngStrategyGroup QSpinBox QLineEdit,
+            QGroupBox#AutoRngStrategyGroup QDoubleSpinBox QLineEdit {
+                background: transparent;
+                border: 0;
+                min-height: 0;
+                max-height: 16777215px;
+                padding: 0;
+            }
             QWidget#DelaySettingsField,
             QWidget#CompactStrategyField {
                 background: transparent;
@@ -1598,8 +1608,8 @@ class AutoRngPanel(QWidget):
                 background: transparent;
                 border: 0;
                 border-radius: 0;
-                margin-top: 20px;
-                padding: 13px 0 0 0;
+                margin-top: 16px;
+                padding: 0;
                 color: #24312D;
                 font-size: 14px;
                 font-weight: 500;

@@ -344,6 +344,46 @@ def test_confirmed_navigation_and_seed_preview_use_content_geometry(
     assert controls[1].geometry().right() < controls[2].geometry().left()
 
 
+def test_tid_target_pool_keeps_three_visible_rows_under_main_window_theme(
+    app, isolated_ui_qsettings,
+) -> None:
+    window = MainWindow(profile_settings=isolated_ui_qsettings["MainWindowProfile"])
+    panel = window.auto_tid_rng_tab
+    for value in range(50):
+        panel.add_target_display_tid(value)
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+
+    pool = panel.target_list
+    assert pool.viewport().height() >= pool.gridSize().height() * 3
+    assert pool.verticalScrollBar().maximum() > 0
+    pool.scrollToBottom()
+    app.processEvents()
+    assert pool.viewport().rect().contains(pool.visualItemRect(pool.item(49)))
+    assert panel.target_display_tids() == tuple(range(50))
+
+
+def test_runtime_badge_and_spin_edit_fit_their_actual_main_window_geometry(
+    app, isolated_ui_qsettings,
+) -> None:
+    window = MainWindow(profile_settings=isolated_ui_qsettings["MainWindowProfile"])
+    panel = window.auto_rng_tab
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+
+    badge = panel.runtime_round_label
+    assert badge.height() <= badge.fontMetrics().height() + 8
+    assert badge.width() >= badge.fontMetrics().horizontalAdvance(badge.text())
+    for spin in (panel.max_advances, panel.max_wait_frames):
+        edit = spin.lineEdit()
+        assert spin.rect().contains(edit.geometry())
+        assert edit.height() >= edit.fontMetrics().height()
+
+
 @pytest.mark.parametrize("task", ("定点", "TID"))
 @pytest.mark.parametrize("terminal_phase", ("已完成", "失败", "空闲", "已停止"))
 def test_main_header_terminal_progress_does_not_keep_previous_round(

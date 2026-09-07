@@ -3001,6 +3001,8 @@ class MainWindow(QMainWindow):
 
         # 表格
         self.table = PokeFinderTableWidget()
+        self.table.setObjectName("StaticResultsTable")
+        self.table.setShowGrid(False)
         self.table.setColumnCount(len(self._result_headers()))
         self.table.setHorizontalHeaderLabels(self._result_headers())
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
@@ -3011,6 +3013,7 @@ class MainWindow(QMainWindow):
         self.table.searchStatusChanged.connect(self.statusBar().showMessage)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
         layout.addWidget(self.table, 1)
@@ -3082,15 +3085,21 @@ class MainWindow(QMainWindow):
                 border-radius: 0;
                 top: -1px;
             }
+            QTabWidget#WorkspaceTabs::tab-bar {
+                left: 18px;
+            }
+            QTabWidget#WorkspaceTabs QTabBar {
+                border-bottom: 1px solid #E2E8E4;
+            }
             QTabWidget#WorkspaceTabs QTabBar::tab {
                 background: #FFFFFF;
                 border: 0;
-                border-bottom: 2px solid transparent;
+                border-bottom: 1px solid #E2E8E4;
                 color: #68766F;
                 min-width: 0;
                 min-height: 44px;
                 margin-right: 25px;
-                padding: 0;
+                padding: 0 0 1px 0;
                 font-size: 13px;
                 font-weight: 400;
             }
@@ -3098,6 +3107,7 @@ class MainWindow(QMainWindow):
                 background: #FFFFFF;
                 color: #087C58;
                 border-bottom: 2px solid #087C58;
+                padding-bottom: 0;
                 font-weight: 500;
             }
             QTabWidget#WorkspaceTabs QTabBar::tab:hover:!selected {
@@ -3147,8 +3157,7 @@ class MainWindow(QMainWindow):
             QLineEdit,
             QSpinBox,
             QDoubleSpinBox,
-            QComboBox,
-            QListWidget {
+            QComboBox {
                 background: #FFFFFF;
                 border: 1px solid #E2E8E4;
                 border-radius: 5px;
@@ -3158,6 +3167,22 @@ class MainWindow(QMainWindow):
                 color: #24312D;
                 font-size: 13px;
                 selection-background-color: #DCEFE7;
+            }
+            QListWidget {
+                background: #FFFFFF;
+                border: 1px solid #E2E8E4;
+                border-radius: 5px;
+                padding: 6px;
+                color: #24312D;
+                selection-background-color: #DCEFE7;
+            }
+            QSpinBox QLineEdit,
+            QDoubleSpinBox QLineEdit {
+                background: transparent;
+                border: 0;
+                min-height: 0;
+                max-height: 16777215px;
+                padding: 0;
             }
             QLineEdit:focus,
             QSpinBox:focus,
@@ -3488,6 +3513,20 @@ class MainWindow(QMainWindow):
             QTableWidget::item:selected {
                 background: #EDF7F1;
                 color: #087C58;
+            }
+            QTableWidget#StaticResultsTable::item,
+            QTableWidget#TidResultsTable::item {
+                border: 0;
+                border-bottom: 1px solid #E2E8E4;
+                padding: 5px 8px;
+            }
+            QTableWidget#StaticResultsTable QHeaderView::section,
+            QTableWidget#TidResultsTable QHeaderView::section {
+                padding: 6px 8px;
+            }
+            QLabel#ResultCount {
+                color: #68766F;
+                font-size: 12px;
             }
             QHeaderView::section {
                 background: #F6F8F7;
