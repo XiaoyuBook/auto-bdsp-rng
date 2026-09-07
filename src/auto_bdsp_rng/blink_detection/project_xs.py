@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 PROJECT_XS_ROOT = resource_path("third_party", "Project_Xs_CHN")
 PROJECT_XS_SRC = PROJECT_XS_ROOT / "src"
 BROKER_NEW_FRAME_WAIT_SECONDS = 0.1
+BROKER_LATEST_FRAME_READ_ATTEMPTS = 3
 
 
 class ProjectXsIntegrationError(RuntimeError):
@@ -376,6 +377,7 @@ class BrokerFrameCapture:
         if self._released:
             raise ProjectXsIntegrationError("共享视频源客户端已经关闭")
         try:
+            frame = None
             waiter = getattr(self._client, "wait_for_frame", None)
             if self._wait_for_new_frame and callable(waiter):
                 try:
@@ -388,6 +390,7 @@ class BrokerFrameCapture:
                 sequence = getattr(result, "sequence", None)
                 if sequence is not None and int(sequence) <= self._last_sequence:
                     return False, None
+                frame = self._frame_from_result(result)
             else:
                 reader = None
                 for name in ("read_latest", "read_array", "read", "get_latest_frame", "read_frame"):
@@ -397,9 +400,15 @@ class BrokerFrameCapture:
                         break
                 if reader is None:
                     raise ProjectXsIntegrationError("共享视频源客户端不支持读取帧")
-                result = reader()
-                sequence = getattr(result, "sequence", None)
-            frame = self._frame_from_result(result)
+                sequence = None
+                # A lock-free ring snapshot can lose a race with the writer.
+                # Retry immediately before treating the source as unavailable.
+                for _ in range(BROKER_LATEST_FRAME_READ_ATTEMPTS):
+                    result = reader()
+                    frame = self._frame_from_result(result)
+                    if frame is not None:
+                        sequence = getattr(result, "sequence", None)
+                        break
             if frame is None:
                 return False, None
             # Consumers must never annotate the broker's backing memory.  Only

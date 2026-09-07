@@ -149,6 +149,50 @@ def test_preview_capture_keeps_nonblocking_latest_frame_behavior():
     assert int(packet.as_array(copy=False)[0, 0, 0]) == 23
 
 
+def test_preview_capture_retries_transient_empty_latest_frame_without_waiting():
+    packet = _packet(12, 31)
+    responses = [None, packet]
+
+    class Client:
+        def __init__(self) -> None:
+            self.wait_calls = 0
+            self.read_calls = 0
+
+        def wait_for_frame(self, **_kwargs):
+            self.wait_calls += 1
+            raise AssertionError("preview must not wait for a new frame")
+
+        def read_latest(self):
+            self.read_calls += 1
+            return responses.pop(0)
+
+    client = Client()
+    capture = BrokerFrameCapture(lambda: client)
+
+    ok, frame = capture.read()
+
+    assert ok
+    assert int(frame[0, 0, 0]) == 31
+    assert client.wait_calls == 0
+    assert client.read_calls == 2
+
+
+def test_preview_capture_bounds_retries_for_persistent_empty_latest_frame():
+    class Client:
+        def __init__(self) -> None:
+            self.read_calls = 0
+
+        def read_latest(self):
+            self.read_calls += 1
+            return None
+
+    client = Client()
+    capture = BrokerFrameCapture(lambda: client)
+
+    assert capture.read() == (False, None)
+    assert client.read_calls == 3
+
+
 @pytest.mark.parametrize(
     "tracking_name",
     ("_tracking_blink_controlled", "_tracking_poke_blink_controlled"),
