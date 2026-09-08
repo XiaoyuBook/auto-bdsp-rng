@@ -45,6 +45,7 @@ from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.workspace_controls import workspace_icon
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
@@ -383,6 +384,8 @@ class AutoTidRngPanel(QWidget):
         self.status_badge.setObjectName("AutoTidStatus")
         self.status_badge.setFixedHeight(32)
         self.start_button = QToolButton()
+        self.start_button.setIcon(workspace_icon("play", "#FFFFFF"))
+        self.start_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.start_button.setText("开始")
         self.start_button.setObjectName("PrimaryButton")
         self.start_button.setFixedHeight(32)
@@ -398,6 +401,7 @@ class AutoTidRngPanel(QWidget):
         self.start_from_seed_action.triggered.connect(self._start_clicked)
         self.start_from_capture_action.triggered.connect(self._start_from_capture_clicked)
         self.stop_button = QPushButton("停止")
+        self.stop_button.setIcon(workspace_icon("stop", "#AC4B42"))
         self.stop_button.setObjectName("DangerButton")
         self.stop_button.setFixedHeight(32)
         self.stop_button.setFixedWidth(80)
@@ -503,6 +507,7 @@ class AutoTidRngPanel(QWidget):
             "取名脚本",
         )
         self.refresh_scripts_button = QPushButton("刷新脚本列表")
+        self.refresh_scripts_button.setIcon(workspace_icon("refresh"))
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         self.refresh_scripts_button.setFixedHeight(32)
         self.refresh_scripts_button.setFixedWidth(116)

@@ -255,8 +255,10 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert window.version_label.font().pixelSize() == 11
     assert window.title_label.font().weight() == 500
     assert window.version_label.font().weight() == 400
-    assert window.video_source_header_button.size() == QSize(150, 30)
-    assert window.easycon_header_button.size() == QSize(150, 30)
+    assert window.video_source_header_button.size() == QSize(150, 32)
+    assert window.easycon_header_button.size() == QSize(150, 32)
+    assert window.easycon_header_button.status_text == "已连接"
+    assert "COM123456789" in window.easycon_header_button.toolTip()
     assert not window.auto_loop_badge.isVisible()
     assert not window.auto_phase_badge.isVisible()
     assert not window.auto_advance_badge.isVisible()

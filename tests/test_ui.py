@@ -437,6 +437,11 @@ def test_easycon_header_uses_panel_connection_presentation(app):
     assert window.easycon_header_button.property("state") == "connected"
     assert "已连接 · COM17" in window.easycon_header_button.toolTip()
     assert window.easycon_header_button.isEnabled()
+    assert window.easycon_header_button.status_text == "已连接"
+    window.easycon_header_button.click()
+    assert window.easycon_tab.connection_dialog.isVisible()
+    window.easycon_tab.connection_dialog.close_button.click()
+    assert not window.easycon_tab.connection_dialog.isVisible()
 
     window.easycon_tab.connectionPresentationChanged.emit(
         "伊机控 故障",
@@ -449,6 +454,7 @@ def test_easycon_header_uses_panel_connection_presentation(app):
     assert window.easycon_header_button.text() == "伊机控 故障"
     assert window.easycon_header_button.property("state") == "failed"
     assert window.easycon_header_button.isEnabled() is False
+    assert window.easycon_header_button.status_text == "故障"
 
 
 def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
@@ -945,7 +951,7 @@ def test_non_running_broker_start_stop_failure_requires_retry_and_rejects_late_s
     process.stopped = True
     assert window.disconnect_video_source(force=True) is True
     assert not window._video_source_stop_pending
-    assert window.video_source_button.text() == "连接视频源"
+    assert window.video_source_button.text() == "连接"
 
 
 def test_close_stops_non_running_broker_start_attempt_before_queued_success(app, monkeypatch):
@@ -1121,7 +1127,7 @@ def test_video_source_stop_failure_requires_an_explicit_retry(app):
     process.stopped = True
     assert window.disconnect_video_source(force=True) is True
     assert not window._video_source_stop_pending
-    assert window.video_source_button.text() == "连接视频源"
+    assert window.video_source_button.text() == "连接"
     assert window.capture_device_combo.isEnabled()
 
 

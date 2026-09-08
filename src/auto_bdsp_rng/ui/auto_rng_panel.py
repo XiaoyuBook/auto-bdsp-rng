@@ -68,6 +68,7 @@ from auto_bdsp_rng.ui.delay_strategy_dialog import (
 )
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.workspace_controls import workspace_icon
 from auto_bdsp_rng.ui.spin_box import (
     ChevronDoubleSpinBox as QDoubleSpinBox,
     ChevronSpinBox as QSpinBox,
@@ -376,6 +377,8 @@ class AutoRngPanel(QWidget):
         self.mode_combo.addItem("无限循环", "infinite")
         self.loop_count = self._spin(1, 9999, 1)
         self.start_button = QToolButton()
+        self.start_button.setIcon(workspace_icon("play", "#FFFFFF"))
+        self.start_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.start_button.setText("开始")
         self.start_button.setObjectName("PrimaryButton")
         self.start_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
@@ -388,6 +391,7 @@ class AutoRngPanel(QWidget):
         self.start_menu.addAction(self.start_from_reidentify_action)
         self.start_button.setMenu(self.start_menu)
         self.stop_button = QPushButton("停止")
+        self.stop_button.setIcon(workspace_icon("stop", "#AC4B42"))
         self.stop_button.setObjectName("DangerButton")
         self.status_badge = QLabel("状态：空闲")
         self.status_badge.setObjectName("Badge")
@@ -1073,6 +1077,8 @@ class AutoRngPanel(QWidget):
         runtime_title = QLabel("运行现场")
         runtime_title.setObjectName("SectionTitle")
         self.runtime_log_button = QPushButton("轮次记录")
+        self.runtime_log_button.setIcon(workspace_icon("external", "#087C58"))
+        self.runtime_log_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.view_round_button = self.runtime_log_button
         self.runtime_log_button.setObjectName("InlineLinkButton")
         self.runtime_log_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1145,6 +1151,8 @@ class AutoRngPanel(QWidget):
         runtime_footer_layout.addWidget(QLabel("帧"))
         runtime_footer_layout.addStretch(1)
         self.target_data_button = QPushButton("查看目标数据")
+        self.target_data_button.setIcon(workspace_icon("external", "#087C58"))
+        self.target_data_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.target_data_button.setObjectName("InlineLinkButton")
         self.target_data_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.target_data_button.clicked.connect(self.targetDataRequested.emit)
