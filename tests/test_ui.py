@@ -2206,7 +2206,8 @@ def test_auto_rng_panel_persists_exit_script_and_reseeding_threshold(app, tmp_pa
 
     assert config.exit_script_path == tmp_path / "离开地下.txt"
     assert config.reseeding_threshold == 12345
-    assert not hasattr(panel, "refresh_scripts_button")
+    assert panel.refresh_scripts_button.text() == "刷新"
+    assert panel.refresh_scripts_button.toolTip() == "刷新脚本列表"
 
 
 def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
@@ -2215,12 +2216,12 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     layout = panel.script_group.layout()
 
     fields = (
-        ("测种脚本", panel.seed_script_combo, 0, 0),
-        ("过帧脚本", panel.advance_script_combo, 0, 1),
-        ("撞闪脚本", panel.hit_script_combo, 3, 0),
-        ("过场脚本", panel.exit_script_combo, 3, 1),
-        ("反查脚本", panel.reverse_script_combo, 6, 0),
-        ("逃跑脚本", panel.escape_script_combo, 6, 1),
+        ("测种脚本", panel.seed_script_combo, 1, 0),
+        ("过帧脚本", panel.advance_script_combo, 1, 1),
+        ("撞闪脚本", panel.hit_script_combo, 4, 0),
+        ("过场脚本", panel.exit_script_combo, 4, 1),
+        ("反查脚本", panel.reverse_script_combo, 7, 0),
+        ("逃跑脚本", panel.escape_script_combo, 7, 1),
     )
     for label, combo, row, column in fields:
         assert layout.itemAtPosition(row, column).widget().text() == label
@@ -2232,11 +2233,11 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
         assert picker.layout().itemAt(0).widget() is combo
         assert picker.layout().itemAt(1).widget() is edit_button
         assert edit_button.toolTip() == f"编辑{label}"
-    assert layout.itemAtPosition(9, 0).widget() is panel.escape_continue_check
+    assert layout.itemAtPosition(10, 0).widget() is panel.escape_continue_check
     assert panel.escape_continue_check.text() == "未命中时逃跑续搜"
     assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.LeftToRight
     assert "background: transparent" in panel.escape_continue_check.styleSheet()
-    assert layout.itemAtPosition(9, 0).alignment() == (
+    assert layout.itemAtPosition(10, 0).alignment() == (
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     )
     panel.resize(1000, 700)
@@ -2244,7 +2245,7 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     app.processEvents()
     for combo in panel._script_combos():
         assert combo.geometry().right() < panel.script_edit_buttons[combo].geometry().left()
-    advance_label = layout.itemAtPosition(0, 0).widget()
+    advance_label = layout.itemAtPosition(1, 0).widget()
     assert panel.escape_continue_check.geometry().left() == advance_label.geometry().left()
     assert not panel.escape_continue_check.isChecked()
     assert not panel.escape_script_combo.isEnabled()
@@ -2320,6 +2321,8 @@ def test_auto_rng_script_edit_buttons_emit_each_selected_path(app, tmp_path):
         combo.addItem(path.name, str(path))
         combo.setCurrentIndex(combo.findData(str(path)))
         expected_paths.append(path)
+
+    panel.escape_continue_check.setChecked(True)
 
     emitted = []
     panel.scriptEditRequested.connect(emitted.append)
@@ -3372,8 +3375,8 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path
     assert panel.config_contents.layout().spacing() == 13
     assert panel.strategy_form.verticalSpacing() == 13
     script_layout = panel.script_group.layout()
-    assert script_layout.contentsMargins().top() == 10
-    assert [script_layout.rowMinimumHeight(row) for row in (2, 5, 8)] == [6, 6, 6]
+    assert script_layout.contentsMargins().top() == 0
+    assert [script_layout.rowMinimumHeight(row) for row in (3, 6, 9)] == [6, 6, 6]
     target_tags = panel.findChild(QWidget, "TargetTags")
     assert target_tags is not None
     assert target_tags.layout().contentsMargins().bottom() == 10
@@ -3382,8 +3385,8 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path
     assert config_layout.itemAt(4).spacerItem() is not None
     assert panel.more_strategy_button.isCheckable()
     assert panel.shiny_threshold_seconds.isHidden()
-    assert not hasattr(panel, "refresh_scripts_button")
-    assert not any(button.text() == "刷新脚本列表" for button in panel.findChildren(QPushButton))
+    assert panel.refresh_scripts_button.text() == "刷新"
+    assert panel.refresh_scripts_button.toolTip() == "刷新脚本列表"
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
 
 
@@ -3523,11 +3526,14 @@ def test_auto_rng_stop_button_requests_runner_stop_immediately(app):
     emissions: list[str] = []
     panel.stopRequested.connect(lambda: emissions.append("emitted"))
     panel._runner_worker = SimpleNamespace(stop=lambda: stops.append("stopped"))
+    panel.set_preparing(True)
 
     panel.stop_button.click()
 
     assert stops == ["stopped"]
     assert emissions == ["emitted"]
+    assert panel.stop_button.text() == "正在停止"
+    assert not panel.stop_button.isEnabled()
 
 
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
@@ -4799,6 +4805,10 @@ def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp
         assert QThread.currentThread() == ui_thread
         touched.append(name)
 
+    # The service only needs an active timer to exercise pause/resume. Detach its
+    # real frame callback so event ordering cannot open a modal preview error
+    # before the worker's queued pause reaches the UI.
+    window._preview_timer.timeout.disconnect()
     window._preview_timer.start()
     original_stop_preview = window._preview_timer.stop
     original_start_preview = window._preview_timer.start

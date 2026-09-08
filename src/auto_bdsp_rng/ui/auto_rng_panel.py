@@ -59,6 +59,7 @@ from auto_bdsp_rng.data import (
 )
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import (
     DELAY_STRATEGY_LABEL_BY_ID,
@@ -275,7 +276,7 @@ class AutoRngStrategyDialog(QDialog):
         )
 
 
-class AutoRngPanel(QWidget):
+class AutoRngPanel(AutomationLifecycle, QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
     autoProgressChanged = Signal(object)
@@ -302,6 +303,7 @@ class AutoRngPanel(QWidget):
         run_log_sink: Callable[[str, str], None] | None = None,
     ) -> None:
         super().__init__(parent)
+        self._init_lifecycle()
         self.script_dir = script_dir
         self._run_log_sink = run_log_sink
         self._scripts: list[Path] = []
@@ -325,6 +327,7 @@ class AutoRngPanel(QWidget):
         self._build_ui()
         self.refresh_scripts()
         self._restore_panel_state()
+        self._sync_run_controls()
         self._connect_config_state_tracking()
         self._config_state_tracking_ready = True
         self._set_config_saved(True)
@@ -409,7 +412,7 @@ class AutoRngPanel(QWidget):
         self.start_button.setFixedHeight(34)
         self.start_button.setMinimumWidth(88)
         self.stop_button.setFixedHeight(34)
-        self.stop_button.setMinimumWidth(80)
+        self.stop_button.setFixedWidth(104)
 
         self.start_button.clicked.connect(self._start_clicked)
         self.start_from_seed_action.triggered.connect(self._start_clicked)
@@ -971,13 +974,28 @@ class AutoRngPanel(QWidget):
         self.strategy_dialog.set_values(*original_values)
 
     def _build_script_group(self) -> QGroupBox:
-        group = QGroupBox("任务脚本")
+        group = QGroupBox()
         group.setObjectName("AutoRngScriptGroup")
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QGridLayout(group)
-        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(16)
         layout.setVerticalSpacing(4)
+
+        title_row = QHBoxLayout()
+        self.script_group_title = QLabel("任务脚本")
+        self.script_group_title.setObjectName("SectionTitle")
+        title_row.addWidget(self.script_group_title)
+        title_row.addStretch()
+        self.refresh_scripts_button = QPushButton("刷新")
+        self.refresh_scripts_button.setObjectName("AutoRngRefreshScripts")
+        self.refresh_scripts_button.setIcon(workspace_icon("refresh", "#087C58"))
+        self.refresh_scripts_button.setToolTip("刷新脚本列表")
+        self.refresh_scripts_button.setFixedSize(72, 32)
+        self.refresh_scripts_button.setStyleSheet("QPushButton {color: #087C58; border: 0; background: transparent; padding: 0;} QPushButton:disabled {color: #9AA8A1;}")
+        self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
+        title_row.addWidget(self.refresh_scripts_button)
+        layout.addLayout(title_row, 0, 0, 1, 2)
 
         def combo_factory() -> _RefreshingScriptComboBox:
             return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
@@ -1009,6 +1027,7 @@ class AutoRngPanel(QWidget):
         )
         self.escape_script_combo.setEnabled(False)
         self.escape_continue_check.toggled.connect(self.escape_script_combo.setEnabled)
+        self.escape_continue_check.toggled.connect(lambda: self._update_script_edit_button(self.escape_script_combo))
         script_fields = (
             ("测种脚本", self.seed_script_combo, 0, 0),
             ("过帧脚本", self.advance_script_combo, 0, 1),
@@ -1049,17 +1068,17 @@ class AutoRngPanel(QWidget):
             picker_layout.addWidget(edit_button)
             self.script_edit_buttons[combo] = edit_button
             self.script_picker_widgets[combo] = picker
-            layout.addWidget(label, row, column)
-            layout.addWidget(picker, row + 1, column)
+            layout.addWidget(label, row + 1, column)
+            layout.addWidget(picker, row + 2, column)
         layout.addWidget(
             self.escape_continue_check,
-            9,
+            10,
             0,
             1,
             2,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
-        for spacer_row in (2, 5, 8):
+        for spacer_row in (3, 6, 9):
             layout.setRowMinimumHeight(spacer_row, 6)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -1616,7 +1635,7 @@ class AutoRngPanel(QWidget):
                 background: transparent;
                 border: 0;
                 border-radius: 0;
-                margin-top: 16px;
+                margin-top: 0;
                 padding: 0;
                 color: #24312D;
                 font-size: 14px;
@@ -1678,6 +1697,8 @@ class AutoRngPanel(QWidget):
         )
 
     def refresh_scripts(self) -> None:
+        if self._runner_thread is not None or self._preparing:
+            return
         selected_paths = {
             combo: self._selected_path(combo)
             for combo in self._script_combos()
@@ -1693,6 +1714,9 @@ class AutoRngPanel(QWidget):
         if self._scripts_initialized:
             for combo, path in selected_paths.items():
                 self._select_script(combo, path)
+                if path is not None and self._selected_path(combo) is None:
+                    self.add_log(f"脚本已不存在，请重新选择：{path.name}", level="WARNING")
+                    self._mark_config_dirty()
         else:
             self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
             self._select_script(self.advance_script_combo, choose_default_script(self._scripts, DEFAULT_ADVANCE_SCRIPT_NAME))
@@ -1703,7 +1727,7 @@ class AutoRngPanel(QWidget):
     def _update_script_edit_button(self, combo: QComboBox) -> None:
         button = self.script_edit_buttons.get(combo)
         if button is not None:
-            button.setEnabled(self._selected_path(combo) is not None)
+            button.setEnabled(combo.isEnabled() and self._selected_path(combo) is not None)
 
     def _request_script_edit(self, combo: QComboBox) -> None:
         path = self._selected_path(combo)
@@ -1888,9 +1912,11 @@ class AutoRngPanel(QWidget):
         self._start_with_phase(AutoRngPhase.REIDENTIFY)
 
     def _start_with_phase(self, start_phase: AutoRngPhase) -> None:
+        if not self.start_button.isEnabled():
+            return
         self._save_panel_state()
-        config = self.build_config(start_phase=start_phase)
         try:
+            config = self.build_config(start_phase=start_phase)
             validate_auto_scripts(
                 config.seed_script_path,
                 config.advance_script_path,
@@ -1900,16 +1926,14 @@ class AutoRngPanel(QWidget):
                 shiny_threshold_seconds=config.shiny_threshold_seconds,
                 target_species=config.target_species,
             )
-        except AutoScriptError as exc:
+        except (AutoScriptError, ValueError) as exc:
             self.set_phase_text("配置错误")
             self.add_log(str(exc), level="WARNING")
             return
         self.startRequested.emit(config)
 
     def _stop_clicked(self) -> None:
-        if self._runner_worker is not None:
-            self._runner_worker.stop()
-        self.stopRequested.emit()
+        self.request_stop("用户点击停止按钮")
 
     def build_config(self, *, start_phase: AutoRngPhase = AutoRngPhase.RUN_SEED_SCRIPT) -> AutoRngConfig:
         targets = self.targets()
@@ -1969,33 +1993,31 @@ class AutoRngPanel(QWidget):
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.started.connect(worker.run)
+        thread.finished.connect(self._clear_runner_thread)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         self._runner_thread = thread
         self._runner_worker = worker
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
+        self._preparing = False
+        self._stop_pending = False
+        self._worker_done = False
+        self._run_state_active = True
+        self._sync_run_controls()
         self.runStateChanged.emit(True)
         thread.start()
 
     def _runner_finished(self, progress: object) -> None:
         # 不重复 apply_progress：最后一条进度已通过 progressChanged 信号输出
         if isinstance(progress, AutoRngProgress):
-            self.set_phase_text("已停止" if progress.phase == AutoRngPhase.IDLE else "已完成")
-        self._clear_runner_thread()
+            self.set_phase_text("已停止" if progress.phase == AutoRngPhase.IDLE else "失败" if progress.phase == AutoRngPhase.FAILED else "已完成")
+        self._runner_returned()
 
     def _runner_failed(self, message: str) -> None:
         self.set_phase_text("失败")
         if message != self._last_failed_progress_message:
             self.add_log(message, level="ERROR")
         self._last_failed_progress_message = None
-        self._clear_runner_thread()
+        self._runner_returned()
 
-    def _clear_runner_thread(self) -> None:
-        self._runner_thread = None
-        self._runner_worker = None
-        self.start_button.setEnabled(True)
-        self.runStateChanged.emit(False)
 
     def _selected_path(self, combo: QComboBox) -> Path | None:
         value = combo.currentData()

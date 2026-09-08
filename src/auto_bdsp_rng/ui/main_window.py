@@ -171,6 +171,7 @@ from auto_bdsp_rng.ui.run_records_panel import RunRecordsPanel
 from auto_bdsp_rng.ui.spin_box import ChevronDoubleSpinBox as QDoubleSpinBox
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
+from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
 from auto_bdsp_rng.ui.workspace_controls import (
     ConnectionDialog, DeviceStatusButton, set_disconnect_action, workspace_icon,
 )
@@ -1865,6 +1866,11 @@ class MainWindow(QMainWindow):
         self.id_tab = IdPanel(status_callback=lambda text: self.statusBar().showMessage(text))
         self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
+        self.auto_rng_tab.stopRequested.connect(self._cancel_auto_rng_preparation)
+        self.auto_rng_tab.runStateChanged.connect(self._refresh_automation_start_state)
+        self.auto_tid_rng_tab.runStateChanged.connect(self._refresh_automation_start_state)
+        self.easycon_tab.connectionPresentationChanged.connect(self._refresh_automation_start_state)
+        self.easycon_tab._native_status_timer.timeout.connect(self._refresh_automation_start_state)
         self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)
         self.auto_rng_tab.runStateChanged.connect(self._set_ocr_automation_active)
         self.auto_rng_tab.runStateChanged.connect(self._handle_auto_rng_run_state_changed)
@@ -3020,6 +3026,9 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
         layout.addWidget(self.table, 1)
+        self.static_empty_state = TableEmptyState(self.table)
+        self._static_result_state = "initial"
+        self._refresh_static_result_state()
         return panel
 
     def _apply_theme(self) -> None:
@@ -4013,6 +4022,9 @@ class MainWindow(QMainWindow):
         return choice == QMessageBox.StandardButton.Discard
 
     def _request_automation_runner_stop(self, panel: object, label: str) -> None:
+        if hasattr(panel, "request_stop"):
+            panel.request_stop(getattr(self, "_automation_stop_reason", None))
+            return
         self._request_worker_stop(
             getattr(panel, "_runner_worker", None),
             label,
@@ -4260,6 +4272,8 @@ class MainWindow(QMainWindow):
         if self._ocr_settings_dialog is not None:
             self._ocr_settings_dialog.cancel_background_activity("OCR 任务因关闭操作取消")
         if pending_kind == "auto_rng":
+            self.auto_rng_tab.set_preparing(False)
+            self._refresh_automation_start_state()
             message = "OCR 初始化因关闭操作取消，自动流程未启动"
             self.auto_rng_tab.set_phase_text(AutoRngPhase.IDLE.value)
             self.auto_rng_tab.add_log(message, level="WARNING")
@@ -6061,6 +6075,9 @@ class MainWindow(QMainWindow):
             return
         kind, action = pending
         if success:
+            if kind == "auto_rng" and self._ocr_warmup_thread is not None:
+                self._ocr_after_warmup = pending
+                return
             QTimer.singleShot(0, action)
             return
         if kind.startswith("recognize:"):
@@ -6071,6 +6088,7 @@ class MainWindow(QMainWindow):
             self._ocr_full_test_running = False
             self.ocrFullTestFinished.emit(False, message)
         elif kind == "auto_rng":
+            self._finish_auto_rng_preparation()
             self.auto_rng_tab.set_phase_text("OCR 初始化失败")
             self.auto_rng_tab.add_log(f"自动流程未启动：{message}", level="ERROR")
             self.statusBar().showMessage(message)
@@ -6082,6 +6100,12 @@ class MainWindow(QMainWindow):
             self._ocr_warmup_running = False
             self._refresh_shiny_calibration_button_state()
             self._restore_interrupted_ocr_state_if_idle()
+            pending = self._ocr_after_warmup
+            if pending is not None and pending[0] == "auto_rng":
+                self._ocr_after_warmup = None
+                pending[1]()
+            elif self.auto_rng_tab._preparing:
+                self._finish_auto_rng_preparation()
 
     def _set_ocr_test_result_on_ui(self, field: str, text: str) -> None:
         dialog = self._ocr_settings_dialog
@@ -6831,7 +6855,9 @@ class MainWindow(QMainWindow):
                 field = pending[0].split(":", 1)[1]
                 if self._ocr_settings_dialog is not None:
                     self._ocr_settings_dialog.fail_recognition(field, "自动流程启动，已取消手动识别")
-            self._ocr_after_warmup = ("auto_rng", lambda config=config: self._start_auto_rng_after_warmup(config))
+            self.auto_rng_tab.set_preparing(True)
+            self._refresh_automation_start_state()
+            self._ocr_after_warmup = ("auto_rng", lambda config=config: self._resume_auto_rng_preparation(config))
             self.auto_rng_tab.set_phase_text("初始化 OCR")
             self.auto_rng_tab.add_log("正在初始化 OCR，完成后将自动启动流程")
             self.statusBar().showMessage("正在初始化 OCR，完成后将自动启动自动定点流程")
@@ -6839,72 +6865,128 @@ class MainWindow(QMainWindow):
             return
         self._start_auto_rng_after_warmup(config)
 
+    def _resume_auto_rng_preparation(self, config: AutoRngConfig) -> None:
+        if self.auto_rng_tab._preparing and not self.auto_rng_tab._stop_pending:
+            self._start_auto_rng_after_warmup(config)
+
+    def _finish_auto_rng_preparation(self) -> None:
+        thread = self._ocr_warmup_thread
+        if thread is not None:
+            return
+        self.auto_rng_tab.set_preparing(False)
+        self._refresh_automation_start_state()
+
+    def _cancel_auto_rng_preparation(self) -> None:
+        if not self.auto_rng_tab._preparing:
+            return
+        self._ocr_after_warmup = None
+        self.auto_rng_tab.set_phase_text("已停止")
+        self.auto_rng_tab.add_log("用户取消启动，等待准备任务退出")
+        self._finish_auto_rng_preparation()
+
     def _start_auto_rng_after_warmup(self, config: AutoRngConfig) -> None:
-        if self._is_closing:
-            return
-        if not self._ensure_automation_start_available():
-            return
-        if not self._ensure_preview_for_auto_rng():
-            return
-        # 自动连接伊机控（如果尚未连接）
-        if not self._ensure_bridge_connected():
-            return
-        config = replace(
-            config,
-            seed_config_path=self._selected_auto_seed_config_path(),
-            reidentify_config_path=self._selected_auto_reidentify_config_path(),
-        )
-        self._active_auto_rng_run_id = uuid.uuid4().hex
-        self._active_auto_rng_round_id = None
-        target_text = self.auto_rng_tab.target_summary_title.text().partition("：")[2].strip()
-        target_label = target_text or "自动定点"
-        self.history_tab.begin_run(self._active_auto_rng_run_id, target_label)
-        self.run_records_tab.set_session_context("自动定点", target_label)
-        self.run_records_tab.set_active_round(None)
-        services = self._build_auto_rng_services(config)
+        self.auto_rng_tab.set_preparing(True)
+        self._refresh_automation_start_state()
+        try:
+            if self._is_closing:
+                return
+            if not self._ensure_automation_start_available(owner=self.auto_rng_tab):
+                return
+            if not self._ensure_preview_for_auto_rng():
+                return
+            # 自动连接伊机控（如果尚未连接）
+            if not self._ensure_bridge_connected():
+                return
+            config = replace(
+                config,
+                seed_config_path=self._selected_auto_seed_config_path(),
+                reidentify_config_path=self._selected_auto_reidentify_config_path(),
+            )
+            self._active_auto_rng_run_id = uuid.uuid4().hex
+            self._active_auto_rng_round_id = None
+            target_text = self.auto_rng_tab.target_summary_title.text().partition("：")[2].strip()
+            target_label = target_text or "自动定点"
+            self.history_tab.begin_run(self._active_auto_rng_run_id, target_label)
+            self.run_records_tab.set_session_context("自动定点", target_label)
+            self.run_records_tab.set_active_round(None)
+            services = self._build_auto_rng_services(config)
 
-        def history_callback(event: str, args: tuple[object, ...]) -> None:
-            self.autoHistoryEvent.emit(event, args)
+            def history_callback(event: str, args: tuple[object, ...]) -> None:
+                self.autoHistoryEvent.emit(event, args)
 
-        self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
+            self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
+        except Exception as exc:
+            self.auto_rng_tab.set_phase_text("启动失败")
+            self.auto_rng_tab.add_log(str(exc), level="ERROR")
+        finally:
+            if self.auto_rng_tab._runner_thread is None:
+                self._finish_auto_rng_preparation()
 
     def _start_auto_tid_rng(self, config: AutoTidRngConfig) -> None:
         if not self._ensure_automation_start_available():
             return
-        if not self._ensure_preview_for_auto_rng():
-            return
-        if not self._ensure_bridge_connected():
-            return
-        self._active_auto_tid_run_id = uuid.uuid4().hex
-        self._active_auto_tid_round_id = 1
-        self.history_tab.begin_run(self._active_auto_tid_run_id, "自动 TID")
-        self.history_tab.cycle_start(
-            1,
-            run_id=self._active_auto_tid_run_id,
-            round_id=1,
-            target_label="自动 TID",
-        )
-        self.run_records_tab.set_session_context("自动 TID")
-        self.run_records_tab.set_active_round(1)
-        services = self._build_auto_tid_rng_services(config)
-        runner = AutoTidRngRunner(
-            config,
-            services=services,
-        )
-        self.auto_tid_rng_tab.run_with_runner(runner)
+        self.auto_tid_rng_tab.set_preparing(True)
+        self._refresh_automation_start_state()
+        try:
+            if not self._ensure_automation_start_available(owner=self.auto_tid_rng_tab):
+                return
+            if not self._ensure_preview_for_auto_rng():
+                return
+            if not self._ensure_bridge_connected():
+                return
+            self._active_auto_tid_run_id = uuid.uuid4().hex
+            self._active_auto_tid_round_id = 1
+            self.history_tab.begin_run(self._active_auto_tid_run_id, "自动 TID")
+            self.history_tab.cycle_start(
+                1,
+                run_id=self._active_auto_tid_run_id,
+                round_id=1,
+                target_label="自动 TID",
+            )
+            self.run_records_tab.set_session_context("自动 TID")
+            self.run_records_tab.set_active_round(1)
+            services = self._build_auto_tid_rng_services(config)
+            runner = AutoTidRngRunner(
+                config,
+                services=services,
+            )
+            self.auto_tid_rng_tab.run_with_runner(runner)
+        except Exception as exc:
+            self.auto_tid_rng_tab._runner_failed(str(exc))
+        finally:
+            if self.auto_tid_rng_tab._runner_thread is None:
+                self.auto_tid_rng_tab._worker_done = False
+                self.auto_tid_rng_tab.set_preparing(False)
+                self._refresh_automation_start_state()
 
-    def _ensure_automation_start_available(self) -> bool:
+    def _automation_script_busy(self) -> bool:
+        panel = self.easycon_tab
+        return bool(panel._controller_script_running() or panel.native_run_thread is not None
+                    or panel.bridge_run_thread is not None or panel._native_status() == EasyConStatus.RUNNING)
+
+    def _refresh_automation_start_state(self, *_args: object) -> None:
+        panels = (self.auto_rng_tab, self.auto_tid_rng_tab)
+        busy = self._automation_script_busy() or any(
+            p._runner_thread is not None or p._preparing for p in panels
+        )
+        for panel in panels:
+            panel.set_start_available(not busy)
+
+    def _ensure_automation_start_available(self, *, owner=None) -> bool:
         for panel, label in (
             (self.auto_rng_tab, "自动定点"),
             (self.auto_tid_rng_tab, "自动 TID"),
         ):
-            if getattr(panel, "_runner_thread", None) is not None:
+            if getattr(panel, "_runner_thread", None) is not None or (panel is not owner and panel._preparing):
                 QMessageBox.warning(
                     self,
                     "自动流程正在运行",
                     f"{label}正在运行，请先停止当前流程后再启动另一项自动任务。",
                 )
                 return False
+        if self._automation_script_busy():
+            QMessageBox.warning(self, "伊机控正在运行", "请等待当前脚本退出后再启动自动任务。")
+            return False
         return True
 
     @staticmethod
@@ -7357,11 +7439,11 @@ class MainWindow(QMainWindow):
                 )
             )
         except Exception as exc:
+            self._static_result_state = "failed"
+            self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
-        self._states = states
-        self._populate_table(states)
-        self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
+        self._finish_static_generation(record, states)
 
     def _apply_auto_target_to_bdsp_controls(self, record: StaticEncounterRecord, state_filter: StateFilter, shiny_mode: str) -> None:
         category_index = self.category_combo.findData(record.category.value)
@@ -8865,14 +8947,20 @@ class MainWindow(QMainWindow):
                 shiny_mode=shiny_mode,
             )
         except Exception as exc:
+            self._static_result_state = "failed"
+            self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
         if criteria.max_advances >= 1_000_000:
             self._start_static_generation(record, criteria)
             return
+        self._static_result_state = "searching"
+        self._refresh_static_result_state()
         try:
             states = generate_static_candidates(criteria)
         except Exception as exc:
+            self._static_result_state = "failed"
+            self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
         self._finish_static_generation(record, states)
@@ -8881,6 +8969,8 @@ class MainWindow(QMainWindow):
         if self._static_generation_thread is not None and self._static_generation_thread.is_alive():
             self.statusBar().showMessage("Static generation is already running")
             return
+        self._static_result_state = "searching"
+        self._refresh_static_result_state()
         self._static_generation_result = None
         self._static_generation_error = None
 
@@ -8909,17 +8999,22 @@ class MainWindow(QMainWindow):
         if self._static_generation_error is not None:
             error = self._static_generation_error
             self._static_generation_error = None
+            self._static_result_state = "failed"
+            self._refresh_static_result_state()
             self._show_error("Generation failed", error)
             return
         result = self._static_generation_result
         self._static_generation_result = None
         if result is None:
+            self._static_result_state = "failed"
+            self._refresh_static_result_state()
             self._show_error("Generation failed", RuntimeError("Static generation finished without results"))
             return
         record, states = result
         self._finish_static_generation(record, states)
 
     def _finish_static_generation(self, record: StaticEncounterRecord, states: list[State8]) -> None:
+        self._static_result_state = "complete"
         self._states = states
         self._active_record = record
         self._populate_table(states)
@@ -8937,6 +9032,21 @@ class MainWindow(QMainWindow):
                     item.setForeground(Qt.GlobalColor.yellow)
                 self.table.setItem(row, column, item)
         self.result_count.setText(f"{len(states)} {self._text('results')}")
+        self._refresh_static_result_state()
+
+    def _refresh_static_result_state(self) -> None:
+        messages = {
+            "initial": ("尚未生成结果", "设置 Seed 和筛选条件后点击生成"),
+            "searching": ("正在搜索", "正在按当前 Seed 和筛选条件生成结果"),
+            "complete": ("没有符合当前条件的结果", "请调整筛选条件或扩大搜索范围后重新生成"),
+            "failed": ("搜索未完成", "请检查错误信息、Seed 和筛选条件后重试"),
+        }
+        title, detail = messages[self._static_result_state]
+        has_results = bool(self._states)
+        self.static_empty_state.show_message(title, detail, has_results=has_results)
+        self.copy_button.setEnabled(has_results)
+        self.export_button.setEnabled(has_results)
+
 
     def _state_row(self, state: State8) -> list[str]:
         if self.lang == "zh":
@@ -8975,6 +9085,8 @@ class MainWindow(QMainWindow):
         copy_action = menu.addAction("复制" if self.lang == "zh" else "Copy")
         txt_action = menu.addAction("导出 TXT" if self.lang == "zh" else "Export TXT")
         csv_action = menu.addAction("导出 CSV" if self.lang == "zh" else "Export CSV")
+        for action in (copy_action, txt_action, csv_action):
+            action.setEnabled(bool(self._states))
         selected = menu.exec(self.table.viewport().mapToGlobal(position))
         if selected == copy_action:
             self.copy_results()

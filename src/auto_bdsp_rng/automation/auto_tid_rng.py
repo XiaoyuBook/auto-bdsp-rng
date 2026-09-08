@@ -239,6 +239,9 @@ class AutoTidRngProgress:
     wait_tick_lag_seconds: float | None = None
     wait_max_tick_lag_seconds: float | None = None
     wait_keep_awake: bool | None = None
+    # An empty tuple in ordinary progress is not a completed empty search.
+    # Keep this appended so older positional construction remains compatible.
+    id_search_completed: bool = False
 
 
 def parse_tid_text(text: str) -> int | None:
@@ -1229,6 +1232,7 @@ class AutoTidRngRunner:
             "ocr_advances": updates.get("ocr_advances", self.progress.ocr_advances),
             "actual_delay": updates.get("actual_delay", self.progress.actual_delay),
             "id_states": updates.get("id_states", self.progress.id_states),
+            "id_search_completed": "id_states" in updates and phase in (AutoTidRngPhase.SEARCH_TARGET, AutoTidRngPhase.WAIT_NAME_TRIGGER),
             "last_script_path": updates.get("last_script_path", self.progress.last_script_path),
             "log_message": message,
             "stop_reason": updates.get("stop_reason", self.progress.stop_reason),

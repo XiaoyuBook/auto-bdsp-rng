@@ -41,11 +41,13 @@ from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPh
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.workspace_controls import workspace_icon
+from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
@@ -168,7 +170,7 @@ class AutoTidRngWorker(QObject):
         self.request_stop(reason)
 
 
-class AutoTidRngPanel(QWidget):
+class AutoTidRngPanel(AutomationLifecycle, QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
     progressChanged = Signal(object)
@@ -185,6 +187,7 @@ class AutoTidRngPanel(QWidget):
         settings: QSettings | None = None,
     ) -> None:
         super().__init__(parent)
+        self._init_lifecycle()
         self.script_dir = script_dir
         self._run_log_sink = run_log_sink
         self._scripts: list[Path] = []
@@ -196,6 +199,7 @@ class AutoTidRngPanel(QWidget):
         self._build_ui()
         self.refresh_scripts()
         self._restore_panel_state()
+        self._sync_run_controls()
         self._refresh_ocr_region_text()
 
     def _build_ui(self) -> None:
@@ -209,7 +213,7 @@ class AutoTidRngPanel(QWidget):
         content = QWidget(self)
         content.setObjectName("AutoTidContent")
         grid = QGridLayout(content)
-        grid.setContentsMargins(14, 4, 14, 8)
+        grid.setContentsMargins(18, 4, 18, 8)
         grid.setHorizontalSpacing(0)
         grid.setVerticalSpacing(4)
         self.top_controls_group = self._build_top_controls_group()
@@ -280,6 +284,11 @@ class AutoTidRngPanel(QWidget):
             QGroupBox#AutoTidTopControls,
             QGroupBox#AutoTidTargets {
                 border-bottom: 1px solid #e2e8e4;
+            }
+            QGroupBox#AutoTidTopControls,
+            QGroupBox#AutoTidTargets {
+                margin: 0;
+                padding: 0;
             }
             QGroupBox#AutoTidTopControls::title,
             QGroupBox#AutoTidTargets::title,
@@ -404,7 +413,7 @@ class AutoTidRngPanel(QWidget):
         self.stop_button.setIcon(workspace_icon("stop", "#AC4B42"))
         self.stop_button.setObjectName("DangerButton")
         self.stop_button.setFixedHeight(32)
-        self.stop_button.setFixedWidth(80)
+        self.stop_button.setFixedWidth(104)
         self.stop_button.clicked.connect(self._stop_clicked)
         self.ocr_button = QPushButton("OCR 设置")
         self.ocr_button.setObjectName("SecondaryButton")
@@ -465,13 +474,13 @@ class AutoTidRngPanel(QWidget):
         return group
 
     def _build_top_controls_group(self) -> QGroupBox:
-        group = QGroupBox("基础参数与脚本")
+        group = QGroupBox()
         group.setObjectName("AutoTidTopControls")
         group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QGridLayout(group)
-        layout.setContentsMargins(8, 8, 8, 10)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
+        layout.setContentsMargins(0, 14, 0, 16)
+        layout.setHorizontalSpacing(14)
+        layout.setVerticalSpacing(7)
 
         self.frame_threshold = self._spin(0, 1_000_000_000, 300)
         self.delay = self._spin(0, 1_000_000_000, 0)
@@ -493,7 +502,8 @@ class AutoTidRngPanel(QWidget):
             (self.reverse_id_script_combo, 220),
         ):
             combo.setFixedHeight(32)
-            combo.setFixedWidth(width)
+            combo.setMinimumWidth(160)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.script_edit_buttons: dict[QComboBox, QToolButton] = {}
         self.script_picker_widgets: dict[QComboBox, QWidget] = {}
         self.seed_script_picker = self._build_script_picker(
@@ -512,23 +522,26 @@ class AutoTidRngPanel(QWidget):
         self.refresh_scripts_button.setFixedHeight(32)
         self.refresh_scripts_button.setFixedWidth(116)
 
-        layout.addWidget(QLabel("帧数阈值"), 0, 0)
-        layout.addWidget(self.frame_threshold, 0, 1)
-        layout.addWidget(QLabel("delay"), 0, 2)
-        layout.addWidget(self.delay, 0, 3)
-        layout.addWidget(QLabel("测种脚本"), 0, 4)
-        layout.addWidget(self.seed_script_picker, 0, 5)
-        layout.addWidget(QLabel("取名脚本"), 0, 6)
-        layout.addWidget(self.name_script_picker, 0, 7)
-        layout.addWidget(self.refresh_scripts_button, 0, 8)
-        layout.setColumnStretch(9, 1)
+        self.parameter_labels = []
+        for column, (label, widget) in enumerate((
+            ("帧数阈值", self.frame_threshold), ("delay", self.delay),
+            ("测种脚本", self.seed_script_picker), ("取名脚本", self.name_script_picker),
+        )):
+            field_label = QLabel(label)
+            field_label.setStyleSheet("color: #68766F; font-size: 12px;")
+            self.parameter_labels.append(field_label)
+            layout.addWidget(field_label, 0, column)
+            layout.addWidget(widget, 1, column, Qt.AlignmentFlag.AlignBottom)
+        layout.addWidget(self.refresh_scripts_button, 1, 4, Qt.AlignmentFlag.AlignBottom)
+        layout.setColumnStretch(2, 1)
+        layout.setColumnStretch(3, 1)
 
         self.ocr_region_label = QLabel("TID ROI：未设置")
         self.ocr_region_label.setVisible(False)
         self.ocr_region_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
-        layout.addWidget(self.ocr_region_label, 1, 0, 1, 9)
+        layout.addWidget(self.ocr_region_label, 2, 0, 1, 5)
 
         result_group = QGroupBox("校准结果")
         result_group.setVisible(False)
@@ -546,7 +559,7 @@ class AutoTidRngPanel(QWidget):
         result_form.addRow("反查启动帧", self.trigger_result)
         result_form.addRow("OCR TID", self.ocr_result)
         result_form.addRow("实际 delay", self.actual_delay_result)
-        layout.addWidget(result_group, 2, 0, 1, 9)
+        layout.addWidget(result_group, 3, 0, 1, 5)
         return group
 
     def _build_script_picker(
@@ -585,12 +598,11 @@ class AutoTidRngPanel(QWidget):
         return picker
 
     def _build_target_group(self) -> QGroupBox:
-        group = QGroupBox("目标 Display TID")
+        group = QGroupBox()
         group.setObjectName("AutoTidTargets")
         group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        group.setMaximumHeight(200)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(8, 7, 8, 10)
+        layout.setContentsMargins(0, 16, 0, 16)
         layout.setSpacing(6)
 
         target_panel = QWidget()
@@ -598,14 +610,16 @@ class AutoTidRngPanel(QWidget):
         target_layout = QGridLayout(target_panel)
         target_layout.setContentsMargins(0, 0, 0, 0)
         target_layout.setHorizontalSpacing(12)
-        target_layout.setVerticalSpacing(4)
+        target_layout.setVerticalSpacing(8)
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         self.target_count_label = QLabel("0 个目标")
         self.target_count_label.setObjectName("AutoTidTargetCount")
+        self.target_title_label = QLabel("目标 Display TID")
+        title_row.addWidget(self.target_title_label)
         title_row.addStretch(1)
         title_row.addWidget(self.target_count_label)
-        target_layout.addLayout(title_row, 0, 0, 1, 2)
+        target_layout.addLayout(title_row, 0, 0)
         self.target_list = _TargetListWidget()
         self.target_list.setObjectName("TargetPool")
         self.target_list.setViewMode(QListView.ViewMode.IconMode)
@@ -617,12 +631,12 @@ class AutoTidRngPanel(QWidget):
         self.target_list.setGridSize(QSize(92, 32))
         self.target_list.setUniformItemSizes(True)
         # Reserve three complete chip rows in addition to the frame and padding.
-        self.target_list.setMinimumHeight(116)
-        self.target_list.setMaximumHeight(124)
+        self.target_list.setFixedHeight(124)
+        self.target_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         self.target_list.targetRemoved.connect(self._refresh_target_count)
-        target_layout.addWidget(self.target_list, 1, 0, 2, 1)
+        target_layout.addWidget(self.target_list, 1, 0)
 
         action_panel = QWidget()
         action_panel.setObjectName("TargetPoolActions")
@@ -659,7 +673,7 @@ class AutoTidRngPanel(QWidget):
         action_layout.addWidget(self.update_target_button)
         action_layout.addWidget(self.delete_target_button)
         action_layout.addStretch(1)
-        target_layout.addWidget(action_panel, 1, 1, 2, 1, Qt.AlignmentFlag.AlignTop)
+        target_layout.addWidget(action_panel, 0, 1, 2, 1, Qt.AlignmentFlag.AlignTop)
         target_layout.setColumnStretch(0, 1)
         layout.addWidget(target_panel, 1)
         return group
@@ -792,6 +806,9 @@ class AutoTidRngPanel(QWidget):
         )
         self.id_table.setMinimumHeight(320)
         layout.addWidget(self.id_table, 1)
+        self.id_empty_state = TableEmptyState(self.id_table)
+        self._id_result_state = "initial"
+        self._refresh_id_result_state()
         return group
 
     def refresh_scripts(self) -> None:
@@ -849,10 +866,14 @@ class AutoTidRngPanel(QWidget):
     def target_tids(self) -> tuple[int, ...]:
         return self.target_display_tids()
 
-    def set_tid_seed(self, seed: SeedPair64 | SeedState32) -> None:
+    def set_tid_seed(self, seed: SeedPair64 | SeedState32, *, generate: bool = True) -> None:
         seed_pair = seed.to_seed_pair64() if isinstance(seed, SeedState32) else seed
         for box, text in zip(self.tid_seed_inputs, seed_pair.format_seeds()):
             box.setText(text)
+        if not generate:
+            self._id_result_state = "searching"
+            self._refresh_id_result_state()
+            return
         self.set_id_states(
             generate_ids(
                 seed_pair,
@@ -901,13 +922,15 @@ class AutoTidRngPanel(QWidget):
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.started.connect(worker.run)
+        thread.finished.connect(self._clear_runner_thread)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         self._runner_thread = thread
         self._runner_worker = worker
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
+        self._preparing = False
+        self._stop_pending = False
+        self._worker_done = False
         self._run_state_active = True
+        self._sync_run_controls()
         self.runStateChanged.emit(True)
         thread.start()
 
@@ -915,8 +938,15 @@ class AutoTidRngPanel(QWidget):
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         self.status_badge.setText(f"状态：{phase_text}")
         self.progressChanged.emit(progress)
-        if progress.id_states:
+        if progress.id_states or progress.id_search_completed:
             self.set_id_states(list(progress.id_states))
+        elif progress.phase == AutoTidRngPhase.SEARCH_TARGET:
+            self._id_result_state = "searching"
+        elif progress.phase == AutoTidRngPhase.FAILED:
+            self._id_result_state = "failed"
+        elif progress.phase == AutoTidRngPhase.IDLE and self._id_result_state == "searching":
+            self._id_result_state = "initial"
+        self._refresh_id_result_state()
         if progress.target_tid is not None and progress.target_advances is not None:
             sid_text = "-" if progress.target_sid is None else str(progress.target_sid)
             display = "-" if progress.target_display_tid is None else f"{progress.target_display_tid:06d}"
@@ -952,6 +982,7 @@ class AutoTidRngPanel(QWidget):
             self.latest_log_label.setToolTip(text)
 
     def set_id_states(self, states: list[IDState8]) -> None:
+        self._id_result_state = "complete"
         self._id_states = list(states)
         self.id_table.setRowCount(len(self._id_states))
         for row, state in enumerate(self._id_states):
@@ -965,6 +996,20 @@ class AutoTidRngPanel(QWidget):
             for column, value in enumerate(values):
                 self.id_table.setItem(row, column, QTableWidgetItem(value))
         self.id_result_count.setText(f"{len(self._id_states)} 条结果")
+        self._refresh_id_result_state()
+
+    def _refresh_id_result_state(self) -> None:
+        messages = {
+            "searching": ("正在搜索", "正在生成当前 Seed 的 ID 数据"),
+            "complete": ("没有符合当前条件的结果", "请检查帧数阈值和搜索范围"),
+            "failed": ("搜索未完成", "请查看日志中的错误信息后重试"),
+        }
+        initial = ("尚未生成 ID 数据", "运行测种流程后将在这里显示 ID 数据") if all(box.text() for box in self.tid_seed_inputs) else ("尚未捕获 Seed", "运行测种流程后将在这里显示 ID 数据")
+        title, detail = messages.get(self._id_result_state, initial)
+        has_results = bool(self._id_states)
+        self.id_empty_state.show_message(title, detail, has_results=has_results)
+        self.copy_button.setEnabled(has_results)
+        self.export_button.setEnabled(has_results)
 
     def _table_text(self) -> str:
         rows = ["Adv\tTID\tSID\tTSV\tDisplay TID"]
@@ -986,6 +1031,8 @@ class AutoTidRngPanel(QWidget):
         menu = QMenu(self.id_table)
         copy_action = menu.addAction("复制")
         csv_action = menu.addAction("导出 CSV")
+        copy_action.setEnabled(bool(self._id_states))
+        csv_action.setEnabled(bool(self._id_states))
         selected = menu.exec(self.id_table.viewport().mapToGlobal(position))
         if selected == copy_action:
             self.copy_results()
@@ -1018,20 +1065,15 @@ class AutoTidRngPanel(QWidget):
         if isinstance(progress, AutoTidRngProgress):
             phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
             self.status_badge.setText(f"状态：{phase_text}")
-        self._clear_runner_thread()
+        self._runner_returned()
 
     def _runner_failed(self, message: str) -> None:
         self.status_badge.setText("状态：失败")
+        self._id_result_state = "failed"
+        self._refresh_id_result_state()
         self.add_log(message, level="ERROR")
-        self._clear_runner_thread()
+        self._runner_returned()
 
-    def _clear_runner_thread(self) -> None:
-        self._runner_thread = None
-        self._runner_worker = None
-        self.start_button.setEnabled(True)
-        if self._run_state_active:
-            self._run_state_active = False
-            self.runStateChanged.emit(False)
 
     def _start_clicked(self) -> None:
         self._start_with_phase(AutoTidRngPhase.RUN_SEED_SCRIPT)
@@ -1040,6 +1082,8 @@ class AutoTidRngPanel(QWidget):
         self._start_with_phase(AutoTidRngPhase.CAPTURE_TIDSID)
 
     def _start_with_phase(self, start_phase: AutoTidRngPhase) -> None:
+        if not self.start_button.isEnabled():
+            return
         self._save_panel_state()
         try:
             config = self.build_config(start_phase=start_phase)
@@ -1051,17 +1095,7 @@ class AutoTidRngPanel(QWidget):
         self.startRequested.emit(config)
 
     def _stop_clicked(self) -> None:
-        if self._runner_worker is not None:
-            request_stop = getattr(self._runner_worker, "request_stop", None)
-            if callable(request_stop):
-                try:
-                    request_stop("用户点击停止按钮")
-                except TypeError:
-                    request_stop()
-            else:
-                # Keep simple test/extension worker objects compatible.
-                self._runner_worker.stop()
-        self.stopRequested.emit()
+        self.request_stop("用户点击停止按钮")
 
     def _validate_config(self, config: AutoTidRngConfig) -> None:
         if config.start_phase == AutoTidRngPhase.RUN_SEED_SCRIPT and config.seed_script_path is None:
@@ -1155,7 +1189,7 @@ class AutoTidRngPanel(QWidget):
 
     def _parse_tid(self, text: str) -> int | None:
         try:
-            match = re.search(r"\d{1,6}", str(text))
+            match = re.fullmatch(r"[0-9]{1,6}", str(text).removesuffix(" ×").strip())
             if match is None:
                 return None
             return self._validate_display_tid_value(int(match.group(0), 10))

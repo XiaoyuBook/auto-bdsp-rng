@@ -69,8 +69,10 @@ def test_rng_panels_keep_numeric_fields_ascii_under_rtl_default(app, tmp_path: P
     try:
         settings = QSettings(str(tmp_path / "auto-rng.ini"), QSettings.Format.IniFormat)
         settings.clear()
+        tid_settings = QSettings(str(tmp_path / "auto-tid-rng.ini"), QSettings.Format.IniFormat)
+        tid_settings.clear()
         auto_panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
-        tid_panel = AutoTidRngPanel(script_dir=tmp_path)
+        tid_panel = AutoTidRngPanel(script_dir=tmp_path, settings=tid_settings)
 
         numeric_fields = (
             auto_panel.loop_count,
@@ -94,8 +96,8 @@ def test_rng_panels_keep_numeric_fields_ascii_under_rtl_default(app, tmp_path: P
         auto_panel.max_advances.setValue(123456789)
         auto_panel.shiny_threshold_seconds.setValue(123.456)
         tid_panel.frame_threshold.setValue(987654321)
-        assert auto_panel.max_advances.text() == "123456789"
-        assert auto_panel.shiny_threshold_seconds.text() == "123.456"
-        assert tid_panel.frame_threshold.text() == "987654321"
+        assert auto_panel.max_advances.cleanText() == "123456789"
+        assert auto_panel.shiny_threshold_seconds.cleanText() == "123.456"
+        assert tid_panel.frame_threshold.cleanText() == "987654321"
     finally:
         QLocale.setDefault(previous)

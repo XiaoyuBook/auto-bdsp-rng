@@ -9,7 +9,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPoint, QSettings, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QListView, QToolButton, QWidget
+from PySide6.QtWidgets import QApplication, QListView, QSizePolicy, QToolButton, QWidget
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
@@ -309,8 +309,10 @@ def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: 
     assert panel.refresh_scripts_button.parentWidget() is top_controls
     assert panel.frame_threshold.maximumWidth() <= 140
     assert panel.delay.maximumWidth() <= 120
-    assert panel.seed_script_combo.maximumWidth() <= 220
-    assert panel.name_script_combo.maximumWidth() <= 220
+    assert panel.seed_script_combo.minimumWidth() >= 160
+    assert panel.name_script_combo.minimumWidth() >= 160
+    assert panel.seed_script_combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert panel.name_script_combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     panel.resize(1150, 820)
     panel.show()
     app.processEvents()
