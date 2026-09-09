@@ -2211,7 +2211,6 @@ def test_auto_rng_panel_persists_exit_script_and_reseeding_threshold(app, tmp_pa
 def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     (tmp_path / "逃跑.txt").write_text("B 100\n", encoding="utf-8")
     panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
-    panel.runtime_script_summary_toggle.click()
     layout = panel.script_group.layout()
 
     fields = (
@@ -2223,7 +2222,7 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
         ("逃跑脚本", panel.escape_script_combo, 7, 1),
     )
     for label, combo, row, column in fields:
-        assert layout.itemAtPosition(row, column).widget().text() == label
+        assert layout.itemAtPosition(row, column).widget().text().startswith(label + " · ")
         picker = panel.script_picker_widgets[combo]
         assert layout.itemAtPosition(row + 1, column).widget() is picker
         assert combo.parentWidget() is picker
@@ -3173,10 +3172,10 @@ def test_auto_rng_panel_keeps_hidden_message_mirror_and_live_runtime_card(app):
 
     assert "运行摘要" not in group_titles
     assert panel.runtime_card.property("state") == "idle"
-    assert panel.runtime_phase_label.text() == "准备就绪"
+    assert panel.runtime_phase_label.text() == "待完成配置"
     assert panel.runtime_round_label.text() == "任务已停止"
-    assert not panel.runtime_script_summary.isHidden()
-    assert panel.script_group.isHidden()
+    assert panel.runtime_script_summary.isHidden()
+    assert not panel.script_group.isHidden()
     assert panel.runtime_current_value.text() == "—"
     assert panel.runtime_target_value.text() == "—"
     assert panel.runtime_remaining_value.text() == "—"
@@ -3366,7 +3365,8 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path
     assert panel.delay_settings_button._estimate_text == "100"
     assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
     assert panel.delay_active_label.text() == "下轮预计 100 帧"
-    assert panel.runtime_card.height() == 300
+    assert panel.runtime_card.minimumHeight() == 220
+    assert panel.runtime_card.maximumHeight() == 16777215
     assert isinstance(panel.debug_output_check, CheckmarkCheckBox)
     assert isinstance(panel.escape_continue_check, CheckmarkCheckBox)
     assert panel.seed_script_combo.minimumWidth() == 160
@@ -3394,10 +3394,10 @@ def test_auto_rng_page_surfaces_start_readiness_and_dirty_config(app, tmp_path):
         settings=_auto_rng_settings(tmp_path),
     )
 
-    assert panel.toolbar_status.text() == "待配置 · 缺少 2 项"
+    assert panel.toolbar_status.text() == "待选择 · 过帧、撞闪"
     assert panel.toolbar_status.property("state") == "warning"
     assert panel.script_status_label.text() == "待配置 · 缺少 2 项"
-    assert panel.runtime_description_label.text().startswith("请先确认目标")
+    assert panel.runtime_description_label.text() == "请先选择过帧、撞闪脚本；下方已标出缺项。"
 
     for combo, name in (
         (panel.advance_script_combo, "advance.txt"),
@@ -3414,12 +3414,103 @@ def test_auto_rng_page_surfaces_start_readiness_and_dirty_config(app, tmp_path):
 
     panel.save_scripts_button.click()
 
-    assert panel.toolbar_status.text() == "准备就绪 · 可开始"
+    assert panel.toolbar_status.text() == "配置已就绪"
 
     panel._set_config_saved(False)
 
     assert panel.save_config_button.property("state") == "dirty"
     assert panel.toolbar_status.text() == "有未保存修改"
+
+
+def test_auto_rng_missing_script_shortcut_reveals_and_focuses_field(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    panel.resize(1126, 740)
+    panel.show()
+    panel.runtime_script_summary_toggle.click()
+    assert panel.script_group.isHidden()
+    panel.runtime_setup_button.click()
+    app.processEvents()
+    assert not panel.script_group.isHidden()
+    assert panel.advance_script_combo.hasFocus()
+    assert panel.advance_script_combo.property("missing") is True
+
+    for combo in (panel.advance_script_combo, panel.hit_script_combo):
+        combo.addItem("configured.txt", str(tmp_path / "configured.txt"))
+        combo.setCurrentIndex(combo.count() - 1)
+    assert panel.runtime_setup_button.isHidden()
+    assert panel.runtime_phase_label.text() == "等待开始"
+    panel.escape_continue_check.setChecked(True)
+    assert "逃跑" in panel.toolbar_status.text()
+    panel.runtime_setup_button.click()
+    assert panel.escape_script_combo.hasFocus()
+
+
+def test_auto_rng_progress_preserves_manual_script_expansion_and_stop_priority(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.CAPTURE_SEED))
+    assert panel.script_group.isHidden()
+    panel.runtime_script_summary_toggle.click()
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.SEARCH_TARGET))
+    assert not panel.script_group.isHidden()
+    panel.set_preparing(True)
+    assert panel.toolbar_status.text() == "正在准备 · 请稍候"
+    try:
+        assert panel.request_stop()
+        assert panel.toolbar_status.text() == "正在停止 · 请稍候"
+        assert not panel.start_button.isEnabled()
+        assert not panel.stop_button.isEnabled()
+    finally:
+        panel.set_preparing(False)
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.COMPLETED))
+    assert panel.runtime_card.property("state") == "completed"
+    assert panel.toolbar_status.text() == "流程已完成 · 可查看轮次"
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FAILED, log_message="没有可用画面"))
+    assert panel.runtime_card.property("state") == "failed"
+    assert panel.runtime_description_label.text() == "没有可用画面"
+
+
+def test_auto_rng_negative_remaining_keeps_value_and_explains_passed_trigger(app, tmp_path):
+    panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    panel.apply_progress(AutoRngProgress(
+        phase=AutoRngPhase.FINAL_WAIT,
+        current_advances=1500,
+        trigger_advances=1200,
+    ))
+    assert panel.runtime_remaining_value.text() == "-300 帧"
+    assert panel.runtime_description_label.text() == "启动点已过去 300 帧；请留意后续阶段和日志。"
+
+
+def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(app, tmp_path):
+    window = MainWindow(profile_settings=_profile_settings(tmp_path))
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+    window.show()
+    app.processEvents()
+    panel = window.auto_rng_tab
+    assert not panel.script_group.isHidden()
+    viewport = panel.runtime_panel.viewport()
+
+    def within_view(widget):
+        position = widget.mapTo(viewport, QPoint(0, 0))
+        assert position.y() >= 0
+        assert position.y() + widget.height() <= viewport.height()
+
+    within_view(panel.runtime_card)
+    within_view(panel.escape_continue_check)
+    assert panel.runtime_panel.verticalScrollBar().maximum() == 0
+    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FINAL_WAIT))
+    panel.set_candidate_targets([
+        SimpleNamespace(advances=1000 + i, shiny=0, nature=0, ivs=(31,) * 6)
+        for i in range(25)
+    ], locked_index=24)
+    app.processEvents()
+    within_view(panel.candidate_table)
+    assert panel.candidate_table.item(0, 0).text() == "已锁定"
+    panel.candidate_table.setFocus()
+    QTest.keyClick(panel.candidate_table, Qt.Key.Key_PageDown)
+    assert panel.candidate_table.verticalScrollBar().value() > 0
+    panel.runtime_script_summary_toggle.click()
+    app.processEvents()
+    within_view(panel.candidate_table)
 
 
 def test_auto_rng_advanced_strategies_scroll_inside_fixed_sidebar(app, tmp_path):

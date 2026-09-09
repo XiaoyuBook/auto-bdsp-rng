@@ -74,6 +74,7 @@ from auto_bdsp_rng.ui.delay_strategy_dialog import (
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.workspace_controls import workspace_icon
+from auto_bdsp_rng.ui.workspace_theme import focus_styles, workspace_styles
 from auto_bdsp_rng.ui.spin_box import (
     ChevronDoubleSpinBox as QDoubleSpinBox,
     ChevronSpinBox as QSpinBox,
@@ -414,7 +415,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_completed_steps: set[int] = set()
         self._runtime_loop_index = 0
         self._runtime_candidate_total = 0
-        self._runtime_script_editor_expanded = False
+        self._runtime_script_editor_expanded = True
         self._config_state_tracking_ready = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
         self._build_ui()
@@ -1108,17 +1109,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         layout.setHorizontalSpacing(16)
         layout.setVerticalSpacing(4)
 
-        title_row = QHBoxLayout()
         self.script_group_title = QLabel("任务脚本")
         self.script_group_title.setObjectName("SectionTitle")
-        title_row.addWidget(self.script_group_title)
-        title_row.addStretch()
+        self.script_group_title.setParent(group)
+        self.script_group_title.hide()  # The persistent section header owns the title.
         self.script_status_label = QLabel("脚本待配置")
         self.script_status_label.setObjectName("ScriptStatusLabel")
         self.script_status_label.setProperty("state", "warning")
         self.script_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.script_status_label.setMinimumWidth(92)
-        title_row.addWidget(self.script_status_label)
         self.refresh_scripts_button = QPushButton("刷新")
         self.refresh_scripts_button.setObjectName("AutoRngRefreshScripts")
         self.refresh_scripts_button.setIcon(workspace_icon("refresh", "#087C58"))
@@ -1127,8 +1126,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.refresh_scripts_button.setFixedSize(72, 32)
         self.refresh_scripts_button.setStyleSheet("QPushButton {color: #087C58; border: 0; background: transparent; padding: 0;} QPushButton:disabled {color: #9AA8A1;}")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        title_row.addWidget(self.refresh_scripts_button)
-        layout.addLayout(title_row, 0, 0, 1, 2)
+        self.runtime_script_header.layout().insertWidget(1, self.script_status_label)
+        self.runtime_script_header.layout().insertWidget(2, self.refresh_scripts_button)
 
         def combo_factory() -> _RefreshingScriptComboBox:
             return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
@@ -1173,6 +1172,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         for label_text, combo, row, column in script_fields:
             label = QLabel(label_text)
             label.setObjectName("ScriptFieldLabel")
+            combo.setAccessibleName(label_text)
+            label.setBuddy(combo)
             self.script_labels[combo] = label
             picker = QWidget(group)
             picker.setObjectName("ScriptPicker")
@@ -1254,7 +1255,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_card = QFrame()
         self.runtime_card.setObjectName("RuntimeCard")
         self.runtime_card.setProperty("state", "idle")
-        self.runtime_card.setFixedHeight(300)
+        self.runtime_card.setMinimumHeight(220)
+        self.runtime_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         runtime_layout = QVBoxLayout(self.runtime_card)
         runtime_layout.setContentsMargins(16, 13, 16, 12)
         runtime_layout.setSpacing(6)
@@ -1278,9 +1280,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         )
         self.runtime_description_label.setObjectName("RuntimeDescriptionLabel")
         self.runtime_description_label.setWordWrap(True)
-        self.runtime_description_label.setMaximumHeight(38)
+        self.runtime_description_label.setTextFormat(Qt.TextFormat.PlainText)
         self.runtime_description_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        runtime_layout.addWidget(self.runtime_description_label)
+        description_row = QHBoxLayout()
+        description_row.setSpacing(12)
+        description_row.addWidget(self.runtime_description_label, 1)
+        self.runtime_setup_button = QPushButton("补全脚本")
+        self.runtime_setup_button.setObjectName("RuntimeSetupButton")
+        self.runtime_setup_button.setMinimumSize(88, 32)
+        self.runtime_setup_button.setAccessibleName("定位到第一个缺少的必需脚本")
+        self.runtime_setup_button.clicked.connect(self._focus_missing_script)
+        description_row.addWidget(self.runtime_setup_button)
+        runtime_layout.addLayout(description_row)
         self.runtime_steps = self._build_runtime_steps()
         runtime_layout.addWidget(self.runtime_steps)
 
@@ -1335,16 +1346,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         )
         layout.addWidget(self.previous_round_label)
 
+        self.candidate_section = self._build_candidate_section()
+        layout.addWidget(self.candidate_section)
+
         self.runtime_script_header = self._build_runtime_script_header()
         layout.addWidget(self.runtime_script_header)
         self.runtime_script_summary = self._build_runtime_script_summary()
         layout.addWidget(self.runtime_script_summary)
         self.script_group = self._build_script_group()
-        layout.addSpacing(6)
         layout.addWidget(self.script_group)
-
-        self.candidate_section = self._build_candidate_section()
-        layout.addWidget(self.candidate_section)
         layout.addStretch(1)
         scroll.setWidget(panel)
         self.runtime_content = panel
@@ -1362,9 +1372,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         title.setObjectName("SectionTitle")
         row.addWidget(title)
         row.addStretch(1)
-        state = QLabel("下次启动时生效")
+        state = QLabel("下次启动生效")
         state.setObjectName("RuntimeScriptHeaderState")
-        row.addWidget(state)
+        state.setParent(header)
+        state.hide()
+        header.setToolTip("脚本选择下次启动生效；点击开始时会自动保存全部配置。")
         self.script_save_state_label = QLabel("已保存")
         self.script_save_state_label.setObjectName("ScriptSaveStateLabel")
         row.addWidget(self.script_save_state_label)
@@ -1381,13 +1393,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         card = QFrame()
         card.setObjectName("RuntimeScriptSummary")
         card_layout = QHBoxLayout(card)
-        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(10)
-        icon = QLabel("⌁")
-        icon.setObjectName("RuntimeScriptSummaryIcon")
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setFixedSize(24, 24)
-        card_layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
         text_layout = QVBoxLayout()
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(2)
@@ -1396,7 +1403,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_script_summary_detail = QLabel("尚未选择脚本")
         self.runtime_script_summary_detail.setObjectName("RuntimeScriptSummaryDetail")
         self.runtime_script_summary_detail.setWordWrap(True)
-        text_layout.addWidget(self.runtime_script_summary_title)
+        self.runtime_script_summary_title.setParent(card)
+        self.runtime_script_summary_title.hide()
         text_layout.addWidget(self.runtime_script_summary_detail)
         card_layout.addLayout(text_layout, 1)
         self.runtime_script_summary_toggle = QToolButton()
@@ -1406,8 +1414,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_script_summary_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.runtime_script_summary_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.runtime_script_summary_toggle.setAccessibleName("展开任务脚本编辑")
+        self.runtime_script_summary_toggle.setMinimumSize(88, 32)
         self.runtime_script_summary_toggle.clicked.connect(self._toggle_runtime_script_editor)
-        card_layout.addWidget(self.runtime_script_summary_toggle, 0, Qt.AlignmentFlag.AlignTop)
+        self.runtime_script_header.layout().addWidget(self.runtime_script_summary_toggle)
         card.hide()
         return card
 
@@ -1424,10 +1433,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         )
         selected = [label for label, combo in script_specs if self._selected_path(combo) is not None]
         if selected:
-            detail = " / ".join(selected) + f" · {len(selected)} 个脚本"
+            detail = f"已选择 {len(selected)} 个脚本 · " + " / ".join(selected)
         else:
             detail = "尚未选择脚本"
         self.runtime_script_summary_detail.setText(detail)
+        self.runtime_script_summary_detail.setToolTip("\n".join(
+            f"{label}：{self._selected_path(combo) or '未选择'}"
+            for label, combo in script_specs
+        ))
         species_name = self._current_delay_species_name()
         self.runtime_script_summary_title.setText(
             f"{species_name}脚本配置" if species_name != "未选择" else "自动定点脚本配置"
@@ -1446,23 +1459,25 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.previous_round_label.setVisible(not visible)
         self.runtime_script_header.setVisible(visible)
         self._refresh_runtime_script_summary()
-        self.runtime_script_summary.setVisible(visible)
+        self.runtime_script_summary.setVisible(visible and not self._runtime_script_editor_expanded)
         self.script_group.setVisible(not visible or self._runtime_script_editor_expanded)
-        self.runtime_script_summary_toggle.setText(
-            "收起编辑" if self._runtime_script_editor_expanded else "展开编辑"
-        )
-        self.runtime_script_summary_toggle.setArrowType(
-            Qt.ArrowType.UpArrow if self._runtime_script_editor_expanded else Qt.ArrowType.DownArrow
-        )
+        self._sync_script_toggle()
 
     @Slot()
     def _toggle_runtime_script_editor(self) -> None:
-        if not hasattr(self, "runtime_script_summary") or self.runtime_script_summary.isHidden():
+        if not hasattr(self, "runtime_script_summary"):
             return
         self._runtime_script_editor_expanded = not self._runtime_script_editor_expanded
         self.script_group.setVisible(self._runtime_script_editor_expanded)
+        self.runtime_script_summary.setVisible(not self._runtime_script_editor_expanded)
+        self._sync_script_toggle()
+
+    def _sync_script_toggle(self) -> None:
         self.runtime_script_summary_toggle.setText(
             "收起编辑" if self._runtime_script_editor_expanded else "展开编辑"
+        )
+        self.runtime_script_summary_toggle.setAccessibleName(
+            "收起任务脚本编辑" if self._runtime_script_editor_expanded else "展开任务脚本编辑"
         )
         self.runtime_script_summary_toggle.setArrowType(
             Qt.ArrowType.UpArrow if self._runtime_script_editor_expanded else Qt.ArrowType.DownArrow
@@ -1534,7 +1549,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.candidate_table.setHorizontalHeaderLabels(("状态", "帧数", "异色", "性格", "个体值"))
         self.candidate_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.candidate_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.candidate_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.candidate_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.candidate_table.setAlternatingRowColors(True)
         self.candidate_table.setShowGrid(False)
         self.candidate_table.setWordWrap(False)
@@ -1554,6 +1569,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.candidate_empty_label.setObjectName("RuntimeCandidatesEmpty")
         self.candidate_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.candidate_empty_label.setMinimumHeight(42)
+        self.candidate_empty_label.setWordWrap(True)
         layout.addWidget(self.candidate_empty_label)
         return section
 
@@ -1955,26 +1971,50 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.save_config_button.style().polish(self.save_config_button)
         self._update_toolbar_status()
 
-    def _update_script_status(self) -> None:
-        """Show whether the minimum script set can start an automatic run."""
-
-        if not hasattr(self, "script_status_label"):
-            return
-        self._refresh_runtime_script_summary()
+    def _missing_script_fields(self) -> list[tuple[QComboBox, str]]:
         required = [
             (self.advance_script_combo, "过帧"),
             (self.hit_script_combo, "撞闪"),
         ]
         if self.escape_continue_check.isChecked():
             required.append((self.escape_script_combo, "逃跑"))
-        missing = [label for combo, label in required if self._selected_path(combo) is None]
+        return [(combo, label) for combo, label in required if self._selected_path(combo) is None]
+
+    def _focus_missing_script(self) -> None:
+        missing = self._missing_script_fields()
+        if not missing:
+            return
+        self._runtime_script_editor_expanded = True
+        self._set_runtime_script_summary_visible(True)
+        combo = missing[0][0]
+        self.runtime_content.layout().activate()
+        self.runtime_panel.ensureWidgetVisible(combo)
+        combo.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _update_script_status(self) -> None:
+        """Report configuration readiness without implying a hardware connection."""
+        if not hasattr(self, "script_status_label"):
+            return
+        self._refresh_runtime_script_summary()
+        missing_fields = self._missing_script_fields()
+        missing = [label for _combo, label in missing_fields]
+        for combo, label in self.script_labels.items():
+            required = combo in (self.advance_script_combo, self.hit_script_combo) or (
+                combo is self.escape_script_combo and self.escape_continue_check.isChecked()
+            )
+            absent = any(combo is field for field, _name in missing_fields)
+            label.setText(f"{combo.accessibleName()} · {'待选择' if absent else '必需' if required else '可选'}")
+            for widget in (label, combo):
+                widget.setProperty("missing", absent)
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
         if missing:
             self.script_status_label.setText(f"待配置 · 缺少 {len(missing)} 项")
             self.script_status_label.setToolTip("还需要选择：" + "、".join(missing))
             state = "warning"
         else:
             self.script_status_label.setText("脚本已就绪")
-            self.script_status_label.setToolTip("过帧、撞闪等必需脚本已选择，可以开始运行。")
+            self.script_status_label.setToolTip("必需脚本已选择；开始前仍需确认视频源与伊机控连接。")
             state = "ready"
         self.script_status_label.setProperty("state", state)
         self.script_status_label.style().unpolish(self.script_status_label)
@@ -1995,28 +2035,41 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 and self.runtime_card.property("state") == "active"
             )
         )
-        if busy:
+        if self._stop_pending:
+            text = "正在停止 · 请稍候"
+            state = "warning"
+            self.runtime_phase_label.setText("正在停止")
+            self.runtime_description_label.setText("已请求停止，正在等待当前任务结束。")
+        elif self._preparing:
+            text = "正在准备 · 请稍候"
+            state = "active"
+            self.runtime_phase_label.setText("正在准备")
+            self.runtime_description_label.setText("正在准备自动流程，请稍候。")
+        elif busy:
             phase = (
                 self.runtime_phase_label.text().strip()
                 if hasattr(self, "runtime_phase_label")
                 else "运行中"
             )
-            text = f"运行中 · {phase or '处理中'}"
+            text = "正在收尾 · 请稍候" if self._worker_done else f"运行中 · {phase or '处理中'}"
             state = "active"
-        elif self._stop_pending:
-            text = "正在停止 · 请稍候"
-            state = "warning"
         elif (
             hasattr(self, "runtime_card")
             and self.runtime_card.property("state") == "failed"
         ):
             text = self.runtime_phase_label.text().strip() or "运行失败"
             state = "failed"
+        elif hasattr(self, "runtime_card") and self.runtime_card.property("state") == "completed":
+            text = "流程已完成 · 可查看轮次"
+            state = "idle"
         elif (
             hasattr(self, "script_status_label")
             and self.script_status_label.property("state") == "warning"
         ):
-            text = self.script_status_label.text()
+            text = "待选择 · " + "、".join(name for _field, name in self._missing_script_fields())
+            state = "warning"
+        elif not self._start_available:
+            text = "其他任务占用 · 暂不可开始"
             state = "warning"
         elif any(
             label is not None and label.property("saved") is False
@@ -2026,16 +2079,29 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             text = "有未保存修改"
             state = "warning"
         else:
-            text = "准备就绪 · 可开始"
+            text = "配置已就绪"
             state = "idle"
         self.toolbar_status.setText(text)
         self.toolbar_status.setProperty("state", state)
         self.toolbar_status.style().unpolish(self.toolbar_status)
         self.toolbar_status.style().polish(self.toolbar_status)
+        if hasattr(self, "runtime_setup_button") and hasattr(self, "script_labels"):
+            missing = self._missing_script_fields()
+            idle = self._runtime_phase in (None, AutoRngPhase.IDLE) and not busy and not self._stop_pending
+            self.runtime_setup_button.setVisible(idle and bool(missing))
+            if idle and self.runtime_phase_label.text() not in ("已停止", "已完成"):
+                self.runtime_phase_label.setText("待完成配置" if missing else "等待开始")
+                self.runtime_description_label.setText(
+                    "请先选择" + "、".join(name for _field, name in missing) + "脚本；下方已标出缺项。"
+                    if missing else "目标与脚本配置完成后，确认顶部设备连接，再点击“开始”。"
+                )
 
     def _set_runtime_card_state(self, state: str) -> None:
         if self.runtime_card.property("state") == state:
             return
+        if state == "active":
+            # Fold once on entry, never on each progress tick: users may reopen it.
+            self._runtime_script_editor_expanded = False
         self.runtime_card.setProperty("state", state)
         self.runtime_card.style().unpolish(self.runtime_card)
         self.runtime_card.style().polish(self.runtime_card)
@@ -2054,10 +2120,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def _apply_panel_style(self) -> None:
         self.setStyleSheet(
-            """
+            workspace_styles("""
             QWidget#AutoRngPanel {
-                background: #FFFFFF;
-                color: #24312D;
+                background: $surface;
+                color: $text;
                 font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
                 font-size: 14px;
             }
@@ -2072,9 +2138,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-size: 14px;
             }
             QFrame#AutoRngToolbar {
-                background: #FFFFFF;
+                background: $surface;
                 border: 0;
-                border-bottom: 1px solid #E2E8E4;
+                border-bottom: 1px solid $border;
                 border-radius: 0;
             }
             QFrame#AutoRngToolbar QComboBox,
@@ -2086,28 +2152,28 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 5px;
             }
             QLabel#ToolbarStatus {
-                background: #F6F8F7;
-                border: 1px solid #E2E8E4;
-                border-radius: 15px;
+                background: $surface_muted;
+                border: 1px solid $border;
+                border-radius: 5px;
                 color: #68766F;
                 padding: 0 12px;
                 font-size: 12px;
                 font-weight: 400;
             }
             QLabel#ToolbarStatus[state="active"] {
-                background: #EDF7F1;
+                background: $accent_soft;
                 border-color: #C7E6D5;
-                color: #087C58;
+                color: $accent;
             }
             QLabel#ToolbarStatus[state="warning"] {
-                background: #FFF7E8;
+                background: $warning_soft;
                 border-color: #F0D7A7;
-                color: #906423;
+                color: $warning;
             }
             QLabel#ToolbarStatus[state="failed"] {
-                background: #FFF4F1;
+                background: $error_soft;
                 border-color: #E9C8C0;
-                color: #AC4B42;
+                color: $error;
             }
             QLabel#ToolbarFieldLabel,
             QLabel#RuntimeMetricCaption,
@@ -2122,23 +2188,23 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QLabel#PreviousRoundLabel,
             QLabel#MessageTimeLabel,
             QLabel#DelayActiveLabel {
-                color: #596C62;
+                color: $text_secondary;
                 font-size: 12px;
                 font-weight: 400;
             }
             QLabel#SectionTitle {
-                color: #24312D;
-                font-size: 16px;
-                font-weight: 700;
+                color: $text;
+                font-size: 15px;
+                font-weight: 600;
             }
             QScrollArea#AutoRngConfigPanel {
-                background: #F6F8F7;
+                background: $surface_muted;
                 border: 0;
-                border-right: 1px solid #E2E8E4;
+                border-right: 1px solid $border;
             }
             QScrollArea#AutoRngConfigPanel > QWidget > QWidget,
             QWidget#AutoRngConfigContents {
-                background: #F6F8F7;
+                background: $surface_muted;
             }
             QScrollArea#AutoRngConfigPanel QScrollBar:vertical {
                 width: 7px;
@@ -2155,11 +2221,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 height: 0;
             }
             QLabel#ConfigSavedLabel, QLabel#ScriptSaveStateLabel {
-                color: #596C62;
+                color: $text_secondary;
                 font-size: 12px;
             }
             QLabel#ConfigSavedLabel[saved="false"], QLabel#ScriptSaveStateLabel[saved="false"] {
-                color: #906423;
+                color: $warning;
             }
             QLabel#ScriptStatusLabel {
                 border-radius: 10px;
@@ -2170,12 +2236,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-weight: 400;
             }
             QLabel#ScriptStatusLabel[state="ready"] {
-                color: #087C58;
-                background: #EDF7F1;
+                color: $accent;
+                background: $accent_soft;
             }
             QLabel#ScriptStatusLabel[state="warning"] {
-                color: #906423;
-                background: #FFF7E8;
+                color: $warning;
+                background: $warning_soft;
             }
             QGroupBox#TargetSummaryGroup,
             QGroupBox#AutoRngStrategyGroup {
@@ -2187,15 +2253,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-weight: 400;
             }
             QFrame#TargetCard {
-                background: #FFFFFF;
-                border: 1px solid #E2E8E4;
+                background: $surface;
+                border: 1px solid $border;
                 border-radius: 5px;
             }
             QWidget#TargetTags {
                 background: transparent;
             }
             QLabel#TargetNameLabel {
-                color: #24312D;
+                color: $text;
                 font-size: 20px;
                 font-weight: 700;
             }
@@ -2208,8 +2274,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-weight: 400;
             }
             QLabel#GreenTag {
-                background: #EDF7F1;
-                color: #087C58;
+                background: $accent_soft;
+                color: $accent;
             }
             QLabel#NeutralTag,
             QLabel#RuntimeRoundLabel {
@@ -2222,7 +2288,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QPushButton#InlineLinkButton {
                 background: transparent;
                 border: 0;
-                color: #087C58;
+                color: $accent;
                 padding: 0 4px;
                 font-size: 13px;
                 font-weight: 400;
@@ -2233,15 +2299,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 5px;
             }
             QPushButton#ConfigSaveButton[state="dirty"], QPushButton#ScriptSaveButton[state="dirty"] {
-                background: #087C58;
-                border: 1px solid #087C58;
-                color: #FFFFFF;
+                background: $accent;
+                border: 1px solid $accent;
+                color: $surface;
                 font-weight: 500;
             }
             QPushButton#ConfigSaveButton[state="dirty"]:hover, QPushButton#ScriptSaveButton[state="dirty"]:hover {
                 background: #066A4B;
                 border-color: #066A4B;
-                color: #FFFFFF;
+                color: $surface;
                 text-decoration: none;
             }
             QPushButton#TargetOpenButton:hover,
@@ -2270,11 +2336,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QGroupBox#AutoRngStrategyGroup QLineEdit {
                 min-height: 30px;
                 max-height: 32px;
-                background: #FFFFFF;
-                border: 1px solid #E2E8E4;
+                background: $surface;
+                border: 1px solid $border;
                 border-radius: 5px;
                 padding: 0 8px;
-                color: #24312D;
+                color: $text;
                 font-size: 14px;
                 font-weight: 400;
             }
@@ -2314,7 +2380,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QToolButton#MoreStrategyButton {
                 background: transparent;
                 border: 0;
-                border-top: 1px solid #E2E8E4;
+                border-top: 1px solid $border;
                 border-radius: 0;
                 color: #68766F;
                 padding: 7px 0 0 0;
@@ -2323,20 +2389,20 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-weight: 400;
             }
             QToolButton#MoreStrategyButton:hover {
-                color: #087C58;
+                color: $accent;
             }
             QFrame#ConfigFooter {
                 background: transparent;
                 border: 0;
-                border-top: 1px solid #E2E8E4;
+                border-top: 1px solid $border;
             }
             QScrollArea#AutoRngRuntimePanel {
-                background: #FFFFFF;
+                background: $surface;
                 border: 0;
             }
             QScrollArea#AutoRngRuntimePanel > QWidget > QWidget,
             QWidget#AutoRngRuntimeContent {
-                background: #FFFFFF;
+                background: $surface;
             }
             QScrollArea#AutoRngRuntimePanel QScrollBar:vertical {
                 width: 7px;
@@ -2353,15 +2419,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 height: 0;
             }
             QFrame#RuntimeCard {
-                background: #F6F8F7;
+                background: $surface_muted;
                 border: 0;
                 border-radius: 7px;
             }
             QFrame#RuntimeCard[state="active"] {
-                background: #EDF7F1;
+                background: $accent_soft;
+            }
+            QFrame#RuntimeCard[state="completed"] {
+                background: $accent_soft;
             }
             QFrame#RuntimeCard[state="failed"] {
-                background: #FFF4F1;
+                background: $error_soft;
             }
             QWidget#RuntimeSteps,
             QWidget#RuntimeSteps QWidget {
@@ -2375,48 +2444,51 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-size: 12px;
             }
             QFrame#RuntimeCard[state="active"] QLabel#RuntimeStateDot {
-                color: #087C58;
+                color: $accent;
             }
             QFrame#RuntimeCard[state="failed"] QLabel#RuntimeStateDot {
-                color: #AC4B42;
+                color: $error;
+            }
+            QFrame#RuntimeCard[state="completed"] QLabel#RuntimeStateDot {
+                color: $accent;
             }
             QLabel#RuntimeStepCircle {
                 background: #DCE7E1;
                 border-radius: 11px;
                 border: 1px solid #CFDDD5;
-                color: #7A8A82;
+                color: $text_secondary;
                 font-size: 11px;
                 font-weight: 500;
             }
             QLabel#RuntimeStepCircle[state="active"] {
-                background: #087C58;
-                border-color: #087C58;
-                color: #FFFFFF;
+                background: $accent;
+                border-color: $accent;
+                color: $surface;
             }
             QLabel#RuntimeStepCircle[state="completed"] {
                 background: #CDEBDD;
                 border-color: #B9DEC9;
-                color: #087C58;
+                color: $accent;
             }
             QLabel#RuntimeStepCircle[state="failed"] {
-                background: #AC4B42;
-                border-color: #AC4B42;
-                color: #FFFFFF;
+                background: $error;
+                border-color: $error;
+                color: $surface;
             }
             QLabel#RuntimeStepLabel {
-                color: #7A8A82;
+                color: $text_secondary;
                 font-size: 12px;
                 font-weight: 400;
             }
             QLabel#RuntimeStepLabel[state="active"] {
-                color: #087C58;
+                color: $accent;
                 font-weight: 700;
             }
             QLabel#RuntimeStepLabel[state="completed"] {
                 color: #4F665A;
             }
             QLabel#RuntimeStepLabel[state="failed"] {
-                color: #AC4B42;
+                color: $error;
                 font-weight: 500;
             }
             QFrame#RuntimeStepConnector {
@@ -2429,35 +2501,35 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QLabel#RuntimeDelayState {
                 background: #E7F3EC;
                 border-radius: 9px;
-                color: #087C58;
+                color: $accent;
                 padding: 2px 7px;
                 font-size: 12px;
             }
             QFrame#RuntimeScriptSummary {
-                background: #FFFFFF;
-                border: 1px solid #DDE6E0;
-                border-radius: 5px;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
             }
             QLabel#RuntimeScriptSummaryIcon {
-                background: #EDF7F1;
+                background: $accent_soft;
                 border-radius: 12px;
-                color: #087C58;
+                color: $accent;
                 font-size: 16px;
             }
             QLabel#RuntimeScriptSummaryTitle {
-                color: #24312D;
+                color: $text;
                 font-size: 14px;
                 font-weight: 700;
             }
             QLabel#RuntimeScriptSummaryDetail,
             QLabel#RuntimeScriptHeaderState {
-                color: #596C62;
+                color: $text_secondary;
                 font-size: 12px;
             }
             QToolButton#RuntimeScriptSummaryToggle {
                 background: transparent;
                 border: 0;
-                color: #087C58;
+                color: $accent;
                 padding: 2px 0;
                 font-size: 13px;
             }
@@ -2465,29 +2537,29 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 color: #066A4B;
             }
             QLabel#CandidateCountLabel {
-                color: #596C62;
+                color: $text_secondary;
                 font-size: 12px;
             }
             QLabel#RuntimeCandidatesEmpty {
                 background: #F8FAF9;
                 border: 1px dashed #DDE6E0;
                 border-radius: 5px;
-                color: #8A9891;
+                color: $text_secondary;
                 font-size: 12px;
             }
             QTableWidget#RuntimeCandidateTable {
-                background: #FFFFFF;
+                background: $surface;
                 alternate-background-color: #F8FAF9;
-                border: 1px solid #E2E8E4;
+                border: 1px solid $border;
                 border-radius: 5px;
-                color: #24312D;
+                color: $text;
                 font-size: 13px;
             }
             QTableWidget#RuntimeCandidateTable QHeaderView::section {
                 background: #F2F5F3;
                 border: 0;
-                border-bottom: 1px solid #E2E8E4;
-                color: #596C62;
+                border-bottom: 1px solid $border;
+                color: $text_secondary;
                 padding: 0 7px;
                 font-size: 12px;
                 font-weight: 700;
@@ -2511,22 +2583,22 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 height: 0;
             }
             QLabel#RuntimePhaseLabel {
-                color: #24312D;
-                font-size: 20px;
+                color: $text;
+                font-size: 18px;
                 font-weight: 700;
             }
             QLabel#RuntimeMetricValue,
             QLabel#RuntimeMetricValueAccent {
-                color: #24312D;
-                font-size: 26px;
+                color: $text;
+                font-size: 24px;
                 font-weight: 600;
                 letter-spacing: 0;
             }
             QLabel#RuntimeMetricValueAccent {
-                color: #087C58;
+                color: $accent;
             }
             QLabel#RuntimeMonoSmall {
-                color: #24312D;
+                color: $text;
                 font-size: 14px;
                 font-weight: 600;
                 letter-spacing: 0;
@@ -2540,7 +2612,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 padding-left: 1px;
             }
             QLabel#TargetConditionLabel {
-                color: #596C62;
+                color: $text_secondary;
                 font-size: 12px;
                 font-weight: 400;
             }
@@ -2550,7 +2622,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 0;
                 margin-top: 0;
                 padding: 0;
-                color: #24312D;
+                color: $text;
                 font-size: 14px;
                 font-weight: 500;
             }
@@ -2564,25 +2636,44 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QGroupBox#AutoRngScriptGroup QComboBox {
                 min-height: 30px;
                 max-height: 32px;
-                background: #FFFFFF;
-                border: 1px solid #E2E8E4;
+                background: $surface;
+                border: 1px solid $border;
                 border-radius: 5px;
                 padding: 0 8px;
-                color: #24312D;
+                color: $text;
                 font-size: 14px;
                 font-weight: 400;
+            }
+            QGroupBox#AutoRngScriptGroup QComboBox[missing="true"] {
+                border-color: #C29D5F;
+                background: $warning_soft;
+            }
+            QLabel#ScriptFieldLabel[missing="true"] {
+                color: $warning;
+            }
+            QPushButton#RuntimeSetupButton {
+                background: $surface;
+                color: $accent;
+                border: 1px solid #B9C8C0;
+                border-radius: 5px;
+                padding: 0 10px;
+                font-size: 13px;
+            }
+            QPushButton#RuntimeSetupButton:hover {
+                background: $accent_soft;
+                border-color: $accent;
             }
             QWidget#ScriptPicker {
                 background: transparent;
             }
             QToolButton#ScriptEditButton {
-                background: #FFFFFF;
-                border: 1px solid #E2E8E4;
+                background: $surface;
+                border: 1px solid $border;
                 border-radius: 5px;
                 padding: 0;
             }
             QToolButton#ScriptEditButton:hover {
-                background: #F6F8F7;
+                background: $surface_muted;
                 border-color: #B9C8C0;
             }
             QToolButton#ScriptEditButton:disabled {
@@ -2590,9 +2681,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-color: #EEF1EF;
             }
             QGroupBox#CurrentMessageGroup {
-                background: #FFFFFF;
+                background: $surface;
                 border: 0;
-                border-top: 1px solid #E2E8E4;
+                border-top: 1px solid $border;
                 border-radius: 0;
                 margin: 0;
                 padding: 0;
@@ -2610,7 +2701,21 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-family: "Consolas", "Cascadia Mono", monospace;
                 font-size: 10px;
             }
-            """
+            """) + focus_styles(
+                "QPushButton#RuntimeSetupButton", "QPushButton#TargetOpenButton",
+                "QPushButton#ConfigSaveButton", "QPushButton#ScriptSaveButton",
+                "QPushButton#InlineLinkButton", "QPushButton#AutoRngRefreshScripts",
+                "QToolButton#PrimaryButton", "QPushButton#DangerButton",
+                "QPushButton#SecondaryButton", "QToolButton#ScriptEditButton",
+                "QToolButton#RuntimeScriptSummaryToggle", "QToolButton#MoreStrategyButton",
+                "QGroupBox#AutoRngScriptGroup QComboBox",
+                "QGroupBox#AutoRngStrategyGroup QSpinBox",
+                "QGroupBox#AutoRngStrategyGroup QDoubleSpinBox",
+                "QGroupBox#AutoRngStrategyGroup QComboBox",
+                "QGroupBox#AutoRngStrategyGroup QLineEdit",
+                "QFrame#AutoRngToolbar QComboBox", "QFrame#AutoRngToolbar QSpinBox",
+                "QTableWidget#RuntimeCandidateTable",
+            )
         )
 
     def refresh_scripts(self) -> None:
@@ -2668,7 +2773,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if normalized in {AutoRngPhase.IDLE.value, "已停止", "已完成"}:
             self.runtime_phase_label.setText("准备就绪" if normalized == AutoRngPhase.IDLE.value else normalized)
             self.runtime_round_label.setText("任务已停止")
-            self._set_runtime_card_state("idle")
+            self._set_runtime_card_state("completed" if normalized == "已完成" else "idle")
             self._set_runtime_script_summary_visible(True)
         elif "失败" in normalized or "错误" in normalized:
             self.runtime_phase_label.setText(normalized or "失败")
@@ -2738,7 +2843,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if progress.phase == AutoRngPhase.FINAL_WAIT:
             remaining_text = self._runtime_value(remaining)
             self.runtime_description_label.setText(
-                f"软件活帧等待，还需过 {remaining_text} 帧；到达撞闪启动点后自动运行脚本。"
+                f"启动点已过去 {self._runtime_value(-remaining)} 帧；请留意后续阶段和日志。"
+                if remaining is not None and remaining < 0
+                else f"软件活帧等待，还需过 {remaining_text} 帧；到达撞闪启动点后自动运行脚本。"
             )
         elif progress.log_message:
             self.runtime_description_label.setText(progress.log_message)
@@ -2753,6 +2860,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         }:
             self.clear_candidate_targets("正在搜索本轮可达候选" if progress.phase == AutoRngPhase.SEARCH_TARGET
                                          else "等待测种后搜索本轮候选")
+        if self.candidate_table.rowCount() == 0:
+            if progress.phase == AutoRngPhase.FAILED:
+                self.clear_candidate_targets("本轮暂无候选，请查看上方错误信息。")
+            elif progress.phase == AutoRngPhase.COMPLETED:
+                self.clear_candidate_targets("流程已结束，本轮没有可显示的候选。")
         runtime_tooltip = self.runtime_description_label.text()
         if progress.seed_text:
             runtime_tooltip = (
@@ -2899,6 +3011,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             )
         except (AutoScriptError, ValueError) as exc:
             self.set_phase_text("配置错误")
+            self.runtime_description_label.setText(str(exc))
             self.add_log(str(exc), level="WARNING")
             return
         self.startRequested.emit(config)
