@@ -171,14 +171,16 @@ class RunRecordsPanel(QWidget):
                 border: 0;
                 border-bottom: 2px solid transparent;
                 border-radius: 0;
-                color: #68766F;
+                color: #4B5E54;
                 background: transparent;
-                font-weight: 500;
+                font-size: 14px;
+                font-weight: 400;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab:selected {
                 color: #087C58;
                 border-bottom-color: #087C58;
                 background: transparent;
+                font-weight: 700;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab:hover:!selected {
                 color: #087C58;

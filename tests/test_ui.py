@@ -690,7 +690,6 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
     assert config.uses_shared_video_source
     assert callable(config.frame_source_factory)
     assert window._preview_timer.isActive()
-    assert window.preview_button.text() == "预览常驻"
     assert window.video_source_status_dot.property("state") == "connected"
     assert "已连接" in window.video_source_header_button.text()
     assert not window.video_source_dialog.isVisible()
@@ -1732,7 +1731,6 @@ def test_picture_in_picture_confirms_ocr_selection_and_restores_live_frame(app, 
     window._latest_preview_frame = initial_frame
     window._latest_annotated_preview_frame = initial_frame
     window._video_source_connected = True
-    window.preview_button.setText("预览常驻")
     window._preview_timer.start()
     emitted = []
     window.ocrRegionSelected.connect(lambda field, roi: emitted.append((field, roi)))
@@ -2655,7 +2653,6 @@ def test_capture_seed_restores_running_preview(app, monkeypatch):
         lambda *_args, **_kwargs: SimpleNamespace(state=seed_state),
     )
     window._preview_timer.start()
-    window.preview_button.setText(window._text("stop_preview"))
     window._latest_preview_frame = object()
 
     window.capture_seed()
@@ -2663,11 +2660,9 @@ def test_capture_seed_restores_running_preview(app, monkeypatch):
     window._poll_capture_thread()
 
     preview_active = window._preview_timer.isActive()
-    preview_label = window.preview_button.text()
     window._preview_timer.stop()
 
     assert preview_active
-    assert preview_label == window._text("stop_preview")
 
 
 def test_capture_seed_initializes_preview_when_no_frame_was_seen(app, monkeypatch):
@@ -2710,7 +2705,6 @@ def test_reidentify_restores_running_preview(app, monkeypatch):
     for box, text in zip(window.seed32_inputs, ["12345678", "9ABCDEF0", "11111111", "22222222"]):
         box.setText(text)
     window._preview_timer.start()
-    window.preview_button.setText(window._text("stop_preview"))
     window._latest_preview_frame = object()
 
     window.reidentify_seed()
@@ -2718,11 +2712,9 @@ def test_reidentify_restores_running_preview(app, monkeypatch):
     window._poll_capture_thread()
 
     preview_active = window._preview_timer.isActive()
-    preview_label = window.preview_button.text()
     window._preview_timer.stop()
 
     assert preview_active
-    assert preview_label == window._text("stop_preview")
 
 
 def test_reidentify_initializes_preview_when_no_frame_was_seen(app, monkeypatch):
@@ -5030,7 +5022,6 @@ def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp
     monkeypatch.setattr(window._preview_timer, "stop", stop_preview)
     monkeypatch.setattr(window._preview_timer, "start", start_preview)
     monkeypatch.setattr(window.preview_label, "clear", lambda: assert_ui_thread("clear_preview"))
-    monkeypatch.setattr(window.preview_button, "setText", lambda _text: assert_ui_thread("set_preview_text"))
     monkeypatch.setattr(window.preview_label, "setText", lambda _text: assert_ui_thread("set_preview_label"))
     monkeypatch.setattr(main_window_module.time, "perf_counter", lambda: 100.0)
     monkeypatch.setattr(main_window_module, "capture_player_blinks", lambda *_args, **_kwargs: observation)
@@ -6337,7 +6328,6 @@ def test_preview_selection_cancel_keeps_previous_eye_path(app, monkeypatch, tmp_
     window._latest_preview_frame = initial_frame
     window._latest_annotated_preview_frame = initial_frame
     window._video_source_connected = True
-    window.preview_button.setText("预览常驻")
     window._preview_timer.start()
     window.start_eye_capture_selection()
 
@@ -6363,7 +6353,6 @@ def test_preview_selection_cancel_keeps_previous_eye_path(app, monkeypatch, tmp_
     assert window._selection_preview_frame is None
     assert rendered_frames[-1] is live_frame
     assert window._preview_timer.isActive()
-    assert window.preview_button.text() == "预览常驻"
 
 
 def test_eye_capture_uses_frozen_frame_then_restores_live_preview(app, monkeypatch, tmp_path):
@@ -6382,7 +6371,6 @@ def test_eye_capture_uses_frozen_frame_then_restores_live_preview(app, monkeypat
     window._selection_mode = "eye"
     window._resume_preview_after_selection = True
     window._video_source_connected = True
-    window.preview_button.setText("预览常驻")
     window._preview_timer.start()
     written_images = []
 
@@ -6406,7 +6394,6 @@ def test_eye_capture_uses_frozen_frame_then_restores_live_preview(app, monkeypat
     assert window.preview_label._selection_enabled
     assert rendered_frames[-1] is live_frame
     assert window._preview_timer.isActive()
-    assert window.preview_button.text() == "预览常驻"
 
 
 def test_preview_label_stores_ocr_overlay_region(app):
@@ -6460,7 +6447,6 @@ def test_ocr_region_selection_confirm_emits_field_and_roi(app, monkeypatch):
     window._latest_preview_frame = frame
     window._latest_annotated_preview_frame = frame
     window._video_source_connected = True
-    window.preview_button.setText("预览常驻")
     window._preview_timer.start()
     window.start_ocr_region_selection("characteristic")
     monkeypatch.setattr(window, "_confirm_preview_selection", lambda _roi: True)
@@ -6472,7 +6458,6 @@ def test_ocr_region_selection_confirm_emits_field_and_roi(app, monkeypatch):
     assert window._ocr_selection_field is None
     assert window._selection_preview_frame is None
     assert window._preview_timer.isActive()
-    assert window.preview_button.text() == "预览常驻"
     assert window.preview_label._ocr_overlay_region == OcrRegion(10, 20, 30, 40)
 
 

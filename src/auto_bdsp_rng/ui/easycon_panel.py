@@ -864,7 +864,7 @@ class EasyConPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 12px; }}")
+        self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 14px; }}")
 
         side_panel = self._build_log_area()
         editor_panel = self._build_editor_area()
@@ -972,7 +972,7 @@ class EasyConPanel(QWidget):
 
         log_header = QLabel("运行概览")
         log_header.setStyleSheet(
-            f"font-weight: 500; font-size: 13px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};"
+            f"font-weight: 700; font-size: 16px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};"
         )
         layout.addWidget(log_header)
 
@@ -992,7 +992,7 @@ class EasyConPanel(QWidget):
         message_layout.setContentsMargins(0, 0, 0, 0)
         message_layout.setSpacing(4)
         recent_title = QLabel("最近消息")
-        recent_title.setStyleSheet(f"font-weight: 400; color: {self.CLR_HINT};")
+        recent_title.setStyleSheet(f"font-size: 12px; font-weight: 400; color: {self.CLR_HINT};")
         message_layout.addWidget(recent_title)
         self.latest_log_label = QLabel("暂无消息")
         self.latest_log_label.setObjectName("LatestLogLabel")
@@ -1187,7 +1187,9 @@ class EasyConPanel(QWidget):
         )
         output_layout = QHBoxLayout(output_header)
         output_layout.setContentsMargins(16, 0, 12, 0)
-        output_layout.addWidget(QLabel("运行输出"))
+        output_title = QLabel("运行输出")
+        output_title.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
+        output_layout.addWidget(output_title)
         output_layout.addStretch(1)
         complete_log_button = QPushButton("完整日志")
         complete_log_button.setObjectName("EasyConCompleteLogButton")
@@ -1439,7 +1441,7 @@ class EasyConPanel(QWidget):
         keyboard_header = QHBoxLayout()
         keyboard_header.setContentsMargins(0, 0, 0, 0)
         keyboard_title = QLabel("键盘控制")
-        keyboard_title.setStyleSheet(f"font-weight: 500; color: {self.CLR_TEXT};")
+        keyboard_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {self.CLR_TEXT};")
         self.keyboard_controller_state_label = QLabel("不可用")
         self.keyboard_controller_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.keyboard_controller_state_label.setMinimumWidth(62)
@@ -1518,7 +1520,7 @@ class EasyConPanel(QWidget):
         recording_header = QHBoxLayout()
         recording_header.setContentsMargins(0, 0, 0, 0)
         recording_title = QLabel("操作录制")
-        recording_title.setStyleSheet(f"font-weight: 500; color: {self.CLR_TEXT};")
+        recording_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {self.CLR_TEXT};")
         self.recording_state_label = QLabel("未录制")
         self.recording_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.recording_state_label.setMinimumWidth(62)

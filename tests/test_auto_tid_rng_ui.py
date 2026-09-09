@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +38,145 @@ def app(monkeypatch):
 
 def _settings(tmp_path: Path) -> QSettings:
     return QSettings(str(tmp_path / "tid_ocr.ini"), QSettings.Format.IniFormat)
+
+
+@pytest.fixture
+def configured_tid_panel(app, tmp_path):
+    for name in ("BDSP测种.txt", "取名.txt"):
+        (tmp_path / name).write_text("A 100\n", encoding="utf-8")
+    panel = AutoTidRngPanel(script_dir=tmp_path, settings=_settings(tmp_path))
+    panel.add_target_display_tid(1)
+    panel.delay.setValue(20)
+    panel._save_panel_state()
+    return panel
+
+
+def test_tid_delete_and_readd_targets_updates_start_and_saved_state(configured_tid_panel, app):
+    panel = configured_tid_panel
+    panel.show()
+    app.processEvents()
+    panel.target_list.setCurrentRow(0)
+    QTest.keyClick(panel.target_list, Qt.Key.Key_Delete)
+    assert panel.target_display_tids() == ()
+    assert not panel.start_button.isEnabled()
+    assert not any(action.isEnabled() for action in panel.start_menu.actions())
+    assert panel.save_state_label.text() == "有未保存修改"
+    panel.target_input.setText("000001, 123456")
+    QTest.keyClick(panel.target_input, Qt.Key.Key_Return)
+    assert panel.target_display_tids() == (1, 123456)
+    assert panel.target_list.item(0).text() == "000001 ×"
+    assert panel.start_button.isEnabled()
+    panel.save_button.click()
+    assert panel.save_state_label.text() == "已保存"
+    restored = AutoTidRngPanel(script_dir=panel.script_dir, settings=panel._settings)
+    assert restored.target_display_tids() == (1, 123456)
+    assert restored.delay.value() == 20
+
+
+def test_tid_wait_updates_use_startup_delay_and_preserve_table_selection(configured_tid_panel, app):
+    panel = configured_tid_panel
+    panel._start_clicked()
+    states = (IDState8(advances=260, tid=10, sid=20, tsv=1, display_tid=1),
+              IDState8(advances=280, tid=30, sid=40, tsv=2, display_tid=2))
+    waiting = AutoTidRngProgress(
+        phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=4,
+        current_advances=212, target_advances=260, trigger_advances=240,
+        target_display_tid=1, target_tid=10, id_states=states, id_search_completed=True,
+    )
+    panel.apply_progress(waiting)
+    item = panel.id_table.item(1, 4)
+    panel.id_table.setCurrentCell(1, 4)
+    panel.delay.setValue(99)
+    panel._clear_targets()
+    panel.apply_progress(replace(waiting, current_advances=215, log_message="", id_search_completed=False))
+    assert panel.runtime_current_value.text() == "215"
+    assert panel.runtime_target_value.text() == "260"
+    assert panel.runtime_remaining_value.text() == "25 帧"
+    assert panel.runtime_delay_value.text() == "20 帧"
+    assert "000001" in panel.runtime_description_label.text()
+    assert panel.runtime_round_label.text() == "第 4 轮"
+    assert panel.id_table.item(1, 4) is item
+    assert panel.id_table.currentRow() == 1
+    assert panel.id_table.item(0, 4).toolTip() == "本轮目标 Display TID 000001"
+    panel.target_data_button.click()
+    assert panel.id_table.currentRow() == 0
+    assert "000001" in panel._table_text()
+    assert "本轮目标" not in panel._table_text()
+    QTest.keyClicks(panel.id_table, "999")
+    assert "未找到: 999" in panel.id_result_count.text()
+    assert panel.status_badge.text() == "状态：等待取名帧"
+
+
+def test_tid_retry_clears_previous_seed_target_and_results(configured_tid_panel):
+    panel = configured_tid_panel
+    panel.apply_progress(AutoTidRngProgress(
+        phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=1,
+        seed_text="0000000000000001 0000000000000002", current_advances=2,
+        target_advances=40, trigger_advances=20, target_display_tid=1,
+        id_states=(IDState8(advances=40, tid=10, sid=20, tsv=1, display_tid=1),),
+    ))
+    panel.apply_progress(AutoTidRngProgress(
+        phase=AutoTidRngPhase.RUN_SEED_SCRIPT, loop_index=2,
+        log_message="已超过取名脚本触发帧，重新测种",
+    ))
+    assert panel.runtime_phase_label.text() == "重新测种"
+    assert "触发帧不可用" in panel.runtime_description_label.text()
+    assert all(not box.text() for box in panel.tid_seed_inputs)
+    assert panel.runtime_current_value.text() == panel.runtime_target_value.text() == "—"
+    assert panel.runtime_remaining_value.text() == "—"
+    assert panel.id_table.rowCount() == 0
+    assert panel.id_result_count.text() == "0 条结果"
+    assert not panel.target_data_button.isEnabled()
+    assert not panel.copy_button.isEnabled()
+
+
+def test_tid_result_does_not_claim_actual_id_verification(configured_tid_panel):
+    panel = configured_tid_panel
+    panel.apply_progress(AutoTidRngProgress(
+        phase=AutoTidRngPhase.COMPLETED, loop_index=1, target_display_tid=1,
+        current_advances=20, target_advances=40, trigger_advances=20,
+    ))
+    assert panel.runtime_phase_label.text() == "取名脚本已完成"
+    assert panel.runtime_current_value.text() == "—"
+    assert panel.runtime_remaining_value.text() == "—"
+    assert "命中" not in panel.runtime_description_label.text()
+    panel._runner_failed("脚本执行失败")
+    assert panel.runtime_phase_label.text() == "任务失败"
+    panel.apply_progress(AutoTidRngProgress(phase=AutoTidRngPhase.IDLE, loop_index=1, stop_reason="用户停止"))
+    assert panel.runtime_phase_label.text() == "任务已停止"
+
+
+def test_tid_empty_search_replaces_existing_results(configured_tid_panel):
+    panel = configured_tid_panel
+    panel.set_id_states([IDState8(advances=40, tid=10, sid=20, tsv=1, display_tid=1)])
+    panel.apply_progress(AutoTidRngProgress(phase=AutoTidRngPhase.SEARCH_TARGET, id_search_completed=True))
+    assert panel.id_table.rowCount() == 0
+    assert not panel.export_button.isEnabled()
+    assert "未找到目标" in panel.runtime_description_label.text()
+
+
+def test_tid_script_refresh_preserves_saved_selection_and_collapsed_fields(configured_tid_panel):
+    panel = configured_tid_panel
+    custom = panel.script_dir / "自定义取名.txt"
+    custom.write_text("A 200\n", encoding="utf-8")
+    panel.refresh_scripts()
+    panel.name_script_combo.setCurrentIndex(panel.name_script_combo.findData(str(custom)))
+    panel._save_panel_state()
+    panel.script_toggle.setChecked(True)
+    panel.script_toggle.setChecked(False)
+    panel.refresh_scripts()
+    assert panel.build_config().name_script_path == custom
+    assert panel.save_state_label.text() == "已保存"
+    assert not panel.script_fields.isVisible()
+    assert custom.name in panel.script_summary_label.toolTip()
+
+
+def test_tid_round_record_button_opens_round_view(app):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.auto_tid_rng_tab)
+    window.auto_tid_rng_tab.view_round_button.click()
+    assert window.tabs.currentWidget() is window.run_records_tab
+    assert window.run_records_tab.view_tabs.currentWidget() is window.run_records_tab.history_panel
 
 
 def test_auto_tid_panel_builds_config_with_target_list(app, tmp_path: Path) -> None:
@@ -277,7 +417,7 @@ def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_
     assert panel.target_list.viewMode() == QListView.ViewMode.IconMode
     assert panel.target_list.flow() == QListView.Flow.LeftToRight
     assert panel.target_list.isWrapping()
-    assert panel.id_table.minimumHeight() >= 320
+    assert panel.id_table.minimumHeight() >= panel.id_table.verticalHeader().defaultSectionSize() * 5
     assert panel.id_table.horizontalHeader().stretchLastSection()
 
 
@@ -294,7 +434,7 @@ def test_auto_tid_content_is_added_directly_below_toolbar(app, tmp_path: Path) -
     assert toolbar is not None
 
 
-def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: Path) -> None:
+def test_auto_tid_configuration_and_collapsible_scripts_use_separate_columns(app, tmp_path: Path) -> None:
     panel = AutoTidRngPanel(script_dir=tmp_path)
 
     top_controls = panel.findChild(QWidget, "AutoTidTopControls")
@@ -302,13 +442,11 @@ def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: 
     assert top_controls is not None
     assert panel.frame_threshold.parentWidget() is top_controls
     assert panel.delay.parentWidget() is top_controls
-    assert panel.seed_script_picker.parentWidget() is top_controls
-    assert panel.name_script_picker.parentWidget() is top_controls
+    assert panel.seed_script_picker.parentWidget() is panel.script_fields
+    assert panel.name_script_picker.parentWidget() is panel.script_fields
     assert panel.seed_script_combo.parentWidget() is panel.seed_script_picker
     assert panel.name_script_combo.parentWidget() is panel.name_script_picker
-    assert panel.refresh_scripts_button.parentWidget() is top_controls
-    assert panel.frame_threshold.maximumWidth() <= 140
-    assert panel.delay.maximumWidth() <= 120
+    assert panel.refresh_scripts_button.parentWidget() is panel.script_fields
     assert panel.seed_script_combo.minimumWidth() >= 160
     assert panel.name_script_combo.minimumWidth() >= 160
     assert panel.seed_script_combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
@@ -316,6 +454,11 @@ def test_auto_tid_top_controls_put_params_and_scripts_in_one_row(app, tmp_path: 
     panel.resize(1150, 820)
     panel.show()
     app.processEvents()
+    assert not panel.script_fields.isVisible()
+    panel.script_toggle.click()
+    app.processEvents()
+    assert panel.script_fields.isVisible()
+    assert panel.config_panel.geometry().right() < panel.runtime_scroll.geometry().left()
     for combo in (panel.seed_script_combo, panel.name_script_combo):
         picker = panel.script_picker_widgets[combo]
         edit_button = panel.script_edit_buttons[combo]
@@ -406,9 +549,11 @@ def test_auto_tid_target_pool_has_multiline_space_and_bulk_add(app, tmp_path: Pa
     assert panel.target_input.parentWidget() is target_actions
     assert panel.add_target_button.parentWidget() is target_actions
     assert panel.clear_targets_button.parentWidget() is target_actions
-    assert panel.target_input.maximumWidth() <= 360
-    assert target_actions.minimumHeight() >= panel.target_list.gridSize().height() * 3
-    assert target_actions.maximumHeight() <= panel.target_list.maximumHeight()
+    panel.resize(1150, 820)
+    panel.show()
+    app.processEvents()
+    assert panel.target_input.geometry().right() < panel.add_target_button.geometry().left()
+    assert target_actions.rect().contains(panel.add_target_button.geometry())
     assert panel.delete_target_button.isVisible() is False
 
     panel.clear_targets_button.click()
@@ -532,7 +677,10 @@ def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Pat
     assert warmup_windows == [1.0]
     assert result.seed == seed_state.to_seed_pair64()
     assert [box.text() for box in window.auto_tid_rng_tab.tid_seed_inputs] == list(seed_state.format_seed64_pair())
-    assert window.auto_tid_rng_tab.id_table.rowCount() == window.auto_tid_rng_tab.frame_threshold.value() + 1
+    # The automatic runner owns the search range frozen at startup; seed capture
+    # only fills the seed fields, so edits to the form cannot generate other rows.
+    assert window.auto_tid_rng_tab.id_table.rowCount() == 0
+    assert [box.text() for box in window.auto_tid_rng_tab.tid_seed_inputs] == list(result.seed.format_seeds())
 
 
 def test_main_window_tid_ocr_region_selection_confirm_emits_region(app, monkeypatch) -> None:

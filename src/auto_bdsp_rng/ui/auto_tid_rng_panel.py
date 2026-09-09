@@ -5,19 +5,21 @@ import re
 import csv
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QFont, QGuiApplication
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
+    QScrollArea,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -111,9 +113,17 @@ class _IdResultTable(QTableWidget):
 class _TargetListWidget(QListWidget):
     targetRemoved = Signal()
 
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.currentRow() >= 0:
+            self.takeItem(self.currentRow())
+            self.targetRemoved.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         item = self.itemAt(event.position().toPoint())
-        if item is not None:
+        if item is not None and event.button() == Qt.MouseButton.LeftButton:
             rect = self.visualItemRect(item)
             if event.position().toPoint().x() >= rect.right() - 24:
                 row = self.row(item)
@@ -176,6 +186,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     progressChanged = Signal(object)
     ocrSettingsRequested = Signal()
     runLogRequested = Signal()
+    roundRecordsRequested = Signal()
     runStateChanged = Signal(bool)
     scriptEditRequested = Signal(object)
 
@@ -196,9 +207,21 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self._run_state_active = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoTidRngPanel")
         self._ocr_region = load_tid_ocr_region()
+        self._restoring_state = True
+        self._active_config: AutoTidRngConfig | None = None
+        self._last_progress = AutoTidRngProgress()
+        self._runtime_loop_index = 0
+        self._last_id_states: tuple[IDState8, ...] | None = None
+        self._target_key: tuple[int, int] | None = None
+        self._highlighted_target_row: int | None = None
+        self._reseed_reason = ""
         self._build_ui()
         self.refresh_scripts()
         self._restore_panel_state()
+        self._restoring_state = False
+        self._saved_panel_values = self._panel_values()
+        self._refresh_script_summary()
+        self._mark_config_dirty()
         self._sync_run_controls()
         self._refresh_ocr_region_text()
 
@@ -209,157 +232,127 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         layout.setSpacing(0)
         self.toolbar = self._build_toolbar()
         layout.addWidget(self.toolbar)
-
         content = QWidget(self)
         content.setObjectName("AutoTidContent")
-        grid = QGridLayout(content)
-        grid.setContentsMargins(18, 4, 18, 8)
-        grid.setHorizontalSpacing(0)
-        grid.setVerticalSpacing(4)
-        self.top_controls_group = self._build_top_controls_group()
-        self.target_group = self._build_target_group()
+        row = QHBoxLayout(content)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        self.config_panel = self._build_config_group()
+        row.addWidget(self.config_panel)
+        self.runtime_scroll = QScrollArea()
+        self.runtime_scroll.setObjectName("AutoTidRuntimeScroll")
+        self.runtime_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.runtime_scroll.setWidgetResizable(True)
+        self.runtime_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.runtime_content = QWidget()
+        self.runtime_content.setObjectName("AutoTidRuntimeContent")
+        runtime_layout = QVBoxLayout(self.runtime_content)
+        runtime_layout.setContentsMargins(18, 16, 18, 14)
+        runtime_layout.setSpacing(10)
+        header = QHBoxLayout()
+        header.addWidget(self._section_title("运行现场"))
+        header.addStretch(1)
+        self.view_round_button = self._link_button("轮次记录", self.roundRecordsRequested.emit)
+        self.view_round_button.setIcon(workspace_icon("external", "#087C58"))
+        self.view_round_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        header.addWidget(self.view_round_button)
+        runtime_layout.addLayout(header)
+        runtime_layout.addWidget(self._build_runtime_group())
+        self.script_group = self._build_script_group()
+        runtime_layout.addWidget(self.script_group)
         self.id_table_group = self._build_id_table_group()
-        grid.addWidget(self.top_controls_group, 0, 0, 1, 2)
+        runtime_layout.addWidget(self.id_table_group, 1)
+        self.runtime_scroll.setWidget(self.runtime_content)
+        row.addWidget(self.runtime_scroll, 1)
         self._legacy_log_group = self._build_log_group()
-        self._legacy_log_group.setVisible(False)
-        grid.addWidget(self.target_group, 1, 0, 1, 2)
-        grid.addWidget(self.id_table_group, 2, 0, 1, 2)
-        grid.setColumnStretch(0, 1)
-        grid.setRowStretch(2, 1)
-
+        self._legacy_log_group.setParent(self)
+        self._legacy_log_group.hide()
         layout.addWidget(content, 1)
-        self.setStyleSheet(
-            """
-            QWidget#AutoTidRngPanel,
-            QWidget#AutoTidContent {
-                background: #ffffff;
-                color: #24312d;
-            }
-            QFrame#AutoTidToolbar {
-                background: #ffffff;
-                border: 0;
-                border-bottom: 1px solid #e2e8e4;
-            }
-            QLabel#AutoTidTitle {
-                color: #24312d;
-                font-size: 16px;
-                font-weight: 500;
-            }
-            QLabel#AutoTidSubtitle,
-            QLabel#AutoTidLatest {
-                color: #68766f;
-                font-size: 12px;
-            }
-            QLabel#AutoTidStatus {
-                color: #087c58;
-                background: #edf7f1;
-                border: 0;
-                border-radius: 4px;
-                padding: 0 9px;
-                font-size: 12px;
-                font-weight: 400;
-            }
-            QPushButton#AutoTidLogButton {
-                color: #087c58;
-                background: transparent;
-                border: 0;
-                padding: 0 5px;
-                font-size: 12px;
-            }
-            QPushButton#AutoTidLogButton:hover {
-                color: #066a4b;
-                background: #f6f8f7;
-            }
-            QGroupBox#AutoTidTopControls,
-            QGroupBox#AutoTidTargets,
-            QGroupBox#AutoTidResults {
-                background: #ffffff;
-                border: 0;
-                border-radius: 0;
-                margin-top: 18px;
-                padding: 10px 8px 6px 8px;
-                font-size: 13px;
-                font-weight: 400;
-            }
-            QGroupBox#AutoTidTopControls,
-            QGroupBox#AutoTidTargets {
-                border-bottom: 1px solid #e2e8e4;
-            }
-            QGroupBox#AutoTidTopControls,
-            QGroupBox#AutoTidTargets {
-                margin: 0;
-                padding: 0;
-            }
-            QGroupBox#AutoTidTopControls::title,
-            QGroupBox#AutoTidTargets::title,
-            QGroupBox#AutoTidResults::title {
-                subcontrol-origin: margin;
-                left: 8px;
-                top: 0;
-                padding: 0;
-                color: #24312d;
-                background: transparent;
-                font-weight: 500;
-            }
-            QWidget#AutoTidScriptPicker {
-                background: transparent;
-            }
-            QToolButton#AutoTidScriptEditButton {
-                background: #ffffff;
-                border: 1px solid #e2e8e4;
-                border-radius: 5px;
-                padding: 0;
-            }
-            QToolButton#AutoTidScriptEditButton:hover {
-                background: #f6f8f7;
-                border-color: #b9c8c0;
-            }
-            QToolButton#AutoTidScriptEditButton:disabled {
-                background: #fafbfa;
-                border-color: #eef1ef;
-            }
-            QWidget#AutoTidTargetPanel,
-            QWidget#TargetPoolActions {
-                background: #ffffff;
-                border: 0;
-            }
-            QListWidget#TargetPool {
-                background: #ffffff;
-                border: 1px solid #e2e8e4;
-                border-radius: 5px;
-                padding: 7px;
-            }
-            QListWidget#TargetPool::item {
-                background: #ffffff;
-                color: #24312d;
-                border: 1px solid #dce4df;
-                border-radius: 4px;
-                padding: 3px 8px;
-                margin: 1px;
-            }
-            QListWidget#TargetPool::item:selected {
-                background: #edf7f1;
-                color: #087c58;
-                border-color: #87b9a6;
-            }
-            QLineEdit#AutoTidSeed {
-                background: #f2f5f3;
-                color: #68766f;
-                font-family: "Cascadia Mono", "Consolas", monospace;
-                letter-spacing: 0;
-            }
-            QLabel#AutoTidResultCount,
-            QLabel#AutoTidTargetCount {
-                color: #68766f;
-                font-size: 12px;
-                font-weight: 400;
-            }
-            QFrame#AutoTidResultDivider {
-                background: #e2e8e4;
-                border: 0;
-            }
-            """
-        )
+        self._apply_panel_style()
+        for spin in (self.frame_threshold, self.delay, self.reverse_lookup_window, self.loop_count):
+            spin.valueChanged.connect(self._mark_config_dirty)
+        for combo in (self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo, self.mode_combo):
+            combo.currentIndexChanged.connect(self._mark_config_dirty)
+        self.debug_output_check.toggled.connect(self._mark_config_dirty)
+        model = self.target_list.model()
+        model.rowsInserted.connect(self._refresh_target_count)
+        model.rowsRemoved.connect(self._refresh_target_count)
+        model.modelReset.connect(self._refresh_target_count)
+
+    def _apply_panel_style(self) -> None:
+        self.setStyleSheet("""
+            QWidget { color: #24312d; font-size: 14px; }
+            QPushButton#PrimaryButton, QToolButton#PrimaryButton { color: #ffffff; background: #087c58; }
+            QPushButton#PrimaryButton:disabled, QToolButton#PrimaryButton:disabled {
+                color: #97a79f; background: #eff3f1; border-color: #eff3f1; }
+            QPushButton#DangerButton { color: #ac4b42; }
+            QPushButton#DangerButton:disabled { color: #97a79f; }
+            QWidget#AutoTidRngPanel, QWidget#AutoTidContent,
+            QWidget#AutoTidRuntimeContent, QScrollArea#AutoTidRuntimeScroll { background: #ffffff; }
+            QFrame#AutoTidToolbar { background: #ffffff; border: 0; border-bottom: 1px solid #e2e8e4; }
+            QFrame#AutoTidConfigPanel { background: #f6f8f7; border: 0; border-right: 1px solid #e2e8e4; }
+            QLabel#AutoTidTitle, QLabel#AutoTidSectionTitle { font-size: 16px; font-weight: 700; }
+            QLabel#AutoTidSubtitle, QLabel#AutoTidMuted, QLabel#AutoTidResultCount,
+            QLabel#AutoTidTargetCount, QLabel#AutoTidSaveState { color: #596c62; font-size: 12px; }
+            QLabel#AutoTidSaveState[dirty="true"] { color: #9e600e; }
+            QFrame#AutoTidRuntimeCard { background: #f6f8f7; border: 0; border-radius: 6px; }
+            QLabel#AutoTidRuntimePhase { font-size: 20px; font-weight: 700; }
+            QLabel#AutoTidRuntimeValue { font-size: 26px; font-weight: 600; }
+            QLabel#AutoTidRuntimeValue[accent="true"] { color: #087c58; }
+            QLabel#AutoTidStateDot { color: #087c58; }
+            QFrame#AutoTidRuntimeCard[state="failed"] QLabel#AutoTidStateDot { color: #ac4b42; }
+            QFrame#AutoTidRuntimeCard[state="idle"] QLabel#AutoTidStateDot { color: #8da299; }
+            QFrame#AutoTidDivider { border: 0; background: #e2e8e4; max-height: 1px; }
+            QFrame#AutoTidScriptCard { background: #ffffff; border: 1px solid #dce4df; border-radius: 5px; }
+            QWidget#AutoTidTargets, QWidget#AutoTidTopControls, QWidget#TargetPoolActions, QWidget#AutoTidScriptFields,
+            QWidget#AutoTidScriptPicker, QWidget#AutoTidSeedFields { background: transparent; }
+            QListWidget#TargetPool { background: transparent; border: 0; padding: 0; }
+            QListWidget#TargetPool::item { background: #ffffff; border: 1px solid #dce4df;
+                border-radius: 4px; padding: 3px 7px; margin: 1px; }
+            QListWidget#TargetPool::item:selected { background: #edf7f1; color: #087c58; border-color: #87b9a6; }
+            QPushButton#AutoTidLink, QToolButton#AutoTidLink { color: #087c58; background: transparent;
+                border: 0; padding: 2px 0; font-size: 12px; }
+            QPushButton#AutoTidLink:hover, QToolButton#AutoTidLink:hover { color: #066a4b; }
+            QPushButton#AutoTidLink:disabled { color: #8da299; }
+            QToolButton#AutoTidScriptEditButton { background: #ffffff; border: 1px solid #e2e8e4;
+                border-radius: 5px; padding: 0; }
+            QLineEdit#AutoTidTargetInput { font-size: 12px; }
+            QLineEdit#AutoTidSeed { background: #f2f5f3; color: #596c62; font-size: 12px;
+                font-family: "Cascadia Mono", "Consolas", monospace; }
+            QTableWidget#TidResultsTable { font-size: 13px; border: 0; gridline-color: #e2e8e4; }
+            QTableWidget#TidResultsTable QHeaderView::section { background: #f6f8f7; color: #596c62;
+                border: 0; border-bottom: 1px solid #e2e8e4; padding: 8px; font-size: 12px; font-weight: 700; }
+        """)
+
+    def _section_title(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("AutoTidSectionTitle")
+        return label
+
+    def _muted_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("AutoTidMuted")
+        return label
+
+    def _link_button(self, text: str, callback: Callable) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("AutoTidLink")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(callback)
+        return button
+
+    def _divider(self) -> QFrame:
+        line = QFrame()
+        line.setObjectName("AutoTidDivider")
+        line.setFixedHeight(1)
+        return line
+
+    def _sync_run_controls(self) -> None:
+        super()._sync_run_controls()
+        if hasattr(self, "target_list") and not self.target_list.count():
+            self.start_button.setEnabled(False)
+            for action in self.start_menu.actions():
+                action.setEnabled(False)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_panel_state()
@@ -425,7 +418,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.title_label = QLabel("自动 TID 乱数")
         self.title_label.setObjectName("AutoTidTitle")
         row.addWidget(self.title_label)
-        self.subtitle_label = QLabel("按 Display TID 命中后取名")
+        self.subtitle_label = QLabel("未命中时自动重新测种")
         self.subtitle_label.setObjectName("AutoTidSubtitle")
         row.addWidget(self.subtitle_label)
         row.addSpacing(10)
@@ -434,132 +427,75 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.latest_log_label.setMaximumHeight(32)
         self.latest_log_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        row.addWidget(self.latest_log_label, 1)
+        self.latest_log_label.setParent(toolbar)
+        self.latest_log_label.hide()
+        row.addStretch(1)
         self.view_log_button = QPushButton("查看日志")
-        self.view_log_button.setObjectName("AutoTidLogButton")
+        self.view_log_button.setObjectName("AutoTidLink")
         self.view_log_button.setFixedSize(76, 32)
         self.view_log_button.clicked.connect(self.runLogRequested.emit)
         row.addWidget(self.view_log_button)
-        row.addWidget(self.status_badge)
+        self.status_badge.setParent(toolbar)
+        self.status_badge.hide()
         row.addWidget(self.start_button)
         row.addWidget(self.stop_button)
         row.addWidget(self.ocr_button)
         return toolbar
 
-    def _build_config_group(self) -> QGroupBox:
-        group = QGroupBox("基础参数")
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+    def _build_config_group(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("AutoTidConfigPanel")
+        panel.setFixedWidth(326)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(18)
+        header = QHBoxLayout()
+        header.addWidget(self._section_title("任务配置"))
+        header.addStretch(1)
+        self.save_state_label = QLabel("已保存")
+        self.save_state_label.setObjectName("AutoTidSaveState")
+        header.addWidget(self.save_state_label)
+        layout.addLayout(header)
+        self.target_group = self._build_target_group()
+        layout.addWidget(self.target_group)
+        self.top_controls_group = self._build_top_controls_group()
+        layout.addWidget(self.top_controls_group)
+        layout.addWidget(self._divider())
+        footer = QHBoxLayout()
+        footer.addWidget(self._muted_label("配置下次启动生效"))
+        footer.addStretch(1)
+        self.save_button = QPushButton("保存")
+        self.save_button.setObjectName("PrimaryButton")
+        self.save_button.setFixedSize(64, 34)
+        self.save_button.setToolTip("保存当前配置；点击开始也会自动保存。运行中的任务使用启动时的配置。")
+        self.save_button.clicked.connect(self._save_panel_state)
+        footer.addWidget(self.save_button)
+        layout.addLayout(footer)
+        layout.addStretch(1)
+        return panel
 
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(8)
-        self.frame_threshold = self._spin(0, 1_000_000_000, 300)
-        self.delay = self._spin(0, 1_000_000_000, 0)
-        self.reverse_lookup_window = self._spin(0, 10_000, 50)
-        self.reverse_lookup_window.setPrefix("±")
-        self.reverse_lookup_window.setSuffix(" 帧")
-        self.reverse_lookup_window.setVisible(False)
-        for spin in (self.frame_threshold, self.delay, self.reverse_lookup_window):
-            spin.setMinimumWidth(150)
-        form.addWidget(QLabel("帧数阈值"), 0, 0)
-        form.addWidget(self.frame_threshold, 0, 1)
-        form.addWidget(QLabel("delay"), 0, 2)
-        form.addWidget(self.delay, 0, 3)
-        form.setColumnStretch(1, 1)
-        form.setColumnStretch(3, 1)
-        layout.addLayout(form)
-        return group
-
-    def _build_top_controls_group(self) -> QGroupBox:
-        group = QGroupBox()
+    def _build_top_controls_group(self) -> QWidget:
+        group = QWidget()
         group.setObjectName("AutoTidTopControls")
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        layout = QGridLayout(group)
-        layout.setContentsMargins(0, 14, 0, 16)
-        layout.setHorizontalSpacing(14)
-        layout.setVerticalSpacing(7)
-
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         self.frame_threshold = self._spin(0, 1_000_000_000, 300)
         self.delay = self._spin(0, 1_000_000_000, 0)
+        self.frame_threshold.setSuffix(" 帧")
+        self.delay.setSuffix(" 帧")
+        self.frame_threshold.setToolTip("生成从 0 到此帧数的 ID 数据，选择最早匹配的目标 Display TID。")
+        self.delay.setToolTip("取名脚本启动帧 = 目标帧数 − delay。修改后下次启动生效。")
+        for title, field in (("搜索范围", self.frame_threshold), ("取名 delay", self.delay)):
+            if layout.count():
+                layout.addSpacing(10)
+            label = QLabel(title)
+            label.setBuddy(field)
+            layout.addWidget(label)
+            layout.addWidget(field)
         self.reverse_lookup_window = self._spin(0, 10_000, 50)
-        self.reverse_lookup_window.setPrefix("±")
-        self.reverse_lookup_window.setSuffix(" 帧")
-        self.reverse_lookup_window.setVisible(False)
-        self.frame_threshold.setFixedWidth(112)
-        self.delay.setFixedWidth(88)
-        self.reverse_lookup_window.setFixedWidth(110)
-
-        self.seed_script_combo = QComboBox()
-        self.name_script_combo = QComboBox()
-        self.reverse_id_script_combo = QComboBox()
-        self.reverse_id_script_combo.setVisible(False)
-        for combo, width in (
-            (self.seed_script_combo, 208),
-            (self.name_script_combo, 208),
-            (self.reverse_id_script_combo, 220),
-        ):
-            combo.setFixedHeight(32)
-            combo.setMinimumWidth(160)
-            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.script_edit_buttons: dict[QComboBox, QToolButton] = {}
-        self.script_picker_widgets: dict[QComboBox, QWidget] = {}
-        self.seed_script_picker = self._build_script_picker(
-            group,
-            self.seed_script_combo,
-            "测种脚本",
-        )
-        self.name_script_picker = self._build_script_picker(
-            group,
-            self.name_script_combo,
-            "取名脚本",
-        )
-        self.refresh_scripts_button = QPushButton("刷新脚本列表")
-        self.refresh_scripts_button.setIcon(workspace_icon("refresh"))
-        self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        self.refresh_scripts_button.setFixedHeight(32)
-        self.refresh_scripts_button.setFixedWidth(116)
-
-        self.parameter_labels = []
-        for column, (label, widget) in enumerate((
-            ("帧数阈值", self.frame_threshold), ("delay", self.delay),
-            ("测种脚本", self.seed_script_picker), ("取名脚本", self.name_script_picker),
-        )):
-            field_label = QLabel(label)
-            field_label.setStyleSheet("color: #68766F; font-size: 12px;")
-            self.parameter_labels.append(field_label)
-            layout.addWidget(field_label, 0, column)
-            layout.addWidget(widget, 1, column, Qt.AlignmentFlag.AlignBottom)
-        layout.addWidget(self.refresh_scripts_button, 1, 4, Qt.AlignmentFlag.AlignBottom)
-        layout.setColumnStretch(2, 1)
-        layout.setColumnStretch(3, 1)
-
-        self.ocr_region_label = QLabel("TID ROI：未设置")
-        self.ocr_region_label.setVisible(False)
-        self.ocr_region_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
-        )
-        layout.addWidget(self.ocr_region_label, 2, 0, 1, 5)
-
-        result_group = QGroupBox("校准结果")
-        result_group.setVisible(False)
-        result_form = QFormLayout(result_group)
-        result_form.setVerticalSpacing(8)
-        self.target_result = QLabel("-")
-        self.trigger_result = QLabel("-")
-        self.ocr_result = QLabel("-")
-        self.actual_delay_result = QLabel("-")
-        for label in (self.target_result, self.trigger_result, self.ocr_result, self.actual_delay_result):
-            label.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
-            )
-        result_form.addRow("命中目标", self.target_result)
-        result_form.addRow("反查启动帧", self.trigger_result)
-        result_form.addRow("OCR TID", self.ocr_result)
-        result_form.addRow("实际 delay", self.actual_delay_result)
-        layout.addWidget(result_group, 3, 0, 1, 5)
+        self.reverse_lookup_window.setParent(group)
+        self.reverse_lookup_window.hide()
         return group
 
     def _build_script_picker(
@@ -597,138 +533,205 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.script_picker_widgets[combo] = picker
         return picker
 
-    def _build_target_group(self) -> QGroupBox:
-        group = QGroupBox()
+    def _build_target_group(self) -> QWidget:
+        group = QWidget()
         group.setObjectName("AutoTidTargets")
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(0, 16, 0, 16)
-        layout.setSpacing(6)
-
-        target_panel = QWidget()
-        target_panel.setObjectName("AutoTidTargetPanel")
-        target_layout = QGridLayout(target_panel)
-        target_layout.setContentsMargins(0, 0, 0, 0)
-        target_layout.setHorizontalSpacing(12)
-        target_layout.setVerticalSpacing(8)
-        title_row = QHBoxLayout()
-        title_row.setContentsMargins(0, 0, 0, 0)
-        self.target_count_label = QLabel("0 个目标")
-        self.target_count_label.setObjectName("AutoTidTargetCount")
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         self.target_title_label = QLabel("目标 Display TID")
-        title_row.addWidget(self.target_title_label)
-        title_row.addStretch(1)
-        title_row.addWidget(self.target_count_label)
-        target_layout.addLayout(title_row, 0, 0)
+        layout.addWidget(self.target_title_label)
         self.target_list = _TargetListWidget()
         self.target_list.setObjectName("TargetPool")
+        self.target_list.setAccessibleName("目标 Display TID 列表；点击标签右侧 × 或按 Delete 删除")
+        self.target_list.setToolTip("点击右侧 × 删除目标；也可选中后按 Delete。双击数字可编辑。")
         self.target_list.setViewMode(QListView.ViewMode.IconMode)
         self.target_list.setFlow(QListView.Flow.LeftToRight)
         self.target_list.setWrapping(True)
         self.target_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.target_list.setMovement(QListView.Movement.Static)
-        self.target_list.setSpacing(6)
-        self.target_list.setGridSize(QSize(92, 32))
+        self.target_list.setSpacing(5)
+        self.target_list.setGridSize(QSize(116, 34))
         self.target_list.setUniformItemSizes(True)
-        # Reserve three complete chip rows in addition to the frame and padding.
         self.target_list.setFixedHeight(124)
         self.target_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         self.target_list.targetRemoved.connect(self._refresh_target_count)
-        target_layout.addWidget(self.target_list, 1, 0)
-
+        layout.addWidget(self.target_list)
         action_panel = QWidget()
         action_panel.setObjectName("TargetPoolActions")
-        action_panel.setFixedWidth(300)
-        action_panel.setMinimumHeight(116)
-        action_panel.setMaximumHeight(124)
-        action_layout = QVBoxLayout(action_panel)
-        action_layout.setContentsMargins(0, 0, 0, 0)
-        action_layout.setSpacing(8)
+        actions = QGridLayout(action_panel)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setHorizontalSpacing(6)
+        actions.setVerticalSpacing(6)
         self.target_input = QLineEdit()
-        self.target_input.setPlaceholderText("000000-999999，可粘贴多个")
-        self.target_input.setFixedHeight(32)
-        self.target_input.setMaximumWidth(300)
-        self.add_target_button = QPushButton("添加")
+        self.target_input.setObjectName("AutoTidTargetInput")
+        self.target_input.setPlaceholderText("000000–999999，可粘贴多个")
+        self.target_input.setAccessibleName("添加目标 Display TID")
+        self.target_input.setFixedHeight(34)
+        self.target_input.returnPressed.connect(self._add_target_from_input)
+        self.add_target_button = QPushButton("+")
+        self.add_target_button.setFixedSize(34, 34)
+        self.add_target_button.setAccessibleName("添加目标 Display TID")
         self.add_target_button.clicked.connect(self._add_target_from_input)
-        self.update_target_button = QPushButton("更新")
+        actions.addWidget(self.target_input, 0, 0)
+        actions.addWidget(self.add_target_button, 0, 1)
+        self.target_count_label = self._muted_label("0 个目标")
+        self.target_count_label.setObjectName("AutoTidTargetCount")
+        actions.addWidget(self.target_count_label, 1, 0)
+        self.clear_targets_button = self._link_button("清空", self._clear_targets)
+        actions.addWidget(self.clear_targets_button, 1, 1)
+        self.update_target_button = QPushButton("更新", action_panel)
         self.update_target_button.clicked.connect(self._update_selected_target)
-        self.update_target_button.setVisible(False)
-        self.delete_target_button = QPushButton("删除")
+        self.update_target_button.hide()
+        self.delete_target_button = QPushButton("删除", action_panel)
         self.delete_target_button.clicked.connect(self._delete_selected_target)
-        self.delete_target_button.setVisible(False)
-        self.clear_targets_button = QPushButton("清空")
-        self.clear_targets_button.clicked.connect(self._clear_targets)
-        for button in (self.add_target_button, self.update_target_button, self.delete_target_button, self.clear_targets_button):
-            button.setFixedHeight(32)
-        action_layout.addWidget(self.target_input)
-        button_row = QHBoxLayout()
-        button_row.setSpacing(8)
-        self.add_target_button.setFixedWidth(146)
-        self.clear_targets_button.setFixedWidth(146)
-        button_row.addWidget(self.add_target_button)
-        button_row.addWidget(self.clear_targets_button)
-        action_layout.addLayout(button_row)
-        action_layout.addWidget(self.update_target_button)
-        action_layout.addWidget(self.delete_target_button)
-        action_layout.addStretch(1)
-        target_layout.addWidget(action_panel, 0, 1, 2, 1, Qt.AlignmentFlag.AlignTop)
-        target_layout.setColumnStretch(0, 1)
-        layout.addWidget(target_panel, 1)
+        self.delete_target_button.hide()
+        layout.addWidget(action_panel)
+        self.target_hint_label = self._muted_label("添加目标后即可开始")
+        layout.addWidget(self.target_hint_label)
         return group
 
-    def _build_runtime_group(self) -> QGroupBox:
-        group = QGroupBox("脚本")
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+    def _build_runtime_group(self) -> QFrame:
+        self.runtime_card = QFrame()
+        self.runtime_card.setObjectName("AutoTidRuntimeCard")
+        self.runtime_card.setProperty("state", "idle")
+        layout = QVBoxLayout(self.runtime_card)
+        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setSpacing(8)
+        top = QHBoxLayout()
+        self.runtime_state_dot = QLabel("●")
+        self.runtime_state_dot.setObjectName("AutoTidStateDot")
+        top.addWidget(self.runtime_state_dot)
+        self.runtime_phase_label = QLabel("准备就绪")
+        self.runtime_phase_label.setObjectName("AutoTidRuntimePhase")
+        top.addWidget(self.runtime_phase_label)
+        top.addStretch(1)
+        self.runtime_round_label = self._muted_label("尚未开始")
+        top.addWidget(self.runtime_round_label)
+        layout.addLayout(top)
+        self.runtime_description_label = self._muted_label("设置目标 Display TID 和脚本，然后开始任务。")
+        self.runtime_description_label.setWordWrap(True)
+        self.runtime_description_label.setMinimumHeight(38)
+        layout.addWidget(self.runtime_description_label)
+        metrics = QHBoxLayout()
+        metrics.setSpacing(16)
+        for title, attr, accent in (("当前帧数", "runtime_current_value", False),
+                                    ("目标帧数", "runtime_target_value", False),
+                                    ("距离取名启动", "runtime_remaining_value", True)):
+            field = QVBoxLayout()
+            field.setSpacing(4)
+            field.addWidget(self._muted_label(title))
+            value = QLabel("—")
+            value.setObjectName("AutoTidRuntimeValue")
+            value.setProperty("accent", accent)
+            font = QFont()
+            font.setFamilies(["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", "sans-serif"])
+            font.setPixelSize(26)
+            font.setWeight(QFont.Weight.DemiBold)
+            font.setFeature(QFont.Tag("tnum"), 1)
+            value.setFont(font)
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            setattr(self, attr, value)
+            field.addWidget(value)
+            metrics.addLayout(field, 1)
+        self.runtime_current_value.setToolTip("根据小卡比兽眨眼间隔更新 RNG 帧数。取名脚本执行后不再进行实时计数。")
+        self.runtime_remaining_value.setToolTip("取名脚本触发帧减去当前帧数；按眨眼推进，不按固定 FPS 换算。")
+        layout.addLayout(metrics)
+        layout.addWidget(self._divider())
+        footer = QHBoxLayout()
+        footer.addWidget(self._muted_label("本次 delay"))
+        self.runtime_delay_value = QLabel("—")
+        footer.addWidget(self.runtime_delay_value)
+        footer.addStretch(1)
+        self.target_data_button = self._link_button("查看目标数据", self._locate_target)
+        self.target_data_button.setEnabled(False)
+        footer.addWidget(self.target_data_button)
+        layout.addLayout(footer)
+        # Hidden compatibility fields are still updated for OCR integrations.
+        self.target_result = QLabel("—", self)
+        self.trigger_result = QLabel("—", self)
+        self.ocr_result = QLabel("—", self)
+        self.actual_delay_result = QLabel("—", self)
+        for label in (self.target_result, self.trigger_result, self.ocr_result, self.actual_delay_result):
+            label.hide()
+        return self.runtime_card
 
-        script_grid = QFormLayout()
-        script_grid.setHorizontalSpacing(10)
-        script_grid.setVerticalSpacing(10)
-        script_grid.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    def _build_script_group(self) -> QWidget:
+        group = QWidget()
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        header = QHBoxLayout()
+        header.addWidget(self._section_title("任务脚本"))
+        header.addStretch(1)
+        header.addWidget(self._muted_label("下次启动生效"))
+        layout.addLayout(header)
+        card = QFrame()
+        card.setObjectName("AutoTidScriptCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        summary = QHBoxLayout()
+        labels = QVBoxLayout()
+        labels.setSpacing(2)
+        labels.addWidget(QLabel("TID 测种与取名"))
+        self.script_summary_label = self._muted_label("测种 / 取名 · 0 个脚本")
+        labels.addWidget(self.script_summary_label)
+        summary.addLayout(labels, 1)
+        self.script_toggle = QToolButton()
+        self.script_toggle.setObjectName("AutoTidLink")
+        self.script_toggle.setText("展开编辑")
+        self.script_toggle.setCheckable(True)
+        self.script_toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.script_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.script_toggle.setAccessibleName("展开任务脚本编辑")
+        summary.addWidget(self.script_toggle)
+        card_layout.addLayout(summary)
+        self.script_fields = QWidget()
+        self.script_fields.setObjectName("AutoTidScriptFields")
+        fields = QGridLayout(self.script_fields)
+        fields.setContentsMargins(0, 10, 0, 0)
+        fields.setHorizontalSpacing(12)
+        fields.setVerticalSpacing(8)
         self.seed_script_combo = QComboBox()
         self.name_script_combo = QComboBox()
-        self.reverse_id_script_combo = QComboBox()
-        self.reverse_id_script_combo.setVisible(False)
-        for combo in (self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo):
-            combo.setFixedHeight(34)
-            combo.setMinimumWidth(260)
-        self.refresh_scripts_button = QPushButton("刷新脚本列表")
-        self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        self.refresh_scripts_button.setFixedHeight(34)
-        script_grid.addRow("测种脚本", self.seed_script_combo)
-        script_grid.addRow("取名脚本", self.name_script_combo)
-        layout.addLayout(script_grid)
-        layout.addWidget(self.refresh_scripts_button, 0, Qt.AlignmentFlag.AlignRight)
-
-        self.ocr_region_label = QLabel("TID ROI：未设置")
-        self.ocr_region_label.setVisible(False)
-        self.ocr_region_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
-        )
-        layout.addWidget(self.ocr_region_label)
-
-        result_group = QGroupBox("校准结果")
-        result_group.setVisible(False)
-        result_form = QFormLayout(result_group)
-        result_form.setVerticalSpacing(8)
-        self.target_result = QLabel("-")
-        self.trigger_result = QLabel("-")
-        self.ocr_result = QLabel("-")
-        self.actual_delay_result = QLabel("-")
-        for label in (self.target_result, self.trigger_result, self.ocr_result, self.actual_delay_result):
-            label.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
-            )
-        result_form.addRow("命中目标", self.target_result)
-        result_form.addRow("反查启动帧", self.trigger_result)
-        result_form.addRow("OCR TID", self.ocr_result)
-        result_form.addRow("实际 delay", self.actual_delay_result)
-        layout.addWidget(result_group)
+        self.reverse_id_script_combo = QComboBox(self.script_fields)
+        self.reverse_id_script_combo.hide()
+        self.script_edit_buttons = {}
+        self.script_picker_widgets = {}
+        for column, (title, combo) in enumerate((("测种脚本", self.seed_script_combo), ("取名脚本", self.name_script_combo))):
+            combo.setMinimumWidth(160)
+            combo.setFixedHeight(32)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            picker = self._build_script_picker(self.script_fields, combo, title)
+            fields.addWidget(self._muted_label(title), 0, column)
+            fields.addWidget(picker, 1, column)
+            fields.setColumnStretch(column, 1)
+            combo.currentIndexChanged.connect(self._refresh_script_summary)
+        self.seed_script_picker = self.script_picker_widgets[self.seed_script_combo]
+        self.name_script_picker = self.script_picker_widgets[self.name_script_combo]
+        self.refresh_scripts_button = self._link_button("刷新脚本列表", self.refresh_scripts)
+        fields.addWidget(self.refresh_scripts_button, 2, 0, 1, 2, Qt.AlignmentFlag.AlignRight)
+        card_layout.addWidget(self.script_fields)
+        self.script_fields.hide()
+        self.script_toggle.toggled.connect(self._set_scripts_expanded)
+        self.ocr_region_label = QLabel("", self.script_fields)
+        self.ocr_region_label.hide()
+        layout.addWidget(card)
         return group
+
+    def _set_scripts_expanded(self, expanded: bool) -> None:
+        self.script_fields.setVisible(expanded)
+        self.script_toggle.setText("收起编辑" if expanded else "展开编辑")
+        self.script_toggle.setArrowType(Qt.ArrowType.UpArrow if expanded else Qt.ArrowType.DownArrow)
+        self.script_toggle.setAccessibleName("收起任务脚本编辑" if expanded else "展开任务脚本编辑")
+
+    def _refresh_script_summary(self) -> None:
+        combos = (self.seed_script_combo, self.name_script_combo)
+        paths = [self._selected_path(combo) for combo in combos]
+        self.script_summary_label.setText(f"测种 / 取名 · {sum(path is not None for path in paths)} 个脚本")
+        self.script_summary_label.setToolTip(" / ".join(path.name if path else "未选择" for path in paths))
 
     def _build_log_group(self) -> QGroupBox:
         group = QGroupBox("日志")
@@ -740,80 +743,91 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.log_view.setVisible(False)
         return group
 
-    def _build_id_table_group(self) -> QGroupBox:
-        group = QGroupBox("ID 数据表")
+    def _build_id_table_group(self) -> QWidget:
+        group = QWidget()
         group.setObjectName("AutoTidResults")
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(8, 7, 8, 6)
-        layout.setSpacing(7)
-
-        seed_bar = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(self._section_title("ID 数据"))
+        toolbar.addStretch(1)
+        self.id_result_count = self._muted_label("0 条结果")
+        self.id_result_count.setObjectName("AutoTidResultCount")
+        toolbar.addWidget(self.id_result_count)
+        self.copy_button = self._link_button("复制", self.copy_results)
+        self.export_button = self._link_button("导出 CSV", self.export_results)
+        toolbar.addWidget(self.copy_button)
+        toolbar.addWidget(self.export_button)
+        layout.addLayout(toolbar)
+        self.seed_toggle = QToolButton()
+        self.seed_toggle.setObjectName("AutoTidLink")
+        self.seed_toggle.setText("Seed 信息")
+        self.seed_toggle.setCheckable(True)
+        self.seed_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.seed_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        layout.addWidget(self.seed_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        self.seed_fields = QWidget()
+        self.seed_fields.setObjectName("AutoTidSeedFields")
+        seed_bar = QGridLayout(self.seed_fields)
         seed_bar.setContentsMargins(0, 0, 0, 0)
-        seed_bar.setSpacing(8)
-        self.tid_seed_inputs: list[QLineEdit] = []
-        for label_text in ("Seed0", "Seed1"):
-            label = QLabel(label_text)
+        seed_bar.setHorizontalSpacing(8)
+        self.tid_seed_inputs = []
+        for column, label_text in enumerate(("Seed0", "Seed1")):
             seed_box = QLineEdit()
             seed_box.setObjectName("AutoTidSeed")
             seed_box.setReadOnly(True)
             seed_box.setFixedHeight(32)
-            seed_box.setMinimumWidth(230)
+            seed_box.setMinimumWidth(160)
             seed_box.setPlaceholderText("未捕获")
+            seed_box.setAccessibleName(label_text)
             self.tid_seed_inputs.append(seed_box)
-            seed_bar.addWidget(label)
-            seed_bar.addWidget(seed_box, 1)
-        layout.addLayout(seed_bar)
-
-        divider = QFrame()
-        divider.setObjectName("AutoTidResultDivider")
-        divider.setFixedHeight(1)
-        layout.addWidget(divider)
-
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(0, 0, 0, 0)
-        self.id_result_count = QLabel("0 条结果")
-        self.id_result_count.setObjectName("AutoTidResultCount")
-        self.copy_button = QPushButton("复制")
-        self.copy_button.setFixedHeight(32)
-        self.copy_button.setFixedWidth(72)
-        self.copy_button.clicked.connect(self.copy_results)
-        self.export_button = QPushButton("导出 CSV")
-        self.export_button.setFixedHeight(32)
-        self.export_button.setFixedWidth(88)
-        self.export_button.clicked.connect(self.export_results)
-        toolbar.addWidget(self.id_result_count)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self.copy_button)
-        toolbar.addWidget(self.export_button)
-        layout.addLayout(toolbar)
-
+            seed_bar.addWidget(self._muted_label(label_text), 0, column)
+            seed_bar.addWidget(seed_box, 1, column)
+        layout.addWidget(self.seed_fields)
+        self.seed_fields.hide()
+        self.seed_toggle.toggled.connect(self._set_seed_expanded)
         self._id_states: list[IDState8] = []
         self.id_table = _IdResultTable()
         self.id_table.setObjectName("TidResultsTable")
         self.id_table.setShowGrid(False)
         self.id_table.setColumnCount(5)
-        self.id_table.setHorizontalHeaderLabels(("Adv", "TID", "SID", "TSV", "Display TID"))
+        self.id_table.setHorizontalHeaderLabels(("帧数", "TID", "SID", "TSV", "Display TID"))
         self.id_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.id_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.id_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.id_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.id_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.id_table.customContextMenuRequested.connect(self._show_table_context_menu)
-        self.id_table.searchStatusChanged.connect(self.status_badge.setText)
+        self.id_table.searchStatusChanged.connect(self._show_id_search_status)
         self.id_table.verticalHeader().setVisible(False)
+        self.id_table.verticalHeader().setDefaultSectionSize(32)
+        self.id_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.id_table.horizontalHeader().setStretchLastSection(True)
-        self.id_table.horizontalHeader().setDefaultAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        self.id_table.setMinimumHeight(320)
+        self.id_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.id_table.setMinimumHeight(202)
         layout.addWidget(self.id_table, 1)
         self.id_empty_state = TableEmptyState(self.id_table)
         self._id_result_state = "initial"
         self._refresh_id_result_state()
         return group
 
+    def _set_seed_expanded(self, expanded: bool) -> None:
+        self.seed_fields.setVisible(expanded)
+        self.seed_toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+
+    def _show_id_search_status(self, message: str) -> None:
+        summary = message if len(message) <= 20 else message[:20] + "…"
+        self.id_result_count.setText(f"{len(self._id_states)} 条结果 · {summary}")
+        self.id_result_count.setToolTip(message)
+
     def refresh_scripts(self) -> None:
         self._scripts = list_auto_scripts(self.script_dir)
-        for combo in (self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo):
+        defaults = (
+            (self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME)),
+            (self.name_script_combo, self._choose_script_by_keywords(("取名", "name"))),
+            (self.reverse_id_script_combo, self._choose_script_by_keywords(("反查ID", "反查 ID", "id"))),
+        )
+        for combo, default in defaults:
             current = combo.currentData()
             combo.blockSignals(True)
             combo.clear()
@@ -823,11 +837,12 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             combo.blockSignals(False)
             if current:
                 self._select_script_by_path(combo, str(current))
-        self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
-        self._select_script(self.name_script_combo, self._choose_script_by_keywords(("取名", "name")))
-        self._select_script(self.reverse_id_script_combo, self._choose_script_by_keywords(("反查ID", "反查 ID", "id")))
+            elif self._restoring_state:
+                self._select_script(combo, default)
         for combo in (self.seed_script_combo, self.name_script_combo):
             self._update_script_edit_button(combo)
+        self._refresh_script_summary()
+        self._mark_config_dirty()
 
     def _update_script_edit_button(self, combo: QComboBox) -> None:
         button = self.script_edit_buttons.get(combo)
@@ -913,6 +928,12 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         if self._runner_thread is not None:
             self.add_log("自动 TID 乱数已在运行", level="WARNING")
             return
+        config = getattr(runner, "config", None)
+        if isinstance(config, AutoTidRngConfig):
+            self._active_config = config
+        self._runtime_loop_index = 0
+        self._reseed_reason = ""
+        self._clear_runtime_data()
         thread = QThread(self)
         worker = AutoTidRngWorker(runner)
         worker.moveToThread(thread)
@@ -935,35 +956,185 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         thread.start()
 
     def apply_progress(self, progress: AutoTidRngProgress) -> None:
-        phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
-        self.status_badge.setText(f"状态：{phase_text}")
-        self.progressChanged.emit(progress)
+        previous = self._last_progress
+        new_cycle = progress.loop_index > 0 and progress.loop_index != self._runtime_loop_index
+        entering_seed = progress.phase in (AutoTidRngPhase.RUN_SEED_SCRIPT, AutoTidRngPhase.CAPTURE_TIDSID)
+        if new_cycle or (entering_seed and previous.phase not in (
+            AutoTidRngPhase.RUN_SEED_SCRIPT, AutoTidRngPhase.CAPTURE_TIDSID
+        )):
+            self._clear_runtime_data()
+        if new_cycle:
+            self._runtime_loop_index = progress.loop_index
+            if progress.loop_index <= 1:
+                self._reseed_reason = ""
+        if entering_seed and progress.loop_index > 1:
+            if "测种失败" in progress.log_message:
+                self._reseed_reason = "上一轮测种失败，正在重新运行测种脚本。"
+            elif "超过" in progress.log_message or "小于 delay" in progress.log_message:
+                self._reseed_reason = "上一轮取名触发帧不可用，正在重新运行测种脚本。"
+        if progress.seed_text:
+            words = progress.seed_text.split()
+            if len(words) == 2:
+                for box, text in zip(self.tid_seed_inputs, words):
+                    box.setText(text)
         if progress.id_states or progress.id_search_completed:
-            self.set_id_states(list(progress.id_states))
+            # Ordinary wait callbacks retain the same immutable result tuple.
+            # Avoid rebuilding the table or resetting the user's selection/scroll.
+            if progress.id_states is not self._last_id_states:
+                self.set_id_states(list(progress.id_states))
+                self._last_id_states = progress.id_states
+            if progress.phase == AutoTidRngPhase.SEARCH_TARGET and progress.target_advances is None:
+                self._reseed_reason = "上一轮搜索范围内未找到目标，正在重新运行测种脚本。"
         elif progress.phase == AutoTidRngPhase.SEARCH_TARGET:
             self._id_result_state = "searching"
         elif progress.phase == AutoTidRngPhase.FAILED:
             self._id_result_state = "failed"
         elif progress.phase == AutoTidRngPhase.IDLE and self._id_result_state == "searching":
             self._id_result_state = "initial"
+        target_key = None
+        if progress.target_advances is not None and progress.target_display_tid is not None:
+            target_key = (progress.target_advances, progress.target_display_tid)
+        if self._target_key != target_key:
+            self._target_key = target_key
+            self._highlight_target()
         self._refresh_id_result_state()
+        self._last_progress = progress
+        self._render_runtime(progress)
         if progress.target_tid is not None and progress.target_advances is not None:
-            sid_text = "-" if progress.target_sid is None else str(progress.target_sid)
-            display = "-" if progress.target_display_tid is None else f"{progress.target_display_tid:06d}"
-            self.target_result.setText(
-                f"Display TID {display} / TID {progress.target_tid} / SID {sid_text} / Adv {progress.target_advances}"
-            )
+            display = "—" if progress.target_display_tid is None else f"{progress.target_display_tid:06d}"
+            sid = "—" if progress.target_sid is None else str(progress.target_sid)
+            self.target_result.setText(f"Display TID {display} / TID {progress.target_tid} / SID {sid} / 帧数 {progress.target_advances}")
         if progress.trigger_advances is not None:
             self.trigger_result.setText(str(progress.trigger_advances))
         if progress.ocr_tid is not None:
-            self.ocr_result.setText(f"{progress.ocr_tid}（原始：{progress.ocr_text or '-'}）")
+            self.ocr_result.setText(f"{progress.ocr_tid}（原始：{progress.ocr_text or '—'}）")
         elif progress.ocr_text:
             self.ocr_result.setText(progress.ocr_text)
         if progress.actual_delay is not None:
             self.actual_delay_result.setText(str(progress.actual_delay))
+        self.progressChanged.emit(progress)
         if progress.log_message:
             level = "ERROR" if progress.phase == AutoTidRngPhase.FAILED else "INFO"
             self.add_log(progress.log_message, level=level)
+
+    def _clear_runtime_data(self) -> None:
+        self._target_key = None
+        self._highlighted_target_row = None
+        self.set_id_states([])
+        self._last_id_states = None
+        self._id_result_state = "initial"
+        for box in self.tid_seed_inputs:
+            box.clear()
+        for label in (self.target_result, self.trigger_result, self.ocr_result, self.actual_delay_result,
+                      self.runtime_current_value, self.runtime_target_value, self.runtime_remaining_value):
+            label.setText("—")
+        self._refresh_id_result_state()
+
+    @staticmethod
+    def _runtime_number(value: int | None) -> str:
+        return "—" if value is None else f"{value:,}"
+
+    def _render_runtime(self, progress: AutoTidRngProgress) -> None:
+        phase = progress.phase
+        phase_text = phase.value if hasattr(phase, "value") else str(phase)
+        self.status_badge.setText(f"状态：{phase_text}")
+        title = phase_text
+        description = ""
+        display = "—" if progress.target_display_tid is None else f"{progress.target_display_tid:06d}"
+        current = progress.current_advances
+        target = progress.target_advances
+        remaining = None
+        state = "running"
+        if phase == AutoTidRngPhase.IDLE:
+            stopped = bool(progress.stop_reason or progress.loop_index or self._stop_pending)
+            title = "任务已停止" if stopped else "准备就绪"
+            description = "已结束本次任务。" if stopped else "设置目标 Display TID 和脚本，然后开始任务。"
+            current = None
+            state = "idle"
+        elif phase == AutoTidRngPhase.RUN_SEED_SCRIPT:
+            title = "重新测种" if progress.loop_index > 1 else "运行测种脚本"
+            description = self._reseed_reason if progress.loop_index > 1 and self._reseed_reason else "正在执行测种脚本，完成后自动捕获 Seed。"
+            current = target = None
+        elif phase == AutoTidRngPhase.CAPTURE_TIDSID:
+            title = "TID/SID 测种"
+            description = "正在采集小卡比兽眨眼，恢复当前 Seed。"
+            current = target = None
+        elif phase == AutoTidRngPhase.SEARCH_TARGET:
+            title = "搜索目标 TID"
+            description = "正在生成当前 Seed 的 ID 数据，匹配目标 Display TID。"
+            if progress.id_search_completed and target is None:
+                description = "搜索范围内未找到目标，即将重新测种。"
+        elif phase == AutoTidRngPhase.WAIT_NAME_TRIGGER:
+            title = "等待取名"
+            trigger = progress.trigger_advances
+            description = f"已选中 Display TID {display}，到达 {self._runtime_number(trigger)} 帧时执行取名脚本。"
+            if trigger is not None and current is not None:
+                remaining = max(0, trigger - current)
+            else:
+                remaining = progress.remaining_to_trigger
+        elif phase == AutoTidRngPhase.RUN_NAME_SCRIPT:
+            title = "执行取名脚本"
+            description = f"已到达取名触发帧，正在执行取名脚本。目标 Display TID {display}。"
+            current = None
+        elif phase == AutoTidRngPhase.COMPLETED:
+            title = "delay 校准已完成" if progress.actual_delay is not None else "取名脚本已完成"
+            description = (f"实际 delay {progress.actual_delay} 帧。" if progress.actual_delay is not None
+                           else f"本次任务已结束，目标 Display TID 为 {display}。")
+            current = None
+            state = "completed"
+        elif phase == AutoTidRngPhase.FAILED:
+            title = "任务失败"
+            description = "任务执行失败，请查看日志中的错误信息。"
+            current = None
+            state = "failed"
+        else:
+            # Retained reverse/OCR integration phases are reported when actually received.
+            description = phase_text
+        self.runtime_phase_label.setText(title)
+        self.runtime_description_label.setText(description)
+        self.runtime_description_label.setToolTip(progress.log_message or description)
+        self.runtime_round_label.setText(f"第 {progress.loop_index} 轮" if progress.loop_index > 0 else "尚未开始")
+        self.runtime_current_value.setText(self._runtime_number(current))
+        self.runtime_target_value.setText(self._runtime_number(target))
+        self.runtime_remaining_value.setText("—" if remaining is None else f"{remaining:,} 帧")
+        delay = self._active_config.delay if self._active_config is not None else None
+        if delay is None and progress.target_advances is not None and progress.trigger_advances is not None:
+            delay = progress.target_advances - progress.trigger_advances
+        self.runtime_delay_value.setText("—" if delay is None else f"{delay:,} 帧")
+        if self.runtime_card.property("state") != state:
+            self.runtime_card.setProperty("state", state)
+            self.runtime_state_dot.style().unpolish(self.runtime_state_dot)
+            self.runtime_state_dot.style().polish(self.runtime_state_dot)
+
+    def _highlight_target(self) -> None:
+        previous = self._highlighted_target_row
+        self._highlighted_target_row = None
+        if previous is not None and previous < self.id_table.rowCount():
+            for column in range(self.id_table.columnCount()):
+                item = self.id_table.item(previous, column)
+                if item is not None:
+                    item.setData(Qt.ItemDataRole.BackgroundRole, None)
+                    item.setData(Qt.ItemDataRole.ForegroundRole, None)
+                    item.setToolTip("")
+        if self._target_key is not None:
+            for row, state in enumerate(self._id_states):
+                if (state.advances, state.display_tid) == self._target_key:
+                    self._highlighted_target_row = row
+                    for column in range(self.id_table.columnCount()):
+                        item = self.id_table.item(row, column)
+                        item.setBackground(QColor("#edf7f1"))
+                        item.setForeground(QColor("#087c58"))
+                        item.setToolTip(f"本轮目标 Display TID {state.display_tid:06d}")
+                    break
+        self.target_data_button.setEnabled(self._highlighted_target_row is not None)
+
+    def _locate_target(self) -> None:
+        row = self._highlighted_target_row
+        if row is None:
+            return
+        self.runtime_scroll.ensureWidgetVisible(self.id_table_group)
+        self.id_table.setCurrentCell(row, 4)
+        self.id_table.scrollToItem(self.id_table.item(row, 4), QAbstractItemView.ScrollHint.PositionAtCenter)
 
     def add_log(self, message: str, *, level: str = "INFO") -> None:
         text = str(message)
@@ -984,6 +1155,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def set_id_states(self, states: list[IDState8]) -> None:
         self._id_result_state = "complete"
         self._id_states = list(states)
+        self._last_id_states = tuple(states)
+        self._highlighted_target_row = None
         self.id_table.setRowCount(len(self._id_states))
         for row, state in enumerate(self._id_states):
             values = (
@@ -996,6 +1169,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             for column, value in enumerate(values):
                 self.id_table.setItem(row, column, QTableWidgetItem(value))
         self.id_result_count.setText(f"{len(self._id_states)} 条结果")
+        self._highlight_target()
         self._refresh_id_result_state()
 
     def _refresh_id_result_state(self) -> None:
@@ -1063,17 +1237,19 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def _runner_finished(self, progress: object) -> None:
         if isinstance(progress, AutoTidRngProgress):
-            phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
-            self.status_badge.setText(f"状态：{phase_text}")
+            # The worker already emitted this progress; don't log or publish it twice.
+            self._last_progress = progress
+            self._render_runtime(progress)
         self._runner_returned()
 
     def _runner_failed(self, message: str) -> None:
-        self.status_badge.setText("状态：失败")
+        progress = replace(self._last_progress, phase=AutoTidRngPhase.FAILED, log_message=message)
+        self._last_progress = progress
+        self._render_runtime(progress)
         self._id_result_state = "failed"
         self._refresh_id_result_state()
         self.add_log(message, level="ERROR")
         self._runner_returned()
-
 
     def _start_clicked(self) -> None:
         self._start_with_phase(AutoTidRngPhase.RUN_SEED_SCRIPT)
@@ -1090,8 +1266,14 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self._validate_config(config)
         except Exception as exc:
             self.status_badge.setText("状态：配置错误")
+            self.runtime_phase_label.setText("配置错误")
+            self.runtime_description_label.setText(str(exc))
             self.add_log(str(exc), level="WARNING")
             return
+        self._active_config = config
+        self._runtime_loop_index = 0
+        self._reseed_reason = ""
+        self._clear_runtime_data()
         self.startRequested.emit(config)
 
     def _stop_clicked(self) -> None:
@@ -1146,6 +1328,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _add_target_from_input(self) -> None:
         values = self._parse_tid_list(self.target_input.text())
         if not values:
+            self.target_hint_label.setText("请输入 0–999999 的数字")
             self.add_log("目标 Display TID 必须是 0-999999 的数字", level="WARNING")
             return
         for value in values:
@@ -1184,8 +1367,28 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _target_item_text(self, value: int) -> str:
         return f"{value:06d} ×"
 
-    def _refresh_target_count(self) -> None:
-        self.target_count_label.setText(f"{self.target_list.count()} 个目标")
+    def _refresh_target_count(self, *_args: object) -> None:
+        count = self.target_list.count()
+        self.target_count_label.setText(f"{count} 个目标")
+        self.target_hint_label.setText("按最早匹配帧数选择" if count else "添加目标后即可开始")
+        self.clear_targets_button.setEnabled(count > 0)
+        self._sync_run_controls()
+        self._mark_config_dirty()
+
+    def _panel_values(self) -> tuple[object, ...]:
+        return (self.frame_threshold.value(), self.delay.value(), self.target_display_tids(),
+                self._selected_path(self.seed_script_combo), self._selected_path(self.name_script_combo),
+                self._selected_path(self.reverse_id_script_combo), self.reverse_lookup_window.value(),
+                self.mode_combo.currentIndex(), self.loop_count.value(), self.debug_output_check.isChecked())
+
+    def _mark_config_dirty(self, *_args: object) -> None:
+        if self._restoring_state:
+            return
+        dirty = self._panel_values() != self._saved_panel_values
+        self.save_state_label.setText("有未保存修改" if dirty else "已保存")
+        self.save_state_label.setProperty("dirty", dirty)
+        self.save_state_label.style().unpolish(self.save_state_label)
+        self.save_state_label.style().polish(self.save_state_label)
 
     def _parse_tid(self, text: str) -> int | None:
         try:
@@ -1248,6 +1451,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             else:
                 s.setValue(key, str(path))
         s.setValue("debug_output", self.debug_output_check.isChecked())
+        s.sync()
+        self._saved_panel_values = self._panel_values()
+        self._mark_config_dirty()
 
     def _restore_panel_state(self) -> None:
         s = self._settings

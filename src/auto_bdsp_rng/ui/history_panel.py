@@ -503,7 +503,7 @@ class HistoryPanel(QWidget):
         title_row.setContentsMargins(0, 0, 0, 0)
         self.detail_title_label = QLabel("请选择轮次", detail_panel)
         self.detail_title_label.setObjectName("HistoryDetailTitle")
-        self.detail_title_label.setStyleSheet("color: #24312D; font-size: 16px; font-weight: 500;")
+        self.detail_title_label.setStyleSheet("color: #24312D; font-size: 16px; font-weight: 700;")
         self.detail_status_label = QLabel("", detail_panel)
         self.detail_status_label.setObjectName("HistoryDetailStatus")
         title_row.addWidget(self.detail_title_label)

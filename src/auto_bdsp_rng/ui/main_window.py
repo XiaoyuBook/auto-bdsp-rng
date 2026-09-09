@@ -927,8 +927,6 @@ TEXT = {
         "capture_seed": "Capture Seed",
         "reidentify_seed": "Reidentify",
         "stop_capture": "Stop Capture",
-        "preview_button": "Preview",
-        "stop_preview": "Stop Preview",
         "save_config": "Save Config",
         "raw_screenshot": "Capture Eye",
         "select_roi": "框选眼睛区域",
@@ -951,13 +949,12 @@ TEXT = {
         "seed_captured": "Seed captured",
         "seed_reidentified": "Seed reidentified",
         "config_saved": "Config saved",
-        "preview_running": "Preview running",
         "results": "results",
     },
     "zh": {
         "title": "珍钻复刻自动乱数工作台",
         "language": "语言",
-        "capture": "捕捉配置",
+        "capture": "捕捉操作",
         "seed": "Seed",
         "static": "BDSP 定点目标",
         "profile": "玩家档案",
@@ -969,7 +966,7 @@ TEXT = {
         "auto_rng": "自动定点乱数",
         "auto_tid_rng": "自动 TID 乱数",
         "status": "状态",
-        "config": "配置",
+        "config": "编辑配置",
         "browse": "浏览",
         "monitor_window": "捕捉窗口",
         "reidentify_1_pk_npc": "1 PK NPC 校正",
@@ -979,19 +976,17 @@ TEXT = {
         "y": "Y",
         "w": "W",
         "h": "H",
-        "threshold": "阈值",
+        "threshold": "识别阈值",
         "time_delay": "时间延迟",
-        "advance_delay": "Advance 延迟",
-        "advance_delay_2": "Advance 延迟 2",
+        "advance_delay": "帧数延迟",
+        "advance_delay_2": "帧数延迟 2",
         "npcs": "NPC 数",
-        "timeline_npcs": "Timeline NPC 数",
-        "pokemon_npcs": "Pokemon NPC 数",
+        "timeline_npcs": "活帧 NPC 数",
+        "pokemon_npcs": "宝可梦 NPC 数",
         "display_percent": "显示百分比",
         "capture_seed": "捕捉 Seed",
         "reidentify_seed": "校正",
         "stop_capture": "停止捕捉",
-        "preview_button": "预览",
-        "stop_preview": "停止预览",
         "save_config": "保存配置",
         "raw_screenshot": "截取眼睛",
         "select_roi": "框选眼睛区域",
@@ -1014,7 +1009,6 @@ TEXT = {
         "seed_captured": "Seed 捕捉完成",
         "seed_reidentified": "Seed 校正完成",
         "config_saved": "配置已保存",
-        "preview_running": "正在预览",
         "results": "条结果",
     },
 }
@@ -1895,6 +1889,7 @@ class MainWindow(QMainWindow):
         self.auto_tid_rng_tab.runLogRequested.connect(
             lambda: self._show_run_logs("自动 TID")
         )
+        self.auto_tid_rng_tab.roundRecordsRequested.connect(self._show_round_records)
         self.auto_tid_rng_tab.scriptEditRequested.connect(
             self._open_automation_script_editor
         )
@@ -2212,7 +2207,7 @@ class MainWindow(QMainWindow):
         splitter.setObjectName("ProjectXsSplitter")
         splitter.setChildrenCollapsible(False)
 
-        # Left side follows the compact single-column layout from 0940b1b.
+        # Keep manual capture controls beside the shared preview.
         left = QWidget()
         left.setObjectName("ProjectXsConfigPanel")
         left_layout = QVBoxLayout(left)
@@ -2275,9 +2270,9 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
-        group = QGroupBox("配置")
+        group = QGroupBox("捕捉状态与自动配置")
         group.setObjectName("ProjectXsStatusGroup")
-        group.setMaximumHeight(150)
+        group.setMaximumHeight(180)
         group.setMaximumWidth(740)
 
         outer = QGridLayout(group)
@@ -2285,10 +2280,12 @@ class MainWindow(QMainWindow):
         outer.setHorizontalSpacing(8)
         outer.setVerticalSpacing(10)
 
-        self.progress_label = QLabel("Progress:")
+        self.progress_label = QLabel("眨眼进度")
         self.progress_value = QLabel("0/0")
-        self.advances_label = QLabel("Advances:")
+        self.progress_value.setObjectName("CaptureStatusValue")
+        self.advances_label = QLabel("当前帧数")
         self.advances_value = QLabel("0")
+        self.advances_value.setObjectName("CaptureStatusValue")
         self.timer_label = QLabel("Timer:")
         self.timer_value = QLabel("0")
         self.x_to_advance_label = QLabel("X to advance:")
@@ -2306,10 +2303,14 @@ class MainWindow(QMainWindow):
 
         self.seed_config_combo = QComboBox()
         self.seed_config_combo.setFixedHeight(32)
-        self.seed_config_combo.setMinimumWidth(340)
+        self.seed_config_combo.setMinimumWidth(200)
+        self.seed_config_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.reidentify_config_combo = QComboBox()
         self.reidentify_config_combo.setFixedHeight(32)
-        self.reidentify_config_combo.setMinimumWidth(340)
+        self.reidentify_config_combo.setMinimumWidth(200)
+        self.reidentify_config_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.seed_config_combo.setToolTip("自动定点和自动 TID 流程捕捉 Seed 时使用的配置。")
+        self.reidentify_config_combo.setToolTip("自动定点流程校正时使用的配置。")
         self.refresh_seed_configs_button = QPushButton("刷新")
         self.refresh_seed_configs_button.setFixedHeight(32)
         self.refresh_seed_configs_button.setFixedWidth(80)
@@ -2324,6 +2325,10 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.advances_value, 1, 1)
         outer.addWidget(QLabel("校正配置"), 1, 2)
         outer.addWidget(self.reidentify_config_combo, 1, 3)
+        note = QLabel("右侧配置供自动流程使用；手动捕捉与校正使用左侧参数。")
+        note.setObjectName("WorkspaceHint")
+        note.setWordWrap(True)
+        outer.addWidget(note, 2, 0, 1, 4)
         outer.setColumnMinimumWidth(0, 60)
         outer.setColumnMinimumWidth(1, 55)
         outer.setColumnMinimumWidth(2, 66)
@@ -2349,10 +2354,7 @@ class MainWindow(QMainWindow):
         self.capture_button.clicked.connect(self.capture_seed)
         self.reidentify_button = QPushButton()
         self.reidentify_button.clicked.connect(self.reidentify_seed)
-        self.preview_button = QPushButton()
-        self.preview_button.clicked.connect(self.toggle_preview)
         self.tidsid_button = QPushButton("TID/SID 测种")
-        self.tidsid_button.setFixedHeight(30)
         self.tidsid_button.clicked.connect(self.capture_tidsid_seed)
         self.save_config_button = QPushButton()
         self.save_config_button.clicked.connect(self.save_current_config)
@@ -2420,7 +2422,6 @@ class MainWindow(QMainWindow):
         compact_button_style = "QPushButton { min-height: 30px; max-height: 32px; padding: 0 10px; border-radius: 5px; }"
         for button in (
             self.browse_button,
-            self.preview_button,
             self.tidsid_button,
             self.capture_button,
             self.reidentify_button,
@@ -2430,8 +2431,6 @@ class MainWindow(QMainWindow):
         ):
             button.setFixedHeight(32)
             button.setStyleSheet(compact_button_style)
-        self.tidsid_button.setFixedHeight(30)
-        self.tidsid_button.setStyleSheet("QPushButton { min-height: 30px; max-height: 30px; padding: 0 10px; border-radius: 5px; }")
         self.monitor_window.setFixedHeight(28)
         self.reidentify_1_pk_npc.setFixedHeight(28)
 
@@ -2439,41 +2438,87 @@ class MainWindow(QMainWindow):
         config_row = QHBoxLayout()
         config_row.setContentsMargins(0, 0, 0, 0)
         config_row.setSpacing(8)
-        self.config_label.setFixedWidth(38)
+        self.config_label.setFixedWidth(60)
         self.browse_button.setFixedWidth(52)
         config_row.addWidget(self.config_label)
         config_row.addWidget(self.config_combo, 1)
         config_row.addWidget(self.browse_button)
         layout.addLayout(config_row, 0, 0, 1, 4)
+        config_note = QLabel("编辑下方参数后保存到此文件；手动操作使用下方参数。")
+        config_note.setObjectName("WorkspaceHint")
+        config_note.setWordWrap(True)
+        layout.addWidget(config_note, 1, 0, 1, 4)
 
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(8)
-        button_row.addWidget(self.preview_button)
-        button_row.addWidget(self.capture_button)
+        self.capture_button.setMinimumWidth(152)
+        self.capture_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.reidentify_button.setFixedWidth(88)
+        self.tidsid_button.setFixedWidth(128)
+        button_row.addWidget(self.capture_button, 1)
         button_row.addWidget(self.reidentify_button)
-        layout.addLayout(button_row, 1, 0, 1, 4)
+        button_row.addWidget(self.tidsid_button)
+        layout.addLayout(button_row, 2, 0, 1, 4)
 
-        utility_row = QHBoxLayout()
-        utility_row.setContentsMargins(0, 0, 0, 0)
-        utility_row.setSpacing(12)
-        utility_row.addWidget(self.tidsid_button)
-        utility_row.addWidget(self.reidentify_1_pk_npc)
-        utility_row.addStretch(1)
-        utility_row.addWidget(self.calibrate_shiny_threshold_button)
-        layout.addLayout(utility_row, 2, 0, 1, 4)
-        layout.addWidget(self.select_roi_button, 3, 0, 1, 4)
-        self._add_form_row(layout, 4, "threshold", self.threshold)
-        self._add_form_row(layout, 5, "time_delay", self.white_delay)
-        self._add_form_row(layout, 6, "advance_delay", self.advance_delay)
-        self._add_form_row(layout, 7, "advance_delay_2", self.advance_delay_2)
-        self._add_form_row(layout, 8, "npcs", self.npc_count)
-        self._add_form_row(layout, 9, "timeline_npcs", self.timeline_npc)
-        self._add_form_row(layout, 10, "pokemon_npcs", self.pokemon_npc)
-        layout.addWidget(self.save_config_button, 11, 2)
-        layout.addWidget(self.raw_screenshot_button, 11, 3)
+        recognition_title = QLabel("识别参数")
+        recognition_title.setObjectName("WorkspaceSubheading")
+        recognition_header = QHBoxLayout()
+        recognition_header.setContentsMargins(0, 0, 0, 0)
+        recognition_header.setSpacing(12)
+        recognition_header.addWidget(recognition_title)
+        recognition_header.addStretch(1)
+        recognition_header.addWidget(self.calibrate_shiny_threshold_button)
+        layout.addLayout(recognition_header, 3, 0, 1, 4)
+        eyes_row = QHBoxLayout()
+        eyes_row.setSpacing(8)
+        eyes_row.addWidget(self.raw_screenshot_button)
+        eyes_row.addWidget(self.select_roi_button)
+        layout.addLayout(eyes_row, 4, 0, 1, 4)
+        self._add_form_row(layout, 5, "threshold", self.threshold)
+        self._add_form_row(layout, 6, "npcs", self.npc_count)
+        self.threshold.setToolTip("眼睛模板的匹配阈值，范围 0–1；数值越高，匹配要求越严格。")
+
+        self.capture_advanced_button = QToolButton()
+        self.capture_advanced_button.setObjectName("CaptureAdvancedToggle")
+        self.capture_advanced_button.setText("高级时序 · 6 项")
+        self.capture_advanced_button.setCheckable(True)
+        self.capture_advanced_button.setArrowType(Qt.ArrowType.RightArrow)
+        self.capture_advanced_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.capture_advanced_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.capture_advanced_button.setAccessibleName("展开高级时序参数")
+        self.capture_advanced_button.setToolTip("校正模式、延迟与活帧模型参数；收起后仍按当前值参与捕捉和校正。")
+        self.capture_advanced_button.setFixedHeight(30)
+        self.capture_advanced_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self.capture_advanced_button, 7, 0, 1, 4)
+        self.capture_advanced_fields = QWidget()
+        self.capture_advanced_fields.setObjectName("CaptureAdvancedFields")
+        advanced_layout = QGridLayout(self.capture_advanced_fields)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setVerticalSpacing(6)
+        advanced_layout.setHorizontalSpacing(8)
+        advanced_layout.setColumnMinimumWidth(0, 143)
+        advanced_layout.addWidget(self.reidentify_1_pk_npc, 0, 0, 1, 4)
+        for row, (key, field) in enumerate((
+            ("time_delay", self.white_delay),
+            ("advance_delay", self.advance_delay),
+            ("advance_delay_2", self.advance_delay_2),
+            ("timeline_npcs", self.timeline_npc),
+            ("pokemon_npcs", self.pokemon_npc),
+        ), start=1):
+            self._add_form_row(advanced_layout, row, key, field)
+        layout.addWidget(self.capture_advanced_fields, 8, 0, 1, 4)
+        self.capture_advanced_fields.hide()
+        self.capture_advanced_button.toggled.connect(self._set_capture_advanced_visible)
+        layout.addWidget(self.save_config_button, 9, 2, 1, 2, Qt.AlignmentFlag.AlignRight)
         layout.setColumnMinimumWidth(0, 143)
         return group
+
+    def _set_capture_advanced_visible(self, visible: bool) -> None:
+        self.capture_advanced_fields.setVisible(visible)
+        self.capture_advanced_button.setArrowType(Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow)
+        self.capture_advanced_button.setText("收起高级时序" if visible else "高级时序 · 6 项")
+        self.capture_advanced_button.setAccessibleName("收起高级时序参数" if visible else "展开高级时序参数")
 
     def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:
         label = QLabel()
@@ -2590,7 +2635,7 @@ class MainWindow(QMainWindow):
             ("等级",     self.level_display),
             ("特性",     self.template_ability_display),
             ("异色",     self.template_shiny_display),
-            ("IV Count", self.iv_count_display),
+            ("满个体数" if self.lang == "zh" else "IV Count", self.iv_count_display),
         )
         for row, (label_text, widget) in enumerate(rows):
             lbl = QLabel(label_text)
@@ -2765,7 +2810,7 @@ class MainWindow(QMainWindow):
             right_form.addWidget(widget, row, 1)
 
         # Height 行
-        right_form.addWidget(QLabel("Height"), 4, 0)
+        right_form.addWidget(QLabel("身高" if self.lang == "zh" else "Height"), 4, 0)
         ht_row = QHBoxLayout()
         ht_row.setSpacing(8)
         ht_row.addWidget(self.height_min)
@@ -2775,7 +2820,7 @@ class MainWindow(QMainWindow):
         right_form.addLayout(ht_row, 4, 1)
 
         # Weight 行
-        right_form.addWidget(QLabel("Weight"), 5, 0)
+        right_form.addWidget(QLabel("体重" if self.lang == "zh" else "Weight"), 5, 0)
         wt_row = QHBoxLayout()
         wt_row.setSpacing(8)
         wt_row.addWidget(self.weight_min)
@@ -3038,8 +3083,8 @@ class MainWindow(QMainWindow):
             QWidget {
                 background: #FFFFFF;
                 color: #24312D;
-                font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
-                font-size: 13px;
+                font-family: "Microsoft YaHei UI", "PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+                font-size: 14px;
             }
             QWidget#AppRoot {
                 background: #FFFFFF;
@@ -3177,7 +3222,7 @@ class MainWindow(QMainWindow):
                 max-height: 32px;
                 padding: 0 8px;
                 color: #24312D;
-                font-size: 13px;
+                font-size: 14px;
                 selection-background-color: #DCEFE7;
             }
             QListWidget {
@@ -3304,7 +3349,7 @@ class MainWindow(QMainWindow):
                 max-height: 32px;
                 padding: 0 11px;
                 color: #24312D;
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 400;
             }
             QPushButton:hover {
@@ -3430,8 +3475,38 @@ class MainWindow(QMainWindow):
             }
             QLabel#SectionTitle {
                 color: #24312D;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QLabel#WorkspaceSubheading {
+                color: #24312D;
+                font-size: 14px;
+                font-weight: 700;
+                padding-top: 6px;
+            }
+            QLabel#WorkspaceHint {
+                color: #596C62;
+                font-size: 12px;
+            }
+            QLabel#CaptureStatusValue {
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QToolButton#CaptureAdvancedToggle {
+                background: transparent;
+                color: #4B5E54;
+                border: 0;
+                border-top: 1px solid #E2E8E4;
+                text-align: left;
+                padding: 0 4px;
                 font-size: 13px;
-                font-weight: 500;
+            }
+            QToolButton#CaptureAdvancedToggle:hover {
+                color: #087C58;
+                background: #EDF7F1;
+            }
+            QWidget#CaptureAdvancedFields {
+                background: transparent;
             }
 
             QSplitter#ProjectXsSplitter {
@@ -3458,6 +3533,9 @@ class MainWindow(QMainWindow):
                 border-radius: 0;
                 background: transparent;
                 padding: 9px 0 0 0;
+                margin-top: 20px;
+                font-size: 16px;
+                font-weight: 700;
             }
             QGroupBox#CaptureConfigGroup::title,
             QGroupBox#CapturedSeedGroup::title,
@@ -3465,7 +3543,7 @@ class MainWindow(QMainWindow):
             QGroupBox#CapturePreviewGroup::title {
                 left: 0;
                 padding: 0;
-                font-weight: 500;
+                font-weight: 700;
             }
             QLabel#Preview {
                 background: #24312D;
@@ -3500,8 +3578,15 @@ class MainWindow(QMainWindow):
             QWidget#BdspParameters QGroupBox {
                 border: 0;
                 border-radius: 0;
-                margin-top: 16px;
+                margin-top: 20px;
                 padding: 8px 10px 4px 10px;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QGroupBox#BdspRngGroup::title,
+            QGroupBox#BdspEncounterGroup::title,
+            QGroupBox#BdspFilterGroup::title {
+                font-weight: 700;
             }
             QWidget#BdspParameters QGroupBox#BdspEncounterGroup,
             QWidget#BdspParameters QGroupBox#BdspFilterGroup {
@@ -3520,7 +3605,7 @@ class MainWindow(QMainWindow):
                 border: 0;
                 gridline-color: #E2E8E4;
                 color: #24312D;
-                font-size: 12px;
+                font-size: 13px;
             }
             QTableWidget::item:selected {
                 background: #EDF7F1;
@@ -3542,12 +3627,12 @@ class MainWindow(QMainWindow):
             }
             QHeaderView::section {
                 background: #F6F8F7;
-                color: #68766F;
+                color: #596C62;
                 border: 0;
                 border-bottom: 1px solid #E2E8E4;
                 padding: 6px;
                 font-size: 12px;
-                font-weight: 500;
+                font-weight: 700;
             }
             QScrollBar:vertical {
                 background: transparent;
@@ -4293,7 +4378,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(3, self._text("bdsp_search"))
         self.tabs.setTabText(4, self._text("easycon"))
         self.tabs.setTabText(5, "日志区" if self.lang == "zh" else "Logs")
-        self.status_group.setTitle("配置" if self.lang == "zh" else "Config")
+        self.status_group.setTitle("捕捉状态与自动配置" if self.lang == "zh" else "Capture status and automation config")
         self.video_source_dialog.setWindowTitle(
             "视频源设置" if self.lang == "zh" else "Video Source"
         )
@@ -4321,7 +4406,6 @@ class MainWindow(QMainWindow):
         self.capture_button.setText(self._text("stop_capture") if self._is_capturing() else self._text("capture_seed"))
         self.reidentify_button.setText(self._text("reidentify_seed"))
         self.tidsid_button.setText("TID/SID 测种")
-        self.preview_button.setText(self._text("stop_preview") if self._preview_timer.isActive() else self._text("preview_button"))
         self.calibrate_shiny_threshold_button.setText("校准闪光判定")
         self.save_config_button.setText(self._text("save_config"))
         self.raw_screenshot_button.setText(self._text("raw_screenshot"))
@@ -4752,8 +4836,6 @@ class MainWindow(QMainWindow):
         state = "failed" if status == "连接失败" else "disconnected"
         self._set_video_source_status(status, state)
         self._set_video_source_config_enabled(True)
-        self.preview_button.setEnabled(True)
-        self.preview_button.setText(self._text("preview_button"))
         self._clear_video_source_preview()
 
     def _set_video_source_stop_failure(self, message: str) -> None:
@@ -4765,7 +4847,6 @@ class MainWindow(QMainWindow):
         self.video_source_button.setText("重试断开")
         self._set_video_source_status("停止失败，请重试", "failed")
         self._set_video_source_config_enabled(False)
-        self.preview_button.setEnabled(False)
         self._clear_video_source_preview()
 
     def _video_source_diagnostic_snapshot(self) -> str:
@@ -5246,8 +5327,6 @@ class MainWindow(QMainWindow):
         self.video_source_button.setText("断开连接")
         self._set_video_source_status("已连接", "connected")
         self._set_video_source_config_enabled(False)
-        self.preview_button.setEnabled(False)
-        self.preview_button.setText("预览常驻")
         self._profile_settings.setValue("video_source/device_index", device_index)
         self._profile_settings.setValue("video_source/capture_api", capture_api)
         self._latest_preview_frame = None
@@ -5480,23 +5559,6 @@ class MainWindow(QMainWindow):
             return frame
         return capture_preview_frame(config)
 
-    def toggle_preview(self) -> None:
-        if self._is_capturing():
-            return
-        if self._video_source_connected:
-            return
-        if self._preview_timer.isActive():
-            self._preview_timer.stop()
-            self._release_preview_capture()
-            self.preview_button.setText(self._text("preview_button"))
-            self._set_preview_selection_enabled(False)
-            self.preview_label.clear()
-            self.preview_label.setText(self._text("no_preview"))
-            return
-        self._preview_timer.start()
-        self.preview_button.setText(self._text("stop_preview"))
-        self.statusBar().showMessage(self._text("preview_running"))
-
     def _pause_preview_for_capture(self) -> None:
         self._resume_preview_after_capture = self._preview_timer.isActive()
         if self._video_source_connected:
@@ -5504,7 +5566,6 @@ class MainWindow(QMainWindow):
         if self._resume_preview_after_capture:
             self._preview_timer.stop()
             self._release_preview_capture()
-            self.preview_button.setText(self._text("stop_preview"))
 
     def _restore_preview_after_capture(self) -> None:
         if self._video_source_connected:
@@ -5514,7 +5575,6 @@ class MainWindow(QMainWindow):
             return
         if self._resume_preview_after_capture:
             self._preview_timer.start()
-            self.preview_button.setText(self._text("stop_preview"))
         self._resume_preview_after_capture = False
 
     def _ensure_preview_frame_before_capture(self) -> bool:
@@ -5525,7 +5585,6 @@ class MainWindow(QMainWindow):
             return True
         if not self._preview_timer.isActive():
             self._preview_timer.start()
-            self.preview_button.setText(self._text("stop_preview"))
             self.statusBar().showMessage("预览已自动启动，等待摄像头就绪…")
         # 等待摄像头首帧到达（最多等 5 秒）
         waited = 0.0
@@ -5542,7 +5601,6 @@ class MainWindow(QMainWindow):
         ):
             self._preview_timer.stop()
             self._release_preview_capture()
-            self.preview_button.setText(self._text("preview_button"))
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
         return self._latest_preview_frame is not None
@@ -5580,7 +5638,6 @@ class MainWindow(QMainWindow):
         if self._preview_timer.isActive() and not self._video_source_connected:
             self._preview_timer.stop()
             self._release_preview_capture()
-            self.preview_button.setText(self._text("preview_button"))
         if self._latest_preview_frame is None:
             try:
                 frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
@@ -5661,10 +5718,6 @@ class MainWindow(QMainWindow):
         self._resume_preview_after_selection = False
         if resume_preview and not self._preview_timer.isActive():
             self._preview_timer.start()
-        if self._video_source_connected:
-            self.preview_button.setText("预览常驻")
-        elif resume_preview:
-            self.preview_button.setText(self._text("stop_preview"))
         self._refresh_preview_presentation()
         self._sync_picture_in_picture_frame()
 
@@ -6314,8 +6367,6 @@ class MainWindow(QMainWindow):
                     force=True,
                     reason=f"视频源读帧失败（{error_detail}）",
                 )
-            else:
-                self.preview_button.setText(self._text("preview_button"))
             self._show_error(
                 "Preview failed",
                 error,
@@ -6806,7 +6857,6 @@ class MainWindow(QMainWindow):
         if preview_was_running:
             self._preview_timer.stop()
             self._release_preview_capture()
-            self.preview_button.setText(self._text("preview_button"))
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
         return preview_was_running
@@ -6814,7 +6864,6 @@ class MainWindow(QMainWindow):
     def _restore_auto_preview_after_capture(self, preview_was_running: bool) -> None:
         if (preview_was_running or self._video_source_connected) and not self._preview_timer.isActive():
             self._preview_timer.start()
-            self.preview_button.setText(self._text("stop_preview"))
 
     def _recover_zoom_mode_with_preview_paused(
         self,
@@ -7080,7 +7129,8 @@ class MainWindow(QMainWindow):
             if hasattr(self, "id_tab"):
                 self.id_tab.set_seed_pair(seed_pair)
             if hasattr(self, "auto_tid_rng_tab"):
-                self.auto_tid_rng_tab.set_tid_seed(seed_pair)
+                # The runner generates results from its frozen configuration.
+                self.auto_tid_rng_tab.set_tid_seed(seed_pair, generate=False)
 
         def capture_tidsid_seed_service() -> AutoTidSeedResult:
             self._capture_cancel.clear()
@@ -8634,7 +8684,6 @@ class MainWindow(QMainWindow):
             return
 
         self._pause_preview_for_capture()
-        self.preview_button.setEnabled(False)
         self._set_preview_selection_enabled(False)
         self._stop_advance_tracking()
         self._capture_cancel.clear()
@@ -8711,7 +8760,6 @@ class MainWindow(QMainWindow):
             return
 
         self._pause_preview_for_capture()
-        self.preview_button.setEnabled(False)
         self.reidentify_button.setEnabled(False)
         self._set_preview_selection_enabled(False)
         tracked_advances = self._tracked_advances
@@ -8792,7 +8840,6 @@ class MainWindow(QMainWindow):
             return
 
         self._pause_preview_for_capture()
-        self.preview_button.setEnabled(False)
         self.reidentify_button.setEnabled(False)
         self.tidsid_button.setEnabled(False)
         self._set_preview_selection_enabled(False)
@@ -8868,7 +8915,6 @@ class MainWindow(QMainWindow):
         self._capture_thread = None
         if thread is not None:
             thread.join(timeout=0)
-        self.preview_button.setEnabled(True)
         self.reidentify_button.setEnabled(True)
         self.tidsid_button.setEnabled(True)
         self.capture_button.setText(self._text("capture_seed"))

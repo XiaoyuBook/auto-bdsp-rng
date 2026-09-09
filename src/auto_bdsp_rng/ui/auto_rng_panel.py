@@ -605,12 +605,17 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(0, 10, 0, 0)
         footer_layout.setSpacing(8)
-        note = QLabel("修改后从下一轮生效")
+        note = QLabel("常规配置下次启动生效\ndelay 策略下轮生效")
         note.setObjectName("MutedLabel")
+        note.setToolTip(
+            "保存会记住当前配置；正在运行的任务继续使用启动时的常规参数。\n"
+            "delay 策略在每轮开始时重新计算，本轮冻结值不变。"
+        )
         self.save_config_button = QPushButton("保存")
         self.save_config_button.setObjectName("ConfigSaveButton")
         self.save_config_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_config_button.setAccessibleName("保存任务配置")
+        self.save_config_button.setToolTip("保存当前配置。点击开始时也会自动保存；保存不代表立即应用到正在运行的任务。")
         self.save_config_button.clicked.connect(self._save_panel_state)
         footer_layout.addWidget(note)
         footer_layout.addStretch(1)
@@ -969,6 +974,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._refresh_previous_delay_summary()
         tooltip = (
             "delay 越大，撞闪脚本启动得越早。点击编辑固定或动态 delay 策略。\n"
+            "策略修改从下一轮生效，本轮冻结值不变。\n"
             f"本轮使用：{'-' if self._active_delay is None else self._active_delay}\n"
             f"下轮预计：{estimate.value}\n"
             f"有效样本：{estimate.valid_round_count} 轮"

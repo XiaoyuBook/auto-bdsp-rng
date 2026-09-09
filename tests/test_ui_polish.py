@@ -40,6 +40,7 @@ def window(monkeypatch, tmp_path):
     monkeypatch.setattr(QMessageBox, 'critical', lambda *a: QMessageBox.StandardButton.Ok)
     app = QApplication.instance() or QApplication([])
     widget = mw.MainWindow(profile_settings=QSettings(str(tmp_path / 'profile.ini'), QSettings.Format.IniFormat))
+    widget.auto_tid_rng_tab.add_target_display_tid(1)
     widget.show()
     widget.easycon_tab._native_status_timer.stop()
     app.processEvents()
@@ -236,15 +237,16 @@ def test_tid_targets_three_rows_alignment_scroll_and_delete(window, count):
     badge = p.target_count_label.mapTo(w, QPoint())
     pool = p.target_list.mapTo(w, QPoint())
     inputs = p.target_input.mapTo(w, QPoint())
-    assert abs(title.y() - badge.y()) <= 2
-    assert abs(title.y() - inputs.y()) <= 5
+    assert inputs.y() >= pool.y() + p.target_list.height()
+    assert badge.y() >= inputs.y() + p.target_input.height()
     assert 6 <= pool.y() - title.y() - p.target_title_label.height() <= 10
     assert badge.x() + p.target_count_label.width() <= pool.x() + p.target_list.width()
-    controls = (p.frame_threshold, p.delay, p.seed_script_combo, p.name_script_combo, p.refresh_scripts_button)
-    bottoms = [c.mapTo(w, QPoint(0, c.height())).y() for c in controls]
-    assert max(bottoms) - min(bottoms) <= 1
-    for label, control in zip(p.parameter_labels, controls):
-        assert label.mapTo(w, QPoint(0, label.height())).y() < control.mapTo(w, QPoint()).y()
+    assert p.frame_threshold.mapTo(w, QPoint()).y() < p.delay.mapTo(w, QPoint()).y()
+    assert not p.script_fields.isVisible()
+    p.script_toggle.click()
+    app.processEvents()
+    assert p.script_fields.isVisible()
+    assert p.seed_script_combo.mapTo(w, QPoint()).x() < p.name_script_combo.mapTo(w, QPoint()).x()
     if count == 50:
         rects = [p.target_list.visualItemRect(p.target_list.item(i)) for i in range(count)]
         complete_rows = {r.top() for r in rects if p.target_list.viewport().rect().contains(r)}
