@@ -981,7 +981,7 @@ TEXT = {
         "advance_delay": "帧数延迟",
         "advance_delay_2": "帧数延迟 2",
         "npcs": "NPC 数",
-        "timeline_npcs": "活帧 NPC 数",
+        "timeline_npcs": "Timeline NPC 数",
         "pokemon_npcs": "宝可梦 NPC 数",
         "display_percent": "显示百分比",
         "capture_seed": "捕捉 Seed",
@@ -2487,7 +2487,7 @@ class MainWindow(QMainWindow):
         self.capture_advanced_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.capture_advanced_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.capture_advanced_button.setAccessibleName("展开高级时序参数")
-        self.capture_advanced_button.setToolTip("校正模式、延迟与活帧模型参数；收起后仍按当前值参与捕捉和校正。")
+        self.capture_advanced_button.setToolTip("校正模式、延迟与 Timeline 模型参数；收起后仍按当前值参与捕捉和校正。")
         self.capture_advanced_button.setFixedHeight(30)
         self.capture_advanced_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.capture_advanced_button, 7, 0, 1, 4)

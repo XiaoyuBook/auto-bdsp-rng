@@ -421,9 +421,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.refresh_scripts()
         self._restore_panel_state()
         self._sync_run_controls()
+        self._saved_script_values = self._script_values()
         self._connect_config_state_tracking()
         self._config_state_tracking_ready = True
         self._set_config_saved(True)
+        self._mark_scripts_dirty()
         self._update_script_status()
 
     def _build_ui(self) -> None:
@@ -615,8 +617,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.save_config_button.setObjectName("ConfigSaveButton")
         self.save_config_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_config_button.setAccessibleName("保存任务配置")
-        self.save_config_button.setToolTip("保存当前配置。点击开始时也会自动保存；保存不代表立即应用到正在运行的任务。")
-        self.save_config_button.clicked.connect(self._save_panel_state)
+        self.save_config_button.setToolTip("保存左侧任务配置；右侧脚本选择单独保存。点击开始时会自动保存全部配置。")
+        self.save_config_button.clicked.connect(self._save_config_state)
         footer_layout.addWidget(note)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.save_config_button)
@@ -1363,6 +1365,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         state = QLabel("下次启动时生效")
         state.setObjectName("RuntimeScriptHeaderState")
         row.addWidget(state)
+        self.script_save_state_label = QLabel("已保存")
+        self.script_save_state_label.setObjectName("ScriptSaveStateLabel")
+        row.addWidget(self.script_save_state_label)
+        self.save_scripts_button = QPushButton("保存脚本选择")
+        self.save_scripts_button.setObjectName("ScriptSaveButton")
+        self.save_scripts_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_scripts_button.setToolTip("保存本区域的脚本选择及逃跑续搜开关，下次启动生效；脚本内容请通过编辑按钮修改。")
+        self.save_scripts_button.clicked.connect(self._save_script_state)
+        row.addWidget(self.save_scripts_button)
         header.hide()
         return header
 
@@ -1903,10 +1914,29 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         for combo in (self.mode_combo, self.sync_combo, self.auto_reverse_combo):
             combo.currentIndexChanged.connect(self._mark_config_dirty)
         self.sync_nature_input.textEdited.connect(self._mark_config_dirty)
-        self.escape_continue_check.toggled.connect(self._mark_config_dirty)
+        self.escape_continue_check.toggled.connect(self._mark_scripts_dirty)
         self.debug_output_check.toggled.connect(self._mark_config_dirty)
         for combo in self._script_combos():
-            combo.activated.connect(self._mark_config_dirty)
+            combo.currentIndexChanged.connect(self._mark_scripts_dirty)
+
+    def _script_values(self) -> tuple[object, ...]:
+        return tuple(self._selected_path(combo) for combo in self._script_combos()) + (
+            self.escape_continue_check.isChecked(),
+        )
+
+    def _mark_scripts_dirty(self, *_args: object) -> None:
+        if not self._config_state_tracking_ready:
+            return
+        dirty = self._script_values() != self._saved_script_values
+        self.script_save_state_label.setText("有未保存修改" if dirty else "已保存")
+        self.script_save_state_label.setProperty("saved", not dirty)
+        self.script_save_state_label.style().unpolish(self.script_save_state_label)
+        self.script_save_state_label.style().polish(self.script_save_state_label)
+        self.save_scripts_button.setEnabled(dirty)
+        self.save_scripts_button.setProperty("state", "dirty" if dirty else "saved")
+        self.save_scripts_button.style().unpolish(self.save_scripts_button)
+        self.save_scripts_button.style().polish(self.save_scripts_button)
+        self._update_toolbar_status()
 
     def _mark_config_dirty(self, *_args: object) -> None:
         if self._config_state_tracking_ready:
@@ -1988,9 +2018,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         ):
             text = self.script_status_label.text()
             state = "warning"
-        elif (
-            hasattr(self, "config_saved_label")
-            and self.config_saved_label.property("saved") is False
+        elif any(
+            label is not None and label.property("saved") is False
+            for label in (getattr(self, "config_saved_label", None),
+                          getattr(self, "script_save_state_label", None))
         ):
             text = "有未保存修改"
             state = "warning"
@@ -2123,11 +2154,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QScrollArea#AutoRngConfigPanel QScrollBar::sub-line:vertical {
                 height: 0;
             }
-            QLabel#ConfigSavedLabel {
+            QLabel#ConfigSavedLabel, QLabel#ScriptSaveStateLabel {
                 color: #596C62;
                 font-size: 12px;
             }
-            QLabel#ConfigSavedLabel[saved="false"] {
+            QLabel#ConfigSavedLabel[saved="false"], QLabel#ScriptSaveStateLabel[saved="false"] {
                 color: #906423;
             }
             QLabel#ScriptStatusLabel {
@@ -2186,6 +2217,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 color: #68766F;
             }
             QPushButton#TargetOpenButton,
+            QPushButton#ScriptSaveButton,
             QPushButton#ConfigSaveButton,
             QPushButton#InlineLinkButton {
                 background: transparent;
@@ -2195,28 +2227,32 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-size: 13px;
                 font-weight: 400;
             }
-            QPushButton#ConfigSaveButton {
+            QPushButton#ConfigSaveButton, QPushButton#ScriptSaveButton {
                 min-height: 30px;
                 padding: 0 12px;
                 border-radius: 5px;
             }
-            QPushButton#ConfigSaveButton[state="dirty"] {
+            QPushButton#ConfigSaveButton[state="dirty"], QPushButton#ScriptSaveButton[state="dirty"] {
                 background: #087C58;
                 border: 1px solid #087C58;
                 color: #FFFFFF;
                 font-weight: 500;
             }
-            QPushButton#ConfigSaveButton[state="dirty"]:hover {
+            QPushButton#ConfigSaveButton[state="dirty"]:hover, QPushButton#ScriptSaveButton[state="dirty"]:hover {
                 background: #066A4B;
                 border-color: #066A4B;
                 color: #FFFFFF;
                 text-decoration: none;
             }
             QPushButton#TargetOpenButton:hover,
+            QPushButton#ScriptSaveButton:hover,
             QPushButton#ConfigSaveButton:hover,
             QPushButton#InlineLinkButton:hover {
                 color: #066A4B;
                 text-decoration: underline;
+            }
+            QPushButton#ScriptSaveButton:disabled {
+                color: #9AA8A1;
             }
             QScrollArea#TargetSummaryScroll {
                 background: transparent;
@@ -2252,6 +2288,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-weight: 600;
             }
             QPushButton#SecondaryButton,
+            QPushButton#ScriptSaveButton,
             QPushButton#ConfigSaveButton,
             QPushButton#TargetOpenButton,
             QPushButton#InlineLinkButton,
@@ -2596,13 +2633,13 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 self._select_script(combo, path)
                 if path is not None and self._selected_path(combo) is None:
                     self.add_log(f"脚本已不存在，请重新选择：{path.name}", level="WARNING")
-                    self._mark_config_dirty()
         else:
             self._select_script(self.seed_script_combo, choose_default_script(self._scripts, DEFAULT_SEED_SCRIPT_NAME))
             self._select_script(self.advance_script_combo, choose_default_script(self._scripts, DEFAULT_ADVANCE_SCRIPT_NAME))
             self._scripts_initialized = True
         for combo in self._script_combos():
             self._update_script_edit_button(combo)
+        self._mark_scripts_dirty()
         self._update_script_status()
 
     def _update_script_edit_button(self, combo: QComboBox) -> None:
@@ -3057,6 +3094,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def _save_panel_state(self) -> None:
         """持久化当前面板设置。"""
+        self._save_config_state()
+        self._save_script_state()
+
+    def _save_config_state(self) -> None:
         s = self._settings
         s.setValue("mode_index", self.mode_combo.currentIndex())
         s.setValue("loop_count", self.loop_count.value())
@@ -3066,32 +3107,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         s.setValue("max_wait_frames", self.max_wait_frames.value())
         self._save_strategy_settings()
         s.setValue("shiny_threshold", self.shiny_threshold_seconds.value())
-        seed_path = self._selected_path(self.seed_script_combo)
-        advance_path = self._selected_path(self.advance_script_combo)
-        hit_path = self._selected_path(self.hit_script_combo)
-        escape_path = self._selected_path(self.escape_script_combo)
-        exit_path = self._selected_path(self.exit_script_combo)
-        if seed_path is not None:
-            s.setValue("seed_script", str(seed_path))
-        if advance_path is not None:
-            s.setValue("advance_script", str(advance_path))
-        if hit_path is not None:
-            s.setValue("hit_script", str(hit_path))
-        if escape_path is not None:
-            s.setValue("escape_script", str(escape_path))
-        else:
-            s.remove("escape_script")
-        if exit_path is not None:
-            s.setValue("exit_script", str(exit_path))
-        else:
-            s.remove("exit_script")
-        reverse_path = self._selected_path(self.reverse_script_combo)
-        if reverse_path is not None:
-            s.setValue("reverse_script", str(reverse_path))
         s.setValue("sync_state", self.sync_combo.currentIndex())
         s.setValue("sync_nature", self.sync_nature_input.text())
         s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
-        s.setValue("escape_continue", self.escape_continue_check.isChecked())
         s.setValue("reverse_lookup_window", self.reverse_lookup_window.value())
         s.setValue("target_list_json", self._serialize_targets())
         # 目标精灵设置
@@ -3105,6 +3123,24 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         s.setValue("target_skip_filter", tf.skip_filter.isChecked())
         s.sync()
         self._set_config_saved(True)
+
+    def _save_script_state(self) -> None:
+        s = self._settings
+        for key, combo in (
+            ("seed_script", self.seed_script_combo),
+            ("advance_script", self.advance_script_combo),
+            ("hit_script", self.hit_script_combo),
+            ("escape_script", self.escape_script_combo),
+            ("exit_script", self.exit_script_combo),
+            ("reverse_script", self.reverse_script_combo),
+        ):
+            path = self._selected_path(combo)
+            # An explicit empty choice must override first-launch defaults.
+            s.setValue(key, str(path) if path is not None else "")
+        s.setValue("escape_continue", self.escape_continue_check.isChecked())
+        s.sync()
+        self._saved_script_values = self._script_values()
+        self._mark_scripts_dirty()
 
     def _save_strategy_settings(self) -> None:
         s = self._settings
@@ -3260,6 +3296,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             if not s.contains(key):
                 continue
             saved_path = str(s.value(key, ""))
+            if not saved_path:
+                self._select_script(combo, None)
+                continue
             selected_path = self._select_script_by_path(combo, saved_path)
             if selected_path is not None and str(selected_path) != saved_path:
                 s.setValue(key, str(selected_path))

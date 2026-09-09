@@ -11,7 +11,6 @@ from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTi
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -67,6 +66,7 @@ from auto_bdsp_rng.resources import (
     script_directory,
 )
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
+from auto_bdsp_rng.ui.combo_box import NoWheelComboBox as QComboBox
 from auto_bdsp_rng.ui.controller_overlay import ControllerStateOverlay
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox

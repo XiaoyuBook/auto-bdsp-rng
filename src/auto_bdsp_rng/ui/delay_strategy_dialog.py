@@ -10,7 +10,6 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
-    QComboBox,
     QDialog,
     QFrame,
     QGridLayout,
@@ -43,6 +42,7 @@ from auto_bdsp_rng.automation.auto_rng.delay_strategy import (
     evaluate_delay_samples,
 )
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox
+from auto_bdsp_rng.ui.combo_box import NoWheelComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import QApplication, QComboBox, QWidget
 
 
@@ -11,7 +11,15 @@ _COMBO_SUBCONTROL_PATTERN = re.compile(
 )
 
 
-class ChevronComboBox(QComboBox):
+class NoWheelComboBox(QComboBox):
+    """Keep wheel scrolling from changing a selection in the closed field."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        # Leave scrolling to the parent; the popup view handles its own wheel.
+        event.ignore()
+
+
+class ChevronComboBox(NoWheelComboBox):
     """QComboBox with a stable chevron when a stylesheet owns the drop-down."""
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -38,4 +46,4 @@ class ChevronComboBox(QComboBox):
         return bool(app and _COMBO_SUBCONTROL_PATTERN.search(app.styleSheet()))
 
 
-__all__ = ["ChevronComboBox"]
+__all__ = ["ChevronComboBox", "NoWheelComboBox"]

@@ -219,9 +219,11 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.refresh_scripts()
         self._restore_panel_state()
         self._restoring_state = False
-        self._saved_panel_values = self._panel_values()
+        self._saved_config_values = self._config_values()
+        self._saved_script_values = self._script_values()
         self._refresh_script_summary()
         self._mark_config_dirty()
+        self._mark_scripts_dirty()
         self._sync_run_controls()
         self._refresh_ocr_region_text()
 
@@ -271,8 +273,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self._apply_panel_style()
         for spin in (self.frame_threshold, self.delay, self.reverse_lookup_window, self.loop_count):
             spin.valueChanged.connect(self._mark_config_dirty)
-        for combo in (self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo, self.mode_combo):
-            combo.currentIndexChanged.connect(self._mark_config_dirty)
+        self.mode_combo.currentIndexChanged.connect(self._mark_config_dirty)
+        for combo in (self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo):
+            combo.currentIndexChanged.connect(self._mark_scripts_dirty)
         self.debug_output_check.toggled.connect(self._mark_config_dirty)
         model = self.target_list.model()
         model.rowsInserted.connect(self._refresh_target_count)
@@ -293,8 +296,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QFrame#AutoTidConfigPanel { background: #f6f8f7; border: 0; border-right: 1px solid #e2e8e4; }
             QLabel#AutoTidTitle, QLabel#AutoTidSectionTitle { font-size: 16px; font-weight: 700; }
             QLabel#AutoTidSubtitle, QLabel#AutoTidMuted, QLabel#AutoTidResultCount,
-            QLabel#AutoTidTargetCount, QLabel#AutoTidSaveState { color: #596c62; font-size: 12px; }
-            QLabel#AutoTidSaveState[dirty="true"] { color: #9e600e; }
+            QLabel#AutoTidTargetCount, QLabel#AutoTidSaveState, QLabel#AutoTidScriptSaveState { color: #596c62; font-size: 12px; }
+            QLabel#AutoTidSaveState[dirty="true"], QLabel#AutoTidScriptSaveState[dirty="true"] { color: #9e600e; }
             QFrame#AutoTidRuntimeCard { background: #f6f8f7; border: 0; border-radius: 6px; }
             QLabel#AutoTidRuntimePhase { font-size: 20px; font-weight: 700; }
             QLabel#AutoTidRuntimeValue { font-size: 26px; font-weight: 600; }
@@ -467,8 +470,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.save_button = QPushButton("保存")
         self.save_button.setObjectName("PrimaryButton")
         self.save_button.setFixedSize(64, 34)
-        self.save_button.setToolTip("保存当前配置；点击开始也会自动保存。运行中的任务使用启动时的配置。")
-        self.save_button.clicked.connect(self._save_panel_state)
+        self.save_button.setAccessibleName("保存任务配置")
+        self.save_button.setToolTip("保存左侧任务配置；右侧脚本选择单独保存。点击开始时会自动保存全部配置。")
+        self.save_button.clicked.connect(self._save_config_state)
         footer.addWidget(self.save_button)
         layout.addLayout(footer)
         layout.addStretch(1)
@@ -667,6 +671,16 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         header.addWidget(self._section_title("任务脚本"))
         header.addStretch(1)
         header.addWidget(self._muted_label("下次启动生效"))
+        self.script_save_state_label = QLabel("已保存")
+        self.script_save_state_label.setObjectName("AutoTidScriptSaveState")
+        header.addWidget(self.script_save_state_label)
+        self.save_scripts_button = QPushButton("保存脚本选择")
+        self.save_scripts_button.setObjectName("PrimaryButton")
+        self.save_scripts_button.setFixedHeight(32)
+        self.save_scripts_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_scripts_button.setToolTip("保存本区域的脚本选择，下次启动生效；脚本内容请通过编辑按钮修改。")
+        self.save_scripts_button.clicked.connect(self._save_script_state)
+        header.addWidget(self.save_scripts_button)
         layout.addLayout(header)
         card = QFrame()
         card.setObjectName("AutoTidScriptCard")
@@ -842,7 +856,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         for combo in (self.seed_script_combo, self.name_script_combo):
             self._update_script_edit_button(combo)
         self._refresh_script_summary()
-        self._mark_config_dirty()
+        self._mark_scripts_dirty()
 
     def _update_script_edit_button(self, combo: QComboBox) -> None:
         button = self.script_edit_buttons.get(combo)
@@ -1298,6 +1312,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def _select_script(self, combo: QComboBox, path: Path | None) -> None:
         if path is None:
+            combo.setCurrentIndex(0)
             return
         self._select_script_by_path(combo, str(path))
 
@@ -1375,20 +1390,34 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self._sync_run_controls()
         self._mark_config_dirty()
 
-    def _panel_values(self) -> tuple[object, ...]:
+    def _config_values(self) -> tuple[object, ...]:
         return (self.frame_threshold.value(), self.delay.value(), self.target_display_tids(),
-                self._selected_path(self.seed_script_combo), self._selected_path(self.name_script_combo),
-                self._selected_path(self.reverse_id_script_combo), self.reverse_lookup_window.value(),
+                self.reverse_lookup_window.value(),
                 self.mode_combo.currentIndex(), self.loop_count.value(), self.debug_output_check.isChecked())
+
+    def _script_values(self) -> tuple[Path | None, ...]:
+        return tuple(self._selected_path(combo) for combo in (
+            self.seed_script_combo, self.name_script_combo, self.reverse_id_script_combo,
+        ))
 
     def _mark_config_dirty(self, *_args: object) -> None:
         if self._restoring_state:
             return
-        dirty = self._panel_values() != self._saved_panel_values
+        dirty = self._config_values() != self._saved_config_values
         self.save_state_label.setText("有未保存修改" if dirty else "已保存")
         self.save_state_label.setProperty("dirty", dirty)
         self.save_state_label.style().unpolish(self.save_state_label)
         self.save_state_label.style().polish(self.save_state_label)
+
+    def _mark_scripts_dirty(self, *_args: object) -> None:
+        if self._restoring_state:
+            return
+        dirty = self._script_values() != self._saved_script_values
+        self.script_save_state_label.setText("有未保存修改" if dirty else "已保存")
+        self.script_save_state_label.setProperty("dirty", dirty)
+        self.script_save_state_label.style().unpolish(self.script_save_state_label)
+        self.script_save_state_label.style().polish(self.script_save_state_label)
+        self.save_scripts_button.setEnabled(dirty)
 
     def _parse_tid(self, text: str) -> int | None:
         try:
@@ -1433,6 +1462,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         )
 
     def _save_panel_state(self) -> None:
+        self._save_config_state()
+        self._save_script_state()
+
+    def _save_config_state(self) -> None:
         s = self._settings
         s.setValue("mode_index", self.mode_combo.currentIndex())
         s.setValue("loop_count", self.loop_count.value())
@@ -1440,20 +1473,24 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         s.setValue("delay", self.delay.value())
         s.setValue("reverse_lookup_window", self.reverse_lookup_window.value())
         s.setValue("target_tids", json.dumps(list(self.target_display_tids()), separators=(",", ":")))
+        s.setValue("debug_output", self.debug_output_check.isChecked())
+        s.sync()
+        self._saved_config_values = self._config_values()
+        self._mark_config_dirty()
+
+    def _save_script_state(self) -> None:
+        s = self._settings
         for key, combo in (
             ("seed_script", self.seed_script_combo),
             ("name_script", self.name_script_combo),
             ("reverse_id_script", self.reverse_id_script_combo),
         ):
             path = self._selected_path(combo)
-            if path is None:
-                s.remove(key)
-            else:
-                s.setValue(key, str(path))
-        s.setValue("debug_output", self.debug_output_check.isChecked())
+            # An explicit empty choice must override first-launch defaults.
+            s.setValue(key, str(path) if path is not None else "")
         s.sync()
-        self._saved_panel_values = self._panel_values()
-        self._mark_config_dirty()
+        self._saved_script_values = self._script_values()
+        self._mark_scripts_dirty()
 
     def _restore_panel_state(self) -> None:
         s = self._settings
@@ -1488,6 +1525,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             if not s.contains(key):
                 continue
             saved_path = str(s.value(key, ""))
+            if not saved_path:
+                self._select_script(combo, None)
+                continue
             selected_path = self._select_script_by_path(combo, saved_path)
             if selected_path is not None and str(selected_path) != saved_path:
                 s.setValue(key, str(selected_path))

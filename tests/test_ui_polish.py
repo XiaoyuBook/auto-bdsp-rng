@@ -208,7 +208,8 @@ def test_refresh_six_scripts_preserves_selection_dirty_state_and_missing_paths(w
     p.refresh_scripts_button.click()
     assert p.seed_script_combo.currentData() is None
     assert not p.script_edit_buttons[p.seed_script_combo].isEnabled()
-    assert not p.config_saved_label.property('saved')
+    assert p.config_saved_label.property('saved')
+    assert not p.script_save_state_label.property('saved')
     assert '脚本已不存在' in p.log_view.toPlainText()
     assert all(c.findData(str(new)) > 0 for c in p._script_combos())
     p.escape_continue_check.setChecked(False)

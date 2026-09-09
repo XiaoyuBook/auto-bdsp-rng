@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -21,6 +21,10 @@ _SPIN_SUBCONTROL_PATTERN = re.compile(
 
 
 class _ChevronSpinMixin:
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        # Scroll the surrounding page, even when this input has focus.
+        event.ignore()
+
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
         if (

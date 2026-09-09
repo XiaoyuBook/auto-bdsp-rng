@@ -3408,6 +3408,12 @@ def test_auto_rng_page_surfaces_start_readiness_and_dirty_config(app, tmp_path):
 
     assert panel.script_status_label.text() == "脚本已就绪"
     assert panel.script_status_label.property("state") == "ready"
+    assert panel.toolbar_status.text() == "有未保存修改"
+    assert panel.config_saved_label.text() == "已保存"
+    assert panel.script_save_state_label.text() == "有未保存修改"
+
+    panel.save_scripts_button.click()
+
     assert panel.toolbar_status.text() == "准备就绪 · 可开始"
 
     panel._set_config_saved(False)
