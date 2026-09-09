@@ -3107,12 +3107,12 @@ class MainWindow(QMainWindow):
                 background: #FFFFFF;
                 border: 0;
                 border-bottom: 1px solid #E2E8E4;
-                color: #68766F;
+                color: #4B5E54;
                 min-width: 0;
                 min-height: 44px;
                 margin-right: 25px;
                 padding: 0 0 1px 0;
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 400;
             }
             QTabWidget#WorkspaceTabs QTabBar::tab:selected {
@@ -3120,7 +3120,7 @@ class MainWindow(QMainWindow):
                 color: #087C58;
                 border-bottom: 2px solid #087C58;
                 padding-bottom: 0;
-                font-weight: 500;
+                font-weight: 700;
             }
             QTabWidget#WorkspaceTabs QTabBar::tab:hover:!selected {
                 background: #F6F8F7;

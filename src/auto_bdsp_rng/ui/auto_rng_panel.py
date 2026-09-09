@@ -84,6 +84,15 @@ from auto_bdsp_rng.ui.target_dialog import TargetDialog, POKEMON_LABELS_ZH, NATU
 
 RUNTIME_CANDIDATE_DISPLAY_LIMIT = 20
 RUNTIME_CANDIDATE_VISIBLE_ROWS = 5
+_UI_SANS_FONT_FAMILIES = (
+    "Microsoft YaHei UI",
+    "PingFang SC",
+    "Source Han Sans SC",
+    "Noto Sans CJK SC",
+    "Segoe UI",
+    "sans-serif",
+)
+_TABULAR_NUMBERS_TAG = QFont.Tag("tnum")
 _RUNTIME_STEP_LABELS = ("测种", "搜索", "过帧", "校正", "撞闪", "结果")
 _RUNTIME_STEP_TOOLTIPS = (
     "运行测种脚本并捕获当前 Seed",
@@ -130,7 +139,7 @@ _RUNTIME_PHASE_DESCRIPTIONS = {
     AutoRngPhase.RUN_ADVANCE_SCRIPT: "执行过帧脚本，完成后校正位置或重新捕获 Seed。",
     AutoRngPhase.REIDENTIFY: "重新识别当前位置，再搜索目标或决定如何推进。",
     AutoRngPhase.EXIT_RESEED: "执行过场脚本并校正位置，完成后重新搜索目标。",
-    AutoRngPhase.FINAL_CALIBRATE: "根据当前推进数校准撞闪时机。",
+    AutoRngPhase.FINAL_CALIBRATE: "根据当前帧数校准撞闪时机。",
     AutoRngPhase.FINAL_ADJUST: "调整撞闪脚本的闪帧参数，准备启动。",
     AutoRngPhase.RUN_HIT_SCRIPT: "执行撞闪脚本，并按配置检测出闪结果。",
     AutoRngPhase.RUN_ESCAPE_SCRIPT: "执行逃跑脚本，随后校正位置并续搜本轮后续候选。",
@@ -138,6 +147,21 @@ _RUNTIME_PHASE_DESCRIPTIONS = {
     AutoRngPhase.LOOP_CHECK: "本次尝试已结束，检查是否进入下一轮。",
 }
 _RUNTIME_SHINY_LABELS = {0: "否", 1: "星闪", 2: "方闪", 3: "星闪", 4: "方闪"}
+
+
+def _ui_numeric_font(
+    pixel_size: int,
+    weight: QFont.Weight = QFont.Weight.Normal,
+) -> QFont:
+    """Use the CJK UI face for mixed Chinese units and tabular digits."""
+
+    font = QFont()
+    font.setFamilies(list(_UI_SANS_FONT_FAMILIES))
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    font.setPixelSize(pixel_size)
+    font.setWeight(weight)
+    font.setFeature(_TABULAR_NUMBERS_TAG, 1)
+    return font
 
 
 class _CopyableTextEdit(QPlainTextEdit):
@@ -295,6 +319,7 @@ class AutoRngStrategyDialog(QDialog):
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spin.setFixedSize(215, 34)
         set_c_locale(spin)
+        spin.setFont(_ui_numeric_font(14))
         return spin
 
     def policy(self) -> str:
@@ -664,6 +689,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.shiny_threshold_seconds.setValue(DEFAULT_SHINY_THRESHOLD_SECONDS)
         self.shiny_threshold_seconds.setSuffix(" 秒")
         set_c_locale(self.shiny_threshold_seconds)
+        self.shiny_threshold_seconds.setFont(_ui_numeric_font(14))
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
             spin.setFixedWidth(180)
         self.shiny_threshold_seconds.setFixedSize(180, 32)
@@ -771,6 +797,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.reverse_lookup_window.setFixedHeight(32)
         self.reverse_lookup_window.setFixedWidth(86)
         set_c_locale(self.reverse_lookup_window)
+        self.reverse_lookup_window.setFont(_ui_numeric_font(14))
         reverse_row.addWidget(self.auto_reverse_combo)
         reverse_row.addWidget(self.reverse_lookup_window)
         form.addRow("自动反查", self.reverse_field)
@@ -1252,10 +1279,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         metrics = QHBoxLayout()
         metrics.setContentsMargins(0, 3, 0, 3)
         metrics.setSpacing(16)
-        (current_metric, self.runtime_current_value) = self._runtime_metric("当前推进数", "Adv")
-        (target_metric, self.runtime_target_value) = self._runtime_metric("目标推进数", "原始目标 Adv")
-        (remaining_metric, self.runtime_remaining_value) = self._runtime_metric("距撞闪启动", "帧", accent=True)
+        (current_metric, self.runtime_current_value) = self._runtime_metric("当前帧数")
+        (target_metric, self.runtime_target_value) = self._runtime_metric("目标帧数")
+        (remaining_metric, self.runtime_remaining_value) = self._runtime_metric("距离撞闪启动", accent=True)
         current_metric.setToolTip("过帧脚本执行期间的数值来自最近一次定位及计时估算；脚本完成后以校正结果为准。")
+        remaining_metric.setToolTip("扣除本轮 delay 和撞闪脚本等待帧数后的启动点，与当前帧数之间的差值。")
         metrics.addWidget(current_metric, 105)
         metrics.addWidget(target_metric, 100)
         metrics.addWidget(remaining_metric, 90)
@@ -1270,6 +1298,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         runtime_delay_caption.setObjectName("MutedLabel")
         self.runtime_delay_value = QLabel("—")
         self.runtime_delay_value.setObjectName("RuntimeMonoSmall")
+        self.runtime_delay_value.setFont(_ui_numeric_font(14, QFont.Weight.DemiBold))
         self.runtime_delay_state_label = QLabel("已冻结")
         self.runtime_delay_state_label.setObjectName("RuntimeDelayState")
         self.runtime_delay_state_label.hide()
@@ -1484,7 +1513,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.candidate_table = QTableWidget(0, 5, section)
         self.candidate_table.setObjectName("RuntimeCandidateTable")
         self.candidate_table.setAccessibleName("本轮候选目标表")
-        self.candidate_table.setHorizontalHeaderLabels(("状态", "Adv", "异色", "性格", "个体值"))
+        self.candidate_table.setFont(_ui_numeric_font(13))
+        self.candidate_table.setHorizontalHeaderLabels(("状态", "帧数", "异色", "性格", "个体值"))
         self.candidate_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.candidate_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.candidate_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1832,7 +1862,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         caption_label.setObjectName("RuntimeMetricCaption")
         value_label = QLabel("—")
         value_label.setObjectName("RuntimeMetricValueAccent" if accent else "RuntimeMetricValue")
-        value_label.setFont(QFont("Consolas", 17))
+        value_label.setFont(_ui_numeric_font(26, QFont.Weight.DemiBold))
         metric_layout.addWidget(caption_label)
         metric_layout.addWidget(value_label)
         if suffix:
@@ -1977,11 +2007,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.runtime_state_dot.style().polish(self.runtime_state_dot)
 
     @staticmethod
-    def _runtime_value(value: object) -> str:
+    def _runtime_value(value: object, *, suffix: str = "") -> str:
         if value is None or isinstance(value, bool):
             return "—"
         try:
-            return f"{int(value):,}"
+            return f"{int(value):,}{suffix}"
         except (TypeError, ValueError, OverflowError):
             return "—"
 
@@ -1992,7 +2022,17 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 background: #FFFFFF;
                 color: #24312D;
                 font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
-                font-size: 13px;
+                font-size: 14px;
+            }
+            QLabel,
+            QComboBox,
+            QSpinBox,
+            QDoubleSpinBox,
+            QPushButton,
+            QToolButton,
+            QTableWidget {
+                font-family: "Microsoft YaHei UI", "PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+                font-size: 14px;
             }
             QFrame#AutoRngToolbar {
                 background: #FFFFFF;
@@ -2033,22 +2073,26 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 color: #AC4B42;
             }
             QLabel#ToolbarFieldLabel,
-            QLabel#MutedLabel,
-            QLabel#RuntimeDescriptionLabel,
             QLabel#RuntimeMetricCaption,
             QLabel#RuntimeMetricSuffix,
+            QLabel#ScriptFieldLabel {
+                color: #4B5E54;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QLabel#MutedLabel,
+            QLabel#RuntimeDescriptionLabel,
             QLabel#PreviousRoundLabel,
             QLabel#MessageTimeLabel,
-            QLabel#DelayActiveLabel,
-            QLabel#ScriptFieldLabel {
-                color: #68766F;
+            QLabel#DelayActiveLabel {
+                color: #596C62;
                 font-size: 12px;
                 font-weight: 400;
             }
             QLabel#SectionTitle {
                 color: #24312D;
-                font-size: 14px;
-                font-weight: 500;
+                font-size: 16px;
+                font-weight: 700;
             }
             QScrollArea#AutoRngConfigPanel {
                 background: #F6F8F7;
@@ -2074,7 +2118,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 height: 0;
             }
             QLabel#ConfigSavedLabel {
-                color: #68766F;
+                color: #596C62;
                 font-size: 12px;
             }
             QLabel#ConfigSavedLabel[saved="false"] {
@@ -2085,7 +2129,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 padding: 2px 8px;
                 color: #68766F;
                 background: #F2F5F3;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 400;
             }
             QLabel#ScriptStatusLabel[state="ready"] {
@@ -2115,15 +2159,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#TargetNameLabel {
                 color: #24312D;
-                font-size: 18px;
-                font-weight: 500;
+                font-size: 20px;
+                font-weight: 700;
             }
             QLabel#GreenTag,
             QLabel#NeutralTag,
             QLabel#RuntimeRoundLabel {
                 border-radius: 4px;
                 padding: 2px 7px;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 400;
             }
             QLabel#GreenTag {
@@ -2142,7 +2186,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border: 0;
                 color: #087C58;
                 padding: 0 4px;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 400;
             }
             QPushButton#ConfigSaveButton {
@@ -2181,8 +2225,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QGroupBox#AutoRngStrategyGroup QSpinBox,
             QGroupBox#AutoRngStrategyGroup QDoubleSpinBox,
             QGroupBox#AutoRngStrategyGroup QComboBox,
-            QGroupBox#AutoRngStrategyGroup QLineEdit,
-            QGroupBox#AutoRngStrategyGroup QPushButton#SecondaryButton {
+            QGroupBox#AutoRngStrategyGroup QLineEdit {
                 min-height: 30px;
                 max-height: 32px;
                 background: #FFFFFF;
@@ -2190,12 +2233,25 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 5px;
                 padding: 0 8px;
                 color: #24312D;
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 400;
             }
             QGroupBox#AutoRngStrategyGroup QSpinBox,
             QGroupBox#AutoRngStrategyGroup QDoubleSpinBox {
-                font-family: "Consolas", "Cascadia Mono", monospace;
+                font-family: "Microsoft YaHei UI", "PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+            }
+            QToolButton#PrimaryButton,
+            QPushButton#DangerButton {
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QPushButton#SecondaryButton,
+            QPushButton#ConfigSaveButton,
+            QPushButton#TargetOpenButton,
+            QPushButton#InlineLinkButton,
+            QToolButton#RuntimeScriptSummaryToggle,
+            QPushButton#AutoRngRefreshScripts {
+                font-size: 13px;
             }
             QGroupBox#AutoRngStrategyGroup QSpinBox QLineEdit,
             QGroupBox#AutoRngStrategyGroup QDoubleSpinBox QLineEdit {
@@ -2273,7 +2329,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimeStateDot {
                 color: #95A39C;
-                font-size: 11px;
+                font-size: 12px;
             }
             QFrame#RuntimeCard[state="active"] QLabel#RuntimeStateDot {
                 color: #087C58;
@@ -2306,12 +2362,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimeStepLabel {
                 color: #7A8A82;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 400;
             }
             QLabel#RuntimeStepLabel[state="active"] {
                 color: #087C58;
-                font-weight: 500;
+                font-weight: 700;
             }
             QLabel#RuntimeStepLabel[state="completed"] {
                 color: #4F665A;
@@ -2332,7 +2388,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 9px;
                 color: #087C58;
                 padding: 2px 7px;
-                font-size: 11px;
+                font-size: 12px;
             }
             QFrame#RuntimeScriptSummary {
                 background: #FFFFFF;
@@ -2347,26 +2403,26 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimeScriptSummaryTitle {
                 color: #24312D;
-                font-size: 13px;
-                font-weight: 500;
+                font-size: 14px;
+                font-weight: 700;
             }
             QLabel#RuntimeScriptSummaryDetail,
             QLabel#RuntimeScriptHeaderState {
-                color: #68766F;
-                font-size: 11px;
+                color: #596C62;
+                font-size: 12px;
             }
             QToolButton#RuntimeScriptSummaryToggle {
                 background: transparent;
                 border: 0;
                 color: #087C58;
                 padding: 2px 0;
-                font-size: 12px;
+                font-size: 13px;
             }
             QToolButton#RuntimeScriptSummaryToggle:hover {
                 color: #066A4B;
             }
             QLabel#CandidateCountLabel {
-                color: #68766F;
+                color: #596C62;
                 font-size: 12px;
             }
             QLabel#RuntimeCandidatesEmpty {
@@ -2382,16 +2438,16 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border: 1px solid #E2E8E4;
                 border-radius: 5px;
                 color: #24312D;
-                font-size: 12px;
+                font-size: 13px;
             }
             QTableWidget#RuntimeCandidateTable QHeaderView::section {
                 background: #F2F5F3;
                 border: 0;
                 border-bottom: 1px solid #E2E8E4;
-                color: #68766F;
+                color: #596C62;
                 padding: 0 7px;
-                font-size: 11px;
-                font-weight: 400;
+                font-size: 12px;
+                font-weight: 700;
             }
             QTableWidget#RuntimeCandidateTable QTableCornerButton::section {
                 background: #F2F5F3;
@@ -2413,15 +2469,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimePhaseLabel {
                 color: #24312D;
-                font-size: 18px;
-                font-weight: 500;
+                font-size: 20px;
+                font-weight: 700;
             }
             QLabel#RuntimeMetricValue,
             QLabel#RuntimeMetricValueAccent {
                 color: #24312D;
-                font-family: "Consolas", "Cascadia Mono", monospace;
-                font-size: 22px;
-                font-weight: 400;
+                font-size: 26px;
+                font-weight: 600;
                 letter-spacing: 0;
             }
             QLabel#RuntimeMetricValueAccent {
@@ -2429,8 +2484,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimeMonoSmall {
                 color: #24312D;
-                font-family: "Consolas", "Cascadia Mono", monospace;
-                font-size: 12px;
+                font-size: 14px;
+                font-weight: 600;
                 letter-spacing: 0;
             }
             QFrame#RuntimeFooter {
@@ -2442,7 +2497,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 padding-left: 1px;
             }
             QLabel#TargetConditionLabel {
-                color: #5E6F67;
+                color: #596C62;
                 font-size: 12px;
                 font-weight: 400;
             }
@@ -2471,7 +2526,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 5px;
                 padding: 0 8px;
                 color: #24312D;
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 400;
             }
             QWidget#ScriptPicker {
@@ -2507,6 +2562,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#MessageTimeLabel {
                 font-family: "Consolas", "Cascadia Mono", monospace;
+            }
+            QPlainTextEdit#LogView {
+                font-family: "Consolas", "Cascadia Mono", monospace;
+                font-size: 10px;
             }
             """
         )
@@ -2583,7 +2642,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_current_value.setText(self._runtime_value(current))
         if self._runtime_trigger_advances is not None:
             self.runtime_remaining_value.setText(
-                self._runtime_value(self._runtime_trigger_advances - current)
+                self._runtime_value(self._runtime_trigger_advances - current, suffix=" 帧")
             )
 
     def apply_progress(self, progress: AutoRngProgress) -> None:
@@ -2615,7 +2674,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             remaining = self._runtime_trigger_advances - current_advances
         self.runtime_current_value.setText(self._runtime_value(current_advances))
         self.runtime_target_value.setText(self._runtime_value(target_advances))
-        self.runtime_remaining_value.setText(self._runtime_value(remaining))
+        self.runtime_remaining_value.setText(self._runtime_value(remaining, suffix=" 帧"))
         self.runtime_delay_value.setText(self._runtime_value(delay))
         delay_frozen = delay is not None and progress.phase not in {
             AutoRngPhase.IDLE,
@@ -3281,6 +3340,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         spin.setFixedHeight(34)
         set_c_locale(spin)
+        spin.setFont(_ui_numeric_font(14))
         return spin
 
 

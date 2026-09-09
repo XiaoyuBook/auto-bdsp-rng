@@ -3604,7 +3604,7 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     assert panel.runtime_round_label.text() == "第 2 轮"
     assert panel.runtime_current_value.text() == "0"
     assert panel.runtime_target_value.text() == "1,300"
-    assert panel.runtime_remaining_value.text() == "100"
+    assert panel.runtime_remaining_value.text() == "100 帧"
     assert panel.runtime_delay_value.text() == "1,200"
     assert panel.runtime_step_labels[4].property("state") == "active"
     assert panel.runtime_step_labels[3].property("state") == "completed"
@@ -3621,7 +3621,7 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     assert panel.script_group.isHidden()
     panel.set_live_advances(25)
     assert panel.runtime_current_value.text() == "25"
-    assert panel.runtime_remaining_value.text() == "75"
+    assert panel.runtime_remaining_value.text() == "75 帧"
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
     assert panel.latest_log_time_label.text() != "—"
 
