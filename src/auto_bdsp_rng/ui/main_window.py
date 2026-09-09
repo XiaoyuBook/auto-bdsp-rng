@@ -7195,6 +7195,7 @@ class MainWindow(QMainWindow):
         values = tuple(args) if isinstance(args, tuple) else tuple()
         h = self.history_tab
         if event == "cycle_start" and len(values) >= 1:
+            self.auto_rng_tab.begin_runtime_cycle(int(values[0]))
             h.cycle_start(int(values[0]))
             self._active_auto_rng_run_id = getattr(h, "current_run_id", None)
             self._active_auto_rng_round_id = getattr(h, "current_round_id", int(values[0]))
@@ -7218,6 +7219,7 @@ class MainWindow(QMainWindow):
             reason = str(values[0]) if values else "本轮未能继续"
             self._write_run_log("历史记录", f"本轮结束，继续重试：{reason}", level="WARNING")
         elif event == "seed_captured" and len(values) >= 4:
+            self.auto_rng_tab.clear_candidate_targets("已捕获 Seed，正在搜索本轮候选")
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
             self._write_run_log(
                 "历史记录",
@@ -7229,6 +7231,7 @@ class MainWindow(QMainWindow):
             flags = list(values[2]) if len(values) >= 3 else None
             candidates = list(values[0])
             locked_index = int(values[1])
+            self.auto_rng_tab.set_candidate_targets(candidates, locked_index, flags)
             h.candidates_found(candidates, locked_index, flags)  # type: ignore[arg-type]
             locked_adv = (
                 getattr(candidates[locked_index], "advances", "-")
@@ -7240,6 +7243,7 @@ class MainWindow(QMainWindow):
             flags = list(values[2]) if len(values) >= 3 else None
             candidates = list(values[0])
             locked_index = int(values[1])
+            self.auto_rng_tab.set_candidate_targets(candidates, locked_index, flags)
             h.candidates_refiltered(candidates, locked_index, flags)  # type: ignore[arg-type]
             locked_adv = (
                 getattr(candidates[locked_index], "advances", "-")
@@ -7257,6 +7261,7 @@ class MainWindow(QMainWindow):
                 level="WARNING",
             )
         elif event == "cycle_no_candidate":
+            self.auto_rng_tab.clear_candidate_targets("本轮未找到可达候选")
             h.cycle_no_candidate()
             self._write_run_log("历史记录", "本轮结果：无候选")
         elif event == "cycle_result" and len(values) >= 3:

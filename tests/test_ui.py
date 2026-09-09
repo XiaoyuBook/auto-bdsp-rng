@@ -2213,6 +2213,7 @@ def test_auto_rng_panel_persists_exit_script_and_reseeding_threshold(app, tmp_pa
 def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
     (tmp_path / "逃跑.txt").write_text("B 100\n", encoding="utf-8")
     panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    panel.runtime_script_summary_toggle.click()
     layout = panel.script_group.layout()
 
     fields = (
@@ -3158,7 +3159,10 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     assert "运行摘要" not in group_titles
     assert "定点目标 / 存档信息 / 个体筛选" not in group_titles
     assert "候选结果" not in group_titles
-    assert not hasattr(panel, "candidate_table")
+    assert hasattr(panel, "candidate_table")
+    assert panel.candidate_table.isHidden()
+    assert not panel.candidate_section.isHidden()
+    assert not panel.candidate_empty_label.isHidden()
     assert not hasattr(panel, "search_target_summary")
     assert hasattr(panel, "target_button")
     assert panel.target_button.text() == "设置"
@@ -3179,6 +3183,8 @@ def test_auto_rng_panel_keeps_hidden_message_mirror_and_live_runtime_card(app):
     assert panel.runtime_card.property("state") == "idle"
     assert panel.runtime_phase_label.text() == "准备就绪"
     assert panel.runtime_round_label.text() == "任务已停止"
+    assert not panel.runtime_script_summary.isHidden()
+    assert panel.script_group.isHidden()
     assert panel.runtime_current_value.text() == "—"
     assert panel.runtime_target_value.text() == "—"
     assert panel.runtime_remaining_value.text() == "—"
@@ -3368,7 +3374,7 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path
     assert panel.delay_settings_button._estimate_text == "100"
     assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
     assert panel.delay_active_label.text() == "下轮预计 100 帧"
-    assert panel.runtime_card.height() == 226
+    assert panel.runtime_card.height() == 300
     assert isinstance(panel.debug_output_check, CheckmarkCheckBox)
     assert isinstance(panel.escape_continue_check, CheckmarkCheckBox)
     assert panel.seed_script_combo.minimumWidth() == 160
@@ -3388,6 +3394,34 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path
     assert panel.refresh_scripts_button.text() == "刷新"
     assert panel.refresh_scripts_button.toolTip() == "刷新脚本列表"
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
+
+
+def test_auto_rng_page_surfaces_start_readiness_and_dirty_config(app, tmp_path):
+    panel = AutoRngPanel(
+        script_dir=tmp_path,
+        settings=_auto_rng_settings(tmp_path),
+    )
+
+    assert panel.toolbar_status.text() == "待配置 · 缺少 2 项"
+    assert panel.toolbar_status.property("state") == "warning"
+    assert panel.script_status_label.text() == "待配置 · 缺少 2 项"
+    assert panel.runtime_description_label.text().startswith("请先确认目标")
+
+    for combo, name in (
+        (panel.advance_script_combo, "advance.txt"),
+        (panel.hit_script_combo, "hit.txt"),
+    ):
+        combo.addItem(name, str(tmp_path / name))
+        combo.setCurrentIndex(combo.count() - 1)
+
+    assert panel.script_status_label.text() == "脚本已就绪"
+    assert panel.script_status_label.property("state") == "ready"
+    assert panel.toolbar_status.text() == "准备就绪 · 可开始"
+
+    panel._set_config_saved(False)
+
+    assert panel.save_config_button.property("state") == "dirty"
+    assert panel.toolbar_status.text() == "有未保存修改"
 
 
 def test_auto_rng_advanced_strategies_scroll_inside_fixed_sidebar(app, tmp_path):
@@ -3538,6 +3572,7 @@ def test_auto_rng_stop_button_requests_runner_stop_immediately(app):
 
 def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     panel = AutoRngPanel()
+    panel.begin_runtime_cycle(2)
 
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.REIDENTIFY))
     assert panel.status_badge.text() == "校正位置"
@@ -3560,17 +3595,188 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
 
     assert panel.status_badge.text() == "运行撞闪脚本"
     assert panel.runtime_card.property("state") == "active"
+    assert panel.toolbar_status.property("state") == "active"
+    assert panel.toolbar_status.text().startswith("运行中")
+    assert not panel.runtime_script_summary.isHidden()
+    assert panel.script_group.isHidden()
+    assert panel.previous_round_label.isHidden()
     assert panel.runtime_phase_label.text() == "运行撞闪脚本"
     assert panel.runtime_round_label.text() == "第 2 轮"
     assert panel.runtime_current_value.text() == "0"
     assert panel.runtime_target_value.text() == "1,300"
     assert panel.runtime_remaining_value.text() == "100"
     assert panel.runtime_delay_value.text() == "1,200"
+    assert panel.runtime_step_labels[4].property("state") == "active"
+    assert panel.runtime_step_labels[3].property("state") == "completed"
+    assert [label.property("state") for label in panel.runtime_step_labels[:3]] == [
+        "idle",
+        "idle",
+        "idle",
+    ]
+    assert not panel.runtime_delay_state_label.isHidden()
+    panel.runtime_script_summary_toggle.click()
+    assert not panel.script_group.isHidden()
+    assert panel.runtime_script_summary_toggle.text() == "收起编辑"
+    panel.runtime_script_summary_toggle.click()
+    assert panel.script_group.isHidden()
     panel.set_live_advances(25)
     assert panel.runtime_current_value.text() == "25"
     assert panel.runtime_remaining_value.text() == "75"
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
     assert panel.latest_log_time_label.text() != "—"
+
+
+def test_auto_rng_runtime_marks_software_wait_as_advance_stage(app):
+    panel = AutoRngPanel()
+    panel.begin_runtime_cycle(1)
+    for phase in (
+        AutoRngPhase.RUN_SEED_SCRIPT,
+        AutoRngPhase.CAPTURE_SEED,
+        AutoRngPhase.SEARCH_TARGET,
+        AutoRngPhase.DECIDE_ADVANCE,
+    ):
+        panel.apply_progress(AutoRngProgress(phase=phase, loop_index=1))
+
+    assert panel.runtime_step_labels[2].property("state") == "active"
+
+    panel.apply_progress(
+        AutoRngProgress(
+            phase=AutoRngPhase.FINAL_WAIT,
+            loop_index=1,
+            current_advances=120,
+            trigger_advances=180,
+            remaining_to_trigger=60,
+            log_message="还需过 60 帧，由软件等待到脚本启动点",
+        )
+    )
+
+    assert panel.runtime_step_labels[2].property("state") == "active"
+    assert panel.runtime_step_labels[1].property("state") == "completed"
+    assert panel.runtime_step_labels[3].property("state") == "idle"
+    assert "软件活帧等待" in panel.runtime_step_labels[2].toolTip()
+
+    panel.apply_progress(
+        AutoRngProgress(
+            phase=AutoRngPhase.FINAL_WAIT,
+            loop_index=1,
+            current_advances=121,
+            trigger_advances=180,
+            remaining_to_trigger=59,
+        )
+    )
+
+    assert panel.runtime_description_label.text() != "等待新的运行数据。"
+    assert "活帧" in panel.runtime_description_label.text()
+
+
+def test_auto_rng_runtime_steps_only_complete_stages_visited_in_this_cycle(app):
+    panel = AutoRngPanel()
+    panel.begin_runtime_cycle(1)
+
+    for phase in (
+        AutoRngPhase.RUN_SEED_SCRIPT,
+        AutoRngPhase.CAPTURE_SEED,
+        AutoRngPhase.SEARCH_TARGET,
+        AutoRngPhase.COMPLETED,
+    ):
+        panel.apply_progress(AutoRngProgress(phase=phase, loop_index=1))
+
+    assert [label.property("state") for label in panel.runtime_step_labels] == [
+        "completed",
+        "completed",
+        "idle",
+        "idle",
+        "idle",
+        "completed",
+    ]
+
+
+def test_auto_rng_runtime_steps_keep_visited_calibration_when_returning_to_advance(app):
+    panel = AutoRngPanel()
+    panel.begin_runtime_cycle(1)
+
+    for phase in (
+        AutoRngPhase.RUN_SEED_SCRIPT,
+        AutoRngPhase.CAPTURE_SEED,
+        AutoRngPhase.SEARCH_TARGET,
+        AutoRngPhase.DECIDE_ADVANCE,
+        AutoRngPhase.RUN_ADVANCE_SCRIPT,
+        AutoRngPhase.REIDENTIFY,
+        AutoRngPhase.DECIDE_ADVANCE,
+        AutoRngPhase.FINAL_WAIT,
+    ):
+        panel.apply_progress(AutoRngProgress(phase=phase, loop_index=1))
+
+    assert panel.runtime_step_labels[2].property("state") == "active"
+    assert panel.runtime_step_labels[3].property("state") == "completed"
+    assert panel.runtime_step_labels[4].property("state") == "idle"
+
+
+def test_auto_rng_begin_runtime_cycle_clears_previous_round_values_and_candidates(app):
+    panel = AutoRngPanel()
+    panel.set_candidate_targets(
+        [SimpleNamespace(advances=123, shiny=0, nature=0, ivs=(1, 2, 3, 4, 5, 6))],
+        locked_index=0,
+    )
+    panel.apply_progress(
+        AutoRngProgress(
+            phase=AutoRngPhase.RUN_ADVANCE_SCRIPT,
+            loop_index=1,
+            raw_target_advances=123,
+            current_advances=10,
+            remaining_to_trigger=40,
+            fixed_delay=70,
+        )
+    )
+
+    panel.begin_runtime_cycle(2)
+
+    assert [label.property("state") for label in panel.runtime_step_labels] == ["idle"] * 6
+    assert panel.runtime_current_value.text() == "—"
+    assert panel.runtime_target_value.text() == "—"
+    assert panel.runtime_remaining_value.text() == "—"
+    assert panel.runtime_delay_value.text() == "—"
+    assert panel.candidate_table.rowCount() == 0
+    assert panel.candidate_count_label.text() == "0 条候选"
+
+
+def test_auto_rng_runtime_candidates_are_capped_and_keep_locked_target_visible(app):
+    panel = AutoRngPanel()
+    candidates = [
+        SimpleNamespace(
+            advances=100 + index,
+            shiny=0,
+            nature=index % len(NATURES_ZH),
+            ivs=(31, 30, 29, 28, 27, 26),
+        )
+        for index in range(25)
+    ]
+
+    panel.set_candidate_targets(candidates, locked_index=22, sync_flags=["no_sync"] * 25)
+
+    assert not panel.candidate_section.isHidden()
+    assert panel.candidate_table.rowCount() == 20
+    assert panel.candidate_table.height() == 182
+    assert panel.candidate_count_label.text() == "25 条候选 · 显示 20 条"
+    displayed_advances = {
+        panel.candidate_table.item(row, 1).text()
+        for row in range(panel.candidate_table.rowCount())
+    }
+    assert "122" in displayed_advances
+    assert panel.candidate_table.item(0, 0).text() == "已锁定"
+
+    panel.clear_candidate_targets()
+    assert not panel.candidate_section.isHidden()
+    assert not panel.candidate_empty_label.isHidden()
+    assert panel.candidate_table.rowCount() == 0
+
+
+def test_auto_rng_runtime_round_label_uses_count_mode(app):
+    panel = AutoRngPanel()
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("count"))
+    panel.loop_count.setValue(10)
+
+    assert panel._runtime_round_text(4) == "第 4 / 10 轮"
 
 
 def test_manual_reidentify_invalid_seed_uses_chinese_error_title(app, monkeypatch):
