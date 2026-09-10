@@ -9,7 +9,7 @@ import time
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton,
+    QDialog, QDialogButtonBox, QLabel,
     QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -113,12 +113,6 @@ class RuntimeInsights(QWidget):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setStyleSheet("color: #626D79; font-size: 12px; font-weight: 400;")
             layout.addWidget(label)
-        row = QHBoxLayout()
-        self.snapshot_button = QPushButton("配置与本轮快照")
-        self.snapshot_button.clicked.connect(self.show_snapshot)
-        row.addStretch(1)
-        row.addWidget(self.snapshot_button)
-        layout.addLayout(row)
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self._render_wait)
