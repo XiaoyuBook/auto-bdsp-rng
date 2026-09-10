@@ -1112,6 +1112,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.script_status_label.setMinimumWidth(92)
         self.refresh_scripts_button = QPushButton("刷新")
         self.refresh_scripts_button.setObjectName("AutoRngRefreshScripts")
+        # Show the focus cue for keyboard navigation, without retaining it after mouse clicks.
+        self.refresh_scripts_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.refresh_scripts_button.setIcon(workspace_icon("refresh", "#087C58"))
         self.refresh_scripts_button.setToolTip("刷新脚本列表")
         self.refresh_scripts_button.setAccessibleName("刷新任务脚本列表")
