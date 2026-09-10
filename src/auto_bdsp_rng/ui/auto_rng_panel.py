@@ -1860,7 +1860,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.latest_log_label, 1)
 
-        self.view_log_button = QPushButton("查看日志")
+        self.view_log_button = QPushButton("日志中心")
         self.view_log_button.setObjectName("InlineLinkButton")
         self.view_log_button.setFixedHeight(30)
         self.view_log_button.setMinimumWidth(72)

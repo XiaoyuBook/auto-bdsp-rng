@@ -178,7 +178,7 @@ def test_help_menu_exposes_expected_actions(app):
     assert controller.help_menu.title() == "帮助"
     assert controller.tutorial_action.text() == "使用教程"
     assert controller.about_action.text() == "关于项目"
-    assert controller.run_log_menu.title() == "运行日志"
+    assert controller.run_log_menu.title() == "日志中心"
     assert controller.run_log_save_action.text() == "自动保存运行日志（保留 7 天）"
     assert controller.run_log_save_action.isCheckable()
     assert controller.run_log_save_action.isChecked() is False

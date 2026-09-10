@@ -450,6 +450,11 @@ class HistoryPanel(QWidget):
         self.empty_state_detail.setStyleSheet("color: #87939F; font-size: 12px;")
         empty_layout.addWidget(self.empty_state_title)
         empty_layout.addWidget(self.empty_state_detail)
+        self.empty_action_button = QPushButton("开始前检查")
+        self.empty_action_button.setFixedHeight(34)
+        self.empty_action_button.clicked.connect(self._empty_action)
+        self.empty_navigation = None
+        empty_layout.addWidget(self.empty_action_button, 0, Qt.AlignmentFlag.AlignHCenter)
         empty_layout.addStretch(1)
         layout.addWidget(self.empty_state, 1)
 
@@ -859,11 +864,20 @@ class HistoryPanel(QWidget):
             self.empty_state_detail.setText(
                 "当前筛选结果为空" if filtered else "当前会话尚未产生运行结果"
             )
+            self.empty_action_button.setText("清除筛选" if filtered else "开始前检查")
+            self.empty_action_button.setVisible(filtered or self.empty_navigation is not None)
             self.round_splitter.hide()
             self.empty_state.show()
             return
         self.empty_state.hide()
         self.round_splitter.show()
+
+    def _empty_action(self) -> None:
+        if self._round_order:
+            self.result_filter.setCurrentIndex(0)
+            self.search_edit.clear()
+        elif self.empty_navigation is not None:
+            self.empty_navigation()
 
     def _on_round_selected(
         self,

@@ -188,6 +188,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     progressChanged = Signal(object)
     ocrSettingsRequested = Signal()
     runLogRequested = Signal()
+    preparationRequested = Signal()
     roundRecordsRequested = Signal()
     runStateChanged = Signal(bool)
     scriptEditRequested = Signal(object)
@@ -438,7 +439,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.latest_log_label.setParent(toolbar)
         self.latest_log_label.hide()
         row.addStretch(1)
-        self.view_log_button = QPushButton("查看日志")
+        self.view_log_button = QPushButton("日志中心")
         self.view_log_button.setObjectName("AutoTidLink")
         self.view_log_button.setFixedSize(76, 32)
         self.view_log_button.clicked.connect(self.runLogRequested.emit)
@@ -1199,6 +1200,14 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         title, detail = messages.get(self._id_result_state, initial)
         has_results = bool(self._id_states)
         self.id_empty_state.show_message(title, detail, has_results=has_results)
+        if has_results or self._id_result_state == "searching":
+            self.id_empty_state.set_action()
+        elif self._id_result_state == "failed":
+            self.id_empty_state.set_action("查看相关日志", self.runLogRequested.emit)
+        elif self._id_result_state == "complete":
+            self.id_empty_state.set_action("调整搜索范围", self.frame_threshold.setFocus)
+        else:
+            self.id_empty_state.set_action("开始前检查", self.preparationRequested.emit)
         self.copy_button.setEnabled(has_results)
         self.export_button.setEnabled(has_results)
 

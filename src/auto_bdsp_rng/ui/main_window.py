@@ -172,6 +172,7 @@ from auto_bdsp_rng.ui.spin_box import ChevronDoubleSpinBox as QDoubleSpinBox
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
+from auto_bdsp_rng.ui.start_readiness import StartReadinessController
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
 from auto_bdsp_rng.ui.workspace_controls import (
     PrimaryButton,
@@ -1923,7 +1924,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
-        self.tabs.addTab(self.run_records_tab, "日志区")
+        self.tabs.addTab(self.run_records_tab, "日志中心")
         root_layout.addWidget(self.tabs, 1)
         _make_labels_copyable(self.tabs)
 
@@ -1933,7 +1934,7 @@ class MainWindow(QMainWindow):
         status_bar.setFixedHeight(30)
         self.view_status_logs_button = QToolButton()
         self.view_status_logs_button.setObjectName("StatusLogButton")
-        self.view_status_logs_button.setText("查看日志")
+        self.view_status_logs_button.setText("日志中心")
         self.view_status_logs_button.setIcon(workspace_icon("external", "#087C58"))
         self.view_status_logs_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.view_status_logs_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1965,6 +1966,12 @@ class MainWindow(QMainWindow):
             self._handle_silent_update_check_completed
         )
         self.update_controller.silentCheckFailed.connect(self._handle_silent_update_check_failed)
+        self.readiness = StartReadinessController(self)
+        self.history_tab.empty_navigation = self.readiness.show
+        self.history_tab._refresh_round_list()
+        self.run_records_tab.log_panel.empty_navigation = self.readiness.show
+        self.run_records_tab.log_panel._refresh_view_state()
+        self.auto_tid_rng_tab.preparationRequested.connect(lambda: self.readiness.show_for(self.auto_tid_rng_tab))
 
     def _run_log_sink(self, source: str) -> Callable[[str, str], None]:
         def write(level: str, message: str) -> None:
@@ -1973,8 +1980,13 @@ class MainWindow(QMainWindow):
         return write
 
     def _show_run_logs(self, source: str | None = None) -> None:
+        run_id, round_id = None, None
+        if source == "自动定点":
+            run_id, round_id = self._active_auto_rng_run_id, self._active_auto_rng_round_id
+        elif source == "自动 TID":
+            run_id, round_id = self._active_auto_tid_run_id, self._active_auto_tid_round_id
         self.tabs.setCurrentWidget(self.run_records_tab)
-        self.run_records_tab.show_logs(source)
+        self.run_records_tab.show_logs(source, run_id=run_id, round_id=round_id)
 
     def _show_round_records(self) -> None:
         self.run_records_tab.show_rounds()
@@ -4400,7 +4412,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(2, self._text("project_xs"))
         self.tabs.setTabText(3, self._text("bdsp_search"))
         self.tabs.setTabText(4, self._text("easycon"))
-        self.tabs.setTabText(5, "日志区" if self.lang == "zh" else "Logs")
+        self.tabs.setTabText(5, "日志中心" if self.lang == "zh" else "Log Center")
         self.status_group.setTitle("捕捉状态与自动配置" if self.lang == "zh" else "Capture status and automation config")
         self.video_source_dialog.setWindowTitle(
             "视频源设置" if self.lang == "zh" else "Video Source"
@@ -9118,6 +9130,12 @@ class MainWindow(QMainWindow):
         title, detail = messages[self._static_result_state]
         has_results = bool(self._states)
         self.static_empty_state.show_message(title, detail, has_results=has_results)
+        if self._static_result_state == "searching" or has_results:
+            self.static_empty_state.set_action()
+        elif self._static_result_state == "complete":
+            self.static_empty_state.set_action("调整筛选条件", lambda: self.iv_min[0].setFocus())
+        else:
+            self.static_empty_state.set_action("设置 Seed 与参数", lambda: self.bdsp_seed64_inputs[0].setFocus())
         self.copy_button.setEnabled(has_results)
         self.export_button.setEnabled(has_results)
 

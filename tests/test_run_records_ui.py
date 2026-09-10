@@ -114,7 +114,7 @@ def test_run_records_header_and_history_empty_state_switch_cleanly(app):
     app.processEvents()
 
     assert records.heading.height() == 42
-    assert records.title_label.text() == "日志区"
+    assert records.title_label.text() == "日志中心"
     assert records.subtitle_label.text() == "本次会话"
     assert records.live_status_label.text() == "等待任务"
     assert history.empty_state.isVisible()
@@ -311,7 +311,7 @@ def test_main_window_uses_run_records_as_sixth_tab_and_keeps_history_alias(
 
     assert window.tabs.count() == 6
     assert window.tabs.widget(5) is window.run_records_tab
-    assert window.tabs.tabText(5) == "日志区"
+    assert window.tabs.tabText(5) == "日志中心"
     assert window.run_records_tab.view_tabs.count() == 2
     assert window.run_records_tab.view_tabs.tabText(0) == "轮次记录"
     assert window.run_records_tab.view_tabs.tabText(1).startswith("详细日志")

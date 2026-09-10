@@ -193,8 +193,8 @@ class HelpMenuController:
         menu.addMenu(self.ui_scale_menu)
 
         menu.addSeparator()
-        self.run_log_menu = QMenu("运行日志", self.window)
-        self.view_run_logs_action = QAction("查看详细日志", self.window)
+        self.run_log_menu = QMenu("日志中心", self.window)
+        self.view_run_logs_action = QAction("打开日志中心", self.window)
         self.view_run_logs_action.setEnabled(self.open_run_logs is not None)
         self.view_run_logs_action.triggered.connect(self._open_run_logs)
         self.run_log_menu.addAction(self.view_run_logs_action)

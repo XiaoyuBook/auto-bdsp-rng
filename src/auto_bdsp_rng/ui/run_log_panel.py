@@ -370,7 +370,8 @@ class RunLogPanel(QWidget):
         self.follow_check = QCheckBox("自动跟随", self)
         self.follow_check.setObjectName("RunLogAutoFollow")
         self.follow_check.setChecked(True)
-        self.save_check = QCheckBox("自动保存到文件（保留 7 天）", self)
+        self.save_check = QCheckBox("自动保存（7 天）", self)
+        self.save_check.setToolTip("自动保存运行日志到文件，保留最近 7 天。")
         self.save_check.setObjectName("RunLogAutoSave")
         self.save_check.setChecked(self._save_enabled)
         toggle_row.addWidget(self.follow_check)
@@ -405,6 +406,7 @@ class RunLogPanel(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.empty_state = TableEmptyState(self.table, symbol="journal")
+        self.empty_navigation = None
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -613,6 +615,13 @@ class RunLogPanel(QWidget):
         self._refresh_view_state()
         self._follow_filtered_rows()
 
+    def clear_filters(self) -> None:
+        """Restore the full current view without clearing buffered entries."""
+        self.source_combo.setCurrentIndex(0)
+        self.level_combo.setCurrentIndex(0)
+        self.search_edit.clear()
+        self.clear_round_filter()
+
     @Slot()
     def clear_display(self) -> None:
         self._model.clear()
@@ -725,6 +734,11 @@ class RunLogPanel(QWidget):
             "调整筛选条件以查看其他记录" if total else "当前会话的运行消息将在这里显示",
             has_results=visible > 0,
         )
+        if total and not visible:
+            self.empty_state.set_action("清除筛选", self.clear_filters)
+        else:
+            self.empty_state.set_action("开始前检查" if not total and self.empty_navigation else "",
+                                        self.empty_navigation if not total else None)
         self.clear_button.setEnabled(total > 0)
         self.copy_button.setEnabled(visible > 0)
         self.export_button.setEnabled(visible > 0)

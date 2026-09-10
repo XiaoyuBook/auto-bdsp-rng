@@ -76,7 +76,7 @@ class RunRecordsPanel(QWidget):
         heading_layout.setContentsMargins(2, 0, 2, 0)
         heading_layout.setSpacing(10)
 
-        self.title_label = QLabel("日志区", heading)
+        self.title_label = QLabel("日志中心", heading)
         self.title_label.setObjectName("RunRecordsTitle")
         heading_layout.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
         divider = QFrame(heading)
@@ -208,9 +208,11 @@ class RunRecordsPanel(QWidget):
     def set_run_finished(self, text: str = "运行已结束") -> None:
         self.live_status_label.setText(str(text) or "运行已结束")
 
-    def show_logs(self, source: str | None = None) -> None:
-        self.log_panel.clear_round_filter()
+    def show_logs(self, source: str | None = None, *, run_id: str | None = None, round_id: int | None = None) -> None:
+        self.log_panel.clear_filters()
         self.log_panel.set_source_filter(source)
+        self.log_panel.show_round_logs(run_id, round_id,
+                                      f"{source or '全部模块'} · 当前运行" + (f" · 第 {round_id} 轮" if round_id is not None else ""))
         self.view_tabs.setCurrentIndex(self.LOG_TAB)
 
     def show_rounds(self) -> None:
@@ -218,7 +220,7 @@ class RunRecordsPanel(QWidget):
 
     @Slot(object, object)
     def show_round_logs(self, run_id: object, round_id: object) -> None:
-        self.log_panel.set_source_filter(None)
+        self.log_panel.clear_filters()
         self.log_panel.show_round_logs(run_id, round_id)
         self.view_tabs.setCurrentIndex(self.LOG_TAB)
 
