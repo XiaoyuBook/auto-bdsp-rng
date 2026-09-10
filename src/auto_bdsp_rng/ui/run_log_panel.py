@@ -45,6 +45,8 @@ from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
 
+from auto_bdsp_rng.ui.workspace_theme import ui_font_weight, ui_styles
+
 
 MAX_LOG_ENTRIES = 10_000
 ENTRY_ROLE = int(Qt.ItemDataRole.UserRole)
@@ -176,7 +178,7 @@ class _RunLogTableModel(QAbstractTableModel):
             }.get(entry.level)
         if role == int(Qt.ItemDataRole.FontRole) and column == 1:
             font = QFont()
-            font.setWeight(QFont.Weight.Medium)
+            font.setWeight(ui_font_weight(QFont.Weight.Medium))
             return font
         return None
 
@@ -456,7 +458,7 @@ class RunLogPanel(QWidget):
         root.addWidget(self.footer_frame)
 
         self.setStyleSheet(
-            """
+            ui_styles("""
             QWidget#RunLogPanel {
                 background: transparent;
             }
@@ -519,7 +521,7 @@ class RunLogPanel(QWidget):
                 padding: 6px;
                 font-weight: 500;
             }
-            """
+            """)
         )
 
     @staticmethod

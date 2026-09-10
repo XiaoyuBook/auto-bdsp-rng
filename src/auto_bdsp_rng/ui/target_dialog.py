@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord
 from auto_bdsp_rng.gen8_static import StateFilter
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 from auto_bdsp_rng.ui.static_target_form import NATURES_ZH, POKEMON_LABELS_ZH, StaticTargetForm
 
 
@@ -249,7 +249,7 @@ class TargetDialog(QDialog):
 
     @staticmethod
     def _stylesheet() -> str:
-        return """
+        return ui_styles("""
             QDialog#TargetDialog {
                 background: #FFFFFF;
                 color: #202A33;
@@ -257,7 +257,7 @@ class TargetDialog(QDialog):
             QDialog#TargetDialog QWidget {
                 background: transparent;
                 color: #202A33;
-                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 13px;
                 font-weight: 400;
             }
@@ -437,7 +437,7 @@ class TargetDialog(QDialog):
             QDialog#TargetDialog QPushButton#TargetDeleteButton:hover {
                 background: #FFF4F1;
             }
-        """
+        """)
 
     def _add_current(self) -> None:
         record = self.target_form.selected_record()

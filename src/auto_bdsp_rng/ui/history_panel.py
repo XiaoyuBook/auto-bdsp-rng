@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from auto_bdsp_rng.ui.workspace_theme import ui_styles
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.workspace_controls import EmptyIllustration
 
@@ -287,7 +288,7 @@ class _RoundListRow(QWidget):
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         self.title_label = QLabel(self)
-        self.title_label.setStyleSheet("font-weight: 500; color: #202A33;")
+        self.title_label.setStyleSheet(ui_styles("font-weight: 500; color: #202A33;"))
         self.status_label = QLabel(self)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         top.addWidget(self.title_label, 1)
@@ -321,7 +322,7 @@ class _RoundListRow(QWidget):
         }.get(status, "#087C58")
         self.title_label.setText(title)
         self.status_label.setText(status)
-        self.status_label.setStyleSheet(f"color: {status_color}; font-size: 12px; font-weight: 500;")
+        self.status_label.setStyleSheet(ui_styles(f"color: {status_color}; font-size: 12px; font-weight: 500;"))
         self.target_label.setText(record.target_label)
         note = f"{record.candidate_count} 个候选" if record.candidate_count else record.updated_at.strftime("%H:%M:%S")
         self.note_label.setText(note)
@@ -377,7 +378,7 @@ class HistoryPanel(QWidget):
         toolbar = QHBoxLayout()
         self.summary_label = QLabel("0 轮 · 0 条候选")
         self.summary_label.setObjectName("HistorySummary")
-        self.summary_label.setStyleSheet("color: #687480; font-weight: 500;")
+        self.summary_label.setStyleSheet(ui_styles("color: #687480; font-weight: 500;"))
         self.copy_button = QPushButton("复制全部")
         self.copy_button.setFixedHeight(34)
         self.copy_button.setEnabled(False)
@@ -444,7 +445,7 @@ class HistoryPanel(QWidget):
         empty_layout.addWidget(EmptyIllustration("journal"), 0, Qt.AlignmentFlag.AlignHCenter)
         self.empty_state_title = QLabel("暂无轮次记录", self.empty_state)
         self.empty_state_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_state_title.setStyleSheet("color: #687480; font-size: 16px; font-weight: 500;")
+        self.empty_state_title.setStyleSheet(ui_styles("color: #687480; font-size: 16px; font-weight: 500;"))
         self.empty_state_detail = QLabel("当前会话尚未产生运行结果", self.empty_state)
         self.empty_state_detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_state_detail.setStyleSheet("color: #87939F; font-size: 12px;")
@@ -474,8 +475,8 @@ class HistoryPanel(QWidget):
         self.round_list_heading.setObjectName("HistoryRoundListHeading")
         self.round_list_heading.setFixedHeight(36)
         self.round_list_heading.setStyleSheet(
-            "color: #687480; background: #F7F8FA; border: 1px solid #E0E5EB; "
-            "border-bottom: 0; padding: 0 11px; font-size: 12px; font-weight: 500;"
+            ui_styles("color: #687480; background: #F7F8FA; border: 1px solid #E0E5EB; "
+            "border-bottom: 0; padding: 0 11px; font-size: 12px; font-weight: 500;")
         )
         self.round_list = QListWidget(list_panel)
         self.round_list.setObjectName("HistoryRoundList")
@@ -510,7 +511,7 @@ class HistoryPanel(QWidget):
         title_row.setContentsMargins(0, 0, 0, 0)
         self.detail_title_label = QLabel("请选择轮次", detail_panel)
         self.detail_title_label.setObjectName("HistoryDetailTitle")
-        self.detail_title_label.setStyleSheet("color: #202A33; font-size: 16px; font-weight: 500;")
+        self.detail_title_label.setStyleSheet(ui_styles("color: #202A33; font-size: 16px; font-weight: 500;"))
         self.detail_status_label = QLabel("", detail_panel)
         self.detail_status_label.setObjectName("HistoryDetailStatus")
         title_row.addWidget(self.detail_title_label)
@@ -579,7 +580,7 @@ class HistoryPanel(QWidget):
 
         feed_heading = QHBoxLayout()
         feed_title = QLabel("处理详情", detail_panel)
-        feed_title.setStyleSheet("color: #202A33; font-size: 13px; font-weight: 500;")
+        feed_title.setStyleSheet(ui_styles("color: #202A33; font-size: 13px; font-weight: 500;"))
         feed_note = QLabel("候选数据为识别当时的快照", detail_panel)
         feed_note.setStyleSheet("color: #687480; font-size: 12px;")
         feed_heading.addWidget(feed_title)
@@ -632,7 +633,7 @@ class HistoryPanel(QWidget):
         value_label = QLabel("-")
         value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         value_label.setWordWrap(True)
-        value_label.setStyleSheet("color: #202A33; font-weight: 500;")
+        value_label.setStyleSheet(ui_styles("color: #202A33; font-weight: 500;"))
         layout.addWidget(title_label, 0, column)
         layout.addWidget(value_label, 1, column)
         return value_label
@@ -923,8 +924,8 @@ class HistoryPanel(QWidget):
         }.get(status, "#087C58")
         self.detail_status_label.setText(status)
         self.detail_status_label.setStyleSheet(
-            f"color: {status_color}; background: #F0F3F6; border-radius: 3px; "
-            "padding: 2px 6px; font-size: 12px; font-weight: 500;"
+            ui_styles(f"color: {status_color}; background: #F0F3F6; border-radius: 3px; "
+            "padding: 2px 6px; font-size: 12px; font-weight: 500;")
         )
         start = record.started_at.strftime("%Y-%m-%d %H:%M:%S")
         if record.updated_at.replace(microsecond=0) == record.started_at.replace(microsecond=0):
@@ -978,7 +979,7 @@ class HistoryPanel(QWidget):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             label.setWordWrap(True)
-            weight = "font-weight: 500;" if entry.bold else ""
+            weight = ui_styles("font-weight: 500;" if entry.bold else "")
             label.setStyleSheet(f"color: {entry.color}; padding: 1px 4px; {weight}")
             self._append_widget(label)
         elif entry.kind == "divider":
@@ -1323,13 +1324,13 @@ class HistoryPanel(QWidget):
         table.setMinimumWidth(0)
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.setStyleSheet(
-            "QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #FAFBFC; "
+            ui_styles("QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #FAFBFC; "
             "border: 0; color: #202A33; }"
             "QTableWidget#HistoryCandidateTable::item { padding: 3px 6px; }"
             "QTableWidget#HistoryCandidateTable::item:selected { background: #DCEFE6; color: #202A33; }"
             "QTableWidget#HistoryCandidateTable QHeaderView::section { background: #F0F3F6; color: #687480; "
             "border: 0; border-bottom: 1px solid #F0F2F5; "
-            "padding: 6px; font-weight: 500; }"
+            "padding: 6px; font-weight: 500; }")
         )
         return table
 

@@ -179,7 +179,7 @@ from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
 from auto_bdsp_rng.ui.start_readiness import StartReadinessController
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 from auto_bdsp_rng.ui.workspace_controls import (
     PrimaryButton,
     ConnectionDialog, DeviceStatusButton, set_disconnect_action, workspace_icon,
@@ -3012,7 +3012,7 @@ class MainWindow(QMainWindow):
         self.video_source_status_dot.setFixedSize(8, 8)
         self.video_source_status = QLabel("未连接")
         self.video_source_status.setObjectName("VideoSourceStatus")
-        self.video_source_status.setStyleSheet("color: #687480; font-size: 12px; font-weight: 400;")
+        self.video_source_status.setStyleSheet(ui_styles("color: #687480; font-size: 12px; font-weight: 400;"))
         self.video_source_status_dot.setStyleSheet(
             'QFrame { border: 0; border-radius: 4px; background: #97A1AB; }'
             'QFrame[state="connecting"] { background: #B7791F; }'
@@ -3165,12 +3165,12 @@ class MainWindow(QMainWindow):
     def _apply_theme(self) -> None:
         self.setFont(ui_font())
         self.setStyleSheet(
-            """
+            ui_styles("""
             /* Confirmed compact workspace visual system. */
             QWidget {
                 background: #FFFFFF;
                 color: #202A33;
-                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 14px;
             }
             QWidget#AppRoot {
@@ -3777,7 +3777,7 @@ class MainWindow(QMainWindow):
                 color: #A7B0AB;
                 border-color: #EEF1EF;
             }
-            """ + primary_button_styles("QPushButton#PrimaryButton", "QToolButton#PrimaryButton")
+            """ + primary_button_styles("QPushButton#PrimaryButton", "QToolButton#PrimaryButton"))
         )
 
     def _spin(self, minimum: int, maximum: int, value: int) -> QLineEdit:
@@ -9565,10 +9565,10 @@ class _IVCalculatorDialog(QDialog):
             " QPushButton:hover { background: #F7F8FA; border-color: #bfcfc6; }"
         )
         css_primary = (
-            "QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
+            ui_styles("QPushButton { min-height: 34px; max-height: 34px; min-width: 90px; max-width: 110px;"
             " background: #087c58; border: 1px solid #087c58; border-radius: 4px; color: #ffffff;"
             " font-size: 12px; font-weight: 500; }"
-            " QPushButton:hover { background: #066a4b; border-color: #066a4b; }"
+            " QPushButton:hover { background: #066a4b; border-color: #066a4b; }")
         )
         css_entry = "QLineEdit { min-height: 32px; max-height: 32px; max-width: 75px; }"
 
@@ -9668,7 +9668,7 @@ class _IVCalculatorDialog(QDialog):
             lbl = QLabel(h)
             lbl.setFixedWidth(w)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("font-weight: 500;")
+            lbl.setStyleSheet(ui_styles("font-weight: 500;"))
             hdr.addWidget(lbl)
         hdr.addStretch()
         ivl.addLayout(hdr)
@@ -9699,7 +9699,7 @@ class _IVCalculatorDialog(QDialog):
             lbl.setFixedWidth(40)
             bl.addWidget(lbl, i, 0)
             val = QLabel("-")
-            val.setStyleSheet("font-weight: 500;")
+            val.setStyleSheet(ui_styles("font-weight: 500;"))
             val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._base_labels[label] = val
             bl.addWidget(val, i, 1)
@@ -9717,12 +9717,12 @@ class _IVCalculatorDialog(QDialog):
             lbl.setFixedWidth(40)
             rl.addWidget(lbl, i, 0)
             val = QLabel("-")
-            val.setStyleSheet("font-weight: 500; color: #202A33;")
+            val.setStyleSheet(ui_styles("font-weight: 500; color: #202A33;"))
             self._result_labels[label] = val
             rl.addWidget(val, i, 1)
         rl.addWidget(QLabel("下一级"), 6, 0)
         self._next_level_label = QLabel("-")
-        self._next_level_label.setStyleSheet("font-weight: 500; color: #202A33;")
+        self._next_level_label.setStyleSheet(ui_styles("font-weight: 500; color: #202A33;"))
         self._next_level_label.setWordWrap(True)
         rl.addWidget(self._next_level_label, 6, 1)
         rl.setRowStretch(7, 1)

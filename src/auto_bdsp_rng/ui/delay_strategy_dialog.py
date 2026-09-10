@@ -45,7 +45,7 @@ from auto_bdsp_rng.ui.combo_box import NoWheelComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.workspace_controls import workspace_icon
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 
 
 def delay_lucide_icon(name: str, color: str = "#687480", size: int = 16) -> QIcon:
@@ -1002,7 +1002,7 @@ class DelayStrategyDialog(QDialog):
 
     @staticmethod
     def _stylesheet() -> str:
-        return """
+        return ui_styles("""
             QDialog#DelayStrategyDialog { background: #FFFFFF; }
             QFrame#DelayDialogSurface {
                 background: #FFFFFF;
@@ -1012,7 +1012,7 @@ class DelayStrategyDialog(QDialog):
             QFrame#DelayDialogSurface QWidget {
                 background: transparent;
                 color: #202A33;
-                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 13px;
                 font-weight: 400;
             }
@@ -1221,7 +1221,7 @@ class DelayStrategyDialog(QDialog):
             QFrame#DelayDialogSurface QScrollBar::sub-line:vertical {
                 height: 0;
             }
-        """
+        """)
 
     @staticmethod
     def _spin(minimum: int, value: int, *, maximum: int = QT_INT_MAX) -> QSpinBox:

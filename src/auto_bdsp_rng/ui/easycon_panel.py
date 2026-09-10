@@ -73,7 +73,7 @@ from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
 from auto_bdsp_rng.ui.workspace_controls import ConnectionDialog, PrimaryButton, set_disconnect_action, workspace_icon
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 
 
 SCRIPT_DIR = script_directory()
@@ -541,18 +541,18 @@ class KeyMappingDialog(QDialog):
         header_layout.setContentsMargins(20, 0, 20, 0)
         title = QLabel("按键设置", header)
         title.setStyleSheet(
-            "QLabel { background: transparent; border: 0; color: #202A33;"
-            " font-family: 'BDSP UI Sans', 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif; font-size: 15px; font-weight: 500; }"
+            ui_styles("QLabel { background: transparent; border: 0; color: #202A33;"
+            " font-family: 'MiSans', 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif; font-size: 15px; font-weight: 500; }")
         )
         header_layout.addWidget(title)
         header_layout.addStretch(1)
         self.mapping_title = title
 
         btn_style = (
-            "QPushButton {"
+            ui_styles("QPushButton {"
             "  background: #ffffff; color: #202A33;"
             "  border: 1px solid #d7dfda; border-radius: 4px;"
-            "  font-family: 'BDSP UI Sans', 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;"
+            "  font-family: 'MiSans', 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;"
             "  font-size: 12px; font-weight: 400;"
             "}"
             " QPushButton:hover {"
@@ -560,7 +560,7 @@ class KeyMappingDialog(QDialog):
             "}"
             " QPushButton:checked {"
             "  background: #EAF7F1; color: #087c58; border: 2px solid #087c58;"
-            "}"
+            "}")
         )
 
         scale = self._DIAGRAM_W / self._DESIGN_W
@@ -625,9 +625,9 @@ class KeyMappingDialog(QDialog):
         ok_btn = QPushButton("确定", self)
         ok_btn.setGeometry(759, 651, 86, 34)
         ok_btn.setStyleSheet(
-            "QPushButton { background: #087c58; color: #ffffff; border: 1px solid #087c58;"
+            ui_styles("QPushButton { background: #087c58; color: #ffffff; border: 1px solid #087c58;"
             " border-radius: 7px; font-size: 13px; font-weight: 500; }"
-            " QPushButton:hover { background: #066a4b; border-color: #066a4b; }"
+            " QPushButton:hover { background: #066a4b; border-color: #066a4b; }")
         )
         ok_btn.clicked.connect(self.accept)
         self.ok_button = ok_btn
@@ -982,7 +982,7 @@ class EasyConPanel(QWidget):
 
         log_header = QLabel("运行概览")
         log_header.setStyleSheet(
-            f"font-weight: 500; font-size: 16px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};"
+            ui_styles(f"font-weight: 500; font-size: 16px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};")
         )
         layout.addWidget(log_header)
 
@@ -1002,7 +1002,7 @@ class EasyConPanel(QWidget):
         message_layout.setContentsMargins(0, 0, 0, 0)
         message_layout.setSpacing(4)
         recent_title = QLabel("最近消息")
-        recent_title.setStyleSheet(f"font-size: 12px; font-weight: 400; color: {self.CLR_HINT};")
+        recent_title.setStyleSheet(ui_styles(f"font-size: 12px; font-weight: 400; color: {self.CLR_HINT};"))
         message_layout.addWidget(recent_title)
         self.latest_log_label = QLabel("暂无消息")
         self.latest_log_label.setObjectName("LatestLogLabel")
@@ -1105,7 +1105,7 @@ class EasyConPanel(QWidget):
         self.run_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.run_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.run_button.setStyleSheet(
-            f"""
+            ui_styles(f"""
             QPushButton {{
                 background: {self.CLR_RUN_BTN};
                 color: white;
@@ -1124,7 +1124,7 @@ class EasyConPanel(QWidget):
                 color: #9aa9a2;
                 border-color: #E0E5EB;
             }}
-            """
+            """)
         )
         self.run_button.clicked.connect(self.toggle_run)
 
@@ -1198,7 +1198,7 @@ class EasyConPanel(QWidget):
         output_layout = QHBoxLayout(output_header)
         output_layout.setContentsMargins(16, 0, 12, 0)
         output_title = QLabel("运行输出")
-        output_title.setStyleSheet("font-size: 16px; font-weight: 500; background: transparent;")
+        output_title.setStyleSheet(ui_styles("font-size: 16px; font-weight: 500; background: transparent;"))
         output_layout.addWidget(output_title)
         output_layout.addStretch(1)
         complete_log_button = QPushButton("日志中心")
@@ -1292,11 +1292,11 @@ class EasyConPanel(QWidget):
         self.run_button.setIcon(workspace_icon("play", "#FFFFFF"))
         self.run_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.run_button.setStyleSheet(
-            "QPushButton { background: #087c58; color: white; border: 1px solid #087c58;"
+            ui_styles("QPushButton { background: #087c58; color: white; border: 1px solid #087c58;"
             " border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 12px;"
             " font-size: 13px; font-weight: 500; }"
             " QPushButton:hover { background: #066a4b; border-color: #066a4b; }"
-            " QPushButton:disabled { background: #94c9b7; border-color: #94c9b7; color: white; }"
+            " QPushButton:disabled { background: #94c9b7; border-color: #94c9b7; color: white; }")
         )
         self.run_button.setStyleSheet(self.run_button.styleSheet() + primary_button_styles("QPushButton#PrimaryButton"))
         layout.addWidget(self.run_button)
@@ -1452,7 +1452,7 @@ class EasyConPanel(QWidget):
         keyboard_header = QHBoxLayout()
         keyboard_header.setContentsMargins(0, 0, 0, 0)
         keyboard_title = QLabel("键盘控制")
-        keyboard_title.setStyleSheet(f"font-size: 14px; font-weight: 500; color: {self.CLR_TEXT};")
+        keyboard_title.setStyleSheet(ui_styles(f"font-size: 14px; font-weight: 500; color: {self.CLR_TEXT};"))
         self.keyboard_controller_state_label = QLabel("不可用")
         self.keyboard_controller_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.keyboard_controller_state_label.setMinimumWidth(62)
@@ -1470,13 +1470,13 @@ class EasyConPanel(QWidget):
         mode_frame.setObjectName("KeyboardControlMode")
         mode_frame.setFixedHeight(32)
         mode_frame.setStyleSheet(
-            f"QFrame#KeyboardControlMode {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
+            ui_styles(f"QFrame#KeyboardControlMode {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
             " border-radius: 7px; }}"
             " QFrame#KeyboardControlMode QPushButton { background: transparent; border: 0; border-radius: 0;"
             " min-height: 28px; max-height: 28px; padding: 0 6px; font-size: 12px; color: #687480; }"
             " QFrame#KeyboardControlMode QPushButton:hover:!checked { background: #F7F8FA; }"
             " QFrame#KeyboardControlMode QPushButton:checked { background: #EAF7F1; color: #087c58; font-weight: 400; }"
-            " QFrame#KeyboardControlMode QPushButton:disabled { color: #9aa9a2; background: #F7F8FA; }"
+            " QFrame#KeyboardControlMode QPushButton:disabled { color: #9aa9a2; background: #F7F8FA; }")
         )
         mode_layout = QHBoxLayout(mode_frame)
         mode_layout.setContentsMargins(1, 1, 1, 1)
@@ -1531,7 +1531,7 @@ class EasyConPanel(QWidget):
         recording_header = QHBoxLayout()
         recording_header.setContentsMargins(0, 0, 0, 0)
         recording_title = QLabel("操作录制")
-        recording_title.setStyleSheet(f"font-size: 14px; font-weight: 500; color: {self.CLR_TEXT};")
+        recording_title.setStyleSheet(ui_styles(f"font-size: 14px; font-weight: 500; color: {self.CLR_TEXT};"))
         self.recording_state_label = QLabel("未录制")
         self.recording_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.recording_state_label.setMinimumWidth(62)
@@ -1618,8 +1618,8 @@ class EasyConPanel(QWidget):
         _background, foreground = colors.get(state, colors["idle"])
         label.setText(text)
         label.setStyleSheet(
-            f"background: transparent; color: {foreground}; border: 0;"
-            " padding: 0; font-size: 12px; font-weight: 400;"
+            ui_styles(f"background: transparent; color: {foreground}; border: 0;"
+            " padding: 0; font-size: 12px; font-weight: 400;")
         )
 
     def _update_keyboard_control_presentation(self) -> None:

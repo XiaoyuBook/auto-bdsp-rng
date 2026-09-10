@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.resources import resource_path
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 
 
 _SYMBOLS = {
@@ -273,9 +273,9 @@ class ConnectionDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedWidth(490)
-        self.setStyleSheet(f"""
+        self.setStyleSheet(ui_styles(f"""
             QDialog#{object_name} {{ background: transparent; border: 0; }}
-            QDialog#{object_name} QWidget {{ font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; font-size: 13px; color: #202A33; }}
+            QDialog#{object_name} QWidget {{ font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; font-size: 13px; color: #202A33; }}
             QDialog#{object_name} QLabel {{ background: transparent; border: 0; }}
             QDialog#{object_name} QFrame#ConnectionTitleBar {{ background: transparent; border: 0; border-bottom: 1px solid #E0E5EB; }}
             QDialog#{object_name} QLabel#ConnectionTitle {{ font-size: 16px; font-weight: 500; }}
@@ -293,7 +293,7 @@ class ConnectionDialog(QDialog):
             QDialog#{object_name} QMenu {{ background: white; border: 1px solid #E0E5EB; padding: 4px; }}
             QDialog#{object_name} QMenu::item {{ padding: 7px 28px 7px 10px; }}
             QDialog#{object_name} QMenu::item:selected {{ background: #EAF7F1; color: #087C58; }}
-        """)
+        """))
         self.setStyleSheet(self.styleSheet() + primary_button_styles(
             f'QDialog#{object_name} QPushButton#PrimaryButton'
         ) + f"""

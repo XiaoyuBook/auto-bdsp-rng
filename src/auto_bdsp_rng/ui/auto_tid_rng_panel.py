@@ -295,7 +295,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _apply_panel_style(self) -> None:
         self.setFont(ui_font())
         self.setStyleSheet(workspace_styles("""
-            QWidget { color: #202A33; font-size: 14px; font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "Segoe UI", sans-serif; }
+            QWidget { color: #202A33; font-size: 14px; font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "Segoe UI", sans-serif; }
             QPushButton#PrimaryButton, QToolButton#PrimaryButton { color: #ffffff; background: #087c58; }
             QPushButton#PrimaryButton:disabled, QToolButton#PrimaryButton:disabled {
                 color: #97a79f; background: #eff3f1; border-color: #eff3f1; }

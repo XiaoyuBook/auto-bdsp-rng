@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer, RunLogPanel
 
+from auto_bdsp_rng.ui.workspace_theme import ui_styles
+
 
 _UNREAD_LEVELS = {"WARNING", "ERROR", "CRITICAL"}
 
@@ -125,7 +127,7 @@ class RunRecordsPanel(QWidget):
         # The application-wide tab rules target every QTabWidget. Keep this
         # nested switch visually lighter so it reads as a view selector.
         self.setStyleSheet(
-            """
+            ui_styles("""
             QFrame#RunRecordsHeading {
                 background: transparent;
                 border: 0;
@@ -189,7 +191,7 @@ class RunRecordsPanel(QWidget):
             QWidget#RunRecordsSessionCorner {
                 background: transparent;
             }
-            """
+            """)
         )
         self._refresh_log_tab_text()
 

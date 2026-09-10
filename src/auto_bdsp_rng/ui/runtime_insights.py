@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from auto_bdsp_rng.ui.workspace_theme import ui_styles
+
 
 def snapshot_value(value):
     """Detach nested mutable objects without keeping service or widget references."""
@@ -111,7 +113,7 @@ class RuntimeInsights(QWidget):
         for label in (self.next_label, self.event_label, self.wait_label):
             label.setWordWrap(True)
             label.setTextFormat(Qt.TextFormat.PlainText)
-            label.setStyleSheet("color: #626D79; font-size: 12px; font-weight: 400;")
+            label.setStyleSheet(ui_styles("color: #626D79; font-size: 12px; font-weight: 400;"))
             layout.addWidget(label)
         self.timer = QTimer(self)
         self.timer.setInterval(1000)

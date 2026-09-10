@@ -41,7 +41,7 @@ def test_release_copy_keeps_bundled_ui_faces_and_license(monkeypatch, tmp_path):
     monkeypatch.setattr(build_script_module, "PROJECT_XS_ROOT", project / "missing-xs")
     monkeypatch.setattr(build_script_module, "PROJECT_XS_OVERRIDES", project / "missing-overrides")
     build_script_module.copy_release_files()
-    for name in ("BDSPUISans-Regular.otf", "BDSPUISans-Medium.otf", "OFL.txt", "README.md"):
+    for name in ("MiSans-Regular.otf", "MiSans-Medium.otf", "MiSans-LICENSE.pdf", "README.md"):
         assert (dist / "docs/assets/fonts" / name).read_bytes() == (source / name).read_bytes()
 
 

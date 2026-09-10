@@ -24,7 +24,7 @@ from auto_bdsp_rng import __version__
 from auto_bdsp_rng.resources import app_icon_path, resource_path
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 from auto_bdsp_rng.ui.workspace_controls import workspace_icon
 
 
@@ -160,6 +160,7 @@ class AboutDialog(QDialog):
                 ("作者", "晓宇"),
                 ("GitHub", "XiaoyuBook"),
                 ("License", "GPL-3.0-or-later"),
+                ("界面字体", "MiSans · 小米"),
             )
         ):
             label = QLabel(f"{key}：")
@@ -420,7 +421,7 @@ class AboutDialog(QDialog):
             logo_bg = "#EAF7F1"
             warning = "#8a6818"
 
-        return f"""
+        return ui_styles(f"""
         QDialog {{
             background: {bg};
             color: {text};
@@ -595,7 +596,7 @@ class AboutDialog(QDialog):
             color: {bg if self._dark else '#ffffff'};
             border-color: {soft};
         }}
-        """ + primary_button_styles("QPushButton#PrimaryButton")
+        """ + primary_button_styles("QPushButton#PrimaryButton"))
 
 
 class StartupNoticeDialog(QDialog):

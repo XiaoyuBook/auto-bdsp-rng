@@ -258,8 +258,8 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert window.version_label.text() not in window.title_label.text()
     assert window.title_label.font().pixelSize() == 20
     assert window.version_label.font().pixelSize() == 12
-    assert window.title_label.font().weight() == 500
-    assert window.version_label.font().weight() == 400
+    assert window.title_label.font().weight() == 380
+    assert window.version_label.font().weight() == 330
     assert window.video_source_header_button.size() == QSize(150, 32)
     assert window.easycon_header_button.size() == QSize(150, 32)
     assert window.easycon_header_button.status_text == "已连接"
@@ -330,8 +330,8 @@ def test_confirmed_navigation_and_seed_preview_use_content_geometry(
     group_rule = stylesheet.split("QGroupBox {", 1)[1].split("}", 1)[0]
     group_title_rule = stylesheet.split("QGroupBox::title {", 1)[1].split("}", 1)[0]
     checkbox_rule = stylesheet.split("QCheckBox {", 1)[1].split("}", 1)[0]
-    assert "font-weight: 400;" in group_rule
-    assert "font-weight: 500;" in group_title_rule
+    assert "font-weight: 330;" in group_rule
+    assert "font-weight: 380;" in group_title_rule
     assert "background: transparent;" in checkbox_rule
 
     preview = window.preview_aspect_container

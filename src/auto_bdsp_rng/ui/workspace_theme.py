@@ -1,6 +1,7 @@
 """Small shared design tokens for native Qt workspaces (logical pixels)."""
 
 import logging
+import re
 from string import Template
 
 from PySide6.QtCore import QEvent, QObject
@@ -26,8 +27,10 @@ ERROR_SOFT = "#FFF4F1"
 FOCUS = "#176B97"
 CONTROL_HEIGHT = 32
 CONTROL_RADIUS = 7
-BUNDLED_FONT_FAMILY = "BDSP UI Sans"
-BUNDLED_FONT_FILES = ("BDSPUISans-Regular.otf", "BDSPUISans-Medium.otf")
+BUNDLED_FONT_FAMILY = "MiSans"
+BUNDLED_FONT_FILES = ("MiSans-Regular.otf", "MiSans-Medium.otf")
+# MiSans 4.009 uses these native OS/2 weights, not the usual 400/500.
+_MISANS_WEIGHTS = {400: 330, 500: 380}
 UI_FONT_FAMILIES = (
     BUNDLED_FONT_FAMILY,
     "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC",
@@ -60,9 +63,27 @@ def ui_font(pixel_size: int = 14, weight: QFont.Weight = QFont.Weight.Normal) ->
     font.setFamilies(list(UI_FONT_FAMILIES))
     font.setStyleHint(QFont.StyleHint.SansSerif)
     font.setPixelSize(pixel_size)
-    font.setWeight(weight)
+    font.setWeight(ui_font_weight(weight))
     font.setFeature(QFont.Tag("tnum"), 1)
     return font
+
+
+def ui_font_weight(weight: QFont.Weight) -> QFont.Weight:
+    """Select the original MiSans face while keeping semantic fallback weights."""
+    if ensure_ui_fonts():
+        return QFont.Weight(_MISANS_WEIGHTS.get(int(weight), int(weight)))
+    return weight
+
+
+def ui_styles(styles: str) -> str:
+    """Resolve Regular/Medium UI weights; not for technical monospace styles."""
+    if not ensure_ui_fonts():
+        return styles
+    return re.sub(
+        r"(font-weight\s*:\s*)(400|500)(\s*;)",
+        lambda match: match[1] + str(_MISANS_WEIGHTS[int(match[2])]) + match[3],
+        styles,
+    )
 
 
 def primary_button_styles(*selectors: str) -> str:
@@ -109,13 +130,13 @@ def add_card_shadow(widget) -> None:
 
 def workspace_styles(template: str) -> str:
     """Resolve shared colors without interfering with QSS block braces."""
-    return Template(template).substitute(
+    return ui_styles(Template(template).substitute(
         background=BACKGROUND, surface=SURFACE, surface_muted=SURFACE_MUTED, text=TEXT,
         text_secondary=TEXT_SECONDARY, border=BORDER, card_border=CARD_BORDER,
         separator=SEPARATOR, accent=ACCENT,
         accent_soft=ACCENT_SOFT, warning=WARNING, warning_soft=WARNING_SOFT,
         error=ERROR, error_soft=ERROR_SOFT, runtime_gradient=RUNTIME_GRADIENT,
-    )
+    ))
 
 
 def focus_styles(*selectors: str) -> str:

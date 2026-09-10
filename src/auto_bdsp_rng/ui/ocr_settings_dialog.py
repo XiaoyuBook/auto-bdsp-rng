@@ -27,7 +27,7 @@ from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
     STARTER_BATTLE_REGION_FIELD,
     STAT_REGION_FIELDS,
 )
-from auto_bdsp_rng.ui.workspace_theme import ui_font
+from auto_bdsp_rng.ui.workspace_theme import ui_font, ui_styles
 
 
 Recognizer = Callable[[str, OcrRegion | None], str]
@@ -83,7 +83,7 @@ class OcrSettingsDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(980, 680)
         self.setStyleSheet(
-            "QDialog#OcrSettingsDialog { background: #F2F4F7; color: #202A33; }"
+            ui_styles("QDialog#OcrSettingsDialog { background: #F2F4F7; color: #202A33; }"
             " QDialog#OcrSettingsDialog QLabel { color: #626D79; font-size: 12px; background: transparent; }"
             " QDialog#OcrSettingsDialog QTableWidget { font-size: 13px; border-radius: 7px;"
             " background: #ffffff; alternate-background-color: #FAFBFC;"
@@ -107,7 +107,7 @@ class OcrSettingsDialog(QDialog):
             " QDialog#OcrSettingsDialog QScrollBar::add-line, QDialog#OcrSettingsDialog QScrollBar::sub-line { width: 0; height: 0; }"
             " QDialog#OcrSettingsDialog QScrollBar::add-page, QDialog#OcrSettingsDialog QScrollBar::sub-page { background: transparent; }"
             " QDialog#OcrSettingsDialog QMessageBox { background: #ffffff; color: #202A33; }"
-            " QDialog#OcrSettingsDialog QMessageBox QPushButton { min-width: 76px; }"
+            " QDialog#OcrSettingsDialog QMessageBox QPushButton { min-width: 76px; }")
         )
         self._settings = settings or QSettings("auto-bdsp-rng", "OcrSettings")
         self._recognizer = recognizer
