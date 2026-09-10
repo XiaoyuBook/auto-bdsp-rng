@@ -1,5 +1,6 @@
 from __future__ import annotations
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
+from auto_bdsp_rng.ui.static_result_items import StatDisplayMode, StatResultItem
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
 from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, WorkspaceSplit, scroll_surface
@@ -20,6 +21,7 @@ from PySide6.QtCore import (
     QProcess,
     QRect,
     QSettings,
+    QSignalBlocker,
     QSize,
     QThread,
     QTimer,
@@ -2826,7 +2828,7 @@ class MainWindow(QMainWindow):
         left_col.addLayout(iv_grid)
         left_col.addSpacing(10)
         self.show_stats_check = QCheckBox("显示能力值")
-        self.show_stats_check.stateChanged.connect(lambda _state: self._refresh_result_columns())
+        self.show_stats_check.toggled.connect(self._refresh_result_stats)
         left_col.addWidget(self.show_stats_check)
         left_col.addStretch()
         outer.addLayout(left_col)
@@ -3136,6 +3138,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(toolbar_widget)
 
         # 表格
+        self._stat_display_mode = StatDisplayMode(self.show_stats_check.isChecked())
         self.table = PokeFinderTableWidget()
         self.table.setObjectName("StaticResultsTable")
         self.table.setShowGrid(False)
@@ -3811,10 +3814,41 @@ class MainWindow(QMainWindow):
     def _refresh_result_columns(self) -> None:
         if not hasattr(self, "table"):
             return
-        self.table.setColumnCount(len(self._result_headers()))
-        self.table.setHorizontalHeaderLabels(self._result_headers())
         if self._states:
             self._populate_table(self._states)
+        else:
+            self._update_result_headers()
+
+    def _update_result_headers(self) -> None:
+        headers = self._result_headers()
+        self.table.setColumnCount(len(headers))
+        model = self.table.model()
+        # ResizeToContents must see one complete header change, not one per column.
+        with QSignalBlocker(model):
+            self.table.setHorizontalHeaderLabels(headers)
+        model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(headers) - 1)
+
+    def _refresh_result_stats(self, show_stats: bool) -> None:
+        if not hasattr(self, "table"):
+            return
+        resort = self.table.isSortingEnabled() and 7 <= self.table.horizontalHeader().sortIndicatorSection() < 13
+        if resort:
+            # Qt's incremental ensureSorted repeatedly inserts rows when every value
+            # changes. A single full sort avoids that quadratic work on large results.
+            self.table.setSortingEnabled(False)
+        try:
+            self._stat_display_mode.show_stats = show_stats
+            self._update_result_headers()
+            if self.table.rowCount():
+                model = self.table.model()
+                # Keep items and selection; notify both the main and pinned views once.
+                model.dataChanged.emit(
+                    model.index(0, 7), model.index(self.table.rowCount() - 1, 12),
+                    [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole],
+                )
+        finally:
+            if resort:
+                self.table.setSortingEnabled(True)
 
     def _game_label(self, version: GameVersion) -> str:
         labels = GAME_LABELS_ZH if self.lang == "zh" else GAME_LABELS_EN
@@ -7577,7 +7611,6 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.set_target_version(self._profile_version)
         record, state_filter, shiny_mode = self.auto_rng_tab.targets()[0]
         self._apply_auto_target_to_bdsp_controls(record, state_filter, shiny_mode)
-        self._active_record = record
         try:
             states = generate_static_candidates(
                 StaticSearchCriteria(
@@ -9178,13 +9211,16 @@ class MainWindow(QMainWindow):
     def _populate_table(self, states: list[State8]) -> None:
         sorting = self.table.isSortingEnabled()
         self.table.setSortingEnabled(False)
-        self.table.setColumnCount(len(self._result_headers()))
-        self.table.setHorizontalHeaderLabels(self._result_headers())
+        self._update_result_headers()
         self.table.setRowCount(len(states))
         for row, state in enumerate(states):
-            values = self._state_row(state)
+            values = self._state_row(state, show_stats=False)
+            stats = self._stat_values(state)
             for column, value in enumerate(values):
-                item = ResultItem(value, sort_value=int(value, 16) if column in (1, 2) else None)
+                if 7 <= column < 13:
+                    item = StatResultItem(state.ivs[column - 7], stats[column - 7], self._stat_display_mode)
+                else:
+                    item = ResultItem(value, sort_value=int(value, 16) if column in (1, 2) else None)
                 if column == 3 and value not in ("-", "否"):
                     item.setForeground(Qt.GlobalColor.yellow)
                 self.table.setItem(row, column, item)
@@ -9217,7 +9253,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.bdsp_config_scroll, lambda: self.bdsp_config_scroll.ensureWidgetVisible(control))
 
 
-    def _state_row(self, state: State8) -> list[str]:
+    def _state_row(self, state: State8, *, show_stats: bool | None = None) -> list[str]:
         if self.lang == "zh":
             shiny = {0: "否", 1: "星闪", 2: "方闪"}.get(state.shiny, str(state.shiny))
             gender = {0: "雄", 1: "雌", 2: "-"}.get(state.gender, str(state.gender))
@@ -9239,7 +9275,9 @@ class MainWindow(QMainWindow):
             str(state.weight),
             self._characteristic_text(state),
         ]
-        if hasattr(self, "show_stats_check") and self.show_stats_check.isChecked():
+        if show_stats is None:
+            show_stats = hasattr(self, "show_stats_check") and self.show_stats_check.isChecked()
+        if show_stats:
             row[7:13] = [str(value) for value in self._stat_values(state)]
         return row
 
