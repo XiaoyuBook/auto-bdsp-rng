@@ -21,10 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng import __version__
-from auto_bdsp_rng.resources import app_icon_path
+from auto_bdsp_rng.resources import app_icon_path, resource_path
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
+from auto_bdsp_rng.ui.workspace_controls import workspace_icon
 
 
 PROJECT_REPOSITORY_URL = "https://github.com/XiaoyuBook/auto-bdsp-rng"
@@ -210,7 +211,7 @@ class AboutDialog(QDialog):
         layout.setVerticalSpacing(8)
         layout.setRowStretch(3, 1)
 
-        assets_dir = Path(__file__).resolve().parents[3] / "docs" / "assets"
+        assets_dir = resource_path("docs", "assets")
 
         projects = (
             (assets_dir / "friend_easycon.ico",    "伊机控",     "Switch 自动化控制\n脚本执行与串口连接", EASYCON_URL),
@@ -228,7 +229,9 @@ class AboutDialog(QDialog):
             icon_btn.clicked.connect(lambda checked, u=url: QDesktopServices.openUrl(QUrl(u)))
             if icon_path.exists():
                 icon_btn.setIcon(QIcon(str(icon_path)))
-                icon_btn.setIconSize(QSize(56, 56))
+                # The narrow feather needs more height than the round logos to
+                # carry similar visual weight within the shared 56px surface.
+                icon_btn.setIconSize(QSize(44, 44) if name == "Project_Xs" else QSize(40, 40))
             layout.addWidget(icon_btn, 0, column, Qt.AlignmentFlag.AlignCenter)
 
             # 名称
@@ -262,18 +265,25 @@ class AboutDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
 
-        email_btn = QPushButton("📧 发送邮件")
+        icon_color = "#B3BDC8" if self._dark else "#626D79"
+        email_btn = QPushButton("发送邮件")
+        email_btn.setIcon(workspace_icon("mail", icon_color))
+        email_btn.setIconSize(QSize(16, 16))
         email_btn.setObjectName("ContactButton")
         email_btn.setToolTip(AUTHOR_EMAIL)
         email_btn.clicked.connect(self._handle_copy_email)
         btn_row.addWidget(email_btn, 1)
 
-        bili_btn = QPushButton("📺 B站")
+        bili_btn = QPushButton("B站")
+        bili_btn.setIcon(workspace_icon("tv", icon_color))
+        bili_btn.setIconSize(QSize(16, 16))
         bili_btn.setObjectName("ContactButton")
         bili_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(AUTHOR_BILIBILI_URL)))
         btn_row.addWidget(bili_btn, 1)
 
-        gh_btn = QPushButton("🐙 GitHub")
+        gh_btn = QPushButton("GitHub")
+        gh_btn.setIcon(workspace_icon("github", icon_color))
+        gh_btn.setIconSize(QSize(16, 16))
         gh_btn.setObjectName("ContactButton")
         gh_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(AUTHOR_GITHUB_URL)))
         btn_row.addWidget(gh_btn, 1)
@@ -388,6 +398,7 @@ class AboutDialog(QDialog):
             panel = "#2A323D"
             card = "#252D37"
             border = "#434D5A"
+            card_border = "#353F4B"
             text = "#EBEEF2"
             muted = "#B3BDC8"
             soft = "#9fc8ad"
@@ -400,6 +411,7 @@ class AboutDialog(QDialog):
             panel = "#ffffff"
             card = "#ffffff"
             border = "#E0E5EB"
+            card_border = "#E9EDF2"
             text = "#202A33"
             muted = "#626D79"
             soft = "#087c58"
@@ -436,7 +448,7 @@ class AboutDialog(QDialog):
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
         QFrame#AboutHeader {{
             background: {panel};
-            border: 1px solid {border};
+            border: 1px solid {card_border};
             border-radius: 12px;
         }}
         QLabel#AppLogo {{
@@ -469,20 +481,22 @@ class AboutDialog(QDialog):
         }}
         QGroupBox#AboutCard {{
             background: {card};
-            border: 1px solid {border};
+            border: 1px solid {card_border};
             border-radius: 12px;
-            margin-top: 10px;
-            padding: 12px 0 0 0;
+            margin-top: 0;
+            padding: 40px 0 0 0;
             font-size: 16px;
             font-weight: 500;
             color: {soft};
         }}
         QGroupBox#AboutCard::title {{
             color: {text};
-            subcontrol-origin: margin;
-            left: 12px;
-            padding: 0 5px;
-            background: {bg};
+            subcontrol-origin: padding;
+            subcontrol-position: top left;
+            left: 16px;
+            top: 12px;
+            padding: 0;
+            background: transparent;
         }}
         QLabel#MutedLabel {{
             color: {muted};
@@ -520,8 +534,8 @@ class AboutDialog(QDialog):
             font-size: 12px;
         }}
         QPushButton#FriendIconBtn {{
-            background: {soft_bg};
-            border: 1px solid {border};
+            background: {hover};
+            border: 1px solid {card_border};
             border-radius: 10px;
             padding: 0;
             min-width: 56px; max-width: 56px;
@@ -529,7 +543,7 @@ class AboutDialog(QDialog):
             font-size: 22px;
         }}
         QPushButton#FriendIconBtn:hover {{
-            background: {soft};
+            background: {soft_bg};
             border-color: {soft};
         }}
         QLabel#FriendLinkName {{
@@ -567,12 +581,12 @@ class AboutDialog(QDialog):
             border-color: #1e7d5a;
         }}
         QPushButton#ContactButton {{
-            background: {soft_bg};
+            background: {panel};
             border: 1px solid {border};
             border-radius: 7px;
             min-height: 36px;
             padding: 6px 10px;
-            color: {soft};
+            color: {text};
             font-weight: 500;
             font-size: 14px;
         }}

@@ -141,6 +141,9 @@ def test_main_window_reports_when_system_cannot_open_log_directory(app, tmp_path
 
 def test_run_restores_enabled_setting_and_reports_startup_write_failure(monkeypatch):
     class FakeApp:
+        def setFont(self, font) -> None:
+            self.font = font
+
         def exec(self) -> int:
             return 0
 
@@ -239,6 +242,9 @@ def test_run_schedules_startup_update_check_from_persisted_setting(
     expected_calls,
 ):
     class FakeApp:
+        def setFont(self, font) -> None:
+            self.font = font
+
         def exec(self) -> int:
             return 0
 
@@ -294,6 +300,9 @@ def test_run_configures_ui_scale_before_qapplication_and_passes_effective_scale(
     created_with: list[dict[str, object]] = []
 
     class FakeApp:
+        def setFont(self, font) -> None:
+            self.font = font
+
         def exec(self) -> int:
             return 0
 
@@ -402,6 +411,9 @@ def test_startup_update_callback_rechecks_setting_and_runs_silently(
 
 def test_frozen_run_migrates_legacy_internal_scripts_and_reports_backups(monkeypatch, tmp_path):
     class FakeApp:
+        def setFont(self, font) -> None:
+            self.font = font
+
         def __init__(self) -> None:
             self.exec_called = False
 
@@ -488,6 +500,9 @@ def test_frozen_run_skips_legacy_script_migration_during_uncommitted_update(
     tmp_path,
 ):
     class FakeApp:
+        def setFont(self, font) -> None:
+            self.font = font
+
         def __init__(self) -> None:
             self.exec_called = False
 
@@ -551,6 +566,9 @@ def test_frozen_run_skips_legacy_script_migration_during_uncommitted_update(
 
 def test_frozen_run_reports_legacy_script_migration_error_and_still_starts(monkeypatch, tmp_path):
     class FakeApp:
+        def setFont(self, font) -> None:
+            self.font = font
+
         def __init__(self) -> None:
             self.exec_called = False
 
@@ -671,6 +689,9 @@ def test_legacy_script_migration_notices_explain_backup_and_retry_locations(
 @pytest.mark.parametrize("failure_phase", ["exit_write", "close"])
 def test_run_persists_disabled_setting_when_shutdown_logging_fails(monkeypatch, failure_phase):
     class FakeApp:
+        def setFont(self, font) -> None:
+            self.font = font
+
         def exec(self) -> int:
             return 7
 

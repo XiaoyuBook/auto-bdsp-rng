@@ -1,13 +1,13 @@
 """Non-interactive empty guidance confined to a real table's viewport."""
 
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from auto_bdsp_rng.ui.workspace_controls import workspace_icon
+from auto_bdsp_rng.ui.workspace_controls import EmptyIllustration
 
 
 class TableEmptyState(QWidget):
-    def __init__(self, table) -> None:
+    def __init__(self, table, *, symbol: str = "empty") -> None:
         super().__init__(table.viewport())
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -16,10 +16,7 @@ class TableEmptyState(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         layout.addStretch()
-        self.illustration = QLabel()
-        self.illustration.setFixedSize(32, 32)
-        self.illustration.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.illustration.setPixmap(workspace_icon("empty", "#94A5B2").pixmap(QSize(32, 32), self.devicePixelRatioF()))
+        self.illustration = EmptyIllustration(symbol)
         layout.addWidget(self.illustration, 0, Qt.AlignmentFlag.AlignHCenter)
         self.title = QLabel()
         self.detail = QLabel()

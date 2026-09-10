@@ -35,16 +35,17 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
+from auto_bdsp_rng.ui.workspace_controls import EmptyIllustration
 
 # ── 配色 ──────────────────────────────────────────────────
-CLR_SEP     = "#E0E5EB"   # 分隔线
+CLR_SEP     = "#F0F2F5"   # 分隔线
 CLR_TS      = "#687480"   # 时间戳
 CLR_BODY    = "#202A33"   # 正文
 CLR_LOCK    = "#087C58"   # 锁定 / 成功
 CLR_SHINY   = "#B45309"   # 出闪
 CLR_ERROR   = "#AC4B42"   # 错过 / 失败
 CLR_LOCK_BG = "#EAF7F1"   # 锁定行背景
-CLR_LOCK_FG = "#087C58"   # 锁定行文字
+CLR_LOCK_FG = "#202A33"   # 锁定行普通数据
 CLR_SYNC_BG = "#CFFAFE"   # 同步状态背景
 CLR_SYNC_FG = "#155E75"   # 同步状态文字
 CLR_SHINY_BG = "#FEF3C7"   # 异色单元格背景
@@ -432,20 +433,21 @@ class HistoryPanel(QWidget):
         self.empty_state.setObjectName("HistoryEmptyState")
         self.empty_state.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.empty_state.setStyleSheet(
-            "QFrame#HistoryEmptyState { background: #F7F8FA; border: 1px solid #E0E5EB; "
-            "border-radius: 6px; }"
+            "QFrame#HistoryEmptyState { background: #FFFFFF; border: 1px solid #E9EDF2; "
+            "border-radius: 12px; }"
             "QFrame#HistoryEmptyState QLabel { background: transparent; border: 0; }"
         )
         empty_layout = QVBoxLayout(self.empty_state)
         empty_layout.setContentsMargins(24, 24, 24, 24)
-        empty_layout.setSpacing(5)
+        empty_layout.setSpacing(12)
         empty_layout.addStretch(1)
+        empty_layout.addWidget(EmptyIllustration("journal"), 0, Qt.AlignmentFlag.AlignHCenter)
         self.empty_state_title = QLabel("暂无轮次记录", self.empty_state)
         self.empty_state_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_state_title.setStyleSheet("color: #687480; font-size: 16px; font-weight: 500;")
         self.empty_state_detail = QLabel("当前会话尚未产生运行结果", self.empty_state)
         self.empty_state_detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_state_detail.setStyleSheet("color: #8A9891; font-size: 12px;")
+        self.empty_state_detail.setStyleSheet("color: #87939F; font-size: 12px;")
         empty_layout.addWidget(self.empty_state_title)
         empty_layout.addWidget(self.empty_state_detail)
         empty_layout.addStretch(1)
@@ -479,7 +481,7 @@ class HistoryPanel(QWidget):
         self.round_list.setStyleSheet(
             "QListWidget#HistoryRoundList { background: #F7F8FA; color: #202A33; "
             "border: 1px solid #E0E5EB; outline: 0; }"
-            "QListWidget#HistoryRoundList::item { min-height: 62px; border-bottom: 1px solid #E0E5EB; }"
+            "QListWidget#HistoryRoundList::item { min-height: 62px; border-bottom: 1px solid #F0F2F5; }"
             "QListWidget#HistoryRoundList::item:hover { background: #F0F3F6; }"
             "QListWidget#HistoryRoundList::item:selected { background: #EAF7F1; "
             "border-left: 3px solid #087C58; }"
@@ -539,8 +541,8 @@ class HistoryPanel(QWidget):
         meta_frame = QFrame(detail_panel)
         meta_frame.setObjectName("HistoryRoundMeta")
         meta_frame.setStyleSheet(
-            "QFrame#HistoryRoundMeta { border-top: 1px solid #E0E5EB; "
-            "border-bottom: 1px solid #E0E5EB; }"
+            "QFrame#HistoryRoundMeta { border-top: 1px solid #F0F2F5; "
+            "border-bottom: 1px solid #F0F2F5; }"
         )
         meta_layout = QGridLayout(meta_frame)
         meta_layout.setContentsMargins(0, 8, 0, 8)
@@ -1286,7 +1288,7 @@ class HistoryPanel(QWidget):
                 item.setTextAlignment(alignment)
                 if locked:
                     item.setBackground(QColor(CLR_LOCK_BG))
-                    item.setForeground(QColor(CLR_LOCK_FG))
+                    item.setForeground(QColor(CLR_LOCK if column == status_column else CLR_LOCK_FG))
                 if column == status_column and synchronized:
                     if not locked:
                         item.setBackground(QColor(CLR_SYNC_BG))
@@ -1307,12 +1309,12 @@ class HistoryPanel(QWidget):
         table.setMinimumWidth(0)
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.setStyleSheet(
-            "QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #F7F8FA; "
+            "QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #FAFBFC; "
             "border: 0; color: #202A33; }"
             "QTableWidget#HistoryCandidateTable::item { padding: 3px 6px; }"
-            "QTableWidget#HistoryCandidateTable::item:selected { background: #087C58; color: #FFFFFF; }"
+            "QTableWidget#HistoryCandidateTable::item:selected { background: #DCEFE6; color: #202A33; }"
             "QTableWidget#HistoryCandidateTable QHeaderView::section { background: #F0F3F6; color: #687480; "
-            "border: 0; border-bottom: 1px solid #E0E5EB; "
+            "border: 0; border-bottom: 1px solid #F0F2F5; "
             "padding: 6px; font-weight: 500; }"
         )
         return table

@@ -49,6 +49,7 @@ from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.workspace_controls import PrimaryToolButton, workspace_icon
+from auto_bdsp_rng.ui.table_delegate import RowSeparatorDelegate
 from auto_bdsp_rng.ui.workspace_theme import add_card_shadow, primary_button_styles, ui_font, workspace_styles
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
@@ -294,29 +295,29 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QPushButton#DangerButton:disabled { color: #97a79f; }
             QWidget#AutoTidRngPanel, QWidget#AutoTidContent,
             QWidget#AutoTidRuntimeContent, QScrollArea#AutoTidRuntimeScroll { background: $background; }
-            QFrame#AutoTidToolbar { background: #ffffff; border: 0; border-bottom: 1px solid #E0E5EB; }
-            QFrame#AutoTidConfigPanel { background: #F7F8FA; border: 0; border-right: 1px solid #E0E5EB; }
+            QFrame#AutoTidToolbar { background: #ffffff; border: 0; border-bottom: 1px solid $separator; }
+            QFrame#AutoTidConfigPanel { background: #F7F8FA; border: 0; border-right: 1px solid $separator; }
             QLabel#AutoTidTitle, QLabel#AutoTidSectionTitle { font-size: 16px; font-weight: 500; }
             QLabel#AutoTidSubtitle, QLabel#AutoTidMuted, QLabel#AutoTidResultCount,
             QLabel#AutoTidTargetCount, QLabel#AutoTidSaveState, QLabel#AutoTidScriptSaveState { color: #626D79; font-size: 12px; }
             QLabel#AutoTidSaveState[dirty="true"], QLabel#AutoTidScriptSaveState[dirty="true"] { color: #9e600e; }
-            QFrame#AutoTidRuntimeCard { background: $runtime_gradient; border: 1px solid $border; border-radius: 12px; }
+            QFrame#AutoTidRuntimeCard { background: $runtime_gradient; border: 1px solid $card_border; border-radius: 12px; }
             QLabel#AutoTidRuntimePhase { font-size: 20px; font-weight: 500; }
             QLabel#AutoTidRuntimeValue { font-size: 28px; font-weight: 500; }
             QLabel#AutoTidRuntimeValue[accent="true"] { color: #087c58; }
             QLabel#AutoTidStateDot { color: #087c58; }
             QFrame#AutoTidRuntimeCard[state="failed"] QLabel#AutoTidStateDot { color: #ac4b42; }
             QFrame#AutoTidRuntimeCard[state="idle"] QLabel#AutoTidStateDot { color: #8da299; }
-            QFrame#AutoTidDivider { border: 0; background: #E0E5EB; max-height: 1px; }
-            QFrame#AutoTidScriptCard { background: #ffffff; border: 1px solid #DCE2E9; border-radius: 12px; }
+            QFrame#AutoTidDivider { border: 0; background: $separator; max-height: 1px; }
+            QFrame#AutoTidScriptCard { background: #ffffff; border: 1px solid $card_border; border-radius: 12px; }
             QWidget#AutoTidScripts, QWidget#AutoTidResults,
             QWidget#AutoTidTargets, QWidget#AutoTidTopControls, QWidget#TargetPoolActions, QWidget#AutoTidScriptFields,
             QWidget#AutoTidScriptPicker, QWidget#AutoTidSeedFields { background: transparent; }
             QListWidget#TargetPool { background: transparent; border: 0; padding: 0; }
             QListWidget#TargetPool::item { background: #ffffff; border: 1px solid #DCE2E9;
                 border-radius: 4px; padding: 3px 7px; margin: 1px; }
-            QListWidget#TargetPool::item:selected { background: #EAF7F1; color: #087c58; border-color: #87b9a6; }
-            QPushButton#AutoTidLink, QToolButton#AutoTidLink { color: #087c58; background: transparent;
+            QListWidget#TargetPool::item:selected { background: #EAF7F1; color: #202A33; border-color: #87b9a6; }
+            QPushButton#AutoTidLink, QToolButton#AutoTidLink { color: #626D79; background: transparent;
                 border: 0; padding: 2px 0; font-size: 12px; }
             QPushButton#AutoTidLink:hover, QToolButton#AutoTidLink:hover { color: #066a4b; }
             QPushButton#AutoTidLink:disabled { color: #8da299; }
@@ -326,8 +327,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QLineEdit#AutoTidSeed { background: #F0F3F6; color: #626D79; font-size: 12px;
                 font-family: "Cascadia Mono", "Consolas", monospace; }
             QTableWidget#TidResultsTable { font-size: 13px; border: 0; gridline-color: #E0E5EB; }
+            QTableWidget#TidResultsTable::item { padding: 5px 8px; }
             QTableWidget#TidResultsTable QHeaderView::section { background: #F7F8FA; color: #626D79;
-                border: 0; border-bottom: 1px solid #E0E5EB; padding: 8px; font-size: 12px; font-weight: 500; }
+                border: 0; border-bottom: 1px solid $separator; padding: 8px; font-size: 12px; font-weight: 500; }
         """) + primary_button_styles("QPushButton#PrimaryButton", "QToolButton#PrimaryButton"))
 
     def _section_title(self, text: str) -> QLabel:
@@ -805,6 +807,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.id_table = _IdResultTable()
         self.id_table.setObjectName("TidResultsTable")
         self.id_table.setShowGrid(False)
+        self.id_table.setItemDelegate(RowSeparatorDelegate(self.id_table))
         self.id_table.setColumnCount(5)
         self.id_table.setHorizontalHeaderLabels(("帧数", "TID", "SID", "TSV", "Display TID"))
         self.id_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
@@ -1137,7 +1140,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
                     for column in range(self.id_table.columnCount()):
                         item = self.id_table.item(row, column)
                         item.setBackground(QColor("#EAF7F1"))
-                        item.setForeground(QColor("#087c58"))
+                        item.setForeground(QColor("#087c58" if column == 4 else "#202A33"))
                         item.setToolTip(f"本轮目标 Display TID {state.display_tid:06d}")
                     break
         self.target_data_button.setEnabled(self._highlighted_target_row is not None)

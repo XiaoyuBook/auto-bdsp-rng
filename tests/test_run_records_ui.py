@@ -246,6 +246,42 @@ def test_clear_display_does_not_clear_the_session_buffer(app):
     assert _messages(restored_view) == ["保留一", "保留二", "清空后新增"]
 
 
+def test_log_empty_artwork_tracks_filtered_rows_without_changing_the_buffer(app):
+    from PySide6.QtCore import Qt
+
+    buffer = RunLogBuffer()
+    panel = RunLogPanel(buffer)
+    panel.resize(900, 500)
+    panel.show()
+    app.processEvents()
+    assert panel.empty_state.isVisible()
+    assert panel.empty_state.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    buffer.publish("应用", "可见记录")
+    app.processEvents()
+    assert not panel.empty_state.isVisible()
+    panel.search_edit.setText("未匹配的内容")
+    app.processEvents()
+    assert panel.empty_state.isVisible()
+    assert panel.empty_state.title.text() == "没有符合条件的日志"
+    assert panel.visible_entries() == ()
+    assert len(buffer.snapshot()) == 1
+
+    panel.search_edit.clear()
+    app.processEvents()
+    assert not panel.empty_state.isVisible()
+    panel.clear_display()
+    app.processEvents()
+    assert panel.empty_state.isVisible()
+    assert len(buffer.snapshot()) == 1
+    buffer.publish("应用", "新记录")
+    app.processEvents()
+    assert not panel.empty_state.isVisible()
+    assert _messages(panel) == ["新记录"]
+    panel.close()
+    panel.deleteLater()
+
+
 def test_save_checkbox_rolls_back_when_callback_fails(app):
     requested_states: list[bool] = []
 

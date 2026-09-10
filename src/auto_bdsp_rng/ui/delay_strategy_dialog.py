@@ -1020,7 +1020,7 @@ class DelayStrategyDialog(QDialog):
             QFrame#DelayTitleBar {
                 background: #FFFFFF;
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
                 border-top-left-radius: 14px;
                 border-top-right-radius: 14px;
             }
@@ -1130,7 +1130,7 @@ class DelayStrategyDialog(QDialog):
             }
             QFrame#DelayDialogSurface QLabel#DelayRuntimeNextValue { color: #087C58; }
             QFrame#DelaySamplesFrame {
-                background: #FFFFFF; border: 0; border-bottom: 1px solid #E0E5EB;
+                background: #FFFFFF; border: 0; border-bottom: 1px solid #F0F2F5;
             }
             QToolButton#DelaySampleToggle {
                 background: transparent; border: 0; padding: 0;
@@ -1163,14 +1163,14 @@ class DelayStrategyDialog(QDialog):
             QTableWidget#DelayHistoryTable::item {
                 padding: 5px 6px;
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
             }
             QTableWidget#DelayRecentSamplesTable QHeaderView::section,
             QTableWidget#DelayHistoryTable QHeaderView::section {
                 background: #F7F8FA;
                 color: #687480;
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
                 padding: 0 6px;
                 font-weight: 400;
                 font-size: 12px;
@@ -1188,12 +1188,12 @@ class DelayStrategyDialog(QDialog):
                 color: #687480; font-size: 12px; padding: 11px 0;
             }
             QFrame#DelayClearConfirm {
-                background: #FFFFFF; border: 0; border-top: 1px solid #E0E5EB;
+                background: #FFFFFF; border: 0; border-top: 1px solid #F0F2F5;
             }
             QFrame#DelayDialogSurface QPushButton#DelayDangerButton { color: #AC4B42; }
             QFrame#DelayDialogSurface QLabel#DelayApplyStatus { padding: 10px 0; }
             QFrame#DelayFooter {
-                background: #FFFFFF; border: 0; border-top: 1px solid #E0E5EB;
+                background: #FFFFFF; border: 0; border-top: 1px solid #F0F2F5;
                 border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;
             }
             QFrame#DelayDialogSurface QPushButton#DelayPrimaryButton {

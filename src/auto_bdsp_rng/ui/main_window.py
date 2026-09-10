@@ -1116,6 +1116,14 @@ class RoiPreviewLabel(QLabel):
 
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().paintEvent(event)
+        if self.pixmap().isNull() and self.height() >= 140:
+            # Keep the original empty text, frame geometry and ROI interaction;
+            # this artwork is only painted while no image is being displayed.
+            painter = QPainter(self)
+            workspace_icon("viewfinder", "#8395A5").paint(
+                painter, QRect(self.width() // 2 - 24, self.height() // 2 - 72, 48, 48)
+            )
+            painter.end()
         needs_drag_rect = self._selection_enabled and self._drag_start is not None and self._drag_current is not None
         needs_ocr_overlay = self._overlay_enabled and self._ocr_overlay_region is not None
         if not needs_drag_rect and not needs_ocr_overlay:
@@ -3153,7 +3161,7 @@ class MainWindow(QMainWindow):
             QTabWidget#WorkspaceTabs::pane {
                 background: #FFFFFF;
                 border: 0;
-                border-top: 1px solid #E0E5EB;
+                border-top: 1px solid #F0F2F5;
                 border-radius: 0;
                 top: -1px;
             }
@@ -3162,12 +3170,12 @@ class MainWindow(QMainWindow):
             }
             QTabWidget#WorkspaceTabs, QTabWidget#WorkspaceTabs QTabBar {
                 background: #FFFFFF;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
             }
             QTabWidget#WorkspaceTabs QTabBar::tab {
                 background: #FFFFFF;
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
                 color: #52606D;
                 min-width: 0;
                 min-height: 44px;
@@ -3190,7 +3198,7 @@ class MainWindow(QMainWindow):
 
             QGroupBox {
                 background: #FFFFFF;
-                border: 1px solid #E0E5EB;
+                border: 1px solid #E9EDF2;
                 border-radius: 7px;
                 margin-top: 14px;
                 padding: 10px 10px 8px 10px;
@@ -3427,7 +3435,7 @@ class MainWindow(QMainWindow):
             QFrame#EasyConToolbar {
                 background: #FFFFFF;
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
                 border-radius: 0;
             }
             QToolButton#PrimaryButton {
@@ -3512,7 +3520,7 @@ class MainWindow(QMainWindow):
                 background: transparent;
                 color: #52606D;
                 border: 0;
-                border-top: 1px solid #E0E5EB;
+                border-top: 1px solid #F0F2F5;
                 text-align: left;
                 padding: 0 4px;
                 font-size: 13px;
@@ -3563,9 +3571,9 @@ class MainWindow(QMainWindow):
             }
             QLabel#Preview {
                 background: #202A33;
-                border: 1px solid #E0E5EB;
+                border: 1px solid #E9EDF2;
                 border-radius: 7px;
-                color: #AAB8B1;
+                color: #A2AFBA;
             }
 
             QWidget#BdspWorkspace,
@@ -3613,7 +3621,7 @@ class MainWindow(QMainWindow):
             }
             QWidget#ResultsToolbar {
                 background: #FFFFFF;
-                border-top: 1px solid #E0E5EB;
+                border-top: 1px solid #F0F2F5;
             }
             QTableWidget {
                 background: #FFFFFF;
@@ -3625,12 +3633,11 @@ class MainWindow(QMainWindow):
             }
             QTableWidget::item:selected {
                 background: #EAF7F1;
-                color: #087C58;
+                color: #202A33;
             }
-            QTableWidget#StaticResultsTable::item,
-            QTableWidget#TidResultsTable::item {
+            QTableWidget#StaticResultsTable::item {
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
                 padding: 5px 8px;
             }
             QTableWidget#StaticResultsTable QHeaderView::section,
@@ -3645,7 +3652,7 @@ class MainWindow(QMainWindow):
                 background: #F7F8FA;
                 color: #626D79;
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
                 padding: 6px;
                 font-size: 12px;
                 font-weight: 500;
@@ -3681,7 +3688,7 @@ class MainWindow(QMainWindow):
 
             QStatusBar#WorkspaceStatusBar {
                 background: #FFFFFF;
-                border-top: 1px solid #E0E5EB;
+                border-top: 1px solid #F0F2F5;
                 color: #687480;
                 font-size: 12px;
                 padding-left: 8px;

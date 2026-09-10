@@ -86,11 +86,12 @@ class OcrSettingsDialog(QDialog):
             "QDialog#OcrSettingsDialog { background: #F2F4F7; color: #202A33; }"
             " QDialog#OcrSettingsDialog QLabel { color: #626D79; font-size: 12px; background: transparent; }"
             " QDialog#OcrSettingsDialog QTableWidget { font-size: 13px; border-radius: 7px;"
-            " background: #ffffff; alternate-background-color: #F7F8FA;"
-            " color: #202A33; border: 1px solid #E0E5EB; gridline-color: #E0E5EB; }"
+            " background: #ffffff; alternate-background-color: #FAFBFC;"
+            " color: #202A33; border: 1px solid #E9EDF2; }"
+            " QDialog#OcrSettingsDialog QTableWidget::item { border: 0; border-bottom: 1px solid #F0F2F5; padding: 0 8px; }"
             " QDialog#OcrSettingsDialog QHeaderView::section { font-size: 12px; font-weight: 500;"
             " background: #F7F8FA; color: #626D79; border: 0;"
-            " border-bottom: 1px solid #E0E5EB; padding: 6px 8px; }"
+            " border-bottom: 1px solid #F0F2F5; padding: 6px 8px; }"
             " QDialog#OcrSettingsDialog QPushButton { font-size: 14px;"
             " background: #ffffff; color: #202A33; border: 1px solid #E0E5EB;"
             " border-radius: 7px; min-height: 32px; padding: 0 12px; }"
@@ -139,6 +140,7 @@ class OcrSettingsDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.setShowGrid(False)
         self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.setMinimumHeight(556)
         header = self.table.horizontalHeader()
@@ -178,8 +180,8 @@ class OcrSettingsDialog(QDialog):
     def _build_action_cell(self, field: str) -> QWidget:
         widget = QWidget(self.table)
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
         buttons = (
             ("框选", lambda _checked=False, field=field: self.request_selection(field)),
             ("显示", lambda _checked=False, field=field: self.show_region(field)),

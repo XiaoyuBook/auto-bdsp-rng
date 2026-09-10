@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
+from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
 
 
 MAX_LOG_ENTRIES = 10_000
@@ -159,7 +160,7 @@ class _RunLogTableModel(QAbstractTableModel):
             if column == 1:
                 return {
                     "DEBUG": QColor("#6B7280"),
-                    "INFO": QColor("#166534"),
+                    "INFO": QColor("#626D79"),
                     "WARNING": QColor("#92400E"),
                     "ERROR": QColor("#B91C1C"),
                     "CRITICAL": QColor("#991B1B"),
@@ -168,14 +169,14 @@ class _RunLogTableModel(QAbstractTableModel):
                 return QColor("#6B7280")
         if role == int(Qt.ItemDataRole.BackgroundRole) and column == 1:
             return {
-                "INFO": QColor("#ECFDF5"),
+                "INFO": QColor("#F8FAF9"),
                 "WARNING": QColor("#FFFBEB"),
                 "ERROR": QColor("#FEF2F2"),
                 "CRITICAL": QColor("#FEE2E2"),
             }.get(entry.level)
         if role == int(Qt.ItemDataRole.FontRole) and column == 1:
             font = QFont()
-            font.setBold(True)
+            font.setWeight(QFont.Weight.Medium)
             return font
         return None
 
@@ -402,6 +403,8 @@ class RunLogPanel(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.empty_state = TableEmptyState(self.table, symbol="journal")
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -473,19 +476,19 @@ class RunLogPanel(QWidget):
                 padding: 0 12px;
             }
             QFrame#RunLogCorrelation {
-                background: #ECFDF5;
-                border: 1px solid #A7F3D0;
+                background: #F2F8F5;
+                border: 1px solid #E1ECE6;
                 border-radius: 6px;
             }
             QLabel#RunLogCorrelationLabel {
-                color: #166534;
-                font-weight: 600;
+                color: #526D60;
+                font-weight: 500;
             }
             QPushButton#RunLogCorrelationClear {
                 background: transparent;
                 border: 0;
                 color: #047857;
-                font-weight: 600;
+                font-weight: 500;
                 padding: 0 6px;
             }
             QPushButton#RunLogCorrelationClear:hover {
@@ -494,26 +497,25 @@ class RunLogPanel(QWidget):
             }
             QTableView#RunLogTable {
                 background: #FFFFFF;
-                alternate-background-color: #F9FAFB;
-                border: 1px solid #E5E7EB;
+                alternate-background-color: #FAFBFC;
+                border: 1px solid #E9EDF2;
                 border-radius: 6px;
                 gridline-color: #EEF0F3;
                 color: #111827;
-                selection-background-color: #0E8F70;
-                selection-color: #FFFFFF;
+                selection-background-color: #EAF7F1;
+                selection-color: #202A33;
             }
             QTableView#RunLogTable::item {
-                border-bottom: 1px solid #F3F4F6;
+                border-bottom: 1px solid #F0F2F5;
                 padding: 3px 6px;
             }
             QTableView#RunLogTable QHeaderView::section {
                 background: #F9FAFB;
                 color: #4B5563;
                 border: 0;
-                border-right: 1px solid #E5E7EB;
-                border-bottom: 1px solid #D1D5DB;
+                border-bottom: 1px solid #F0F2F5;
                 padding: 6px;
-                font-weight: 600;
+                font-weight: 500;
             }
             """
         )
@@ -718,6 +720,11 @@ class RunLogPanel(QWidget):
         visible = self.proxy_model.rowCount()
         total = self._model.rowCount()
         self.count_label.setText(f"显示 {visible} 条 · 当前会话共 {total} 条")
+        self.empty_state.show_message(
+            "没有符合条件的日志" if total else "暂无详细日志",
+            "调整筛选条件以查看其他记录" if total else "当前会话的运行消息将在这里显示",
+            has_results=visible > 0,
+        )
         self.clear_button.setEnabled(total > 0)
         self.copy_button.setEnabled(visible > 0)
         self.export_button.setEnabled(visible > 0)

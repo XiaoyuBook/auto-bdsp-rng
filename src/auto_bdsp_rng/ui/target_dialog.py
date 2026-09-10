@@ -380,7 +380,7 @@ class TargetDialog(QDialog):
             QDialog#TargetDialog QWidget#TargetEntry {
                 background: #FFFFFF;
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
+                border-bottom: 1px solid #F0F2F5;
             }
             QDialog#TargetDialog QLabel#TargetEmptyLabel {
                 color: #687480;

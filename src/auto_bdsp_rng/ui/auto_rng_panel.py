@@ -74,6 +74,7 @@ from auto_bdsp_rng.ui.delay_strategy_dialog import (
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.workspace_controls import PrimaryToolButton, SpeciesAvatar, workspace_icon
+from auto_bdsp_rng.ui.table_delegate import RowSeparatorDelegate
 from auto_bdsp_rng.ui.workspace_theme import add_card_shadow, focus_styles, primary_button_styles, ui_font, workspace_styles
 from auto_bdsp_rng.ui.spin_box import (
     ChevronDoubleSpinBox as QDoubleSpinBox,
@@ -1225,7 +1226,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         runtime_title = QLabel("运行现场")
         runtime_title.setObjectName("SectionTitle")
         self.runtime_log_button = QPushButton("轮次记录")
-        self.runtime_log_button.setIcon(workspace_icon("external", "#087C58"))
+        self.runtime_log_button.setIcon(workspace_icon("external", "#687480"))
         self.runtime_log_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.view_round_button = self.runtime_log_button
         self.runtime_log_button.setObjectName("InlineLinkButton")
@@ -1313,7 +1314,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         runtime_footer_layout.addWidget(self.runtime_delay_state_label)
         runtime_footer_layout.addStretch(1)
         self.target_data_button = QPushButton("查看目标数据")
-        self.target_data_button.setIcon(workspace_icon("external", "#087C58"))
+        self.target_data_button.setIcon(workspace_icon("external", "#687480"))
         self.target_data_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.target_data_button.setObjectName("InlineLinkButton")
         self.target_data_button.setAccessibleName("查看目标数据")
@@ -1538,6 +1539,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.candidate_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.candidate_table.setAlternatingRowColors(True)
         self.candidate_table.setShowGrid(False)
+        self.candidate_table.setItemDelegate(RowSeparatorDelegate(self.candidate_table))
         self.candidate_table.setWordWrap(False)
         self.candidate_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.candidate_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1727,9 +1729,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             for column, value in enumerate(values[1:]):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignLeft if column == 0 else Qt.AlignmentFlag.AlignHCenter))
                 if locked:
                     item.setBackground(QColor("#EAF7F1"))
-                    item.setForeground(QColor("#087C58"))
+                    item.setForeground(QColor("#087C58" if column == 0 else "#202A33"))
                 self.candidate_table.setItem(row, column, item)
         visible_rows = min(RUNTIME_CANDIDATE_VISIBLE_ROWS, max(1, len(display_indexes)))
         self.candidate_table.setFixedHeight(30 + visible_rows * 30 + 2)
@@ -1879,7 +1882,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         metric.setObjectName("RuntimeMetric")
         metric_layout = QVBoxLayout(metric)
         metric_layout.setContentsMargins(0, 0, 0, 0)
-        metric_layout.setSpacing(1)
+        metric_layout.setSpacing(4)
         caption_label = QLabel(caption)
         caption_label.setObjectName("RuntimeMetricCaption")
         value_label = QLabel("—")
@@ -2129,7 +2132,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QFrame#AutoRngToolbar {
                 background: $surface;
                 border: 0;
-                border-bottom: 1px solid $border;
+                border-bottom: 1px solid $separator;
                 border-radius: 0;
             }
             QFrame#AutoRngToolbar QComboBox,
@@ -2189,7 +2192,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QScrollArea#AutoRngConfigPanel {
                 background: $surface_muted;
                 border: 0;
-                border-right: 1px solid $border;
+                border-right: 1px solid $separator;
             }
             QScrollArea#AutoRngConfigPanel > QWidget > QWidget,
             QWidget#AutoRngConfigContents {
@@ -2225,8 +2228,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-weight: 400;
             }
             QLabel#ScriptStatusLabel[state="ready"] {
-                color: $accent;
-                background: $accent_soft;
+                color: #597467;
+                background: #F2F8F5;
             }
             QLabel#ScriptStatusLabel[state="warning"] {
                 color: $warning;
@@ -2243,7 +2246,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QFrame#TargetCard {
                 background: $surface;
-                border: 1px solid $border;
+                border: 1px solid $card_border;
                 border-radius: 12px;
             }
             QWidget#TargetTags {
@@ -2277,7 +2280,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QPushButton#InlineLinkButton {
                 background: transparent;
                 border: 0;
-                color: $accent;
+                color: $text_secondary;
                 padding: 0 4px;
                 font-size: 13px;
                 font-weight: 400;
@@ -2369,7 +2372,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QToolButton#MoreStrategyButton {
                 background: transparent;
                 border: 0;
-                border-top: 1px solid $border;
+                border-top: 1px solid $separator;
                 border-radius: 0;
                 color: #687480;
                 padding: 7px 0 0 0;
@@ -2383,7 +2386,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QFrame#ConfigFooter {
                 background: transparent;
                 border: 0;
-                border-top: 1px solid $border;
+                border-top: 1px solid $separator;
             }
             QScrollArea#AutoRngRuntimePanel {
                 background: $background;
@@ -2409,14 +2412,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QFrame#RuntimeCard {
                 background: $runtime_gradient;
-                border: 1px solid $border;
+                border: 1px solid $card_border;
                 border-radius: 12px;
             }
             QFrame#RuntimeCard[state="active"] {
-                border-color: #C6E4D8;
+                border-color: #DCECE4;
             }
             QFrame#RuntimeCard[state="completed"] {
-                border-color: #C6E4D8;
+                border-color: #DCECE4;
             }
             QFrame#RuntimeCard[state="failed"] {
                 background: $error_soft;
@@ -2489,9 +2492,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 background: #9DD5B8;
             }
             QLabel#RuntimeDelayState {
-                background: #E7F3EC;
+                background: #F2F8F5;
                 border-radius: 9px;
-                color: $accent;
+                color: #597467;
                 padding: 2px 7px;
                 font-size: 12px;
             }
@@ -2519,7 +2522,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QToolButton#RuntimeScriptSummaryToggle {
                 background: transparent;
                 border: 0;
-                color: $accent;
+                color: $text_secondary;
                 padding: 2px 0;
                 font-size: 13px;
             }
@@ -2539,18 +2542,19 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QTableWidget#RuntimeCandidateTable {
                 background: $surface;
-                alternate-background-color: #F8FAF9;
-                border: 1px solid $border;
+                alternate-background-color: #FAFBFC;
+                border: 1px solid $card_border;
                 border-radius: 7px;
                 color: $text;
                 font-size: 13px;
             }
+            QTableWidget#RuntimeCandidateTable::item { padding: 0 8px; }
             QTableWidget#RuntimeCandidateTable QHeaderView::section {
-                background: #F0F3F6;
+                background: #F8F9FB;
                 border: 0;
-                border-bottom: 1px solid $border;
+                border-bottom: 1px solid $separator;
                 color: $text_secondary;
-                padding: 0 7px;
+                padding: 0 8px;
                 font-size: 12px;
                 font-weight: 500;
             }
@@ -2596,7 +2600,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QFrame#RuntimeFooter {
                 background: transparent;
                 border: 0;
-                border-top: 1px solid #D7E7DF;
+                border-top: 1px solid $separator;
             }
             QLabel#PreviousRoundLabel {
                 padding-left: 1px;
@@ -2673,7 +2677,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QGroupBox#CurrentMessageGroup {
                 background: $surface;
                 border: 0;
-                border-top: 1px solid $border;
+                border-top: 1px solid $separator;
                 border-radius: 0;
                 margin: 0;
                 padding: 0;

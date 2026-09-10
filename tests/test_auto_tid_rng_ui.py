@@ -107,6 +107,40 @@ def test_tid_wait_updates_use_startup_delay_and_preserve_table_selection(configu
     assert panel.status_badge.text() == "状态：等待取名帧"
 
 
+def test_tid_target_background_survives_inherited_workspace_theme(configured_tid_panel, app):
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QVBoxLayout
+
+    host = QWidget()
+    MainWindow._apply_theme(host)
+    panel = configured_tid_panel
+    QVBoxLayout(host).addWidget(panel)
+    states = (IDState8(advances=260, tid=10, sid=20, tsv=1, display_tid=1),)
+    panel.apply_progress(AutoTidRngProgress(
+        phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=1,
+        current_advances=212, target_advances=260, trigger_advances=240,
+        target_display_tid=1, target_tid=10, id_states=states, id_search_completed=True,
+    ))
+    host.resize(1150, 900)
+    host.show()
+    app.processEvents()
+    table = panel.id_table
+    picture = table.viewport().grab().toImage()
+    ratio = picture.devicePixelRatio()
+    for column in range(5):
+        item = table.item(0, column)
+        rect = table.visualItemRect(item)
+        assert picture.pixelColor(round((rect.left() + 3) * ratio), round((rect.top() + 3) * ratio)) == QColor("#EAF7F1")
+        assert item.foreground().color() == QColor("#087C58" if column == 4 else "#202A33")
+    panel.target_data_button.click()
+    assert table.currentColumn() == 4
+    assert table.currentItem().text() == "000001"
+    assert "000001" in panel._table_text()
+    panel.apply_progress(AutoTidRngProgress(phase=AutoTidRngPhase.RUN_SEED_SCRIPT, loop_index=2))
+    assert table.rowCount() == 0
+    assert not panel.target_data_button.isEnabled()
+
+
 def test_tid_retry_clears_previous_seed_target_and_results(configured_tid_panel):
     panel = configured_tid_panel
     panel.apply_progress(AutoTidRngProgress(

@@ -15,6 +15,8 @@ SURFACE_MUTED = "#F7F8FA"
 TEXT = "#202A33"
 TEXT_SECONDARY = "#626D79"
 BORDER = "#E0E5EB"
+CARD_BORDER = "#E9EDF2"
+SEPARATOR = "#F0F2F5"
 ACCENT = "#087C58"
 ACCENT_SOFT = "#EAF7F1"
 WARNING = "#906423"
@@ -31,7 +33,7 @@ UI_FONT_FAMILIES = (
     "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC",
     "Microsoft YaHei UI", "PingFang SC", "Segoe UI", "sans-serif",
 )
-RUNTIME_GRADIENT = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:1 #F0F9F5)"
+RUNTIME_GRADIENT = "qlineargradient(x1:0, y1:1, x2:1, y2:0, stop:0 #FFFFFF, stop:0.65 #FFFFFF, stop:1 #F0F9F5)"
 
 
 def ensure_ui_fonts() -> tuple[int, ...]:
@@ -84,7 +86,7 @@ class _CardShadow(QObject):
         super().__init__(widget)
         self.widget = widget
         self.effect = QGraphicsDropShadowEffect(widget)
-        self.effect.setColor(QColor(26, 42, 56, 18))
+        self.effect.setColor(QColor(26, 42, 56, 14))
         widget.setGraphicsEffect(self.effect)
         widget.installEventFilter(self)
         self._sync()
@@ -109,7 +111,8 @@ def workspace_styles(template: str) -> str:
     """Resolve shared colors without interfering with QSS block braces."""
     return Template(template).substitute(
         background=BACKGROUND, surface=SURFACE, surface_muted=SURFACE_MUTED, text=TEXT,
-        text_secondary=TEXT_SECONDARY, border=BORDER, accent=ACCENT,
+        text_secondary=TEXT_SECONDARY, border=BORDER, card_border=CARD_BORDER,
+        separator=SEPARATOR, accent=ACCENT,
         accent_soft=ACCENT_SOFT, warning=WARNING, warning_soft=WARNING_SOFT,
         error=ERROR, error_soft=ERROR_SOFT, runtime_gradient=RUNTIME_GRADIENT,
     )

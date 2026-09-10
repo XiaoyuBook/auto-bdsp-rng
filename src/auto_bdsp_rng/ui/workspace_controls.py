@@ -29,6 +29,11 @@ _SYMBOLS = {
     "pause": '<path d="M8 5v14M16 5v14"/>',
     "external": '<path d="M7 17 17 7M7 7h10v10"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/>',
+    "tv": '<rect x="3" y="7" width="18" height="14" rx="3"/><path d="m8 3 4 4 4-4M8 12v3m8-3v3"/>',
+    "github": '<path d="M9 19c-4 1-4-2-6-2m6 5v-4c-4-1-6-3-6-6 0-2 1-4 3-5V3l4 2h4l4-2v4c2 1 3 3 3 5 0 3-2 5-6 6v4"/>',
+    "journal": '<rect x="5" y="3" width="15" height="18" rx="2"/><path d="M3 7h4M3 12h4M3 17h4m3-9h6m-6 4h6m-6 4h3"/>',
+    "viewfinder": '<path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3"/><rect x="7" y="8" width="10" height="8" rx="2"/><circle cx="12" cy="12" r="2"/>',
 }
 
 
@@ -88,6 +93,27 @@ class _LineIconEngine(QIconEngine):
 
 def workspace_icon(name: str, color: str = "#687480") -> QIcon:
     return QIcon(_LineIconEngine(name, color))
+
+
+class EmptyIllustration(QWidget):
+    """Decorative vector artwork; never intercepts the underlying UI's input."""
+
+    def __init__(self, symbol: str = "journal", parent=None) -> None:
+        super().__init__(parent)
+        self.symbol = symbol
+        self.setFixedSize(56, 56)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#F4F6F8"))
+        painter.drawRoundedRect(QRectF(0, 0, 56, 56), 16, 16)
+        workspace_icon(self.symbol, "#93A1AE").paint(painter, QRect(10, 10, 36, 36))
+        painter.setBrush(QColor("#81B5A0"))
+        painter.drawEllipse(QPointF(45, 11), 3, 3)
 
 
 class SpeciesAvatar(QWidget):

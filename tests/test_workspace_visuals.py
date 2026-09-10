@@ -143,3 +143,29 @@ def test_connection_surface_and_initial_action_render_before_status_updates(app)
     assert not dialog.isVisible()
     parent.close()
     parent.deleteLater()
+
+
+def test_candidate_separators_preserve_locked_background_and_data(app, tmp_path):
+    from types import SimpleNamespace
+    from PySide6.QtGui import QColor
+
+    panel = AutoRngPanel(script_dir=tmp_path, settings=QSettings(str(tmp_path / "candidates.ini"), QSettings.Format.IniFormat))
+    candidates = [SimpleNamespace(advances=100+i, shiny=0, nature=3, ivs=(31,)*6) for i in range(3)]
+    panel.set_candidate_targets(candidates, locked_index=1)
+    table = panel.candidate_table
+    panel.show()
+    app.processEvents()
+    image = table.viewport().grab().toImage()
+    rect = table.visualItemRect(table.item(0, 1))
+    ratio = image.devicePixelRatio()
+    assert image.pixelColor(round((rect.left()+4)*ratio), round((rect.top()+4)*ratio)) == QColor("#EAF7F1")
+    assert table.item(0, 0).text() == "已锁定"
+    assert table.item(0, 1).text() == "101"
+    assert table.item(0, 1).foreground().color() == QColor("#202A33")
+    panel.set_candidate_targets(candidates, locked_index=2)
+    assert table.item(0, 1).text() == "102"
+    panel.clear_candidate_targets()
+    assert table.rowCount() == 0
+    assert not panel.candidate_empty_label.isHidden()
+    panel.close()
+    panel.deleteLater()
