@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont
@@ -1280,7 +1281,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         description_row.addWidget(self.runtime_setup_button)
         runtime_layout.addLayout(description_row)
         self.runtime_steps = self._build_runtime_steps()
-        runtime_layout.addWidget(self.runtime_steps)
+        self.runtime_steps.setToolTip("仅标记实际经过的阶段；流程可跳过、回跳或重新测种。")
 
         metrics = QHBoxLayout()
         metrics.setContentsMargins(0, 3, 0, 3)
@@ -1294,6 +1295,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         metrics.addWidget(target_metric, 100)
         metrics.addWidget(remaining_metric, 90)
         runtime_layout.addLayout(metrics)
+        self.runtime_insights = RuntimeInsights(self)
+        runtime_layout.addWidget(self.runtime_insights)
+        runtime_layout.addWidget(self.runtime_steps)
 
         runtime_footer = QFrame()
         runtime_footer.setObjectName("RuntimeFooter")
@@ -2788,6 +2792,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             )
 
     def apply_progress(self, progress: AutoRngProgress) -> None:
+        self.runtime_insights.update_progress(progress)
         if progress.loop_index > 0:
             if self._runtime_loop_index > 0 and progress.loop_index != self._runtime_loop_index:
                 self.begin_runtime_cycle(progress.loop_index)
@@ -3064,6 +3069,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             return
         self._last_failed_progress_message = None
         self.begin_runtime_cycle(0)
+        self.runtime_insights.start(getattr(runner, "config", None))
         thread = QThread(self)
         worker = AutoRngWorker(runner)
         worker.moveToThread(thread)

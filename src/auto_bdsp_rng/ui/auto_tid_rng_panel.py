@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication
@@ -645,6 +646,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.runtime_current_value.setToolTip("根据小卡比兽眨眼间隔更新 RNG 帧数。取名脚本执行后不再进行实时计数。")
         self.runtime_remaining_value.setToolTip("取名脚本触发帧减去当前帧数；按眨眼推进，不按固定 FPS 换算。")
         layout.addLayout(metrics)
+        self.runtime_insights = RuntimeInsights(self, tid=True)
+        layout.addWidget(self.runtime_insights)
         layout.addWidget(self._divider())
         footer = QHBoxLayout()
         footer.addWidget(self._muted_label("本次 delay"))
@@ -947,6 +950,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.add_log("自动 TID 乱数已在运行", level="WARNING")
             return
         config = getattr(runner, "config", None)
+        self.runtime_insights.start(config)
         if isinstance(config, AutoTidRngConfig):
             self._active_config = config
         self._runtime_loop_index = 0
@@ -974,6 +978,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         thread.start()
 
     def apply_progress(self, progress: AutoTidRngProgress) -> None:
+        self.runtime_insights.update_progress(progress)
         previous = self._last_progress
         new_cycle = progress.loop_index > 0 and progress.loop_index != self._runtime_loop_index
         entering_seed = progress.phase in (AutoTidRngPhase.RUN_SEED_SCRIPT, AutoTidRngPhase.CAPTURE_TIDSID)

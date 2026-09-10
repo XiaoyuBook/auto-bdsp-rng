@@ -7144,6 +7144,9 @@ class MainWindow(QMainWindow):
             tracking_config,
             capture=self._shared_capture_config(tracking_config.capture),
         )
+        self.auto_tid_rng_tab.runtime_insights.pending_inputs = {
+            "Seed 配置文件": seed_config_path, "实际采集配置": tracking_config,
+        }
 
         def seed_pair_from_result(seed_result: AutoTidSeedResult) -> SeedPair64:
             seed = seed_result.seed
@@ -7428,6 +7431,9 @@ class MainWindow(QMainWindow):
 
     def _handle_auto_capture_progress(self, done: int, total: int) -> None:
         self.progress_value.setText(f"{done}/{total}")
+        for panel in (self.auto_rng_tab, self.auto_tid_rng_tab):
+            if panel._run_state_active:
+                panel.runtime_insights.capture_signal(done, total)
 
     def _wrap_capture_progress_with_keep_awake(
         self,
@@ -7606,6 +7612,11 @@ class MainWindow(QMainWindow):
             shiny_mode=shiny_mode,
         )
         self._update_auto_rng_search_summary(search_criteria, search_targets)
+        self.auto_rng_tab.runtime_insights.pending_inputs = {
+            "实际采集配置": tracking_config, "过场校正配置": exit_tracking_config,
+            "OCR 区域": ocr_region_config, "搜索条件": search_criteria,
+            "所有目标": target_entries,
+        }
 
         def seed_pair_from_result(seed_result: AutoRngSeedResult) -> SeedPair64:
             seed = seed_result.seed
