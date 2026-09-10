@@ -233,7 +233,7 @@ MAIN_WINDOW_GEOMETRY_KEYS = (
 )
 MAIN_WINDOW_UI_SCALE_KEY = "window/ui_scale_percent"
 MAIN_WINDOW_CURRENT_TAB_KEY = "window/current_tab"
-PROJECT_XS_HORIZONTAL_LEFT_WIDTH = 520
+PROJECT_XS_HORIZONTAL_LEFT_WIDTH = 300
 PROJECT_XS_PREVIEW_MIN_HEIGHT = 260
 _AUTO_HEADER_TERMINAL_PHASES = frozenset(("空闲", "已停止", "已完成", "失败"))
 
@@ -2294,7 +2294,7 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(scroll_surface(left))
         splitter.addWidget(scroll_surface(right))
-        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
         splitter.restore_sizes()
         page = QWidget()
@@ -2355,7 +2355,6 @@ class MainWindow(QMainWindow):
         group = QGroupBox("捕捉状态与自动配置")
         group.setObjectName("ProjectXsStatusGroup")
         group.setMaximumHeight(180)
-        group.setMaximumWidth(740)
 
         outer = QGridLayout(group)
         outer.setContentsMargins(12, 8, 12, 8)
@@ -2427,6 +2426,8 @@ class MainWindow(QMainWindow):
         self.config_label = QLabel()
         self.config_combo = QComboBox()
         self.config_combo.setEditable(True)
+        self.config_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.config_combo.setMinimumContentsLength(10)
         self.config_combo.currentTextChanged.connect(self._load_config_to_form)
         self.config_combo.currentIndexChanged.connect(lambda _index: self._load_config_to_form(self.config_combo.currentText()))
         self.browse_button = QPushButton()
@@ -2516,32 +2517,35 @@ class MainWindow(QMainWindow):
         self.monitor_window.setFixedHeight(28)
         self.reidentify_1_pk_npc.setFixedHeight(28)
 
-        # Keep the short selector label independent from the longer form labels.
+        # Stack the file label so filenames remain readable in the 30% sidebar.
+        config_selector = QVBoxLayout()
+        config_selector.setContentsMargins(0, 0, 0, 0)
+        config_selector.setSpacing(6)
+        config_selector.addWidget(self.config_label)
         config_row = QHBoxLayout()
         config_row.setContentsMargins(0, 0, 0, 0)
         config_row.setSpacing(8)
-        self.config_label.setFixedWidth(60)
         self.browse_button.setFixedWidth(52)
-        config_row.addWidget(self.config_label)
         config_row.addWidget(self.config_combo, 1)
         config_row.addWidget(self.browse_button)
-        layout.addLayout(config_row, 0, 0, 1, 4)
+        config_selector.addLayout(config_row)
+        layout.addLayout(config_selector, 0, 0, 1, 4)
         config_note = QLabel("编辑下方参数后保存到此文件；手动操作使用下方参数。")
         config_note.setObjectName("WorkspaceHint")
         config_note.setWordWrap(True)
         layout.addWidget(config_note, 1, 0, 1, 4)
 
-        button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 0, 0, 0)
-        button_row.setSpacing(8)
-        self.capture_button.setMinimumWidth(152)
+        capture_actions = QVBoxLayout()
+        capture_actions.setContentsMargins(0, 0, 0, 0)
+        capture_actions.setSpacing(8)
         self.capture_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.reidentify_button.setFixedWidth(88)
-        self.tidsid_button.setFixedWidth(128)
-        button_row.addWidget(self.capture_button, 1)
-        button_row.addWidget(self.reidentify_button)
-        button_row.addWidget(self.tidsid_button)
-        layout.addLayout(button_row, 2, 0, 1, 4)
+        capture_actions.addWidget(self.capture_button)
+        secondary_actions = QHBoxLayout()
+        secondary_actions.setSpacing(8)
+        secondary_actions.addWidget(self.reidentify_button, 1)
+        secondary_actions.addWidget(self.tidsid_button, 1)
+        capture_actions.addLayout(secondary_actions)
+        layout.addLayout(capture_actions, 2, 0, 1, 4)
 
         recognition_title = QLabel("识别参数")
         recognition_title.setObjectName("WorkspaceSubheading")
@@ -2579,7 +2583,7 @@ class MainWindow(QMainWindow):
         advanced_layout.setContentsMargins(0, 0, 0, 0)
         advanced_layout.setVerticalSpacing(6)
         advanced_layout.setHorizontalSpacing(8)
-        advanced_layout.setColumnMinimumWidth(0, 143)
+        advanced_layout.setColumnMinimumWidth(0, 108)
         advanced_layout.addWidget(self.reidentify_1_pk_npc, 0, 0, 1, 4)
         for row, (key, field) in enumerate((
             ("time_delay", self.white_delay),
@@ -2593,7 +2597,7 @@ class MainWindow(QMainWindow):
         self.capture_advanced_fields.hide()
         self.capture_advanced_button.toggled.connect(self._set_capture_advanced_visible)
         layout.addWidget(self.save_config_button, 9, 2, 1, 2, Qt.AlignmentFlag.AlignRight)
-        layout.setColumnMinimumWidth(0, 143)
+        layout.setColumnMinimumWidth(0, 108)
         return group
 
     def _set_capture_advanced_visible(self, visible: bool) -> None:

@@ -475,7 +475,6 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     assert window.reidentify_button.text() == "校正"
     assert window.reidentify_1_pk_npc.text() == "1 PK NPC 校正"
     assert window.status_group.maximumHeight() >= 148
-    assert window.status_group.maximumWidth() <= 760
     assert window.refresh_seed_configs_button.isHidden()
     assert window.preview_label.minimumHeight() <= 270
     assert not window.progress_label.isHidden()
