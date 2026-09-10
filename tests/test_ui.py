@@ -354,7 +354,7 @@ def test_project_xs_controls_use_confirmed_split_layout(
     seed = window.seed_group.geometry()
     capture_top = window.capture_group.mapTo(window.project_xs_splitter, QPoint(0, 0)).y()
 
-    assert 8 <= capture_top <= 16
+    assert 16 <= capture_top <= 20
     assert not hasattr(window, "video_source_group")
     assert window.video_source_dialog.parent() is window
     assert not window.video_source_dialog.isVisible()
@@ -465,13 +465,13 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     assert hasattr(window, "reidentify_config_combo")
     assert window.seed_config_combo.findText("config_bebe.json") >= 0
     assert window.reidentify_config_combo.findText("config_bebe.json") >= 0
-    assert layout.itemAtPosition(0, 0).widget() is window.progress_label
-    assert layout.itemAtPosition(0, 1).widget() is window.progress_value
-    assert layout.itemAtPosition(0, 3).widget() is window.seed_config_combo
-    assert layout.itemAtPosition(1, 0).widget() is window.advances_label
-    assert layout.itemAtPosition(1, 1).widget() is window.advances_value
-    assert layout.itemAtPosition(1, 2).widget().text() == "校正配置"
-    assert layout.itemAtPosition(1, 3).widget() is window.reidentify_config_combo
+    assert window.status_group.title() == "自动流程配置"
+    assert layout.itemAtPosition(0, 1).widget() is window.seed_config_combo
+    assert layout.itemAtPosition(1, 0).widget().text() == "校正配置"
+    assert layout.itemAtPosition(1, 1).widget() is window.reidentify_config_combo
+    for status in (window.progress_label, window.progress_value,
+                   window.advances_label, window.advances_value):
+        assert status.parentWidget() is window.capture_status_strip
     assert window.reidentify_button.text() == "校正"
     assert window.reidentify_1_pk_npc.text() == "1 PK NPC 校正"
     assert window.status_group.maximumHeight() >= 148
@@ -3341,7 +3341,7 @@ def test_automation_script_shortcut_honors_unsaved_choice(
     window.easycon_tab._saved_editor_text = window.easycon_tab.editor.toPlainText()
 
 
-def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path):
+def test_auto_rng_page_uses_compact_toolbar_and_resizable_left_sidebar(app, tmp_path):
     panel = AutoRngPanel(
         script_dir=tmp_path,
         settings=_auto_rng_settings(tmp_path),
@@ -3352,31 +3352,31 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path
     assert panel.loop_count.width() == 70
     assert panel.start_button.height() == 34
     assert panel.stop_button.height() == 34
-    assert panel.config_panel.minimumWidth() == 326
-    assert panel.config_panel.minimumWidth() == panel.config_panel.maximumWidth()
+    assert panel.config_panel.minimumWidth() == 280
+    assert panel.config_panel.maximumWidth() > panel.config_panel.minimumWidth()
     assert panel.strategy_group.minimumHeight() < 400
     assert panel.strategy_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Preferred
     assert panel.strategy_group.maximumHeight() == 16777215  # 未设固定高度
     assert panel.script_group.maximumHeight() == 16777215  # 未设固定高度
-    assert panel.max_advances.width() == 180
-    assert panel.delay_settings_button.size().toTuple() == (180, 32)
+    assert panel.max_advances.width() == 156
+    assert panel.delay_settings_button.size().toTuple() == (156, 32)
     assert panel.delay_settings_button._strategy_text == "固定 delay"
     assert panel.delay_settings_button._estimate_text == "100"
     assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
     assert panel.delay_active_label.text() == "下轮预计 100 帧"
-    assert panel.runtime_card.minimumHeight() == 220
+    assert panel.runtime_card.minimumHeight() == 0
     assert panel.runtime_card.maximumHeight() == 16777215
     assert isinstance(panel.debug_output_check, CheckmarkCheckBox)
     assert isinstance(panel.escape_continue_check, CheckmarkCheckBox)
     assert panel.seed_script_combo.minimumWidth() == 160
     assert panel.config_contents.layout().spacing() == 12
-    assert panel.strategy_form.verticalSpacing() == 12
+    assert panel.strategy_form.verticalSpacing() == 8
     script_layout = panel.script_group.layout()
     assert script_layout.contentsMargins().top() == 0
     assert [script_layout.rowMinimumHeight(row) for row in (3, 6, 9)] == [6, 6, 6]
     target_tags = panel.findChild(QWidget, "TargetTags")
     assert target_tags is not None
-    assert target_tags.layout().contentsMargins().bottom() == 10
+    assert target_tags.parentWidget() is panel.target_name_label.parentWidget()
     config_layout = panel.config_contents.layout()
     assert config_layout.itemAt(3).widget().objectName() == "ConfigFooter"
     assert config_layout.itemAt(4).spacerItem() is not None
@@ -3425,7 +3425,6 @@ def test_auto_rng_missing_script_shortcut_reveals_and_focuses_field(app, tmp_pat
     panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
     panel.resize(1126, 740)
     panel.show()
-    panel.runtime_script_summary_toggle.click()
     assert panel.script_group.isHidden()
     panel.runtime_setup_button.click()
     app.processEvents()
@@ -3479,13 +3478,16 @@ def test_auto_rng_negative_remaining_keeps_value_and_explains_passed_trigger(app
     assert panel.runtime_description_label.text() == "启动点已过去 300 帧；请留意后续阶段和日志。"
 
 
-def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(app, tmp_path):
+def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(app, tmp_path, monkeypatch):
     window = MainWindow(profile_settings=_profile_settings(tmp_path))
+    from PySide6.QtCore import QRect
+    monkeypatch.setattr(window, "_screen_available_geometry", lambda: QRect(0, 0, 1800, 1100))
+    window.resize(1150, 900)
     window.tabs.setCurrentWidget(window.auto_rng_tab)
     window.show()
     app.processEvents()
     panel = window.auto_rng_tab
-    assert not panel.script_group.isHidden()
+    assert panel.script_group.isHidden()
     viewport = panel.runtime_panel.viewport()
 
     def within_view(widget):
@@ -3494,7 +3496,7 @@ def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(a
         assert position.y() + widget.height() <= viewport.height()
 
     within_view(panel.runtime_card)
-    within_view(panel.escape_continue_check)
+    within_view(panel.runtime_script_card)
     assert panel.runtime_panel.verticalScrollBar().maximum() == 0
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FINAL_WAIT))
     panel.set_candidate_targets([
@@ -3549,7 +3551,8 @@ def test_auto_rng_content_is_added_directly_below_toolbar(app):
     assert content.objectName() == "AutoRngContent"
     assert content.parentWidget() is panel
     assert not hasattr(panel, "content_scroll")
-    assert panel.content_grid.indexOf(panel.config_panel) >= 0
+    assert panel.content_grid.indexOf(panel.workspace_splitter) >= 0
+    assert panel.workspace_splitter.widget(0) is panel.config_panel
     assert panel.layout().itemAt(0).widget() is panel.toolbar
 
 

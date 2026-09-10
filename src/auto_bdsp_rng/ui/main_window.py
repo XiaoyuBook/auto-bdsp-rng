@@ -2274,7 +2274,7 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left.setObjectName("ProjectXsConfigPanel")
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(14, 12, 14, 12)
+        left_layout.setContentsMargins(16, 18, 16, 18)
         left_layout.setSpacing(8)
         self.capture_group = self._build_blink_group()
         self.seed_group = self._build_seed_group()
@@ -2287,8 +2287,8 @@ class MainWindow(QMainWindow):
         right = QWidget()
         right.setObjectName("ProjectXsPreviewPanel")
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(16, 12, 8, 12)
-        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(18, 18, 18, 18)
+        right_layout.setSpacing(16)
         right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
 
@@ -2308,15 +2308,16 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         panel.setObjectName("BdspWorkspace")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
         # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
         self.profile_group.setMaximumHeight(72)
         profile_scroll = scroll_surface(self.profile_group)
-        profile_scroll.setFixedHeight(90)
+        profile_scroll.setFixedHeight(76)
         configuration = QWidget()
+        configuration.setObjectName("BdspConfiguration")
         configuration_layout = QVBoxLayout(configuration)
         configuration_layout.setContentsMargins(0, 0, 0, 0)
         configuration_layout.addWidget(profile_scroll)
@@ -2325,8 +2326,8 @@ class MainWindow(QMainWindow):
         params_widget = QWidget()
         params_widget.setObjectName("BdspParameters")
         params_row = QHBoxLayout(params_widget)
-        params_row.setContentsMargins(0, 0, 0, 0)
-        params_row.setSpacing(10)
+        params_row.setContentsMargins(8, 12, 8, 12)
+        params_row.setSpacing(12)
         self.rng_info_group = self._build_rng_info_group()
         self.rng_info_group.setMinimumWidth(240)
         self.static_group = self._build_static_group()
@@ -2352,12 +2353,12 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
-        group = QGroupBox("捕捉状态与自动配置")
+        group = QGroupBox("自动流程配置")
         group.setObjectName("ProjectXsStatusGroup")
-        group.setMaximumHeight(180)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         outer = QGridLayout(group)
-        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setContentsMargins(14, 12, 14, 12)
         outer.setHorizontalSpacing(8)
         outer.setVerticalSpacing(10)
 
@@ -2398,22 +2399,16 @@ class MainWindow(QMainWindow):
         self.refresh_seed_configs_button.clicked.connect(self._refresh_config_list)
         self.refresh_seed_configs_button.hide()
 
-        outer.addWidget(self.progress_label, 0, 0)
-        outer.addWidget(self.progress_value, 0, 1)
-        outer.addWidget(QLabel("Seed 配置"), 0, 2)
-        outer.addWidget(self.seed_config_combo, 0, 3)
-        outer.addWidget(self.advances_label, 1, 0)
-        outer.addWidget(self.advances_value, 1, 1)
-        outer.addWidget(QLabel("校正配置"), 1, 2)
-        outer.addWidget(self.reidentify_config_combo, 1, 3)
-        note = QLabel("右侧配置供自动流程使用；手动捕捉与校正使用左侧参数。")
+        outer.addWidget(QLabel("Seed 配置"), 0, 0)
+        outer.addWidget(self.seed_config_combo, 0, 1)
+        outer.addWidget(QLabel("校正配置"), 1, 0)
+        outer.addWidget(self.reidentify_config_combo, 1, 1)
+        note = QLabel("用于自动流程；手动捕捉与校正使用左侧参数。")
         note.setObjectName("WorkspaceHint")
         note.setWordWrap(True)
-        outer.addWidget(note, 2, 0, 1, 4)
-        outer.setColumnMinimumWidth(0, 60)
-        outer.setColumnMinimumWidth(1, 55)
-        outer.setColumnMinimumWidth(2, 66)
-        outer.setColumnStretch(3, 1)
+        outer.addWidget(note, 2, 0, 1, 2)
+        outer.setColumnMinimumWidth(0, 66)
+        outer.setColumnStretch(1, 1)
         return group
 
     def _build_blink_group(self) -> QGroupBox:
@@ -2741,7 +2736,7 @@ class MainWindow(QMainWindow):
 
         outer = QHBoxLayout(group)
         outer.setContentsMargins(12, 4, 12, 6)
-        outer.setSpacing(10)
+        outer.setSpacing(8)
         outer.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # 名称 + 管理
@@ -2749,7 +2744,7 @@ class MainWindow(QMainWindow):
         self.profile_name = QLineEdit("-")
         self.profile_name.setPlaceholderText("存档名称")
         self.profile_name.setFixedHeight(30)
-        self.profile_name.setFixedWidth(140)
+        self.profile_name.setFixedWidth(110)
         outer.addWidget(self.profile_name)
         self.profile_manager_button = QPushButton("管理")
         self.profile_manager_button.setFixedHeight(30)
@@ -2767,7 +2762,7 @@ class MainWindow(QMainWindow):
         self.sid.editingFinished.connect(self._update_tsv)
         for w in (self.tid, self.sid, self.tsv):
             w.setFixedHeight(30)
-            w.setFixedWidth(88)
+            w.setFixedWidth(76)
         outer.addWidget(QLabel("TID"))
         outer.addWidget(self.tid)
         outer.addWidget(QLabel("SID"))
@@ -3051,15 +3046,29 @@ class MainWindow(QMainWindow):
 
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("CapturePreviewPanel")
         panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
+        self.capture_status_strip = QFrame()
+        self.capture_status_strip.setObjectName("CaptureStatusStrip")
+        self.capture_status_strip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        status_layout = QHBoxLayout(self.capture_status_strip)
+        status_layout.setContentsMargins(14, 9, 14, 9)
+        status_layout.setSpacing(8)
+        status_layout.addWidget(self.progress_label)
+        status_layout.addWidget(self.progress_value)
+        status_layout.addSpacing(20)
+        status_layout.addWidget(self.advances_label)
+        status_layout.addWidget(self.advances_value)
+        status_layout.addStretch(1)
+        layout.addWidget(self.capture_status_strip)
         self.preview_group = QGroupBox()
         self.preview_group.setObjectName("CapturePreviewGroup")
         self.preview_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         preview_layout = QVBoxLayout(self.preview_group)
-        preview_layout.setContentsMargins(0, 6, 0, 0)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(8)
 
         preview_controls = QHBoxLayout()
@@ -3175,7 +3184,7 @@ class MainWindow(QMainWindow):
                 background: #FFFFFF;
                 color: #202A33;
                 font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-                font-size: 14px;
+                font-size: 13px;
             }
             QWidget#AppRoot {
                 background: #FFFFFF;
@@ -3192,18 +3201,18 @@ class MainWindow(QMainWindow):
             }
             QLabel#WindowTitle {
                 color: #202A33;
-                font-size: 20px;
+                font-size: 17px;
                 font-weight: 500;
             }
             QLabel#WindowVersion {
                 color: #687480;
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 400;
             }
             QToolButton#VideoSourceHeaderButton,
             QToolButton#EasyConHeaderButton {
-                background: #FFFFFF;
-                border: 1px solid #E0E5EB;
+                background: #F8F9FB;
+                border: 1px solid #EFF2F5;
                 border-radius: 7px;
                 color: #202A33;
                 font-weight: 400;
@@ -3250,7 +3259,7 @@ class MainWindow(QMainWindow):
                 min-height: 44px;
                 margin-right: 25px;
                 padding: 0 0 1px 0;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 400;
             }
             QTabWidget#WorkspaceTabs QTabBar::tab:selected {
@@ -3315,7 +3324,7 @@ class MainWindow(QMainWindow):
                 max-height: 32px;
                 padding: 0 8px;
                 color: #202A33;
-                font-size: 14px;
+                font-size: 13px;
                 selection-background-color: #DCEFE7;
             }
             QListWidget {
@@ -3442,7 +3451,7 @@ class MainWindow(QMainWindow):
                 max-height: 32px;
                 padding: 0 11px;
                 color: #202A33;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 400;
             }
             QPushButton:hover {
@@ -3568,12 +3577,12 @@ class MainWindow(QMainWindow):
             }
             QLabel#SectionTitle {
                 color: #202A33;
-                font-size: 16px;
+                font-size: 15px;
                 font-weight: 500;
             }
             QLabel#WorkspaceSubheading {
                 color: #202A33;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 500;
                 padding-top: 6px;
             }
@@ -3610,29 +3619,65 @@ class MainWindow(QMainWindow):
                 width: 1px;
             }
             QWidget#ProjectXsConfigPanel {
-                background: #F7F8FA;
+                background: #F8F9FB;
             }
             QWidget#ProjectXsPreviewPanel {
+                background: #F2F4F7;
+            }
+            QWidget#CapturePreviewPanel {
+                background: transparent;
+            }
+            QFrame#CaptureStatusStrip {
                 background: #FFFFFF;
+                border: 1px solid #E3E8ED;
+                border-radius: 8px;
+            }
+            QFrame#CaptureStatusStrip QLabel {
+                color: #64707D;
+                font-size: 12px;
+            }
+            QFrame#CaptureStatusStrip QLabel#CaptureStatusValue {
+                color: #202A33;
+                font-size: 14px;
             }
             QWidget#PreviewAspectContainer {
                 background: transparent;
             }
             QGroupBox#CaptureConfigGroup,
             QGroupBox#CapturedSeedGroup,
-            QGroupBox#ProjectXsStatusGroup,
             QGroupBox#CapturePreviewGroup {
                 border: 0;
                 border-radius: 0;
                 background: transparent;
                 padding: 9px 0 0 0;
                 margin-top: 20px;
-                font-size: 16px;
+                font-size: 15px;
                 font-weight: 500;
+            }
+            QGroupBox#ProjectXsStatusGroup {
+                background: #FFFFFF;
+                border: 1px solid #E3E8ED;
+                border-radius: 9px;
+                margin-top: 0;
+                padding: 26px 0 0 0;
+                font-size: 15px;
+                font-weight: 500;
+            }
+            QGroupBox#ProjectXsStatusGroup::title {
+                subcontrol-origin: padding;
+                subcontrol-position: top left;
+                left: 14px;
+                top: 12px;
+            }
+            QGroupBox#CapturePreviewGroup {
+                margin-top: 0;
+                padding: 0;
+            }
+            QGroupBox#CapturedSeedGroup {
+                border-top: 1px solid #E3E8ED;
             }
             QGroupBox#CaptureConfigGroup::title,
             QGroupBox#CapturedSeedGroup::title,
-            QGroupBox#ProjectXsStatusGroup::title,
             QGroupBox#CapturePreviewGroup::title {
                 left: 0;
                 padding: 0;
@@ -3646,13 +3691,18 @@ class MainWindow(QMainWindow):
             }
 
             QWidget#BdspWorkspace,
+            QWidget#BdspConfiguration {
+                background: #F2F4F7;
+            }
             QWidget#BdspParameters {
                 background: #FFFFFF;
+                border: 1px solid #E3E8ED;
+                border-radius: 8px;
             }
             QGroupBox#ProfileGroup {
-                background: #F7F8FA;
-                border: 0;
-                border-radius: 0;
+                background: #FFFFFF;
+                border: 1px solid #E3E8ED;
+                border-radius: 8px;
                 margin-top: 0;
                 padding: 4px 10px;
             }
@@ -3673,7 +3723,7 @@ class MainWindow(QMainWindow):
                 border-radius: 0;
                 margin-top: 20px;
                 padding: 8px 10px 4px 10px;
-                font-size: 16px;
+                font-size: 13px;
                 font-weight: 500;
             }
             QGroupBox#BdspRngGroup::title,
@@ -3683,14 +3733,18 @@ class MainWindow(QMainWindow):
             }
             QWidget#BdspParameters QGroupBox#BdspEncounterGroup,
             QWidget#BdspParameters QGroupBox#BdspFilterGroup {
-                border-left: 1px solid #E0E5EB;
+                border-left: 1px solid #EFF2F5;
             }
             QLabel#RangeSeparator {
                 color: #8A9891;
             }
             QWidget#ResultsToolbar {
-                background: #FFFFFF;
-                border-top: 1px solid #F0F2F5;
+                background: #F2F4F7;
+                border: 0;
+            }
+            QTableWidget#StaticResultsTable {
+                border: 1px solid #E3E8ED;
+                border-radius: 8px;
             }
             QTableWidget {
                 background: #FFFFFF;
@@ -4509,7 +4563,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(3, self._text("bdsp_search"))
         self.tabs.setTabText(4, self._text("easycon"))
         self.tabs.setTabText(5, "日志中心" if self.lang == "zh" else "Log Center")
-        self.status_group.setTitle("捕捉状态与自动配置" if self.lang == "zh" else "Capture status and automation config")
+        self.status_group.setTitle("自动流程配置" if self.lang == "zh" else "Automation configuration")
         self.video_source_dialog.setWindowTitle(
             "视频源设置" if self.lang == "zh" else "Video Source"
         )

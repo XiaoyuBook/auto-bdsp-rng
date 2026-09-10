@@ -166,8 +166,16 @@ class StartReadinessController(QObject):
         self.button = QPushButton("开始前检查")
         self.button.setObjectName("ReadinessButton")
         self.button.setFixedHeight(32)
+        self.button.setStyleSheet(workspace_styles("""
+            QPushButton#ReadinessButton {
+                background: transparent; border: 0; color: $text_secondary;
+                font-size: 12px; padding: 0 8px;
+            }
+            QPushButton#ReadinessButton:hover { color: $accent; background: $accent_soft; }
+        """))
         self.button.clicked.connect(self.show)
         window.header_layout.insertWidget(window.header_layout.count() - 3, self.button)
+        self._button_layout = window.header_layout
         self.items = ()
         self._cache = {}
         self.preview_button = QPushButton("打开视频源设置", window.preview_label)
@@ -181,12 +189,20 @@ class StartReadinessController(QObject):
         window.tabs.currentChanged.connect(self._page_changed)
         window.easycon_tab.connectionPresentationChanged.connect(self.refresh)
         # Defer the first read until MainWindow finishes loading its settings.
-        QTimer.singleShot(0, self.refresh)
+        QTimer.singleShot(0, self._page_changed)
 
     def _page_changed(self, *_args):
         tab = self.window.tabs.currentWidget()
         if tab in (self.window.auto_rng_tab, self.window.auto_tid_rng_tab):
             self.dialog.module_combo.setCurrentIndex(int(tab is self.window.auto_tid_rng_tab))
+            layout, index = tab.toolbar_actions, 0
+        else:
+            layout, index = self.window.header_layout, self.window.header_layout.count() - 3
+        if layout is not self._button_layout:
+            self._button_layout.removeWidget(self.button)
+            layout.insertWidget(index, self.button)
+            self._button_layout = layout
+            self.button.show()
         self.refresh()
 
     @property

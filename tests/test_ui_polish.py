@@ -224,7 +224,7 @@ def test_refresh_six_scripts_preserves_selection_dirty_state_and_missing_paths(w
 
 
 @pytest.mark.parametrize('count', [0, 3, 50])
-def test_tid_targets_three_rows_alignment_scroll_and_delete(window, count):
+def test_tid_targets_two_rows_alignment_scroll_and_delete(window, count):
     w, app = window
     p = w.auto_tid_rng_tab
     w.tabs.setCurrentWidget(p)
@@ -238,10 +238,14 @@ def test_tid_targets_three_rows_alignment_scroll_and_delete(window, count):
     badge = p.target_count_label.mapTo(w, QPoint())
     pool = p.target_list.mapTo(w, QPoint())
     inputs = p.target_input.mapTo(w, QPoint())
-    assert inputs.y() >= pool.y() + p.target_list.height()
-    assert badge.y() >= inputs.y() + p.target_input.height()
-    assert 6 <= pool.y() - title.y() - p.target_title_label.height() <= 10
-    assert badge.x() + p.target_count_label.width() <= pool.x() + p.target_list.width()
+    assert 6 <= inputs.y() - title.y() - p.target_title_label.height() <= 10
+    if count:
+        assert pool.y() >= inputs.y() + p.target_input.height()
+        assert badge.y() >= pool.y() + p.target_list.height()
+        assert badge.x() + p.target_count_label.width() <= pool.x() + p.target_list.width()
+    else:
+        assert p.target_list.isHidden()
+        assert badge.y() >= inputs.y() + p.target_input.height()
     assert p.frame_threshold.mapTo(w, QPoint()).y() < p.delay.mapTo(w, QPoint()).y()
     assert not p.script_fields.isVisible()
     p.script_toggle.click()
@@ -251,7 +255,7 @@ def test_tid_targets_three_rows_alignment_scroll_and_delete(window, count):
     if count == 50:
         rects = [p.target_list.visualItemRect(p.target_list.item(i)) for i in range(count)]
         complete_rows = {r.top() for r in rects if p.target_list.viewport().rect().contains(r)}
-        assert len(complete_rows) >= 3
+        assert len(complete_rows) >= 2
         last = p.target_list.item(count - 1)
         p.target_list.scrollToItem(last)
         app.processEvents()

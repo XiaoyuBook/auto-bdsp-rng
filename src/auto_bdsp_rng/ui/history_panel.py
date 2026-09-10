@@ -371,8 +371,11 @@ class HistoryPanel(QWidget):
         self._follow_timer.timeout.connect(self._finish_auto_follow)
 
     def _build_ui(self) -> None:
+        self.setObjectName("HistoryPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setStyleSheet("QWidget#HistoryPanel { background: #F2F4F7; }")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 14, 0, 0)
         layout.setSpacing(8)
 
         toolbar = QHBoxLayout()
@@ -434,8 +437,8 @@ class HistoryPanel(QWidget):
         self.empty_state.setObjectName("HistoryEmptyState")
         self.empty_state.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.empty_state.setStyleSheet(
-            "QFrame#HistoryEmptyState { background: #FFFFFF; border: 1px solid #E9EDF2; "
-            "border-radius: 12px; }"
+            "QFrame#HistoryEmptyState { background: #FFFFFF; border: 1px solid #E3E8ED; "
+            "border-radius: 8px; }"
             "QFrame#HistoryEmptyState QLabel { background: transparent; border: 0; }"
         )
         empty_layout = QVBoxLayout(self.empty_state)
@@ -535,9 +538,9 @@ class HistoryPanel(QWidget):
         self.related_logs_button.setEnabled(False)
         self.related_logs_button.clicked.connect(self._request_related_logs)
         self.related_logs_button.setStyleSheet(
-            "QPushButton { color: #FFFFFF; background: #087C58; border: 1px solid #087C58; "
-            "border-radius: 4px; padding: 0 10px; }"
-            "QPushButton:hover { background: #066A4B; }"
+            "QPushButton { color: #087C58; background: #EAF7F1; border: 1px solid #D7EDE3; "
+            "border-radius: 7px; padding: 0 10px; }"
+            "QPushButton:hover { background: #DBF1E6; }"
             "QPushButton:disabled { color: #A0A9B2; background: #E0E5EB; border-color: #E0E5EB; }"
         )
         detail_header.addWidget(self.copy_round_button)

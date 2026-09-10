@@ -4,6 +4,7 @@ from pathlib import Path
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngProgress
 from tests.test_start_readiness import window  # isolated real Qt window
+import pytest
 
 
 def test_runtime_snapshot_detaches_inputs_and_ignores_draft_edits(window):
@@ -62,3 +63,41 @@ def test_snapshot_dialog_does_not_save_or_start(window, monkeypatch):
     monkeypatch.setattr(p, "_start_with_phase", forbidden)
     p.runtime_insights.show_snapshot()
     assert p._settings.allKeys() == before
+
+
+@pytest.mark.parametrize("tid", [False, True])
+def test_folded_runtime_details_keep_progress_and_user_expansion(window, tid):
+    panel = window.auto_tid_rng_tab if tid else window.auto_rng_tab
+    window.tabs.setCurrentWidget(panel)
+    assert panel.runtime_metrics.isHidden()
+    assert panel.runtime_details.isHidden()
+    phase = AutoTidRngPhase if tid else AutoRngPhase
+    progress_type = AutoTidRngProgress if tid else AutoRngProgress
+    waiting = phase.WAIT_NAME_TRIGGER if tid else phase.FINAL_WAIT
+    progress = progress_type(phase=waiting, loop_index=1, current_advances=100,
+                             trigger_advances=200)
+    panel.apply_progress(progress)
+    assert not panel.runtime_metrics.isHidden()
+    assert panel.runtime_details.isHidden()
+    panel.runtime_details_toggle.click()
+    panel.apply_progress(replace(progress, current_advances=142))
+    assert not panel.runtime_details.isHidden()
+    assert panel.runtime_remaining_value.text() == "58 帧"
+    panel.runtime_details_toggle.click()
+    panel.apply_progress(replace(progress, current_advances=151))
+    assert panel.runtime_details.isHidden()
+    assert panel.runtime_remaining_value.text() == "49 帧"
+    panel.apply_progress(progress_type(phase=phase.IDLE))
+    assert panel.runtime_metrics.isHidden()
+    assert panel.runtime_footer.isHidden()
+    assert not panel.runtime_details_toggle.isChecked()
+
+
+@pytest.mark.parametrize("text", ["—", "158 帧", "-300 帧", "2,147,483,647 帧", "<无数据>"])
+def test_runtime_value_selection_preserves_plain_text(window, text):
+    label = window.auto_rng_tab.runtime_remaining_value
+    label.setText(text)
+    label.setSelection(0, len(text))
+    assert label.text() == text
+    assert label.selectedText() == text
+    assert label.accessibleName() == text

@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 from PySide6.QtTest import QTest
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
@@ -95,8 +95,11 @@ def test_ocr_settings_dialog_is_non_modal_and_lists_all_fields(app, tmp_path):
         "判闪对话区域",
         "御三家战斗区域",
     ]
-    assert dialog.table.verticalHeader().defaultSectionSize() >= 52
-    assert dialog.table.minimumHeight() >= 470
+    assert dialog.table.verticalHeader().defaultSectionSize() == 44
+    for row in range(dialog.table.rowCount()):
+        actions = dialog.table.cellWidget(row, 3)
+        assert actions.sizeHint().height() <= dialog.table.rowHeight(row)
+        assert len(actions.findChildren(QPushButton)) == 4
 
 
 def test_ocr_settings_dialog_uses_default_regions_on_first_load(app, tmp_path):

@@ -81,24 +81,26 @@ class OcrSettingsDialog(QDialog):
         self.setObjectName("OcrSettingsDialog")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.resize(980, 680)
+        self.resize(980, 590)
         self.setStyleSheet(
-            ui_styles("QDialog#OcrSettingsDialog { background: #F2F4F7; color: #202A33; }"
+            ui_styles("QDialog#OcrSettingsDialog { background: #FFFFFF; color: #202A33; }"
             " QDialog#OcrSettingsDialog QLabel { color: #626D79; font-size: 12px; background: transparent; }"
             " QDialog#OcrSettingsDialog QTableWidget { font-size: 13px; border-radius: 7px;"
             " background: #ffffff; alternate-background-color: #FAFBFC;"
-            " color: #202A33; border: 1px solid #E9EDF2; }"
+            " color: #202A33; border: 1px solid #E3E8ED; }"
             " QDialog#OcrSettingsDialog QTableWidget::item { border: 0; border-bottom: 1px solid #F0F2F5; padding: 0 8px; }"
             " QDialog#OcrSettingsDialog QHeaderView::section { font-size: 12px; font-weight: 500;"
             " background: #F7F8FA; color: #626D79; border: 0;"
             " border-bottom: 1px solid #F0F2F5; padding: 6px 8px; }"
-            " QDialog#OcrSettingsDialog QPushButton { font-size: 14px;"
+            " QDialog#OcrSettingsDialog QPushButton { font-size: 12px;"
             " background: #ffffff; color: #202A33; border: 1px solid #E0E5EB;"
             " border-radius: 7px; min-height: 32px; padding: 0 12px; }"
             " QDialog#OcrSettingsDialog QPushButton:hover {"
             " background: #F7F8FA; border-color: #B8C2CC; }"
             " QDialog#OcrSettingsDialog QPushButton:disabled {"
             " background: #F7F8FA; color: #97A1AB; border-color: #E0E5EB; }"
+            " QDialog#OcrSettingsDialog QPushButton#OcrRowAction { font-size: 11px;"
+            " min-height: 26px; max-height: 26px; padding: 0 7px; border-radius: 5px; }"
             " QDialog#OcrSettingsDialog QScrollBar:vertical { background: #F7F8FA; width: 8px; margin: 0; }"
             " QDialog#OcrSettingsDialog QScrollBar:horizontal { background: #F7F8FA; height: 8px; margin: 0; }"
             " QDialog#OcrSettingsDialog QScrollBar::handle { background: #CAD2DB; border-radius: 4px; }"
@@ -129,8 +131,8 @@ class OcrSettingsDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
         hint = QLabel("点击“框选”后，在 Seed 捕捉预览图上按住右键拖拽选择区域。识别结果只在点击“识别/测试”时刷新。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -141,8 +143,8 @@ class OcrSettingsDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.setShowGrid(False)
-        self.table.verticalHeader().setDefaultSectionSize(56)
-        self.table.setMinimumHeight(556)
+        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.setMinimumHeight(300)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -180,8 +182,8 @@ class OcrSettingsDialog(QDialog):
     def _build_action_cell(self, field: str) -> QWidget:
         widget = QWidget(self.table)
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(5)
         buttons = (
             ("框选", lambda _checked=False, field=field: self.request_selection(field)),
             ("显示", lambda _checked=False, field=field: self.show_region(field)),
@@ -190,8 +192,9 @@ class OcrSettingsDialog(QDialog):
         )
         for text, callback in buttons:
             button = QPushButton(text)
-            button.setFixedHeight(34)
-            button.setMinimumWidth(72)
+            button.setObjectName("OcrRowAction")
+            button.setFixedHeight(28)
+            button.setMinimumWidth(48)
             button.clicked.connect(callback)
             self._row_action_buttons.append(button)
             if text == "显示":

@@ -576,13 +576,13 @@ def test_auto_tid_target_pool_has_multiline_space_and_bulk_add(app, tmp_path: Pa
     assert panel.target_display_tids() == (1, 123456, 654321, 999999)
     assert panel.target_count_label.text() == "4 个目标"
     assert panel.target_list.objectName() == "TargetPool"
-    assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 3
+    assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 2
     assert panel.target_list.maximumHeight() <= 150
     target_actions = panel.findChild(QWidget, "TargetPoolActions")
     assert target_actions is not None
     assert panel.target_input.parentWidget() is target_actions
     assert panel.add_target_button.parentWidget() is target_actions
-    assert panel.clear_targets_button.parentWidget() is target_actions
+    assert panel.clear_targets_button.parentWidget() is panel.target_count_label.parentWidget()
     panel.resize(1150, 820)
     panel.show()
     app.processEvents()
@@ -667,7 +667,7 @@ def test_main_window_styles_keep_auto_tid_target_pool_multiline(app) -> None:
     window.show()
     app.processEvents()
 
-    assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 3
+    assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 2
     assert panel.target_list.verticalScrollBar().isVisible() is False
 
 

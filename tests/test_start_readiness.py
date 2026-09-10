@@ -45,6 +45,23 @@ def checks(window):
     return {item.key: item for item in window.readiness.collect()}
 
 
+def test_preparation_entry_follows_active_automation_toolbar(window):
+    button = window.readiness.button
+    for page in (window.auto_rng_tab, window.auto_tid_rng_tab,
+                 window.project_xs_tab, window.auto_rng_tab):
+        window.tabs.setCurrentWidget(page)
+        QApplication.processEvents()
+        if page in (window.auto_rng_tab, window.auto_tid_rng_tab):
+            assert page.toolbar_actions.indexOf(button) == 0
+            assert button.parentWidget() is page.toolbar
+            button.click()
+            assert window.readiness.panel is page
+            window.readiness.dialog.hide()
+        else:
+            assert button.parentWidget() is window.header
+        assert button.isVisible()
+
+
 def script(combo, tmp_path, name, text="A 100\n"):
     path = tmp_path / name
     path.write_text(text, encoding="utf-8")

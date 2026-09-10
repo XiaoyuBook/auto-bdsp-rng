@@ -310,6 +310,7 @@ class RunLogPanel(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("RunLogPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self._buffer = buffer
         self._set_save_enabled_callback = set_save_enabled
         self._open_log_dir_callback = open_log_dir
@@ -336,8 +337,8 @@ class RunLogPanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setContentsMargins(0, 14, 0, 0)
+        root.setSpacing(10)
 
         filters = QHBoxLayout()
         filters.setContentsMargins(0, 0, 0, 0)
@@ -345,29 +346,29 @@ class RunLogPanel(QWidget):
 
         source_field, self.source_combo = self._combo_field("来源", "全部来源")
         self.source_combo.setObjectName("RunLogSourceFilter")
-        self.source_combo.setMinimumWidth(140)
+        self.source_combo.setMinimumWidth(120)
         filters.addLayout(source_field)
 
         level_field, self.level_combo = self._combo_field("级别", "全部级别")
         self.level_combo.setObjectName("RunLogLevelFilter")
         for level, label in self._LEVEL_LABELS.items():
             self.level_combo.addItem(label, level)
-        self.level_combo.setMinimumWidth(112)
+        self.level_combo.setMinimumWidth(104)
         filters.addLayout(level_field)
 
         search_field = QVBoxLayout()
         search_field.setSpacing(3)
-        search_field.addWidget(self._field_label("搜索日志"))
         self.search_edit = QLineEdit(self)
         self.search_edit.setObjectName("RunLogSearch")
-        self.search_edit.setPlaceholderText("输入关键词")
+        self.search_edit.setAccessibleName("搜索日志")
+        self.search_edit.setPlaceholderText("搜索日志关键词")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setMinimumWidth(180)
+        self.search_edit.setMinimumWidth(130)
         search_field.addWidget(self.search_edit)
         filters.addLayout(search_field, 1)
 
         toggle_row = QHBoxLayout()
-        toggle_row.setContentsMargins(0, 20, 0, 0)
+        toggle_row.setContentsMargins(0, 0, 0, 0)
         toggle_row.setSpacing(12)
         self.follow_check = QCheckBox("自动跟随", self)
         self.follow_check.setObjectName("RunLogAutoFollow")
@@ -414,7 +415,7 @@ class RunLogPanel(QWidget):
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.verticalHeader().setDefaultSectionSize(36)
         header = self.table.horizontalHeader()
         header.setFixedHeight(34)
         header.setStretchLastSection(False)
@@ -429,9 +430,9 @@ class RunLogPanel(QWidget):
 
         self.footer_frame = QFrame(self)
         self.footer_frame.setObjectName("RunLogFooter")
-        self.footer_frame.setFixedHeight(50)
+        self.footer_frame.setFixedHeight(42)
         footer = QHBoxLayout(self.footer_frame)
-        footer.setContentsMargins(0, 8, 0, 8)
+        footer.setContentsMargins(0, 4, 0, 4)
         footer.setSpacing(8)
         self.count_label = QLabel("显示 0 条 · 当前会话共 0 条", self)
         self.count_label.setObjectName("RunLogCount")
@@ -460,7 +461,7 @@ class RunLogPanel(QWidget):
         self.setStyleSheet(
             ui_styles("""
             QWidget#RunLogPanel {
-                background: transparent;
+                background: #F2F4F7;
             }
             QWidget#RunLogPanel QLabel#RunLogFieldLabel,
             QWidget#RunLogPanel QLabel#RunLogCount {
@@ -502,10 +503,10 @@ class RunLogPanel(QWidget):
             QTableView#RunLogTable {
                 background: #FFFFFF;
                 alternate-background-color: #FAFBFC;
-                border: 1px solid #E9EDF2;
-                border-radius: 6px;
+                border: 1px solid #E3E8ED;
+                border-radius: 8px;
                 gridline-color: #EEF0F3;
-                color: #111827;
+                color: #202A33;
                 selection-background-color: #EAF7F1;
                 selection-color: #202A33;
             }
@@ -514,8 +515,8 @@ class RunLogPanel(QWidget):
                 padding: 3px 6px;
             }
             QTableView#RunLogTable QHeaderView::section {
-                background: #F9FAFB;
-                color: #4B5563;
+                background: #F8F9FB;
+                color: #64707D;
                 border: 0;
                 border-bottom: 1px solid #F0F2F5;
                 padding: 6px;
@@ -533,8 +534,9 @@ class RunLogPanel(QWidget):
     def _combo_field(self, label: str, all_text: str) -> tuple[QVBoxLayout, QComboBox]:
         layout = QVBoxLayout()
         layout.setSpacing(3)
-        layout.addWidget(self._field_label(label))
         combo = QComboBox(self)
+        combo.setAccessibleName(label)
+        combo.setToolTip(label)
         combo.addItem(all_text, None)
         layout.addWidget(combo)
         return layout, combo

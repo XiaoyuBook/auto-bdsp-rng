@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
+from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit
 
@@ -404,7 +405,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_completed_steps: set[int] = set()
         self._runtime_loop_index = 0
         self._runtime_candidate_total = 0
-        self._runtime_script_editor_expanded = True
+        self._runtime_script_editor_expanded = False
         self._config_state_tracking_ready = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
         self._build_ui()
@@ -434,7 +435,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.content_grid.setVerticalSpacing(0)
         self.config_panel = self._build_config_panel()
         self.runtime_panel = self._build_runtime_panel()
-        self.workspace_splitter = WorkspaceSplit(self._settings, "static")
+        self.workspace_splitter = WorkspaceSplit(self._settings, "static", breakpoint=1040, horizontal=(280, 840))
         self.workspace_splitter.addWidget(self.config_panel)
         self.workspace_splitter.addWidget(self.runtime_panel)
         self.workspace_splitter.restore_sizes()
@@ -518,7 +519,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.start_button.setFixedHeight(34)
         self.start_button.setMinimumWidth(88)
         self.stop_button.setFixedHeight(34)
-        self.stop_button.setFixedWidth(104)
+        self.stop_button.setFixedWidth(86)
 
         self.start_button.clicked.connect(self._start_clicked)
         self.start_from_seed_action.triggered.connect(self._start_clicked)
@@ -542,14 +543,16 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._update_loop_count_visibility()
 
         self.capture_info_button = QPushButton("OCR设置")
-        self.capture_info_button.setObjectName("SecondaryButton")
+        self.capture_info_button.setObjectName("InlineLinkButton")
+        self.capture_info_button.setIcon(workspace_icon("viewfinder", "#64707D"))
         self.capture_info_button.setAccessibleName("打开 OCR 设置")
         self.capture_info_button.setFixedHeight(34)
-        self.capture_info_button.setMinimumWidth(120)
+        self.capture_info_button.setMinimumWidth(88)
         self.capture_info_button.setToolTip("打开 OCR 区域设置窗口")
         self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
 
         right_layout = QHBoxLayout()
+        self.toolbar_actions = right_layout
         right_layout.setSpacing(8)
         right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         right_layout.addWidget(self.capture_info_button)
@@ -558,8 +561,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
         row.addLayout(left_layout)
         row.addStretch(1)
-        row.addWidget(self.toolbar_status)
-        row.addStretch(1)
+        self.toolbar_status.setParent(toolbar)
+        self.toolbar_status.hide()
         row.addLayout(right_layout)
         return toolbar
 
@@ -570,14 +573,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         panel.setFrameShape(QFrame.Shape.NoFrame)
         panel.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         panel.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        panel.setMinimumWidth(326)
+        panel.setMinimumWidth(280)
         panel.setMaximumWidth(16777215)
 
         contents = QWidget()
         contents.setObjectName("AutoRngConfigContents")
-        contents.setMinimumWidth(300)
+        contents.setMinimumWidth(264)
         layout = QVBoxLayout(contents)
-        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setContentsMargins(16, 18, 16, 18)
         layout.setSpacing(12)
 
         header = QHBoxLayout()
@@ -597,7 +600,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
         footer = QFrame()
         footer.setObjectName("ConfigFooter")
-        footer_layout = QHBoxLayout(footer)
+        footer_layout = QVBoxLayout(footer)
         footer_layout.setContentsMargins(0, 10, 0, 0)
         footer_layout.setSpacing(8)
         note = QLabel("常规配置下次启动生效\ndelay 策略下轮生效")
@@ -606,15 +609,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             "保存会记住当前配置；正在运行的任务继续使用启动时的常规参数。\n"
             "delay 策略在每轮开始时重新计算，本轮冻结值不变。"
         )
-        self.save_config_button = QPushButton("保存")
+        self.save_config_button = QPushButton("保存配置")
+        self.save_config_button.setIcon(workspace_icon("save", "#64707D"))
         self.save_config_button.setObjectName("ConfigSaveButton")
         self.save_config_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_config_button.setAccessibleName("保存任务配置")
         self.save_config_button.setToolTip("保存左侧任务配置；右侧脚本选择单独保存。点击开始时会自动保存全部配置。")
         self.save_config_button.clicked.connect(self._save_config_state)
         footer_layout.addWidget(note)
-        footer_layout.addStretch(1)
-        footer_layout.addWidget(self.save_config_button)
+        footer_layout.addWidget(self.save_config_button, 0, Qt.AlignmentFlag.AlignRight)
         layout.addWidget(footer)
         layout.addStretch(1)
 
@@ -628,10 +631,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form = QFormLayout(group)
         form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(12)
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(8)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.strategy_form = form
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
@@ -644,7 +647,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.delay_strategy_dialog = DelayStrategyDialog(self)
         self.delay_settings_button = DelaySummaryButton()
         self.delay_settings_button.setObjectName("SecondaryButton")
-        self.delay_settings_button.setFixedSize(180, 32)
+        self.delay_settings_button.setFixedSize(156, 32)
         self.delay_settings_button.setIcon(
             delay_lucide_icon("settings-2", "#626D79", 16)
         )
@@ -653,7 +656,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.delay_active_label.setObjectName("DelayActiveLabel")
         self.delay_settings_field = QWidget()
         self.delay_settings_field.setObjectName("DelaySettingsField")
-        self.delay_settings_field.setFixedSize(180, 52)
+        self.delay_settings_field.setFixedSize(156, 52)
         delay_field_layout = QVBoxLayout(self.delay_settings_field)
         delay_field_layout.setContentsMargins(0, 0, 0, 0)
         delay_field_layout.setSpacing(3)
@@ -691,7 +694,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         set_c_locale(self.shiny_threshold_seconds)
         self.shiny_threshold_seconds.setFont(_ui_numeric_font(14))
         for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
-            spin.setFixedWidth(180)
+            spin.setFixedWidth(156)
         self.shiny_threshold_seconds.setFixedSize(180, 32)
         explained_rows = (
             (
@@ -1121,7 +1124,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.refresh_scripts_button.setStyleSheet("QPushButton {color: #087C58; border: 0; background: transparent; padding: 0;} QPushButton:disabled {color: #9AA8A1;}")
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         self.runtime_script_header.layout().insertWidget(1, self.script_status_label)
-        self.runtime_script_header.layout().insertWidget(2, self.refresh_scripts_button)
+        layout.addWidget(self.refresh_scripts_button, 0, 0, 1, 2, Qt.AlignmentFlag.AlignRight)
 
         def combo_factory() -> _RefreshingScriptComboBox:
             return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
@@ -1250,7 +1253,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_card.setObjectName("RuntimeCard")
         add_card_shadow(self.runtime_card)
         self.runtime_card.setProperty("state", "idle")
-        self.runtime_card.setMinimumHeight(220)
+        self.runtime_card.setMinimumHeight(0)
         self.runtime_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         runtime_layout = QVBoxLayout(self.runtime_card)
         runtime_layout.setContentsMargins(16, 13, 16, 12)
@@ -1286,27 +1289,28 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_setup_button.setAccessibleName("定位到第一个缺少的必需脚本")
         self.runtime_setup_button.clicked.connect(self._focus_missing_script)
         description_row.addWidget(self.runtime_setup_button)
-        runtime_layout.addLayout(description_row)
         self.runtime_steps = self._build_runtime_steps()
         self.runtime_steps.setToolTip("仅标记实际经过的阶段；流程可跳过、回跳或重新测种。")
 
-        metrics = QHBoxLayout()
+        self.runtime_metrics = QWidget()
+        self.runtime_metrics.setObjectName("RuntimeMetrics")
+        metrics = QHBoxLayout(self.runtime_metrics)
         metrics.setContentsMargins(0, 3, 0, 3)
-        metrics.setSpacing(16)
+        metrics.setSpacing(14)
         (current_metric, self.runtime_current_value) = self._runtime_metric("当前帧数")
         (target_metric, self.runtime_target_value) = self._runtime_metric("目标帧数")
         (remaining_metric, self.runtime_remaining_value) = self._runtime_metric("距离撞闪启动", accent=True)
         current_metric.setToolTip("过帧脚本执行期间的数值来自最近一次定位及计时估算；脚本完成后以校正结果为准。")
         remaining_metric.setToolTip("扣除本轮 delay 和撞闪脚本等待帧数后的启动点，与当前帧数之间的差值。")
-        metrics.addWidget(current_metric, 105)
+        metrics.addWidget(current_metric, 100)
         metrics.addWidget(target_metric, 100)
-        metrics.addWidget(remaining_metric, 90)
-        runtime_layout.addLayout(metrics)
+        metrics.addWidget(remaining_metric, 115)
+        runtime_layout.addWidget(self.runtime_metrics)
+        runtime_layout.addLayout(description_row)
         self.runtime_insights = RuntimeInsights(self)
-        runtime_layout.addWidget(self.runtime_insights)
-        runtime_layout.addWidget(self.runtime_steps)
 
         runtime_footer = QFrame()
+        self.runtime_footer = runtime_footer
         runtime_footer.setObjectName("RuntimeFooter")
         runtime_footer_layout = QHBoxLayout(runtime_footer)
         runtime_footer_layout.setContentsMargins(0, 8, 0, 0)
@@ -1324,6 +1328,13 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         runtime_footer_layout.addWidget(QLabel("帧"))
         runtime_footer_layout.addWidget(self.runtime_delay_state_label)
         runtime_footer_layout.addStretch(1)
+        self.runtime_details_toggle = QToolButton()
+        self.runtime_details_toggle.setObjectName("RuntimeScriptSummaryToggle")
+        self.runtime_details_toggle.setText("阶段记录")
+        self.runtime_details_toggle.setCheckable(True)
+        self.runtime_details_toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.runtime_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        runtime_footer_layout.addWidget(self.runtime_details_toggle)
         self.target_data_button = QPushButton("查看目标数据")
         self.target_data_button.setIcon(workspace_icon("external", "#687480"))
         self.target_data_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1331,8 +1342,23 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.target_data_button.setAccessibleName("查看目标数据")
         self.target_data_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.target_data_button.clicked.connect(self.targetDataRequested.emit)
-        runtime_footer_layout.addWidget(self.target_data_button)
+        self.target_data_button.setParent(self.runtime_card)
+        self.target_data_button.hide()
         runtime_layout.addWidget(runtime_footer)
+        self.runtime_details = QWidget()
+        self.runtime_details.setObjectName("RuntimeDetails")
+        details_layout = QVBoxLayout(self.runtime_details)
+        details_layout.setContentsMargins(0, 4, 0, 0)
+        details_layout.setSpacing(10)
+        details_layout.addWidget(self.runtime_insights)
+        details_layout.addWidget(self.runtime_steps)
+        details_layout.addWidget(self.target_data_button, 0, Qt.AlignmentFlag.AlignRight)
+        self.target_data_button.show()
+        runtime_layout.addWidget(self.runtime_details)
+        self.runtime_details.hide()
+        self.runtime_details_toggle.toggled.connect(self._set_runtime_details_visible)
+        self.runtime_metrics.hide()
+        self.runtime_footer.hide()
         layout.addWidget(self.runtime_card)
 
         self.previous_round_label = QLabel("暂无 delay 样本")
@@ -1347,12 +1373,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.candidate_section = self._build_candidate_section()
         layout.addWidget(self.candidate_section)
 
+        self.runtime_script_card = QFrame()
+        self.runtime_script_card.setObjectName("RuntimeScriptCard")
+        script_layout = QVBoxLayout(self.runtime_script_card)
+        script_layout.setContentsMargins(12, 10, 12, 12)
+        script_layout.setSpacing(6)
         self.runtime_script_header = self._build_runtime_script_header()
-        layout.addWidget(self.runtime_script_header)
+        script_layout.addWidget(self.runtime_script_header)
         self.runtime_script_summary = self._build_runtime_script_summary()
-        layout.addWidget(self.runtime_script_summary)
+        script_layout.addWidget(self.runtime_script_summary)
         self.script_group = self._build_script_group()
-        layout.addWidget(self.script_group)
+        script_layout.addWidget(self.script_group)
+        layout.addWidget(self.runtime_script_card)
         layout.addStretch(1)
         scroll.setWidget(panel)
         self.runtime_content = panel
@@ -1378,7 +1410,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.script_save_state_label = QLabel("已保存")
         self.script_save_state_label.setObjectName("ScriptSaveStateLabel")
         row.addWidget(self.script_save_state_label)
-        self.save_scripts_button = QPushButton("保存脚本选择")
+        self.save_scripts_button = QPushButton("保存")
         self.save_scripts_button.setObjectName("ScriptSaveButton")
         self.save_scripts_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_scripts_button.setToolTip("保存本区域的脚本选择及逃跑续搜开关，下次启动生效；脚本内容请通过编辑按钮修改。")
@@ -1530,7 +1562,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         layout.setSpacing(7)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        title = QLabel("本轮目标")
+        title = QLabel("本轮候选")
         title.setObjectName("SectionTitle")
         self.candidate_count_label = QLabel("0 条候选")
         self.candidate_count_label.setObjectName("CandidateCountLabel")
@@ -1568,7 +1600,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.candidate_empty_label = QLabel("开始运行后显示本轮候选目标")
         self.candidate_empty_label.setObjectName("RuntimeCandidatesEmpty")
         self.candidate_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.candidate_empty_label.setMinimumHeight(42)
+        self.candidate_empty_label.setMinimumHeight(96)
         self.candidate_empty_label.setWordWrap(True)
         layout.addWidget(self.candidate_empty_label)
         return section
@@ -1778,17 +1810,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         group = QGroupBox()
         group.setObjectName("TargetSummaryGroup")
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        group.setMaximumHeight(176)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
         target_card = QFrame()
         target_card.setObjectName("TargetCard")
-        add_card_shadow(target_card)
         target_card.setMinimumHeight(66)
-        target_card_layout = QHBoxLayout(target_card)
-        target_card_layout.setContentsMargins(12, 8, 8, 8)
+        target_card_contents = QVBoxLayout(target_card)
+        target_card_contents.setContentsMargins(12, 12, 12, 12)
+        target_card_contents.setSpacing(10)
+        target_card_layout = QHBoxLayout()
+        target_card_contents.addLayout(target_card_layout)
         target_card_layout.setSpacing(8)
         self.target_avatar = SpeciesAvatar()
         target_card_layout.addWidget(self.target_avatar)
@@ -1817,7 +1850,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         target_tags_widget = QWidget(group)
         target_tags_widget.setObjectName("TargetTags")
         target_tags = QHBoxLayout(target_tags_widget)
-        target_tags.setContentsMargins(0, 0, 0, 10)
+        target_tags.setContentsMargins(0, 0, 0, 0)
         target_tags.setSpacing(6)
         self.target_count_label = QLabel("0 组目标条件")
         self.target_count_label.setObjectName("GreenTag")
@@ -1826,7 +1859,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         target_tags.addWidget(self.target_count_label)
         target_tags.addWidget(self.target_match_label)
         target_tags.addStretch(1)
-        layout.addWidget(target_tags_widget)
+        target_card_contents.addWidget(target_tags_widget)
+        self.target_condition_summary = QLabel()
+        self.target_condition_summary.setObjectName("TargetConditionLabel")
+        self.target_condition_summary.setWordWrap(True)
+        target_card_contents.addWidget(self.target_condition_summary)
+        self.target_condition_summary.hide()
 
         self.target_summary_scroll = QScrollArea()
         self.target_summary_scroll.setObjectName("TargetSummaryScroll")
@@ -1894,13 +1932,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self, caption: str, suffix: str = "", *, accent: bool = False
     ) -> tuple[QWidget, QLabel]:
         metric = QWidget()
-        metric.setObjectName("RuntimeMetric")
+        metric.setObjectName("RuntimeMetricFocus" if accent else "RuntimeMetric")
+        metric.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         metric_layout = QVBoxLayout(metric)
-        metric_layout.setContentsMargins(0, 0, 0, 0)
+        metric_layout.setContentsMargins(12 if accent else 0, 9, 12 if accent else 0, 9)
         metric_layout.setSpacing(4)
         caption_label = QLabel(caption)
         caption_label.setObjectName("RuntimeMetricCaption")
-        value_label = QLabel("—")
+        value_label = RuntimeValueLabel()
         value_label.setObjectName("RuntimeMetricValueAccent" if accent else "RuntimeMetricValue")
         value_label.setFont(_ui_numeric_font(28, QFont.Weight.Medium))
         metric_layout.addWidget(caption_label)
@@ -2110,11 +2149,19 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             # Fold once on entry, never on each progress tick: users may reopen it.
             self._runtime_script_editor_expanded = False
         self.runtime_card.setProperty("state", state)
+        self.runtime_metrics.setVisible(state != "idle")
+        self.runtime_footer.setVisible(state != "idle")
+        if state == "idle":
+            self.runtime_details_toggle.setChecked(False)
         self.runtime_card.style().unpolish(self.runtime_card)
         self.runtime_card.style().polish(self.runtime_card)
         if hasattr(self, "runtime_state_dot"):
             self.runtime_state_dot.style().unpolish(self.runtime_state_dot)
             self.runtime_state_dot.style().polish(self.runtime_state_dot)
+
+    def _set_runtime_details_visible(self, visible: bool) -> None:
+        self.runtime_details.setVisible(visible)
+        self.runtime_details_toggle.setArrowType(Qt.ArrowType.UpArrow if visible else Qt.ArrowType.DownArrow)
 
     @staticmethod
     def _runtime_value(value: object, *, suffix: str = "") -> str:
@@ -2132,7 +2179,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 background: $surface;
                 color: $text;
                 font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-                font-size: 14px;
+                font-size: 13px;
             }
             QLabel,
             QComboBox,
@@ -2142,7 +2189,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QToolButton,
             QTableWidget {
                 font-family: "MiSans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-                font-size: 14px;
+                font-size: 13px;
             }
             QFrame#AutoRngToolbar {
                 background: $surface;
@@ -2201,7 +2248,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#SectionTitle {
                 color: $text;
-                font-size: 16px;
+                font-size: 15px;
                 font-weight: 500;
             }
             QScrollArea#AutoRngConfigPanel {
@@ -2229,26 +2276,26 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#ConfigSavedLabel, QLabel#ScriptSaveStateLabel {
                 color: $text_secondary;
-                font-size: 12px;
+                font-size: 11px;
             }
             QLabel#ConfigSavedLabel[saved="false"], QLabel#ScriptSaveStateLabel[saved="false"] {
                 color: $warning;
             }
             QLabel#ScriptStatusLabel {
-                border-radius: 10px;
-                padding: 2px 8px;
+                border: 0;
+                padding: 0;
                 color: #687480;
-                background: #F0F3F6;
+                background: transparent;
                 font-size: 12px;
                 font-weight: 400;
             }
             QLabel#ScriptStatusLabel[state="ready"] {
                 color: #597467;
-                background: #F2F8F5;
+                background: transparent;
             }
             QLabel#ScriptStatusLabel[state="warning"] {
                 color: $warning;
-                background: $warning_soft;
+                background: transparent;
             }
             QGroupBox#TargetSummaryGroup,
             QGroupBox#AutoRngStrategyGroup {
@@ -2262,14 +2309,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QFrame#TargetCard {
                 background: $surface;
                 border: 1px solid $card_border;
-                border-radius: 12px;
+                border-radius: 9px;
             }
             QWidget#TargetTags {
                 background: transparent;
             }
             QLabel#TargetNameLabel {
                 color: $text;
-                font-size: 20px;
+                font-size: 18px;
                 font-weight: 500;
             }
             QLabel#GreenTag,
@@ -2289,6 +2336,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 background: #F0F3F6;
                 color: #687480;
             }
+            QLabel#RuntimeRoundLabel { background: transparent; padding: 0; font-size: 11px; }
             QPushButton#TargetOpenButton,
             QPushButton#ScriptSaveButton,
             QPushButton#ConfigSaveButton,
@@ -2304,17 +2352,20 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 min-height: 30px;
                 padding: 0 12px;
                 border-radius: 7px;
+                background: $surface;
+                border: 1px solid $border;
+                font-size: 12px;
             }
             QPushButton#ConfigSaveButton[state="dirty"], QPushButton#ScriptSaveButton[state="dirty"] {
-                background: $accent;
-                border: 1px solid $accent;
-                color: $surface;
-                font-weight: 500;
+                background: $accent_soft;
+                border: 1px solid #C8E5D9;
+                color: $accent;
+                font-weight: 400;
             }
             QPushButton#ConfigSaveButton[state="dirty"]:hover, QPushButton#ScriptSaveButton[state="dirty"]:hover {
-                background: #066A4B;
-                border-color: #066A4B;
-                color: $surface;
+                background: #DCEFE7;
+                border-color: $accent;
+                color: $accent;
                 text-decoration: none;
             }
             QPushButton#TargetOpenButton:hover,
@@ -2348,7 +2399,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 7px;
                 padding: 0 8px;
                 color: $text;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 400;
             }
             QGroupBox#AutoRngStrategyGroup QSpinBox,
@@ -2428,7 +2479,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QFrame#RuntimeCard {
                 background: $runtime_gradient;
                 border: 1px solid $card_border;
-                border-radius: 12px;
+                border-radius: 11px;
             }
             QFrame#RuntimeCard[state="active"] {
                 border-color: #DCECE4;
@@ -2444,9 +2495,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 background: transparent;
             }
             QWidget#RuntimeScriptHeader, QWidget#RuntimeCandidatesSection,
-            QWidget#RuntimeMetric {
+            QWidget#RuntimeMetric, QWidget#RuntimeMetrics, QWidget#RuntimeDetails {
                 background: transparent;
             }
+            QWidget#RuntimeMetricFocus { background: $accent_soft; border: 0; border-radius: 8px; }
+            QFrame#RuntimeScriptCard { background: $surface; border: 1px solid $card_border; border-radius: 8px; }
             QLabel#RuntimeStateDot {
                 color: #99A4AF;
                 font-size: 12px;
@@ -2550,7 +2603,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimeCandidatesEmpty {
                 background: $surface;
-                border: 1px dashed $border;
+                border: 1px solid $border;
                 border-radius: 7px;
                 color: $text_secondary;
                 font-size: 12px;
@@ -2593,7 +2646,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimePhaseLabel {
                 color: $text;
-                font-size: 20px;
+                font-size: 18px;
                 font-weight: 500;
             }
             QLabel#RuntimeMetricValue,
@@ -2605,6 +2658,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QLabel#RuntimeMetricValueAccent {
                 color: $accent;
+                font-size: 31px;
             }
             QLabel#RuntimeMonoSmall {
                 color: $text;
@@ -2650,7 +2704,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-radius: 7px;
                 padding: 0 8px;
                 color: $text;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 400;
             }
             QGroupBox#AutoRngScriptGroup QComboBox[missing="true"] {
@@ -2710,7 +2764,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-family: "Consolas", "Cascadia Mono", monospace;
                 font-size: 10px;
             }
-            """) + primary_button_styles("QToolButton#PrimaryButton", 'QPushButton#ConfigSaveButton[state="dirty"]', 'QPushButton#ScriptSaveButton[state="dirty"]') + focus_styles(
+            """) + primary_button_styles("QToolButton#PrimaryButton") + focus_styles(
                 "QPushButton#RuntimeSetupButton", "QPushButton#TargetOpenButton",
                 "QPushButton#ConfigSaveButton", "QPushButton#ScriptSaveButton",
                 "QPushButton#InlineLinkButton", "QPushButton#AutoRngRefreshScripts",
@@ -2961,6 +3015,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.target_name_label.setText("-")
             self.target_avatar.set_species(None)
             self.target_count_label.setText("0 组目标条件")
+            self.target_condition_summary.hide()
+            self.target_summary_scroll.hide()
             self._refresh_runtime_script_summary()
             return
         record = targets[0][0]
@@ -2969,6 +3025,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.target_name_label.setText(name)
         self.target_avatar.set_species(int(record.template.species), name)
         self.target_count_label.setText(f"{len(targets)} 组目标条件")
+        self.target_summary_scroll.setVisible(len(targets) > 1)
+        conditions = _target_condition_text(targets[0][1], "any")
+        self.target_condition_summary.setText(conditions)
+        self.target_condition_summary.setVisible(len(targets) == 1 and conditions != "无额外筛选")
+        self.target_match_label.setText({
+            "square": "方闪", "star": "星闪", "shiny": "仅异色",
+            "none": "非异色", "any": "异色不限",
+        }.get(targets[0][2], "已设筛选") if len(targets) == 1 else "匹配任一即可")
+        self.target_match_label.setToolTip("\n".join(
+            _target_condition_text(state_filter, shiny_mode)
+            for _record, state_filter, shiny_mode in targets
+        ))
         for index, (_record, state_filter, shiny_mode) in enumerate(targets, start=1):
             label = QLabel(f"{index}. {_target_condition_text(state_filter, shiny_mode)}")
             label.setObjectName("TargetConditionLabel")

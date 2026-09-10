@@ -12,12 +12,12 @@ from auto_bdsp_rng.resources import resource_path
 
 BACKGROUND = "#F2F4F7"
 SURFACE = "#FFFFFF"
-SURFACE_MUTED = "#F7F8FA"
+SURFACE_MUTED = "#F8F9FB"
 TEXT = "#202A33"
-TEXT_SECONDARY = "#626D79"
-BORDER = "#E0E5EB"
-CARD_BORDER = "#E9EDF2"
-SEPARATOR = "#F0F2F5"
+TEXT_SECONDARY = "#64707D"
+BORDER = "#E3E8ED"
+CARD_BORDER = "#E3E8ED"
+SEPARATOR = "#EFF2F5"
 ACCENT = "#087C58"
 ACCENT_SOFT = "#EAF7F1"
 WARNING = "#906423"
@@ -36,7 +36,7 @@ UI_FONT_FAMILIES = (
     "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC",
     "Microsoft YaHei UI", "PingFang SC", "Segoe UI", "sans-serif",
 )
-RUNTIME_GRADIENT = "qlineargradient(x1:0, y1:1, x2:1, y2:0, stop:0 #FFFFFF, stop:0.65 #FFFFFF, stop:1 #F0F9F5)"
+RUNTIME_GRADIENT = SURFACE
 
 
 def ensure_ui_fonts() -> tuple[int, ...]:
@@ -92,9 +92,8 @@ def primary_button_styles(*selectors: str) -> str:
         return ", ".join(selector + state for selector in selectors) + " { " + body + " }\n"
 
     return (
-        rule("", "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #10956B, stop:1 #087C58); "
-             "color: #FFFFFF; border: 1px solid #087C58; border-top-color: #36A883; border-radius: 7px;")
-        + rule(":hover", "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #119E72, stop:1 #07845D);")
+        rule("", "background: #087C58; color: #FFFFFF; border: 1px solid #087C58; border-radius: 7px;")
+        + rule(":hover", "background: #0C8963; border-color: #0C8963;")
         + rule(":pressed", "background: #066A4B; border-color: #055B41;")
         + rule(":disabled", "background: #EDF0F3; color: #929CA6; border-color: #E0E5EB;")
     )
@@ -107,14 +106,14 @@ class _CardShadow(QObject):
         super().__init__(widget)
         self.widget = widget
         self.effect = QGraphicsDropShadowEffect(widget)
-        self.effect.setColor(QColor(26, 42, 56, 14))
+        self.effect.setColor(QColor(32, 50, 71, 10))
         widget.setGraphicsEffect(self.effect)
         widget.installEventFilter(self)
         self._sync()
 
     def _sync(self) -> None:
         ratio = self.widget.devicePixelRatioF()
-        self.effect.setBlurRadius(20 * ratio)
+        self.effect.setBlurRadius(12 * ratio)
         self.effect.setOffset(0, 3 * ratio)
 
     def eventFilter(self, watched, event) -> bool:

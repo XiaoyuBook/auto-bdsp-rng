@@ -829,10 +829,10 @@ class EasyConPanel(QWidget):
 
     # ── 浅色主题颜色常量 ──────────────────────────────────
     CLR_BG = "#ffffff"
-    CLR_PANEL_BG = "#F7F8FA"
-    CLR_BORDER = "#E0E5EB"
+    CLR_PANEL_BG = "#F8F9FB"
+    CLR_BORDER = "#E3E8ED"
     CLR_TEXT = "#202A33"
-    CLR_HINT = "#687480"
+    CLR_HINT = "#64707D"
     CLR_LOG_BG = "#ffffff"
     CLR_LOG_TEXT = "#202A33"
     CLR_RUN_BTN = "#087c58"
@@ -867,7 +867,7 @@ class EasyConPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 14px; }}")
+        self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 13px; }}")
 
         side_panel = self._build_log_area()
         editor_panel = self._build_editor_area()
@@ -879,11 +879,11 @@ class EasyConPanel(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.workspace_splitter = WorkspaceSplit(None, "easycon", breakpoint=0, horizontal=(245, 800))
-        side_panel.setMinimumWidth(245)
+        self.workspace_splitter = WorkspaceSplit(None, "easycon", breakpoint=0, horizontal=(240, 880))
+        side_panel.setMinimumWidth(224)
         side_panel.setMaximumWidth(16777215)
         self.sidebar_scroll = scroll_surface(side_panel)
-        self.sidebar_scroll.setMinimumWidth(261)
+        self.sidebar_scroll.setMinimumWidth(240)
         self.workspace_splitter.addWidget(self.sidebar_scroll)
         self.workspace_splitter.addWidget(scroll_surface(editor_panel))
         self.workspace_splitter.restore_sizes()
@@ -974,15 +974,15 @@ class EasyConPanel(QWidget):
             f"QWidget#EasyConSidePanel {{ background: {self.CLR_PANEL_BG};"
             f" border-right: 1px solid {self.CLR_BORDER}; }}"
         )
-        area.setFixedWidth(245)
-        area.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        area.setMinimumWidth(224)
+        area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(area)
-        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setContentsMargins(16, 18, 16, 16)
         layout.setSpacing(8)
 
         log_header = QLabel("运行概览")
         log_header.setStyleSheet(
-            ui_styles(f"font-weight: 500; font-size: 16px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};")
+            ui_styles(f"font-weight: 500; font-size: 15px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};")
         )
         layout.addWidget(log_header)
 
@@ -1140,15 +1140,15 @@ class EasyConPanel(QWidget):
         area.setObjectName("EasyConEditorArea")
         area.setStyleSheet(f"background: {self.CLR_BG};")
         layout = QVBoxLayout(area)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(18, 16, 18, 14)
         layout.setSpacing(0)
 
         # 编辑器标题行
         editor_header = QWidget()
         editor_header.setFixedHeight(40)
-        editor_header.setStyleSheet(f"background: {self.CLR_PANEL_BG}; border-bottom: 1px solid {self.CLR_BORDER};")
+        editor_header.setStyleSheet(f"background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER};")
         editor_header_layout = QHBoxLayout(editor_header)
-        editor_header_layout.setContentsMargins(16, 0, 16, 0)
+        editor_header_layout.setContentsMargins(0, 0, 0, 0)
         self.script_name_label = QLabel("未命名脚本")
         self.script_name_label.setStyleSheet(f"font-size: 12px; color: {self.CLR_TEXT}; border: 0; background: transparent;")
         editor_header_layout.addWidget(self.script_name_label)
@@ -1196,9 +1196,9 @@ class EasyConPanel(QWidget):
             f" border-top: 1px solid {self.CLR_BORDER}; }}"
         )
         output_layout = QHBoxLayout(output_header)
-        output_layout.setContentsMargins(16, 0, 12, 0)
+        output_layout.setContentsMargins(0, 0, 0, 0)
         output_title = QLabel("运行输出")
-        output_title.setStyleSheet(ui_styles("font-size: 16px; font-weight: 500; background: transparent;"))
+        output_title.setStyleSheet(ui_styles("font-size: 13px; font-weight: 500; background: transparent;"))
         output_layout.addWidget(output_title)
         output_layout.addStretch(1)
         complete_log_button = QPushButton("日志中心")
@@ -1226,7 +1226,7 @@ class EasyConPanel(QWidget):
     def _build_right_buttons(self) -> QWidget:
         area = QFrame()
         area.setObjectName("EasyConToolbar")
-        area.setFixedHeight(58)
+        area.setFixedHeight(56)
         area.setStyleSheet(
             f"QFrame#EasyConToolbar {{ background: {self.CLR_WHITE};"
             f" border: 0; border-bottom: 1px solid {self.CLR_BORDER}; }}"
@@ -1439,8 +1439,8 @@ class EasyConPanel(QWidget):
         )
         self.keyboard_control_group = group
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(0, 14, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setSpacing(10)
 
         btn_style = (
             f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"

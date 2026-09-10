@@ -124,7 +124,8 @@ def test_connection_surface_and_initial_action_render_before_status_updates(app)
                 picture.pixelColor(x, picture.height() - round(6 * dpr)))
 
     initial = colors()
-    assert initial[0].green() > initial[1].green() + 8
+    assert initial[0] == initial[1]  # The primary action uses a flat emerald fill.
+    assert initial[0].name().upper() == "#087C58"
     set_disconnect_action(button, False)
     assert colors() == initial
     set_disconnect_action(button, True)

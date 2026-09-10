@@ -41,6 +41,8 @@ class RunRecordsPanel(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("RunRecordsPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.history_panel = history_panel
         self._unread_problem_count = sum(
             entry.level in _UNREAD_LEVELS for entry in log_buffer.snapshot()
@@ -66,7 +68,7 @@ class RunRecordsPanel(QWidget):
         open_log_dir: Callable[[], object] | None,
     ) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 0, 18, 14)
+        root.setContentsMargins(18, 16, 18, 14)
         root.setSpacing(10)
 
         heading = QFrame(self)
@@ -128,6 +130,9 @@ class RunRecordsPanel(QWidget):
         # nested switch visually lighter so it reads as a view selector.
         self.setStyleSheet(
             ui_styles("""
+            QWidget#RunRecordsPanel, QTabWidget#RunRecordsTabs {
+                background: #F2F4F7;
+            }
             QFrame#RunRecordsHeading {
                 background: transparent;
                 border: 0;
@@ -156,32 +161,29 @@ class RunRecordsPanel(QWidget):
             }
             QTabWidget#RunRecordsTabs::pane {
                 border: 0;
-                border-top: 1px solid #E0E5EB;
                 background: transparent;
-                top: -1px;
+                top: 0;
             }
             QTabWidget#RunRecordsTabs > QTabBar {
                 border: 0;
-                border-bottom: 1px solid #E0E5EB;
                 background: transparent;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab {
-                min-width: 96px;
-                min-height: 34px;
-                margin: 0 18px 0 0;
-                padding: 0 2px 6px 2px;
-                border: 0;
-                border-bottom: 2px solid transparent;
-                border-radius: 0;
+                min-width: 76px;
+                min-height: 32px;
+                margin: 0 8px 0 0;
+                padding: 0 10px;
+                border: 1px solid #E3E8ED;
+                border-radius: 6px;
                 color: #52606D;
-                background: transparent;
-                font-size: 14px;
+                background: #FFFFFF;
+                font-size: 13px;
                 font-weight: 400;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab:selected {
                 color: #087C58;
-                border-bottom-color: #087C58;
-                background: transparent;
+                border-color: #EAF7F1;
+                background: #EAF7F1;
                 font-weight: 500;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab:hover:!selected {
