@@ -251,8 +251,8 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert window.title_label.text() == APP_TITLE
     assert window.version_label.text().startswith("v")
     assert window.version_label.text() not in window.title_label.text()
-    assert window.title_label.font().pixelSize() == 17
-    assert window.version_label.font().pixelSize() == 11
+    assert window.title_label.font().pixelSize() == 20
+    assert window.version_label.font().pixelSize() == 12
     assert window.title_label.font().weight() == 500
     assert window.version_label.font().weight() == 400
     assert window.video_source_header_button.size() == QSize(150, 32)

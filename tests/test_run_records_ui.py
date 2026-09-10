@@ -6,6 +6,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QWidget
+from PySide6.QtTest import QTest
 
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngProgress
 from auto_bdsp_rng.run_log import RunLogManager
@@ -54,6 +55,8 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
         "需要确保窄列中的多行内容不会被裁切。"
     )
     app.processEvents()
+    # A font with taller lines can schedule a second height-for-width layout.
+    QTest.qWait(10)
     assert easycon_panel.view_log_button.height() == 30
     assert easycon_panel.overview_panel.rect().contains(easycon_panel.view_log_button.geometry())
     assert easycon_panel.overview_panel.rect().contains(easycon_panel.latest_log_label.geometry())

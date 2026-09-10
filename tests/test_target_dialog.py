@@ -98,8 +98,8 @@ def test_target_dialog_fits_canvas_and_keeps_complete_compact_form_visible(app):
 
     stylesheet = dialog.styleSheet().lower()
     assert "#087c58" in stylesheet
-    assert "#f6f8f7" in stylesheet
-    assert "#e2e8e4" in stylesheet
+    assert "#f7f8fa" in stylesheet
+    assert "#e0e5eb" in stylesheet
 
 
 def test_adding_and_removing_target_conditions_updates_lock_and_indexes(app):

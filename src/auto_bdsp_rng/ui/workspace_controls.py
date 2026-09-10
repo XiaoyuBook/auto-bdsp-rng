@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, QPointF, QRect, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPixmap
+from PySide6.QtCore import QByteArray, QEasingCurve, QPointF, QRect, QRectF, QSize, Qt, QVariantAnimation
+from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPixmap, QRegion
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QStyle, QStyleOptionToolButton,
+    QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QStyle, QStyleOptionToolButton,
     QStylePainter, QToolButton, QVBoxLayout, QWidget,
 )
+
+from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles
 
 
 _SYMBOLS = {
@@ -29,6 +32,33 @@ _SYMBOLS = {
 }
 
 
+_DELAY_SYMBOLS = {
+    "settings-2": (
+        '<path d="M20 7h-9"/><path d="M14 17H5"/>'
+        '<circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>'
+    ),
+    "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    "chevron-right": '<path d="m9 18 6-6-6-6"/>',
+    "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    "arrow-up-right": '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+    "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+    "square-pen": (
+        '<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>'
+        '<path d="M18.375 2.625a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/>'
+    ),
+    "trash-2": (
+        '<path d="M3 6h18"/><path d="M19 6l-1 14H6L5 6"/>'
+        '<path d="M8 6V4h8v2"/><path d="M10 11v6"/><path d="M14 11v6"/>'
+    ),
+    "rotate-ccw": (
+        '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>'
+    ),
+}
+_SYMBOLS.update(_DELAY_SYMBOLS)
+_SYMBOLS["empty"] = '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5M7 10h6m-3-3v6"/>'
+_SYMBOLS["pokeball"] = '<circle cx="12" cy="12" r="9"/><path d="M3 12h6m6 0h6"/><circle cx="12" cy="12" r="3"/>'
+
+
 class _LineIconEngine(QIconEngine):
     def __init__(self, name: str, color: str) -> None:
         super().__init__()
@@ -38,10 +68,10 @@ class _LineIconEngine(QIconEngine):
         return _LineIconEngine(self.name, self.color)
 
     def paint(self, painter, rect, mode, state) -> None:
-        color = "#9AA9A2" if mode == QIcon.Mode.Disabled and self.color != "#FFFFFF" else self.color
+        color = "#97A1AB" if mode == QIcon.Mode.Disabled else self.color
         svg = (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
-            f'fill="none" stroke="{color}" stroke-width="1.7" '
+            f'fill="none" stroke="{color}" stroke-width="1.8" '
             'stroke-linecap="round" stroke-linejoin="round">'
             + _SYMBOLS[self.name] + "</svg>"
         )
@@ -56,8 +86,94 @@ class _LineIconEngine(QIconEngine):
         return pixmap
 
 
-def workspace_icon(name: str, color: str = "#68766F") -> QIcon:
+def workspace_icon(name: str, color: str = "#687480") -> QIcon:
     return QIcon(_LineIconEngine(name, color))
+
+
+class SpeciesAvatar(QWidget):
+    """Decorative species art, independent of the target selection model."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(36, 36)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._sprite = QPixmap()
+
+    def set_species(self, species: int | None, name: str = "") -> None:
+        self.setProperty("speciesId", species)
+        self.setAccessibleName(name or "目标精灵")
+        self._sprite = QPixmap(str(resource_path("docs", "assets", "pokemon", f"{species}.png"))) if species else QPixmap()
+        if not self._sprite.isNull():
+            bounds = QRegion(self._sprite.mask()).boundingRect()
+            if not bounds.isEmpty():
+                self._sprite = self._sprite.copy(bounds)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#EAF7F1"))
+        painter.drawRoundedRect(QRectF(self.rect()), 10, 10)
+        if self._sprite.isNull():
+            workspace_icon("pokeball", "#087C58").paint(painter, self.rect().adjusted(8, 8, -8, -8))
+        else:
+            size = self._sprite.size().scaled(30, 30, Qt.AspectRatioMode.KeepAspectRatio)
+            rect = QRect((36 - size.width()) // 2, (36 - size.height()) // 2, size.width(), size.height())
+            painter.drawPixmap(rect, self._sprite)
+
+
+class _ButtonMotion:
+    """Short paint-only feedback; native clicks, menus and enabled state remain intact."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._highlight = 0.0
+        self._hover_animation = QVariantAnimation(self)
+        self._hover_animation.setDuration(140)
+        self._hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._hover_animation.valueChanged.connect(self._set_highlight)
+
+    def _set_highlight(self, value) -> None:
+        self._highlight = float(value)
+        self.update()
+
+    def _animate_highlight(self, value: float) -> None:
+        self._hover_animation.stop()
+        self._hover_animation.setStartValue(self._highlight)
+        self._hover_animation.setEndValue(value)
+        self._hover_animation.start()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        super().enterEvent(event)
+        self._animate_highlight(1.0)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        super().leaveEvent(event)
+        self._animate_highlight(0.0)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._hover_animation.stop()
+        self._highlight = 0.0
+        super().hideEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self.isEnabled() and not self.isDown() and self._highlight:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, round(15 * self._highlight)))
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 6, 6)
+
+
+class PrimaryButton(_ButtonMotion, QPushButton):
+    pass
+
+
+class PrimaryToolButton(_ButtonMotion, QToolButton):
+    pass
 
 
 class DeviceStatusButton(QToolButton):
@@ -97,15 +213,15 @@ class DeviceStatusButton(QToolButton):
         font = self.font()
         font.setPixelSize(12)
         painter.setFont(font)
-        painter.setPen(QColor("#24312D" if self.isEnabled() else "#9AA9A2"))
+        painter.setPen(QColor("#202A33" if self.isEnabled() else "#97A1AB"))
         painter.drawText(QRect(33, 0, 38, self.height()), Qt.AlignmentFlag.AlignVCenter, self.device_name)
         color = {
             "connected": "#087C58", "connecting": "#B7791F", "failed": "#B4443C",
-        }.get(self.property("state"), "#68766F")
+        }.get(self.property("state"), "#687480")
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(color if self.property("state") != "disconnected" else "#9AA9A2"))
+        painter.setBrush(QColor(color if self.property("state") != "disconnected" else "#97A1AB"))
         painter.drawEllipse(QPointF(82, self.height() / 2), 3, 3)
-        painter.setPen(QColor(color if self.isEnabled() else "#9AA9A2"))
+        painter.setPen(QColor(color if self.isEnabled() else "#97A1AB"))
         painter.drawText(QRect(91, 0, self.width() - 99, self.height()), Qt.AlignmentFlag.AlignVCenter, self.status_text)
 
 
@@ -130,30 +246,33 @@ class ConnectionDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setFixedWidth(490)
         self.setStyleSheet(f"""
-            QDialog#{object_name} {{ background: white; border: 1px solid #E2E8E4; border-radius: 8px; }}
-            QDialog#{object_name} QWidget {{ font-family: 'Microsoft YaHei UI', 'Segoe UI'; font-size: 13px; color: #24312D; }}
+            QDialog#{object_name} {{ background: white; border: 1px solid #E0E5EB; border-radius: 14px; }}
+            QDialog#{object_name} QWidget {{ font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; font-size: 13px; color: #202A33; }}
             QDialog#{object_name} QLabel {{ background: transparent; border: 0; }}
-            QDialog#{object_name} QFrame#ConnectionTitleBar {{ background: white; border: 0; border-bottom: 1px solid #E2E8E4; }}
+            QDialog#{object_name} QFrame#ConnectionTitleBar {{ background: white; border: 0; border-bottom: 1px solid #E0E5EB; }}
             QDialog#{object_name} QLabel#ConnectionTitle {{ font-size: 16px; font-weight: 500; }}
-            QDialog#{object_name} QFrame#ConnectionFooter {{ background: white; border: 0; border-top: 1px solid #E2E8E4; }}
-            QDialog#{object_name} QComboBox, QDialog#{object_name} QPushButton {{ background: white; border: 1px solid #E2E8E4; border-radius: 5px; min-height: 30px; max-height: 30px; padding: 0 12px; }}
+            QDialog#{object_name} QFrame#ConnectionFooter {{ background: white; border: 0; border-top: 1px solid #E0E5EB; }}
+            QDialog#{object_name} QComboBox, QDialog#{object_name} QPushButton {{ background: white; border: 1px solid #E0E5EB; border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 12px; }}
             QDialog#{object_name} QComboBox {{ padding-right: 32px; }}
             QDialog#{object_name} QComboBox::drop-down {{ border: 0; width: 28px; }}
             QDialog#{object_name} QComboBox::down-arrow {{ image: none; }}
             QDialog#{object_name} QComboBox:focus {{ border-color: #087C58; }}
-            QDialog#{object_name} QPushButton:hover {{ background: #F6F8F7; }}
+            QDialog#{object_name} QPushButton:hover {{ background: #F7F8FA; }}
             QDialog#{object_name} QPushButton#PrimaryButton {{ background: #087C58; color: white; border-color: #087C58; }}
             QDialog#{object_name} QPushButton#PrimaryButton:hover {{ background: #066A4B; }}
             QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"] {{ background: white; color: #AC4B42; border-color: #D9AAA6; }}
             QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"]:hover {{ background: #FFF7F6; }}
-            QDialog#{object_name} QPushButton#PrimaryButton:disabled, QDialog#{object_name} QPushButton:disabled, QDialog#{object_name} QComboBox:disabled {{ background: #F6F8F7; color: #9AA9A2; border-color: #E2E8E4; }}
-            QDialog#{object_name} QToolButton {{ background: white; border: 1px solid #E2E8E4; border-radius: 5px; padding: 0; }}
+            QDialog#{object_name} QPushButton#PrimaryButton:disabled, QDialog#{object_name} QPushButton:disabled, QDialog#{object_name} QComboBox:disabled {{ background: #F7F8FA; color: #97A1AB; border-color: #E0E5EB; }}
+            QDialog#{object_name} QToolButton {{ background: white; border: 1px solid #E0E5EB; border-radius: 7px; padding: 0; }}
             QDialog#{object_name} QToolButton#ConnectionClose {{ border: 0; }}
-            QDialog#{object_name} QToolButton:hover {{ background: #F6F8F7; }}
-            QDialog#{object_name} QMenu {{ background: white; border: 1px solid #E2E8E4; padding: 4px; }}
+            QDialog#{object_name} QToolButton:hover {{ background: #F7F8FA; }}
+            QDialog#{object_name} QMenu {{ background: white; border: 1px solid #E0E5EB; padding: 4px; }}
             QDialog#{object_name} QMenu::item {{ padding: 7px 28px 7px 10px; }}
-            QDialog#{object_name} QMenu::item:selected {{ background: #EDF7F1; color: #087C58; }}
+            QDialog#{object_name} QMenu::item:selected {{ background: #EAF7F1; color: #087C58; }}
         """)
+        self.setStyleSheet(self.styleSheet() + primary_button_styles(
+            f'QDialog#{object_name} QPushButton#PrimaryButton[disconnect="false"]'
+        ))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(1, 1, 1, 1)
         layout.setSpacing(0)

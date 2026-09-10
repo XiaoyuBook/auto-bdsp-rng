@@ -28,7 +28,7 @@ class ChevronComboBox(NoWheelComboBox):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = "#24312D" if self.isEnabled() else "#A5AEA9"
+        color = "#202A33" if self.isEnabled() else "#A0A9B2"
         painter.setPen(QPen(QColor(color), 1.5))
         center_x = self.width() - 17
         center_y = self.height() // 2

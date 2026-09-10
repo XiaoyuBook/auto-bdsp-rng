@@ -3370,8 +3370,8 @@ def test_auto_rng_page_uses_compact_toolbar_and_fixed_left_sidebar(app, tmp_path
     assert isinstance(panel.debug_output_check, CheckmarkCheckBox)
     assert isinstance(panel.escape_continue_check, CheckmarkCheckBox)
     assert panel.seed_script_combo.minimumWidth() == 160
-    assert panel.config_contents.layout().spacing() == 13
-    assert panel.strategy_form.verticalSpacing() == 13
+    assert panel.config_contents.layout().spacing() == 12
+    assert panel.strategy_form.verticalSpacing() == 12
     script_layout = panel.script_group.layout()
     assert script_layout.contentsMargins().top() == 0
     assert [script_layout.rowMinimumHeight(row) for row in (3, 6, 9)] == [6, 6, 6]
@@ -4103,14 +4103,14 @@ def test_history_panel_candidates_do_not_show_global_delay(app):
     assert table.item(0, headers.index("HP")).text() == "31"
     assert table.item(0, headers.index("特性")).text() == "1"
     assert table.item(0, headers.index("性别")).text() == "雄"
-    assert table.item(0, 0).background().color().name() == "#edf7f1"
+    assert table.item(0, 0).background().color().name() == "#eaf7f1"
     assert table.item(1, headers.index("状态")).background().color().name() == "#cffafe"
     assert table.item(0, headers.index("异色")).background().color().name() == "#fef3c7"
     # A styled item border can silently mask BackgroundRole despite correct data.
     image = table.viewport().grab().toImage()
     rect = table.visualItemRect(table.item(0, 0))
     dpr = image.devicePixelRatio()
-    assert image.pixelColor(round((rect.x() + 5) * dpr), round((rect.y() + 5) * dpr)).name() == "#edf7f1"
+    assert image.pixelColor(round((rect.x() + 5) * dpr), round((rect.y() + 5) * dpr)).name() == "#eaf7f1"
     assert table.wordWrap() is False
     assert table.horizontalScrollBar().maximum() > 0
 

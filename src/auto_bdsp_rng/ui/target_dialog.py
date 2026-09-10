@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.data import GameVersion, StaticEncounterRecord
 from auto_bdsp_rng.gen8_static import StateFilter
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles
 from auto_bdsp_rng.ui.static_target_form import NATURES_ZH, POKEMON_LABELS_ZH, StaticTargetForm
 
 
@@ -144,7 +145,7 @@ class TargetDialog(QDialog):
         self.setMinimumSize(860, 640)
         self.resize(920, 700)
         self._entries: list[TargetEntry] = []
-        self.setStyleSheet(self._stylesheet())
+        self.setStyleSheet(self._stylesheet() + primary_button_styles("QDialog#TargetDialog QPushButton#TargetPrimaryButton"))
         self._build_ui(version)
 
     def _build_ui(self, version: GameVersion) -> None:
@@ -250,12 +251,12 @@ class TargetDialog(QDialog):
         return """
             QDialog#TargetDialog {
                 background: #FFFFFF;
-                color: #24312D;
+                color: #202A33;
             }
             QDialog#TargetDialog QWidget {
                 background: transparent;
-                color: #24312D;
-                font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
+                color: #202A33;
+                font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 13px;
                 font-weight: 400;
             }
@@ -281,17 +282,17 @@ class TargetDialog(QDialog):
                 left: 0;
                 top: 0;
                 padding: 0;
-                color: #24312D;
+                color: #202A33;
             }
             QDialog#TargetDialog QComboBox,
             QDialog#TargetDialog QSpinBox {
                 background: #FFFFFF;
-                border: 1px solid #E2E8E4;
-                border-radius: 5px;
+                border: 1px solid #E0E5EB;
+                border-radius: 7px;
                 min-height: 32px;
                 max-height: 32px;
                 padding: 0 9px;
-                selection-background-color: #EDF7F1;
+                selection-background-color: #EAF7F1;
                 selection-color: #087C58;
             }
             QDialog#TargetDialog QComboBox:focus,
@@ -300,8 +301,8 @@ class TargetDialog(QDialog):
             }
             QDialog#TargetDialog QComboBox:disabled,
             QDialog#TargetDialog QSpinBox:disabled {
-                background: #F6F8F7;
-                color: #68766F;
+                background: #F7F8FA;
+                color: #687480;
             }
             QDialog#TargetDialog QComboBox::drop-down {
                 subcontrol-origin: border;
@@ -311,9 +312,9 @@ class TargetDialog(QDialog):
             }
             QDialog#TargetDialog QComboBox QAbstractItemView {
                 background: #FFFFFF;
-                color: #24312D;
-                border: 1px solid #E2E8E4;
-                selection-background-color: #EDF7F1;
+                color: #202A33;
+                border: 1px solid #E0E5EB;
+                selection-background-color: #EAF7F1;
                 selection-color: #087C58;
                 padding: 3px;
             }
@@ -323,7 +324,7 @@ class TargetDialog(QDialog):
                 min-height: 0;
                 max-height: 16777215px;
                 padding: 0;
-                color: #24312D;
+                color: #202A33;
                 font-family: "Cascadia Mono", "Consolas", monospace;
             }
             QDialog#TargetDialog QCheckBox {
@@ -333,7 +334,7 @@ class TargetDialog(QDialog):
             QDialog#TargetDialog QCheckBox::indicator {
                 width: 13px;
                 height: 13px;
-                border: 1px solid #A5AEA9;
+                border: 1px solid #A0A9B2;
                 border-radius: 2px;
                 background: #FFFFFF;
             }
@@ -343,15 +344,15 @@ class TargetDialog(QDialog):
             }
             QDialog#TargetDialog QFrame#TargetFilterDivider,
             QDialog#TargetDialog QFrame#TargetSectionDivider {
-                color: #E2E8E4;
-                background: #E2E8E4;
+                color: #E0E5EB;
+                background: #E0E5EB;
                 border: 0;
             }
             QDialog#TargetDialog QLabel#TargetRangeSeparator,
             QDialog#TargetDialog QLabel#TargetMutedLabel,
             QDialog#TargetDialog QLabel#TargetEntryIndex,
             QDialog#TargetDialog QLabel#TargetEntrySummary {
-                color: #68766F;
+                color: #687480;
             }
             QDialog#TargetDialog QLabel#TargetRangeSeparator,
             QDialog#TargetDialog QLabel#TargetEntryIndex {
@@ -378,17 +379,17 @@ class TargetDialog(QDialog):
             QDialog#TargetDialog QWidget#TargetEntry {
                 background: #FFFFFF;
                 border: 0;
-                border-bottom: 1px solid #E2E8E4;
+                border-bottom: 1px solid #E0E5EB;
             }
             QDialog#TargetDialog QLabel#TargetEmptyLabel {
-                color: #68766F;
-                background: #F6F8F7;
-                border-radius: 5px;
+                color: #687480;
+                background: #F7F8FA;
+                border-radius: 7px;
             }
             QDialog#TargetDialog QScrollBar:vertical {
                 width: 8px;
                 margin: 0;
-                background: #F6F8F7;
+                background: #F7F8FA;
             }
             QDialog#TargetDialog QScrollBar::handle:vertical {
                 min-height: 24px;
@@ -403,10 +404,10 @@ class TargetDialog(QDialog):
                 min-height: 32px;
                 max-height: 34px;
                 padding: 0 13px;
-                border: 1px solid #E2E8E4;
-                border-radius: 5px;
+                border: 1px solid #E0E5EB;
+                border-radius: 7px;
                 background: #FFFFFF;
-                color: #24312D;
+                color: #202A33;
                 font-weight: 400;
             }
             QDialog#TargetDialog QPushButton:hover {

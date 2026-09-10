@@ -37,7 +37,7 @@ class _ChevronSpinMixin:
         self.initStyleOption(option)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor("#5F6C66" if self.isEnabled() else "#A5AEA9")
+        color = QColor("#626D79" if self.isEnabled() else "#A0A9B2")
         pen = QPen(color, 1.15)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)

@@ -513,7 +513,7 @@ class RunLogPanel(QWidget):
                 border-right: 1px solid #E5E7EB;
                 border-bottom: 1px solid #D1D5DB;
                 padding: 6px;
-                font-weight: 700;
+                font-weight: 600;
             }
             """
         )

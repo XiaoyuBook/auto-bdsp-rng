@@ -133,14 +133,14 @@ class RunRecordsPanel(QWidget):
             QLabel#RunRecordsTitle {
                 color: #202225;
                 font-size: 18px;
-                font-weight: 600;
+                font-weight: 500;
             }
             QFrame#RunRecordsDivider {
                 background: #D9DEE4;
                 border: 0;
             }
             QLabel#RunRecordsSubtitle {
-                color: #68766F;
+                color: #687480;
                 font-size: 12px;
             }
             QLabel#RunRecordsLiveStatus {
@@ -154,13 +154,13 @@ class RunRecordsPanel(QWidget):
             }
             QTabWidget#RunRecordsTabs::pane {
                 border: 0;
-                border-top: 1px solid #E2E8E4;
+                border-top: 1px solid #E0E5EB;
                 background: transparent;
                 top: -1px;
             }
             QTabWidget#RunRecordsTabs > QTabBar {
                 border: 0;
-                border-bottom: 1px solid #E2E8E4;
+                border-bottom: 1px solid #E0E5EB;
                 background: transparent;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab {
@@ -171,7 +171,7 @@ class RunRecordsPanel(QWidget):
                 border: 0;
                 border-bottom: 2px solid transparent;
                 border-radius: 0;
-                color: #4B5E54;
+                color: #52606D;
                 background: transparent;
                 font-size: 14px;
                 font-weight: 400;
@@ -180,7 +180,7 @@ class RunRecordsPanel(QWidget):
                 color: #087C58;
                 border-bottom-color: #087C58;
                 background: transparent;
-                font-weight: 700;
+                font-weight: 500;
             }
             QTabWidget#RunRecordsTabs > QTabBar::tab:hover:!selected {
                 color: #087C58;
