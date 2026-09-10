@@ -204,9 +204,11 @@ class AboutDialog(QDialog):
 
     def _friend_links_card(self) -> QGroupBox:
         group = self._card("友情链接")
-        layout = QHBoxLayout(group)
+        layout = QGridLayout(group)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(20)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(8)
+        layout.setRowStretch(3, 1)
 
         assets_dir = Path(__file__).resolve().parents[3] / "docs" / "assets"
 
@@ -216,10 +218,8 @@ class AboutDialog(QDialog):
             (assets_dir / "friend_pokefinder.ico",  "PokeFinder", "Gen 8 定点生成\n个体值与异色筛选",       POKEFINDER_URL),
         )
 
-        for icon_path, name, desc, url in projects:
-            col = QVBoxLayout()
-            col.setSpacing(8)
-
+        for column, (icon_path, name, desc, url) in enumerate(projects):
+            layout.setColumnStretch(column, 1)
             # 图标按钮：全部56x56
             icon_btn = QPushButton()
             icon_btn.setFixedSize(56, 56)
@@ -229,22 +229,22 @@ class AboutDialog(QDialog):
             if icon_path.exists():
                 icon_btn.setIcon(QIcon(str(icon_path)))
                 icon_btn.setIconSize(QSize(56, 56))
-            col.addWidget(icon_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(icon_btn, 0, column, Qt.AlignmentFlag.AlignCenter)
 
             # 名称
             name_lbl = QLabel(name)
             name_lbl.setObjectName("FriendLinkName")
             name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            col.addWidget(name_lbl)
+            layout.addWidget(name_lbl, 1, column)
 
             # 描述
             desc_lbl = QLabel(desc)
             desc_lbl.setObjectName("FriendDesc")
-            desc_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            desc_lbl.setWordWrap(True)
-            col.addWidget(desc_lbl)
-
-            layout.addLayout(col, 1)
+            desc_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            # Keep the deliberate phrase breaks; the grid reserves each line's
+            # natural width and shares the name row across all three projects.
+            desc_lbl.setWordWrap(False)
+            layout.addWidget(desc_lbl, 2, column)
 
         return group
 
