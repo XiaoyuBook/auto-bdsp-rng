@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
+from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem, TableWorkbench
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication
@@ -826,6 +827,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.id_table.horizontalHeader().setStretchLastSection(True)
         self.id_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.id_table.setMinimumHeight(202)
+        self.id_table_tools = TableWorkbench(self.id_table, toolbar, self._settings, "ids")
+        self.id_table.model().layoutChanged.connect(self._highlight_target)
         layout.addWidget(self.id_table, 1)
         self.id_empty_state = TableEmptyState(self.id_table)
         self._id_result_state = "initial"
@@ -1130,25 +1133,25 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.runtime_state_dot.style().polish(self.runtime_state_dot)
 
     def _highlight_target(self) -> None:
-        previous = self._highlighted_target_row
         self._highlighted_target_row = None
-        if previous is not None and previous < self.id_table.rowCount():
+        for row in range(self.id_table.rowCount()):
+            key_item = self.id_table.item(row, 0)
+            if key_item is None:
+                continue
+            key = key_item.data(IDENTITY_ROLE)
+            locked = self._target_key is not None and tuple(key or ()) == self._target_key
+            if locked:
+                self._highlighted_target_row = row
+            was_locked = bool(key_item.data(IDENTITY_ROLE + 1))
+            if not locked and not was_locked:
+                continue
+            key_item.setData(IDENTITY_ROLE + 1, locked)
             for column in range(self.id_table.columnCount()):
-                item = self.id_table.item(previous, column)
+                item = self.id_table.item(row, column)
                 if item is not None:
-                    item.setData(Qt.ItemDataRole.BackgroundRole, None)
-                    item.setData(Qt.ItemDataRole.ForegroundRole, None)
-                    item.setToolTip("")
-        if self._target_key is not None:
-            for row, state in enumerate(self._id_states):
-                if (state.advances, state.display_tid) == self._target_key:
-                    self._highlighted_target_row = row
-                    for column in range(self.id_table.columnCount()):
-                        item = self.id_table.item(row, column)
-                        item.setBackground(QColor("#EAF7F1"))
-                        item.setForeground(QColor("#087c58" if column == 4 else "#202A33"))
-                        item.setToolTip(f"本轮目标 Display TID {state.display_tid:06d}")
-                    break
+                    item.setData(Qt.ItemDataRole.BackgroundRole, QColor("#EAF7F1") if locked else None)
+                    item.setData(Qt.ItemDataRole.ForegroundRole, QColor("#087c58" if column == 4 else "#202A33") if locked else None)
+                    item.setToolTip(f"本轮目标 Display TID {self._target_key[1]:06d}" if locked else "")
         self.target_data_button.setEnabled(self._highlighted_target_row is not None)
 
     def _locate_target(self) -> None:
@@ -1156,6 +1159,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         if row is None:
             return
         self.runtime_scroll.ensureWidgetVisible(self.id_table_group)
+        self.id_table_tools.set_column_visible(4, True)
         self.id_table.setCurrentCell(row, 4)
         self.id_table.scrollToItem(self.id_table.item(row, 4), QAbstractItemView.ScrollHint.PositionAtCenter)
 
@@ -1180,6 +1184,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self._id_states = list(states)
         self._last_id_states = tuple(states)
         self._highlighted_target_row = None
+        sorting = self.id_table.isSortingEnabled()
+        self.id_table.setSortingEnabled(False)
         self.id_table.setRowCount(len(self._id_states))
         for row, state in enumerate(self._id_states):
             values = (
@@ -1190,7 +1196,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
                 f"{state.display_tid:06d}",
             )
             for column, value in enumerate(values):
-                self.id_table.setItem(row, column, QTableWidgetItem(value))
+                item = ResultItem(value)
+                item.setData(IDENTITY_ROLE, (state.advances, state.display_tid))
+                self.id_table.setItem(row, column, item)
+        self.id_table.setSortingEnabled(sorting)
         self.id_result_count.setText(f"{len(self._id_states)} 条结果")
         self._highlight_target()
         self._refresh_id_result_state()

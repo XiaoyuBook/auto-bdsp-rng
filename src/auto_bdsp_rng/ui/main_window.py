@@ -1,4 +1,7 @@
 from __future__ import annotations
+from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
+from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
+from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
 
 import csv
 import sys
@@ -1959,6 +1962,7 @@ class MainWindow(QMainWindow):
             request_restart=self._request_ui_scale_restart,
         )
         self.help_menu_controller.install(self.help_button)
+        self.help_menu_controller.help_menu.addAction("术语与操作帮助", lambda: show_terminology(self))
         self.update_controller.busyChanged.connect(
             lambda busy: self.help_menu_controller.check_updates_action.setEnabled(not busy)
         )
@@ -2300,6 +2304,9 @@ class MainWindow(QMainWindow):
         # 第 3 行 + 第 4 行：结果表格（工具栏 + 表格）
         self.results_panel = self._build_results()
         layout.addWidget(self.results_panel, 1)
+        self.height_min.setToolTip(TERMS[10][1])
+        self.weight_min.setToolTip(TERMS[10][1])
+        self.iv_count_display.setToolTip(TERMS[9][1])
         return panel
 
     def _build_project_status_group(self) -> QGroupBox:
@@ -3080,6 +3087,8 @@ class MainWindow(QMainWindow):
         self.export_button.clicked.connect(self.export_results)
 
         toolbar.addWidget(self.result_count)
+        self.filter_presets = FilterPresetButton(self)
+        toolbar.addWidget(self.filter_presets)
         toolbar.addStretch(1)
         toolbar.addWidget(self.generate_button)
         toolbar.addWidget(self.copy_button)
@@ -3103,6 +3112,7 @@ class MainWindow(QMainWindow):
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
+        self.static_table_tools = TableWorkbench(self.table, toolbar, self._profile_settings, "static")
         layout.addWidget(self.table, 1)
         self.static_empty_state = TableEmptyState(self.table)
         self._static_result_state = "initial"
@@ -9118,16 +9128,19 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
 
     def _populate_table(self, states: list[State8]) -> None:
+        sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
         self.table.setColumnCount(len(self._result_headers()))
         self.table.setHorizontalHeaderLabels(self._result_headers())
         self.table.setRowCount(len(states))
         for row, state in enumerate(states):
             values = self._state_row(state)
             for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
+                item = ResultItem(value, sort_value=int(value, 16) if column in (1, 2) else None)
                 if column == 3 and value not in ("-", "否"):
                     item.setForeground(Qt.GlobalColor.yellow)
                 self.table.setItem(row, column, item)
+        self.table.setSortingEnabled(sorting)
         self.result_count.setText(f"{len(states)} {self._text('results')}")
         self._refresh_static_result_state()
 

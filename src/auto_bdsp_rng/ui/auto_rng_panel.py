@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
+from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont
@@ -1556,6 +1557,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.candidate_table.setColumnWidth(column, width)
         table_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.candidate_table.hide()
+        self.candidate_tools = TableWorkbench(self.candidate_table, header, self._settings, "candidates", pinned_columns=2)
         layout.addWidget(self.candidate_table)
         self.candidate_empty_label = QLabel("开始运行后显示本轮候选目标")
         self.candidate_empty_label.setObjectName("RuntimeCandidatesEmpty")
@@ -1722,6 +1724,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if locked_index in display_indexes:
             display_indexes.remove(locked_index)
             display_indexes.insert(0, locked_index)
+        sorting = self.candidate_table.isSortingEnabled()
+        self.candidate_table.setSortingEnabled(False)
         self.candidate_table.setRowCount(len(display_indexes))
         for row, candidate_index in enumerate(display_indexes):
             state = candidates[candidate_index]
@@ -1731,13 +1735,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 state, locked=locked, synchronized=synchronized, index=candidate_index
             )
             for column, value in enumerate(values[1:]):
-                item = QTableWidgetItem(value)
+                item = ResultItem(value)
                 item.setToolTip(value)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignLeft if column == 0 else Qt.AlignmentFlag.AlignHCenter))
                 if locked:
                     item.setBackground(QColor("#EAF7F1"))
                     item.setForeground(QColor("#087C58" if column == 0 else "#202A33"))
                 self.candidate_table.setItem(row, column, item)
+        self.candidate_table.setSortingEnabled(sorting)
         visible_rows = min(RUNTIME_CANDIDATE_VISIBLE_ROWS, max(1, len(display_indexes)))
         self.candidate_table.setFixedHeight(30 + visible_rows * 30 + 2)
         if total > len(display_indexes):
