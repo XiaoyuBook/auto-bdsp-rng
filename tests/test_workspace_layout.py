@@ -24,9 +24,11 @@ def test_narrow_pages_reflow_without_changing_fonts_or_controls(window, monkeypa
         settle()
         assert w.width() == 860 and w.height() == 600
         assert splitter.orientation() == Qt.Orientation.Vertical
-        assert w.page_headers[page].help_button.isVisible()
-        assert w.page_headers[page].logs_button.isVisible()
-        assert w.page_headers[page].geometry().right() <= page.width()
+        assert splitter.widget(0).isVisible()
+        assert splitter.widget(1).isVisible()
+        assert w.help_button.isVisible()
+        assert w.view_status_logs_button.isVisible()
+    assert w.project_xs_splitter.geometry() == w.project_xs_tab.rect()
     w.tabs.setCurrentWidget(w.bdsp_tab)
     settle()
     assert w.bdsp_reflow.layout.direction() == QBoxLayout.Direction.TopToBottom
@@ -39,25 +41,21 @@ def test_narrow_pages_reflow_without_changing_fonts_or_controls(window, monkeypa
     assert w.auto_rng_tab.max_wait_frames.value() == original
 
 
-def test_readiness_and_empty_state_reveal_folded_configuration(window):
+def test_readiness_and_empty_state_reveal_configuration_without_page_header(window):
     w = window
     panel = w.auto_tid_rng_tab
-    header = w.page_headers[panel]
-    header.fold_button.click()
+    panel.config_scroll.hide()
     assert panel.config_scroll.isHidden()
     w.readiness.show_for(panel)
     w.readiness.navigate("targets")
     settle()
     assert not panel.config_scroll.isHidden()
-    assert not header.fold_button.isChecked()
-    static_header = w.page_headers[w.bdsp_tab]
     w.tabs.setCurrentWidget(w.bdsp_tab)
-    static_header.fold_button.click()
+    w.bdsp_config_scroll.hide()
     assert w.bdsp_config_scroll.isHidden()
     w._focus_static_configuration(w.iv_min[0])
     settle()
     assert not w.bdsp_config_scroll.isHidden()
-    assert not static_header.fold_button.isChecked()
 
 
 def test_splitter_preferences_keep_independent_orientations(window, monkeypatch):
@@ -82,8 +80,26 @@ def test_shared_log_entry_preserves_module_scope(window):
     w = window
     w._active_auto_rng_run_id = "layout-run"
     w._active_auto_rng_round_id = "layout-round"
+    w._active_auto_tid_run_id = "tid-run"
+    w._active_auto_tid_round_id = "tid-round"
     called = []
     w.run_records_tab.show_logs = lambda source, **kw: called.append((source, kw))
-    w.page_headers[w.auto_rng_tab].logs_button.click()
-    assert w.tabs.currentWidget() is w.run_records_tab
-    assert called == [("自动定点", {"run_id": "layout-run", "round_id": "layout-round"})]
+    for page, source, run_id, round_id in (
+        (w.auto_rng_tab, "自动定点", "layout-run", "layout-round"),
+        (w.auto_tid_rng_tab, "自动 TID", "tid-run", "tid-round"),
+        (w.project_xs_tab, "Seed 捕捉", None, None),
+        (w.easycon_tab, "伊机控", None, None),
+        (w.bdsp_tab, None, None, None),
+        (w.run_records_tab, None, None, None),
+    ):
+        w.tabs.setCurrentWidget(page)
+        w.view_status_logs_button.click()
+        assert w.tabs.currentWidget() is w.run_records_tab
+        assert called[-1] == (source, {"run_id": run_id, "round_id": round_id})
+    w.tabs.setCurrentWidget(w.auto_tid_rng_tab)
+    settle()
+    assert w.auto_tid_rng_tab.view_log_button.isVisible()
+    w.auto_tid_rng_tab.view_log_button.click()
+    assert called[-1] == ("自动 TID", {"run_id": "tid-run", "round_id": "tid-round"})
+    w.help_menu_controller.view_run_logs_action.trigger()
+    assert called[-1] == (None, {"run_id": None, "round_id": None})

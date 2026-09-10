@@ -2,7 +2,7 @@ from __future__ import annotations
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
-from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, PageHeader, WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, WorkspaceSplit, scroll_surface
 
 import csv
 import sys
@@ -1944,7 +1944,8 @@ class MainWindow(QMainWindow):
         self.view_status_logs_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.view_status_logs_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.view_status_logs_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.view_status_logs_button.clicked.connect(lambda: self._show_run_logs(None))
+        self.view_status_logs_button.setToolTip("查看当前页面日志；自动任务会定位当前运行与轮次")
+        self.view_status_logs_button.clicked.connect(self._show_current_page_logs)
         status_bar.addPermanentWidget(self.view_status_logs_button)
         self.setStatusBar(status_bar)
         self.update_controller = UpdateController(self)
@@ -1978,47 +1979,26 @@ class MainWindow(QMainWindow):
         self.run_records_tab.log_panel.empty_navigation = self.readiness.show
         self.run_records_tab.log_panel._refresh_view_state()
         self.auto_tid_rng_tab.preparationRequested.connect(lambda: self.readiness.show_for(self.auto_tid_rng_tab))
-        self._install_page_headers()
-
-    def _install_page_headers(self) -> None:
-        self.page_headers = {}
-        definitions = (
-            (self.auto_rng_tab, "自动定点乱数", "自动定点", self.auto_rng_tab.config_panel, "auto"),
-            (self.auto_tid_rng_tab, "自动 TID 乱数", "自动 TID", self.auto_tid_rng_tab.config_scroll, "tid"),
-            (self.project_xs_tab, "Seed 捕捉", "Seed 捕捉", self.project_xs_splitter.widget(0), "seed"),
-            (self.bdsp_tab, "定点数据区", None, self.bdsp_config_scroll, "data"),
-            (self.easycon_tab, "伊机控", "伊机控", self.easycon_tab.sidebar_scroll, "easycon"),
-            (self.run_records_tab, "日志中心", None, None, "logs"),
-        )
-        for page, title, source, configuration, key in definitions:
-            header = PageHeader(title, page, log_callback=(lambda s=source: self._show_run_logs(s)) if page is not self.run_records_tab else None,
-                                configuration=configuration, settings=self._profile_settings, key=key)
-            page.layout().insertWidget(0, header)
-            self.page_headers[page] = header
-        self.auto_tid_rng_tab.title_label.hide()
-        self.auto_tid_rng_tab.subtitle_label.hide()
-        self.auto_tid_rng_tab.view_log_button.hide()
-        self.auto_rng_tab.autoProgressChanged.connect(lambda p: self.page_headers[self.auto_rng_tab].set_status(f"{p.phase.value} · 第 {p.loop_index} 轮"))
-        self.auto_tid_rng_tab.progressChanged.connect(lambda p: self.page_headers[self.auto_tid_rng_tab].set_status(f"{p.phase.value} · 第 {p.loop_index} 轮"))
-        self.page_headers[self.auto_rng_tab].set_status("等待开始")
-        self.page_headers[self.auto_tid_rng_tab].set_status("等待开始 · 未命中时自动重新测种")
-        self.page_headers[self.run_records_tab].set_status("轮次记录与详细日志")
-        self.readiness.timer.timeout.connect(self._refresh_page_status)
-        self._refresh_page_status()
 
     def reveal_page_configuration(self, page) -> None:
-        header = getattr(self, "page_headers", {}).get(page)
-        if header is not None:
-            header.reveal_configuration()
+        configuration = {
+            self.auto_rng_tab: self.auto_rng_tab.config_panel,
+            self.auto_tid_rng_tab: self.auto_tid_rng_tab.config_scroll,
+            self.project_xs_tab: self.project_xs_splitter.widget(0),
+            self.bdsp_tab: self.bdsp_config_scroll,
+            self.easycon_tab: self.easycon_tab.sidebar_scroll,
+        }.get(page)
+        if configuration is not None:
+            configuration.show()
 
-    def _refresh_page_status(self) -> None:
-        for panel in (self.auto_rng_tab, self.auto_tid_rng_tab):
-            self.page_headers[panel].set_status(panel.runtime_phase_label.text())
-        self.page_headers[self.project_xs_tab].set_status(
-            f"{self._capture_mode_label()} · 眨眼 {self.progress_value.text()}" if self._is_capturing()
-            else "视频已连接，可以捕捉或校正" if self._video_source_connected else "等待连接视频源")
-        self.page_headers[self.bdsp_tab].set_status({"initial": "设置条件后生成", "searching": "正在生成", "failed": "生成失败，请查看日志", "complete": f"已生成 {len(self._states)} 条结果"}.get(self._static_result_state, "等待生成"))
-        self.page_headers[self.easycon_tab].set_status("脚本运行中" if self.easycon_tab._controller_script_running() else self.easycon_tab.connection_presentation()[0])
+    def _show_current_page_logs(self) -> None:
+        source = {
+            self.auto_rng_tab: "自动定点",
+            self.auto_tid_rng_tab: "自动 TID",
+            self.project_xs_tab: "Seed 捕捉",
+            self.easycon_tab: "伊机控",
+        }.get(self.tabs.currentWidget())
+        self._show_run_logs(source)
 
     def _run_log_sink(self, source: str) -> Callable[[str, str], None]:
         def write(level: str, message: str) -> None:
