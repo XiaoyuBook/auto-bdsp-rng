@@ -1,10 +1,13 @@
 """Small shared design tokens for native Qt workspaces (logical pixels)."""
 
+import logging
 from string import Template
 
 from PySide6.QtCore import QEvent, QObject
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication
 from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
+from auto_bdsp_rng.resources import resource_path
 
 BACKGROUND = "#F2F4F7"
 SURFACE = "#FFFFFF"
@@ -21,14 +24,36 @@ ERROR_SOFT = "#FFF4F1"
 FOCUS = "#176B97"
 CONTROL_HEIGHT = 32
 CONTROL_RADIUS = 7
+BUNDLED_FONT_FAMILY = "BDSP UI Sans"
+BUNDLED_FONT_FILES = ("BDSPUISans-Regular.otf", "BDSPUISans-Medium.otf")
 UI_FONT_FAMILIES = (
+    BUNDLED_FONT_FAMILY,
     "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC",
     "Microsoft YaHei UI", "PingFang SC", "Segoe UI", "sans-serif",
 )
 RUNTIME_GRADIENT = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:1 #F0F9F5)"
 
 
+def ensure_ui_fonts() -> tuple[int, ...]:
+    """Register packaged faces once per Qt application, without installing OS fonts."""
+    app = QGuiApplication.instance()
+    if app is None:
+        return ()
+    if not hasattr(app, "_bdsp_ui_font_ids"):
+        font_ids = []
+        for filename in BUNDLED_FONT_FILES:
+            path = resource_path("docs", "assets", "fonts", filename)
+            font_id = QFontDatabase.addApplicationFont(str(path))
+            if font_id < 0:
+                logging.getLogger(__name__).warning("Unable to load UI font %s; using font fallback", path)
+            else:
+                font_ids.append(font_id)
+        app._bdsp_ui_font_ids = tuple(font_ids)
+    return app._bdsp_ui_font_ids
+
+
 def ui_font(pixel_size: int = 14, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
+    ensure_ui_fonts()
     font = QFont()
     font.setFamilies(list(UI_FONT_FAMILIES))
     font.setStyleHint(QFont.StyleHint.SansSerif)

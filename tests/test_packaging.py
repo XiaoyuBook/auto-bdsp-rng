@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -28,6 +29,20 @@ def _load_build_script_module():
 
 
 build_script_module = _load_build_script_module()
+
+
+def test_release_copy_keeps_bundled_ui_faces_and_license(monkeypatch, tmp_path):
+    source = ROOT / "docs/assets/fonts"
+    project = tmp_path / "project"
+    shutil.copytree(source, project / "docs/assets/fonts")
+    dist = tmp_path / "dist"
+    monkeypatch.setattr(build_script_module, "ROOT", project)
+    monkeypatch.setattr(build_script_module, "DIST_DIR", dist)
+    monkeypatch.setattr(build_script_module, "PROJECT_XS_ROOT", project / "missing-xs")
+    monkeypatch.setattr(build_script_module, "PROJECT_XS_OVERRIDES", project / "missing-overrides")
+    build_script_module.copy_release_files()
+    for name in ("BDSPUISans-Regular.otf", "BDSPUISans-Medium.otf", "OFL.txt", "README.md"):
+        assert (dist / "docs/assets/fonts" / name).read_bytes() == (source / name).read_bytes()
 
 
 def test_pyinstaller_spec_collects_project_xs_win32ui_dependency():

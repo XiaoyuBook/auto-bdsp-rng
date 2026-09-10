@@ -302,7 +302,7 @@ def test_connection_dialog_actions_keep_backend_and_visible_state_in_sync(easyco
     panel.port_combo.setCurrentText("COM7")
     panel.show_connection_dialog()
     app.processEvents()
-    assert not panel.connection_dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert panel.connection_dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert panel.connection_dialog.rect().contains(panel.connection_dialog.title_bar.geometry())
     panel.connect_button.click()
     assert panel.native_backend.connected_port == "COM7"

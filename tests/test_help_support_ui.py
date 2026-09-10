@@ -495,6 +495,38 @@ def test_about_qr_popup_shows_fallback_when_asset_missing(app, monkeypatch):
     assert any("当前构建未包含此二维码" in message for message in shown_messages)
 
 
+def test_about_cards_remain_accessible_in_a_compact_window(app):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QSignalSpy, QTest
+    from PySide6.QtWidgets import QPushButton, QScrollArea
+    from auto_bdsp_rng.ui.about_dialog import AboutDialog
+
+    opened = []
+    dialog = AboutDialog(open_sponsors=lambda: opened.append("sponsors"))
+    dialog.resize(800, 660)
+    dialog.show()
+    app.processEvents()
+    scroll = dialog.findChild(QScrollArea, "AboutScroll")
+    assert dialog.height() == 660
+    assert scroll.verticalScrollBar().maximum() > 0
+    for button in scroll.findChildren(QPushButton):
+        scroll.ensureWidgetVisible(button)
+        QTest.qWait(10)
+        center = button.mapTo(scroll.viewport(), button.rect().center())
+        assert scroll.viewport().rect().contains(center), button.text()
+    for label in scroll.findChildren(QLabel, "FriendDesc"):
+        assert label.height() >= label.heightForWidth(label.width())
+    sponsors = next(button for button in scroll.findChildren(QPushButton) if button.text() == "赞助名单")
+    sponsors.click()
+    assert opened == ["sponsors"]
+    close = dialog.findChild(QPushButton, "PrimaryButton")
+    assert dialog.rect().contains(close.mapTo(dialog, QPoint(0, 0)))
+    accepted = QSignalSpy(dialog.accepted)
+    close.click()
+    assert accepted.count() == 1
+    dialog.deleteLater()
+
+
 def test_markdown_viewer_returns_missing_message(tmp_path):
     from auto_bdsp_rng.ui.markdown_viewer import read_markdown_text
 

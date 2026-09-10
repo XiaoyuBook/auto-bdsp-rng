@@ -1514,6 +1514,7 @@ class MainWindow(QMainWindow):
         ui_scale_source: str = "fallback",
     ) -> None:
         super().__init__()
+        self.setFont(ui_font())
         self.setWindowTitle(APP_DISPLAY_TITLE)
         if app_icon_path().exists():
             self.setWindowIcon(QIcon(str(app_icon_path())))
@@ -3096,7 +3097,7 @@ class MainWindow(QMainWindow):
             QWidget {
                 background: #FFFFFF;
                 color: #202A33;
-                font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 14px;
             }
             QWidget#AppRoot {
@@ -9718,6 +9719,7 @@ def run() -> int:
     ui_scale = get_ui_scale()
     ui_scale_environment = configure_ui_scale_environment(ui_scale)
     app = QApplication.instance() or QApplication([])
+    app.setFont(ui_font())
     configure_application_identity(app)
     run_log_manager = RunLogManager()
     run_log_errors: list[str] = []

@@ -4,13 +4,16 @@ import pytest
 from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, Qt
 from PySide6.QtGui import QEnterEvent, QIcon
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QPushButton, QWidget
 
 from auto_bdsp_rng.data import get_static_encounters
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
-from auto_bdsp_rng.ui.workspace_controls import PrimaryButton, PrimaryToolButton, SpeciesAvatar, workspace_icon
+from auto_bdsp_rng.ui.workspace_controls import (
+    ConnectionDialog, PrimaryButton, PrimaryToolButton, SpeciesAvatar,
+    set_disconnect_action, workspace_icon,
+)
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles
 
 
@@ -93,3 +96,50 @@ def test_species_art_covers_existing_encounters_and_falls_back_without_changing_
         assert not panel.target_avatar._sprite.isNull()
     panel.close()
     panel.deleteLater()
+
+
+def test_connection_surface_and_initial_action_render_before_status_updates(app):
+    parent = QWidget()
+    dialog = ConnectionDialog("连接设置", "TestConnectionDialog", parent)
+    dialog.body_layout.addWidget(QLabel("设备"))
+    button = QPushButton("连接")
+    button.setObjectName("PrimaryButton")
+    button.setFixedWidth(100)
+    dialog.footer_layout.addWidget(button)
+    dialog.show()
+    app.processEvents()
+    surface = dialog.grab().toImage()
+    width, height = surface.width(), surface.height()
+    for x, y in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
+        assert surface.pixelColor(x, y).alpha() == 0
+    assert surface.pixelColor(width // 2, 2).alpha() == 255
+    assert surface.pixelColor(width // 2, height - 3).alpha() == 255
+    assert button.property("disconnect") is None
+
+    def colors():
+        picture = button.grab().toImage()
+        dpr = picture.devicePixelRatio()
+        x = round(12 * dpr)  # Inside the fill, away from text and corner edges.
+        return (picture.pixelColor(x, round(6 * dpr)),
+                picture.pixelColor(x, picture.height() - round(6 * dpr)))
+
+    initial = colors()
+    assert initial[0].green() > initial[1].green() + 8
+    set_disconnect_action(button, False)
+    assert colors() == initial
+    set_disconnect_action(button, True)
+    disconnected = colors()
+    assert disconnected != initial
+    assert disconnected[0].green() > 230
+    button.setEnabled(False)
+    assert colors() != disconnected
+    button.setEnabled(True)
+    set_disconnect_action(button, False)
+    assert colors() == initial
+    clicks = QSignalSpy(button.clicked)
+    button.click()
+    assert clicks.count() == 1
+    dialog.close_button.click()
+    assert not dialog.isVisible()
+    parent.close()
+    parent.deleteLater()

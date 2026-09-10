@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -23,6 +24,7 @@ from auto_bdsp_rng import __version__
 from auto_bdsp_rng.resources import app_icon_path
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
 
 
 PROJECT_REPOSITORY_URL = "https://github.com/XiaoyuBook/auto-bdsp-rng"
@@ -45,6 +47,7 @@ class AboutDialog(QDialog):
         sponsor_assets: SponsorAssets | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setFont(ui_font())
         self.setWindowTitle("关于项目")
         self.setMinimumWidth(780)
         self.resize(800, 660)
@@ -60,13 +63,16 @@ class AboutDialog(QDialog):
         self.setStyleSheet(self._stylesheet())
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(24, 24, 24, 16)
+        layout.setSpacing(16)
 
         layout.addWidget(self._build_header())
 
-        grid = QGridLayout()
-        grid.setSpacing(14)
+        cards = QWidget()
+        cards.setObjectName("AboutCards")
+        grid = QGridLayout(cards)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(16)
         grid.addWidget(self._project_info_card(), 0, 0)
         grid.addWidget(self._open_source_card(),   0, 1)
         grid.addWidget(self._usage_card(),         1, 0)
@@ -75,7 +81,13 @@ class AboutDialog(QDialog):
         grid.addWidget(self._sponsor_card(),       2, 1)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
-        layout.addLayout(grid)
+        scroll = QScrollArea()
+        scroll.setObjectName("AboutScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(cards)
+        layout.addWidget(scroll, 1)
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
@@ -94,7 +106,7 @@ class AboutDialog(QDialog):
         header.setObjectName("AboutHeader")
         row = QHBoxLayout(header)
         row.setContentsMargins(18, 16, 18, 16)
-        row.setSpacing(14)
+        row.setSpacing(16)
 
         logo = QLabel()
         logo.setObjectName("AppLogo")
@@ -139,7 +151,7 @@ class AboutDialog(QDialog):
     def _project_info_card(self) -> QGroupBox:
         group = self._card("项目信息")
         grid = QGridLayout(group)
-        grid.setContentsMargins(14, 14, 14, 14)
+        grid.setContentsMargins(16, 16, 16, 16)
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(8)
         for row, (key, value) in enumerate(
@@ -161,7 +173,7 @@ class AboutDialog(QDialog):
     def _usage_card(self) -> QGroupBox:
         group = self._card("使用说明")
         layout = QHBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(18)
         layout.addWidget(self._rule_column("允许", ("学习研究", "修改代码", "非商业分享"), True))
         layout.addWidget(self._rule_column("禁止", ("付费售卖", "打包分发牟利", "冒充官方发布"), False))
@@ -170,7 +182,7 @@ class AboutDialog(QDialog):
     def _open_source_card(self) -> QGroupBox:
         group = self._card("开源声明")
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(9)
 
         lead = QLabel("本项目永久免费开源。")
@@ -193,7 +205,7 @@ class AboutDialog(QDialog):
     def _friend_links_card(self) -> QGroupBox:
         group = self._card("友情链接")
         layout = QHBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(20)
 
         assets_dir = Path(__file__).resolve().parents[3] / "docs" / "assets"
@@ -207,7 +219,6 @@ class AboutDialog(QDialog):
         for icon_path, name, desc, url in projects:
             col = QVBoxLayout()
             col.setSpacing(8)
-            col.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             # 图标按钮：全部56x56
             icon_btn = QPushButton()
@@ -240,7 +251,7 @@ class AboutDialog(QDialog):
     def _contact_card(self) -> QGroupBox:
         group = self._card("作者联系")
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
         intro = QLabel("如需反馈 Bug、提出功能建议或优化需求，请尽量附上触发场景、复现步骤和截图，并通过以下方式联系作者：")
@@ -280,11 +291,11 @@ class AboutDialog(QDialog):
         dlg.setWindowTitle(title)
         dlg.setMinimumSize(400, 440)
         dlg.setStyleSheet(
-            "QDialog#AboutQrDialog { background: #ffffff; color: #24312d; }"
-            " QDialog#AboutQrDialog QPushButton { background: #ffffff; color: #24312d;"
-            " border: 1px solid #e2e8e4; border-radius: 4px; min-height: 32px; padding: 0 14px; }"
-            " QDialog#AboutQrDialog QPushButton:hover { background: #f6f8f7;"
-            " border-color: #bfcfc6; }"
+            "QDialog#AboutQrDialog { background: #ffffff; color: #202A33; }"
+            " QDialog#AboutQrDialog QPushButton { background: #ffffff; color: #202A33;"
+            " border: 1px solid #E0E5EB; border-radius: 7px; min-height: 32px; padding: 0 14px; }"
+            " QDialog#AboutQrDialog QPushButton:hover { background: #F7F8FA;"
+            " border-color: #B8C2CC; }"
         )
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -294,7 +305,7 @@ class AboutDialog(QDialog):
             message = "当前构建未包含此二维码" if path is None or not path.exists() else "二维码图片无法读取"
             img.setText(message)
             img.setWordWrap(True)
-            img.setStyleSheet("color: #68766f; padding: 32px; border: 1px solid #e2e8e4; background: #f6f8f7;")
+            img.setStyleSheet("color: #626D79; padding: 32px; border: 1px solid #E0E5EB; background: #F7F8FA;")
         else:
             img.setPixmap(pixmap.scaled(360, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         layout.addWidget(img, 1)
@@ -306,7 +317,7 @@ class AboutDialog(QDialog):
     def _sponsor_card(self) -> QGroupBox:
         group = self._card("支持项目")
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
         intro = QLabel("如果本项目对你有帮助，欢迎自愿赞助，支持后续维护。")
@@ -373,44 +384,60 @@ class AboutDialog(QDialog):
 
     def _stylesheet(self) -> str:
         if self._dark:
-            bg = "#202221"
-            panel = "#2a2d2b"
-            card = "#252826"
-            border = "#424843"
-            text = "#e8ece9"
-            muted = "#aeb8b1"
+            bg = "#20262E"
+            panel = "#2A323D"
+            card = "#252D37"
+            border = "#434D5A"
+            text = "#EBEEF2"
+            muted = "#B3BDC8"
             soft = "#9fc8ad"
             soft_bg = "#25352d"
-            hover = "#343934"
+            hover = "#343E4B"
             logo_bg = "#324238"
             warning = "#f0b96b"
         else:
-            bg = "#ffffff"
+            bg = "#F2F4F7"
             panel = "#ffffff"
             card = "#ffffff"
-            border = "#e2e8e4"
-            text = "#24312d"
-            muted = "#68766f"
+            border = "#E0E5EB"
+            text = "#202A33"
+            muted = "#626D79"
             soft = "#087c58"
-            soft_bg = "#eff7f3"
-            hover = "#f6f8f7"
-            logo_bg = "#eff7f3"
+            soft_bg = "#EAF7F1"
+            hover = "#F7F8FA"
+            logo_bg = "#EAF7F1"
             warning = "#8a6818"
 
         return f"""
         QDialog {{
             background: {bg};
             color: {text};
-            font-size: 12px;
+            font-size: 14px;
+            font-weight: 400;
         }}
         QLabel {{
+            color: {text};
+            font-size: 14px;
+            font-weight: 400;
             background: transparent;
             border: 0;
         }}
+        QScrollArea#AboutScroll, QWidget#AboutCards {{
+            background: transparent;
+            border: 0;
+        }}
+        QScrollBar:vertical {{
+            background: {bg}; width: 8px; margin: 0;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {border}; border-radius: 4px; min-height: 24px;
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
         QFrame#AboutHeader {{
             background: {panel};
             border: 1px solid {border};
-            border-radius: 6px;
+            border-radius: 12px;
         }}
         QLabel#AppLogo {{
             background: {logo_bg};
@@ -418,38 +445,40 @@ class AboutDialog(QDialog):
             border-radius: 8px;
             color: {soft};
             font-size: 16px;
-            font-weight: 800;
+            font-weight: 500;
         }}
         QLabel#AboutTitle {{
             color: {text};
-            font-size: 22px;
-            font-weight: 800;
+            font-size: 20px;
+            font-weight: 500;
         }}
         QLabel#VersionLabel {{
             color: {muted};
-            font-size: 11px;
-            font-weight: 600;
+            font-size: 12px;
+            font-weight: 500;
             padding-top: 6px;
         }}
         QLabel#AboutSubtitle {{
             color: {muted};
-            font-size: 13px;
+            font-size: 14px;
         }}
         QLabel#SloganLabel {{
             color: {soft};
-            font-size: 13px;
-            font-weight: 700;
+            font-size: 14px;
+            font-weight: 500;
         }}
         QGroupBox#AboutCard {{
             background: {card};
             border: 1px solid {border};
-            border-radius: 6px;
+            border-radius: 12px;
             margin-top: 10px;
-            padding-top: 12px;
-            font-weight: 800;
+            padding: 12px 0 0 0;
+            font-size: 16px;
+            font-weight: 500;
             color: {soft};
         }}
         QGroupBox#AboutCard::title {{
+            color: {text};
             subcontrol-origin: margin;
             left: 12px;
             padding: 0 5px;
@@ -457,42 +486,46 @@ class AboutDialog(QDialog):
         }}
         QLabel#MutedLabel {{
             color: {muted};
+            font-size: 12px;
             line-height: 1.4;
         }}
         QLabel#ValueLabel, QLabel#RepoLabel {{
             color: {text};
-            font-weight: 600;
+            font-weight: 400;
         }}
         QLabel#StatementLead {{
             color: {text};
-            font-size: 15px;
-            font-weight: 800;
+            font-size: 16px;
+            font-weight: 500;
         }}
         QLabel#WarningText {{
             color: {warning};
             font-size: 14px;
-            font-weight: 800;
+            font-weight: 500;
         }}
         QLabel#RuleTitleAllowed, QLabel#RuleTitleDenied {{
             color: {text};
-            font-weight: 800;
+            font-weight: 500;
         }}
         QLabel#RuleAllowed {{
             color: {soft};
-            font-weight: 700;
+            font-weight: 400;
         }}
         QLabel#RuleDenied {{
             color: {warning};
-            font-weight: 700;
+            font-weight: 400;
         }}
         QLabel#BuildLabel {{
             color: {muted};
-            font-size: 11px;
+            font-size: 12px;
         }}
         QPushButton#FriendIconBtn {{
             background: {soft_bg};
             border: 1px solid {border};
             border-radius: 10px;
+            padding: 0;
+            min-width: 56px; max-width: 56px;
+            min-height: 56px; max-height: 56px;
             font-size: 22px;
         }}
         QPushButton#FriendIconBtn:hover {{
@@ -501,22 +534,23 @@ class AboutDialog(QDialog):
         }}
         QLabel#FriendLinkName {{
             color: {text};
-            font-weight: 700;
+            font-weight: 500;
             font-size: 12px;
         }}
         QLabel#FriendDesc {{
             color: {muted};
-            font-size: 10px;
+            font-size: 12px;
             line-height: 1.4;
         }}
         QPushButton {{
+            font-size: 14px;
             background: {panel};
             border: 1px solid {border};
-            border-radius: 4px;
+            border-radius: 7px;
             min-height: 30px;
             padding: 4px 14px;
             color: {text};
-            font-weight: 700;
+            font-weight: 500;
         }}
         QPushButton:hover {{
             background: {hover};
@@ -535,35 +569,36 @@ class AboutDialog(QDialog):
         QPushButton#ContactButton {{
             background: {soft_bg};
             border: 1px solid {border};
-            border-radius: 6px;
+            border-radius: 7px;
             min-height: 36px;
             padding: 6px 10px;
             color: {soft};
-            font-weight: 700;
-            font-size: 13px;
+            font-weight: 500;
+            font-size: 14px;
         }}
         QPushButton#ContactButton:hover {{
             background: {soft};
-            color: #ffffff;
+            color: {bg if self._dark else '#ffffff'};
             border-color: {soft};
         }}
-        """
+        """ + primary_button_styles("QPushButton#PrimaryButton")
 
 
 class StartupNoticeDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setFont(ui_font())
         self.setWindowTitle("开源项目提示")
         self.setObjectName("StartupNoticeDialog")
         self.resize(460, 220)
         self.setStyleSheet(
-            "QDialog#StartupNoticeDialog { background: #ffffff; color: #24312d; }"
-            " QDialog#StartupNoticeDialog QLabel { background: transparent; color: #24312d; }"
+            "QDialog#StartupNoticeDialog { background: #ffffff; color: #202A33; }"
+            " QDialog#StartupNoticeDialog QLabel { background: transparent; color: #202A33; }"
             " QDialog#StartupNoticeDialog QPushButton { background: #087c58; color: #ffffff;"
-            " border: 1px solid #087c58; border-radius: 4px; min-height: 32px; padding: 0 14px; }"
+            " border: 1px solid #087c58; border-radius: 7px; min-height: 32px; padding: 0 14px; }"
             " QDialog#StartupNoticeDialog QPushButton:hover { background: #066a4b;"
             " border-color: #066a4b; }"
-            " QDialog#StartupNoticeDialog QCheckBox { color: #24312d; }"
+            " QDialog#StartupNoticeDialog QCheckBox { color: #202A33; }"
         )
         self._build_ui()
 
@@ -574,7 +609,7 @@ class StartupNoticeDialog(QDialog):
             "任何付费售卖均非官方行为，请勿购买。"
         )
         message.setWordWrap(True)
-        message.setStyleSheet("font-size: 13px; color: #24312d;")
+        message.setStyleSheet("font-size: 14px; color: #202A33;")
         layout.addWidget(message, 1)
 
         self.dont_show_again = QCheckBox("不再提示")

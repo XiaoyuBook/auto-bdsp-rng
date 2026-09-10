@@ -45,7 +45,7 @@ from auto_bdsp_rng.ui.combo_box import NoWheelComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.workspace_controls import workspace_icon
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
 
 
 def delay_lucide_icon(name: str, color: str = "#687480", size: int = 16) -> QIcon:
@@ -608,6 +608,7 @@ class DelayStrategyDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setFont(ui_font())
         self.setObjectName("DelayStrategyDialog")
         self.setWindowTitle("delay 策略设置")
         self.setWindowFlags(
@@ -1011,7 +1012,7 @@ class DelayStrategyDialog(QDialog):
             QFrame#DelayDialogSurface QWidget {
                 background: transparent;
                 color: #202A33;
-                font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 13px;
                 font-weight: 400;
             }

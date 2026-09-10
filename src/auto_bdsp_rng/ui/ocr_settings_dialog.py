@@ -27,6 +27,7 @@ from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
     STARTER_BATTLE_REGION_FIELD,
     STAT_REGION_FIELDS,
 )
+from auto_bdsp_rng.ui.workspace_theme import ui_font
 
 
 Recognizer = Callable[[str, OcrRegion | None], str]
@@ -75,27 +76,36 @@ class OcrSettingsDialog(QDialog):
         recognizer: Recognizer | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setFont(ui_font())
         self.setWindowTitle("OCR区域设置")
         self.setObjectName("OcrSettingsDialog")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(980, 680)
         self.setStyleSheet(
-            "QDialog#OcrSettingsDialog { background: #ffffff; color: #24312d; }"
-            " QDialog#OcrSettingsDialog QTableWidget {"
-            " background: #ffffff; alternate-background-color: #f6f8f7;"
-            " color: #24312d; border: 1px solid #e2e8e4; gridline-color: #e2e8e4; }"
-            " QDialog#OcrSettingsDialog QHeaderView::section {"
-            " background: #f6f8f7; color: #52615a; border: 0;"
-            " border-bottom: 1px solid #e2e8e4; padding: 6px 8px; }"
-            " QDialog#OcrSettingsDialog QPushButton {"
-            " background: #ffffff; color: #24312d; border: 1px solid #e2e8e4;"
-            " border-radius: 4px; min-height: 32px; padding: 0 12px; }"
+            "QDialog#OcrSettingsDialog { background: #F2F4F7; color: #202A33; }"
+            " QDialog#OcrSettingsDialog QLabel { color: #626D79; font-size: 12px; background: transparent; }"
+            " QDialog#OcrSettingsDialog QTableWidget { font-size: 13px; border-radius: 7px;"
+            " background: #ffffff; alternate-background-color: #F7F8FA;"
+            " color: #202A33; border: 1px solid #E0E5EB; gridline-color: #E0E5EB; }"
+            " QDialog#OcrSettingsDialog QHeaderView::section { font-size: 12px; font-weight: 500;"
+            " background: #F7F8FA; color: #626D79; border: 0;"
+            " border-bottom: 1px solid #E0E5EB; padding: 6px 8px; }"
+            " QDialog#OcrSettingsDialog QPushButton { font-size: 14px;"
+            " background: #ffffff; color: #202A33; border: 1px solid #E0E5EB;"
+            " border-radius: 7px; min-height: 32px; padding: 0 12px; }"
             " QDialog#OcrSettingsDialog QPushButton:hover {"
-            " background: #f6f8f7; border-color: #bfcfc6; }"
+            " background: #F7F8FA; border-color: #B8C2CC; }"
             " QDialog#OcrSettingsDialog QPushButton:disabled {"
-            " background: #f6f8f7; color: #9aa9a2; border-color: #e2e8e4; }"
-            " QDialog#OcrSettingsDialog QMessageBox { background: #ffffff; color: #24312d; }"
+            " background: #F7F8FA; color: #97A1AB; border-color: #E0E5EB; }"
+            " QDialog#OcrSettingsDialog QScrollBar:vertical { background: #F7F8FA; width: 8px; margin: 0; }"
+            " QDialog#OcrSettingsDialog QScrollBar:horizontal { background: #F7F8FA; height: 8px; margin: 0; }"
+            " QDialog#OcrSettingsDialog QScrollBar::handle { background: #CAD2DB; border-radius: 4px; }"
+            " QDialog#OcrSettingsDialog QScrollBar::handle:vertical { min-height: 24px; }"
+            " QDialog#OcrSettingsDialog QScrollBar::handle:horizontal { min-width: 24px; }"
+            " QDialog#OcrSettingsDialog QScrollBar::add-line, QDialog#OcrSettingsDialog QScrollBar::sub-line { width: 0; height: 0; }"
+            " QDialog#OcrSettingsDialog QScrollBar::add-page, QDialog#OcrSettingsDialog QScrollBar::sub-page { background: transparent; }"
+            " QDialog#OcrSettingsDialog QMessageBox { background: #ffffff; color: #202A33; }"
             " QDialog#OcrSettingsDialog QMessageBox QPushButton { min-width: 76px; }"
         )
         self._settings = settings or QSettings("auto-bdsp-rng", "OcrSettings")
@@ -118,7 +128,7 @@ class OcrSettingsDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
         hint = QLabel("点击“框选”后，在 Seed 捕捉预览图上按住右键拖拽选择区域。识别结果只在点击“识别/测试”时刷新。")
         hint.setWordWrap(True)

@@ -72,7 +72,7 @@ from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
 from auto_bdsp_rng.ui.workspace_controls import ConnectionDialog, PrimaryButton, set_disconnect_action, workspace_icon
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
 
 
 SCRIPT_DIR = script_directory()
@@ -541,7 +541,7 @@ class KeyMappingDialog(QDialog):
         title = QLabel("按键设置", header)
         title.setStyleSheet(
             "QLabel { background: transparent; border: 0; color: #202A33;"
-            " font-family: 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif; font-size: 15px; font-weight: 500; }"
+            " font-family: 'BDSP UI Sans', 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif; font-size: 15px; font-weight: 500; }"
         )
         header_layout.addWidget(title)
         header_layout.addStretch(1)
@@ -551,7 +551,7 @@ class KeyMappingDialog(QDialog):
             "QPushButton {"
             "  background: #ffffff; color: #202A33;"
             "  border: 1px solid #d7dfda; border-radius: 4px;"
-            "  font-family: 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;"
+            "  font-family: 'BDSP UI Sans', 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;"
             "  font-size: 12px; font-weight: 400;"
             "}"
             " QPushButton:hover {"
@@ -708,6 +708,7 @@ class EasyConPanel(QWidget):
         keyboard_hook_factory: Callable[..., WindowsKeyboardHook] | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setFont(ui_font())
         self._run_log_sink = run_log_sink
         self.native_backend = native_backend
         self._video_source_connected = video_source_connected

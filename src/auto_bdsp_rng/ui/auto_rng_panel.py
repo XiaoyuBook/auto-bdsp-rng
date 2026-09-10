@@ -2113,7 +2113,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QWidget#AutoRngPanel {
                 background: $surface;
                 color: $text;
-                font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 14px;
             }
             QLabel,
@@ -2123,7 +2123,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QPushButton,
             QToolButton,
             QTableWidget {
-                font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
                 font-size: 14px;
             }
             QFrame#AutoRngToolbar {
@@ -2335,7 +2335,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             }
             QGroupBox#AutoRngStrategyGroup QSpinBox,
             QGroupBox#AutoRngStrategyGroup QDoubleSpinBox {
-                font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+                font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
             }
             QToolButton#PrimaryButton,
             QPushButton#DangerButton {

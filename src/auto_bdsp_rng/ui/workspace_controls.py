@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QByteArray, QEasingCurve, QPointF, QRect, QRectF, QSize, Qt, QVariantAnimation
-from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPixmap, QRegion
+from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPen, QPixmap, QRegion
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QStyle, QStyleOptionToolButton,
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.resources import resource_path
-from auto_bdsp_rng.ui.workspace_theme import primary_button_styles
+from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font
 
 
 _SYMBOLS = {
@@ -236,32 +236,30 @@ class _ConnectionTitleBar(QFrame):
 
 
 class ConnectionDialog(QDialog):
-    """Opaque draggable dialog with the mockup's title, form and action footer."""
+    """Draggable dialog with a continuous rounded surface and transparent corners."""
 
     def __init__(self, title: str, object_name: str, parent: QWidget) -> None:
         super().__init__(parent)
+        self.setFont(ui_font())
         self.setObjectName(object_name)
         self.setWindowTitle(title)
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedWidth(490)
         self.setStyleSheet(f"""
-            QDialog#{object_name} {{ background: white; border: 1px solid #E0E5EB; border-radius: 14px; }}
-            QDialog#{object_name} QWidget {{ font-family: "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; font-size: 13px; color: #202A33; }}
+            QDialog#{object_name} {{ background: transparent; border: 0; }}
+            QDialog#{object_name} QWidget {{ font-family: "BDSP UI Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; font-size: 13px; color: #202A33; }}
             QDialog#{object_name} QLabel {{ background: transparent; border: 0; }}
-            QDialog#{object_name} QFrame#ConnectionTitleBar {{ background: white; border: 0; border-bottom: 1px solid #E0E5EB; }}
+            QDialog#{object_name} QFrame#ConnectionTitleBar {{ background: transparent; border: 0; border-bottom: 1px solid #E0E5EB; }}
             QDialog#{object_name} QLabel#ConnectionTitle {{ font-size: 16px; font-weight: 500; }}
-            QDialog#{object_name} QFrame#ConnectionFooter {{ background: white; border: 0; border-top: 1px solid #E0E5EB; }}
+            QDialog#{object_name} QFrame#ConnectionFooter {{ background: transparent; border: 0; border-top: 1px solid #E0E5EB; }}
             QDialog#{object_name} QComboBox, QDialog#{object_name} QPushButton {{ background: white; border: 1px solid #E0E5EB; border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 12px; }}
             QDialog#{object_name} QComboBox {{ padding-right: 32px; }}
             QDialog#{object_name} QComboBox::drop-down {{ border: 0; width: 28px; }}
             QDialog#{object_name} QComboBox::down-arrow {{ image: none; }}
             QDialog#{object_name} QComboBox:focus {{ border-color: #087C58; }}
             QDialog#{object_name} QPushButton:hover {{ background: #F7F8FA; }}
-            QDialog#{object_name} QPushButton#PrimaryButton {{ background: #087C58; color: white; border-color: #087C58; }}
-            QDialog#{object_name} QPushButton#PrimaryButton:hover {{ background: #066A4B; }}
-            QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"] {{ background: white; color: #AC4B42; border-color: #D9AAA6; }}
-            QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"]:hover {{ background: #FFF7F6; }}
             QDialog#{object_name} QPushButton#PrimaryButton:disabled, QDialog#{object_name} QPushButton:disabled, QDialog#{object_name} QComboBox:disabled {{ background: #F7F8FA; color: #97A1AB; border-color: #E0E5EB; }}
             QDialog#{object_name} QToolButton {{ background: white; border: 1px solid #E0E5EB; border-radius: 7px; padding: 0; }}
             QDialog#{object_name} QToolButton#ConnectionClose {{ border: 0; }}
@@ -271,8 +269,13 @@ class ConnectionDialog(QDialog):
             QDialog#{object_name} QMenu::item:selected {{ background: #EAF7F1; color: #087C58; }}
         """)
         self.setStyleSheet(self.styleSheet() + primary_button_styles(
-            f'QDialog#{object_name} QPushButton#PrimaryButton[disconnect="false"]'
-        ))
+            f'QDialog#{object_name} QPushButton#PrimaryButton'
+        ) + f"""
+            QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"] {{ background: white; color: #AC4B42; border-color: #D9AAA6; }}
+            QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"]:hover {{ background: #FFF7F6; }}
+            QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"]:pressed {{ background: #FFE9E5; border-color: #AC4B42; }}
+            QDialog#{object_name} QPushButton#PrimaryButton[disconnect="true"]:disabled {{ background: #EDF0F3; color: #929CA6; border-color: #E0E5EB; }}
+        """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(1, 1, 1, 1)
         layout.setSpacing(0)
@@ -307,6 +310,15 @@ class ConnectionDialog(QDialog):
         self.footer_layout.setSpacing(8)
         self.footer_layout.addStretch(1)
         layout.addWidget(footer)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        # Child title/footer frames remain transparent, so all four corners belong
+        # to this one antialiased surface (QSS radii alone do not clip a window).
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#E0E5EB"), 1))
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 14, 14)
 
 
 def set_disconnect_action(button, disconnect: bool) -> None:
