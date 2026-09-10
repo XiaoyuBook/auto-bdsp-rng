@@ -173,7 +173,7 @@ def test_main_window_generates_static_results(app, tmp_path):
         "Seed 捕捉",
         "定点数据区",
         "伊机控",
-        "日志区",
+        "日志中心",
     ]
     assert window.tabs.tabText(window.tabs.currentIndex()) == "自动定点乱数"
     assert hasattr(window, "id_tab")
@@ -352,7 +352,7 @@ def test_project_xs_controls_use_confirmed_split_layout(
 
     capture = window.capture_group.geometry()
     seed = window.seed_group.geometry()
-    capture_top = window.capture_group.mapTo(window.project_xs_tab, QPoint(0, 0)).y()
+    capture_top = window.capture_group.mapTo(window.project_xs_splitter, QPoint(0, 0)).y()
 
     assert 8 <= capture_top <= 16
     assert not hasattr(window, "video_source_group")

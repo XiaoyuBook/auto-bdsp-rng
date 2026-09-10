@@ -29,6 +29,9 @@ class TableWorkbench(QObject):
         self.pinned_columns = pinned_columns
         self.pin_enabled = False
         self._updating = False
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self.refresh_frozen)
         self.copy_button = QPushButton("复制选中行")
         self.copy_button.setToolTip("复制所选单元格所在的完整行（含隐藏列），按当前表格顺序。Ctrl / Shift 可多选。")
         self.copy_button.clicked.connect(self.copy_selected)
@@ -77,7 +80,7 @@ class TableWorkbench(QObject):
         self.restore()
 
     def schedule_refresh(self, *_args):
-        QTimer.singleShot(0, self.refresh_frozen)
+        self._refresh_timer.start(0)
 
     def eventFilter(self, obj, event):
         if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):

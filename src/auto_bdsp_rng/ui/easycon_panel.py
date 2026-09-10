@@ -1,4 +1,5 @@
 from __future__ import annotations
+from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit, scroll_surface
 
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -878,8 +879,15 @@ class EasyConPanel(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        content_layout.addWidget(side_panel)
-        content_layout.addWidget(editor_panel, 1)
+        self.workspace_splitter = WorkspaceSplit(None, "easycon", breakpoint=0, horizontal=(245, 800))
+        side_panel.setMinimumWidth(245)
+        side_panel.setMaximumWidth(16777215)
+        self.sidebar_scroll = scroll_surface(side_panel)
+        self.sidebar_scroll.setMinimumWidth(261)
+        self.workspace_splitter.addWidget(self.sidebar_scroll)
+        self.workspace_splitter.addWidget(scroll_surface(editor_panel))
+        self.workspace_splitter.restore_sizes()
+        content_layout.addWidget(self.workspace_splitter, 1)
 
         layout.addWidget(content, 1)
 

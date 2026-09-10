@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
+from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont
@@ -433,8 +434,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.content_grid.setVerticalSpacing(0)
         self.config_panel = self._build_config_panel()
         self.runtime_panel = self._build_runtime_panel()
-        self.content_grid.addWidget(self.config_panel, 0, 0)
-        self.content_grid.addWidget(self.runtime_panel, 0, 1)
+        self.workspace_splitter = WorkspaceSplit(self._settings, "static")
+        self.workspace_splitter.addWidget(self.config_panel)
+        self.workspace_splitter.addWidget(self.runtime_panel)
+        self.workspace_splitter.restore_sizes()
+        self.content_grid.addWidget(self.workspace_splitter, 0, 0, 1, 2)
         # Keep the old message widgets as compatibility state surfaces.  The
         # visible message and log entry now live in the main window footer.
         self.content_grid.addWidget(self._build_log_group(), 1, 0, 1, 2)
@@ -567,7 +571,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         panel.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         panel.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         panel.setMinimumWidth(326)
-        panel.setMaximumWidth(326)
+        panel.setMaximumWidth(16777215)
 
         contents = QWidget()
         contents.setObjectName("AutoRngConfigContents")

@@ -77,6 +77,12 @@ LABELS = {
     "threshold": "识别阈值", "blink_count": "采集眨眼数", "profile": "训练家配置",
     "state_filter": "筛选条件", "record": "定点数据", "shiny_mode": "异色条件",
     "seed": "Seed", "initial_advances": "起始帧数", "offset": "偏移（帧）",
+    "seed_text": "本轮 Seed", "trigger_advances": "脚本触发帧", "raw_target_advances": "目标帧数",
+    "target_advances": "目标帧数", "final_flash_frames": "最终脚本等待（帧）",
+    "seed_script": "已保存测种脚本", "advance_script": "已保存过帧脚本", "hit_script": "已保存撞闪脚本",
+    "escape_script": "已保存逃跑脚本", "exit_script": "已保存过场脚本", "reverse_script": "已保存反查脚本",
+    "name_script": "已保存取名脚本", "target_tids": "已保存目标 Display TID",
+    "target_list_json": "已保存目标条件", "mode_index": "已保存运行模式选项",
 }
 
 
@@ -217,9 +223,15 @@ class RuntimeInsights(QWidget):
             draft = snapshot_value(self.panel.build_config())
         except ValueError as exc:
             draft = {"草稿待补全": str(exc)}
+            if self.tid:
+                draft.update(frame_threshold=self.panel.frame_threshold.value(), delay=self.panel.delay.value(),
+                             target_display_tids=list(self.panel.target_display_tids()),
+                             seed_script_path=snapshot_value(self.panel._selected_path(self.panel.seed_script_combo)),
+                             name_script_path=snapshot_value(self.panel._selected_path(self.panel.name_script_combo)))
         if hasattr(self.panel, "targets"):
             draft["目标条件"] = snapshot_value(self.panel.targets())
-        saved = {key: snapshot_value(self.panel._settings.value(key)) for key in self.panel._settings.allKeys()}
+        saved = {key: snapshot_value(self.panel._settings.value(key)) for key in self.panel._settings.allKeys()
+                 if not key.startswith(("table_workbench/", "workspace_layout/"))}
         datasets = (("编辑草稿", draft), ("已保存", saved or {"说明": "尚未写入配置，当前使用加载的默认值。"}),
                     ("本次运行", self.snapshot() if self.active else {"说明": "尚未启动，没有运行快照。"}))
         for title, values in datasets:

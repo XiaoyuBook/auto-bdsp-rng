@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem, TableWorkbench
+from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit, scroll_surface
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication
@@ -245,7 +246,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
         self.config_panel = self._build_config_group()
-        row.addWidget(self.config_panel)
+        self.workspace_splitter = WorkspaceSplit(self._settings, "tid")
+        self.config_scroll = scroll_surface(self.config_panel)
+        self.workspace_splitter.addWidget(self.config_scroll)
         self.runtime_scroll = QScrollArea()
         self.runtime_scroll.setObjectName("AutoTidRuntimeScroll")
         self.runtime_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -270,7 +273,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.id_table_group = self._build_id_table_group()
         runtime_layout.addWidget(self.id_table_group, 1)
         self.runtime_scroll.setWidget(self.runtime_content)
-        row.addWidget(self.runtime_scroll, 1)
+        self.workspace_splitter.addWidget(self.runtime_scroll)
+        self.workspace_splitter.restore_sizes()
+        row.addWidget(self.workspace_splitter, 1)
         self._legacy_log_group = self._build_log_group()
         self._legacy_log_group.setParent(self)
         self._legacy_log_group.hide()
@@ -456,7 +461,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _build_config_group(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("AutoTidConfigPanel")
-        panel.setFixedWidth(326)
+        panel.setMinimumWidth(310)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 16, 18, 18)
         layout.setSpacing(18)
@@ -1219,11 +1224,18 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         elif self._id_result_state == "failed":
             self.id_empty_state.set_action("查看相关日志", self.runLogRequested.emit)
         elif self._id_result_state == "complete":
-            self.id_empty_state.set_action("调整搜索范围", self.frame_threshold.setFocus)
+            self.id_empty_state.set_action("调整搜索范围", self._focus_search_range)
         else:
             self.id_empty_state.set_action("开始前检查", self.preparationRequested.emit)
         self.copy_button.setEnabled(has_results)
         self.export_button.setEnabled(has_results)
+
+    def _focus_search_range(self) -> None:
+        reveal = getattr(self.window(), "reveal_page_configuration", None)
+        if callable(reveal):
+            reveal(self)
+        self.frame_threshold.setFocus()
+        self.config_scroll.ensureWidgetVisible(self.frame_threshold)
 
     def _table_text(self) -> str:
         rows = ["Adv\tTID\tSID\tTSV\tDisplay TID"]

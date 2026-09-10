@@ -11,7 +11,9 @@ from typing import Literal, TypeAlias
 
 AUTO_UI_SCALE = "auto"
 MANAGED_QT_SCALE_FACTOR_MARKER = "AUTO_BDSP_RNG_MANAGED_QT_SCALE_FACTOR"
-DEFAULT_UI_BASELINE = (1150, 900)
+# The responsive layout fits this size at the existing font size. Only reduce
+# automatic scaling when even this minimum cannot fit on a connected display.
+DEFAULT_UI_BASELINE = (860, 600)
 DEFAULT_UI_SCALE_MARGIN_PX = 32
 MIN_UI_SCALE_PERCENT = 50
 MAX_UI_SCALE_PERCENT = 125

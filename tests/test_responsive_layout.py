@@ -168,7 +168,7 @@ def test_clamp_window_rect_repositions_saved_window_without_losing_size() -> Non
     assert rect.bottom() <= available.bottom() - MAIN_WINDOW_SCREEN_MARGIN
 
 
-def test_main_window_keeps_fixed_layout_on_short_screen(
+def test_main_window_reflows_within_short_screen(
     app,
     monkeypatch,
     tmp_path: Path,
@@ -185,11 +185,13 @@ def test_main_window_keeps_fixed_layout_on_short_screen(
     assert window.height() >= MAIN_WINDOW_MIN_SIZE.height()
     assert isinstance(window.tabs, QTabWidget)
     assert type(window.tabs) is QTabWidget
-    assert isinstance(window.project_xs_tab, QSplitter)
-    assert type(window.project_xs_tab) is QSplitter
-    assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
-    assert window.project_xs_tab.widget(0).isAncestorOf(window.capture_group)
-    assert window.project_xs_tab.widget(1).isAncestorOf(window.status_group)
+    assert available.contains(window.geometry())
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    app.processEvents()
+    assert isinstance(window.project_xs_splitter, QSplitter)
+    assert window.project_xs_splitter.orientation() == Qt.Orientation.Vertical
+    assert window.project_xs_splitter.widget(0).isAncestorOf(window.capture_group)
+    assert window.project_xs_splitter.widget(1).isAncestorOf(window.status_group)
     assert not hasattr(window, "project_xs_controls_scroll")
     assert not hasattr(window, "bdsp_content_scroll")
 
@@ -205,7 +207,9 @@ def test_main_window_uses_design_geometry_when_screen_can_fit_it(app, monkeypatc
     assert window.geometry().width() == 1150
     assert window.geometry().height() == 900
     assert window.geometry().bottom() <= available.bottom() - MAIN_WINDOW_SCREEN_MARGIN
-    assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    app.processEvents()
+    assert window.project_xs_splitter.orientation() == Qt.Orientation.Horizontal
 
 
 def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
@@ -236,19 +240,20 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     window.show()
     app.processEvents()
 
-    controls = (
+    controls = tuple(control for control in (
         window.title_label,
         window.version_label,
+        window.readiness.button,
         window.video_source_header_button,
         window.easycon_header_button,
         window.help_button,
-    )
+    ) if control.isVisible())
     for left, right in zip(controls, controls[1:], strict=False):
         assert left.geometry().right() < right.geometry().left()
     assert controls[0].geometry().left() >= window.header.contentsRect().left()
     assert controls[-1].geometry().right() <= window.header.contentsRect().right()
     assert window.header_layout.minimumSize().width() <= window.header.width()
-    assert window.title_label.text() == APP_TITLE
+    assert window.title_label.toolTip() == APP_TITLE
     assert window.version_label.text().startswith("v")
     assert window.version_label.text() not in window.title_label.text()
     assert window.title_label.font().pixelSize() == 20
@@ -262,7 +267,7 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert not window.auto_loop_badge.isVisible()
     assert not window.auto_phase_badge.isVisible()
     assert not window.auto_advance_badge.isVisible()
-    assert window.navigation_status.isVisible()
+    assert not window.navigation_status.isVisible()
     assert window.navigation_status.text() == "● 定点 · 第 9999 轮"
     assert window.navigation_status.geometry().right() <= window.tabs.width()
     assert window.auto_phase_badge.toolTip() == "阶段 搜索目标 Display TID"
@@ -460,22 +465,23 @@ def test_main_header_run_state_finalizes_without_final_progress(
     assert window._header_loop_index == 0
 
 
-def test_project_xs_never_reflows_to_vertical(app, monkeypatch, tmp_path: Path) -> None:
+def test_project_xs_reflows_only_on_narrow_window(app, monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         MainWindow,
         "_screen_available_geometry",
         lambda _self: QRect(0, 0, 1920, 1080),
     )
     window = MainWindow(profile_settings=_settings(tmp_path))
+    window.tabs.setCurrentWidget(window.project_xs_tab)
     window.show()
-    window.resize(1024, 640)
+    window.resize(980, 640)
     app.processEvents()
-    assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
+    assert window.project_xs_splitter.orientation() == Qt.Orientation.Vertical
 
     window.resize(1280, 760)
     app.processEvents()
 
-    assert window.project_xs_tab.orientation() == Qt.Orientation.Horizontal
+    assert window.project_xs_splitter.orientation() == Qt.Orientation.Horizontal
 
 
 def test_window_geometry_and_tab_restore_when_effective_scale_matches(

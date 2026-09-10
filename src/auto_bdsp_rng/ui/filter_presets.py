@@ -117,8 +117,8 @@ class FilterPresetButton(QToolButton):
         if not names:
             self.menu.addAction("尚无方案，先设置条件再保存").setEnabled(False)
         for name in names:
-            self.menu.addAction(name, lambda n=name: self._apply(n))
+            self.menu.addAction(name, lambda _checked=False, n=name: self._apply(n))
         if names:
             delete = self.menu.addMenu("删除方案")
             for name in names:
-                delete.addAction(name, lambda n=name: self._delete(n))
+                delete.addAction(name, lambda _checked=False, n=name: self._delete(n))

@@ -45,11 +45,11 @@ def test_normalize_ui_scale_setting(value, expected):
     [
         (1182, 932, 1.0, 100),
         (2560, 1440, 1.0, 100),
-        (1366, 768, 1.0, 80),
-        (1920, 1080, 1.5, 75),
-        (1920, 1080, 2.0, 55),
-        (1366, 728, 1.75, 40),
-        (640, 480, 1.0, 45),
+        (1366, 768, 1.0, 100),
+        (1920, 1080, 1.5, 100),
+        (1920, 1080, 2.0, 85),
+        (1366, 728, 1.75, 65),
+        (640, 480, 1.0, 70),
         (50, 50, 1.0, 5),
     ],
 )
@@ -58,8 +58,8 @@ def test_calculate_auto_ui_scale_percent(width, height, system_scale, expected):
 
 
 def test_calculate_auto_ui_scale_uses_largest_step_that_fits():
-    assert calculate_auto_ui_scale_percent(952, 752, 1.0) == 80
-    assert calculate_auto_ui_scale_percent(951, 751, 1.0) == 75
+    assert calculate_auto_ui_scale_percent(720, 512, 1.0) == 80
+    assert calculate_auto_ui_scale_percent(719, 511, 1.0) == 75
 
 
 @pytest.mark.parametrize(
@@ -82,7 +82,7 @@ def test_resolve_ui_scale_percent_handles_manual_auto_and_missing_metrics():
     metrics = DisplayMetrics(1366, 768, 1.0)
 
     assert resolve_ui_scale_percent(90, metrics) == 90
-    assert resolve_ui_scale_percent("auto", metrics) == 80
+    assert resolve_ui_scale_percent("auto", metrics) == 100
     assert resolve_ui_scale_percent("auto", None) == 100
 
 
@@ -96,7 +96,7 @@ def test_select_most_constrained_display_metrics_uses_smallest_auto_scale():
     )
 
     assert selected is compact_high_dpi
-    assert resolve_ui_scale_percent("auto", selected) == 40
+    assert resolve_ui_scale_percent("auto", selected) == 65
 
 
 def test_select_most_constrained_display_metrics_ignores_invalid_values():
@@ -153,11 +153,11 @@ def test_configure_environment_sets_automatic_factor():
 
     result = configure_ui_scale_environment("auto", environ, lambda: metrics)
 
-    assert environ["QT_SCALE_FACTOR"] == "0.75"
+    assert environ["QT_SCALE_FACTOR"] == "1"
     assert environ[MANAGED_QT_SCALE_FACTOR_MARKER] == "1"
     assert result.source == "automatic"
-    assert result.percent == 75
-    assert result.scale_factor == 0.75
+    assert result.percent == 100
+    assert result.scale_factor == 1.0
 
 
 def test_configure_environment_falls_back_when_metrics_provider_fails():
@@ -241,6 +241,6 @@ def test_configure_environment_defaults_to_most_constrained_display(monkeypatch)
 
     result = configure_ui_scale_environment("auto", environ)
 
-    assert environ["QT_SCALE_FACTOR"] == "0.4"
+    assert environ["QT_SCALE_FACTOR"] == "0.65"
     assert result.source == "automatic"
-    assert result.percent == 40
+    assert result.percent == 65

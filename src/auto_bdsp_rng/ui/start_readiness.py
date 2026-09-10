@@ -360,11 +360,13 @@ class StartReadinessController(QObject):
             w.easycon_tab.show_connection_dialog()
         elif action in ("seed", "seed_value"):
             w.tabs.setCurrentWidget(w.project_xs_tab)
+            w.reveal_page_configuration(w.project_xs_tab)
             (w.seed32_inputs[0] if action == "seed_value" else w.seed_config_combo).setFocus()
         elif action == "ocr":
             w.open_ocr_settings()
         else:
             w.tabs.setCurrentWidget(panel)
+            w.reveal_page_configuration(panel)
             if action == "targets":
                 if panel is w.auto_rng_tab:
                     panel.open_target_dialog()

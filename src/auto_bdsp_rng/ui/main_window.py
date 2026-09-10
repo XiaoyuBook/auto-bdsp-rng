@@ -2,6 +2,7 @@ from __future__ import annotations
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
+from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, PageHeader, WorkspaceSplit, scroll_surface
 
 import csv
 import sys
@@ -186,7 +187,7 @@ from auto_bdsp_rng.update_core import (
     has_uncommitted_update_transaction,
     migrate_legacy_internal_scripts,
 )
-from auto_bdsp_rng.ui_scale import UiScaleEnvironmentResult, configure_ui_scale_environment
+from auto_bdsp_rng.ui_scale import DEFAULT_UI_BASELINE, UiScaleEnvironmentResult, configure_ui_scale_environment
 
 
 PROJECT_XS_CONFIGS = resource_path("third_party", "Project_Xs_CHN", "configs")
@@ -217,11 +218,10 @@ STARTUP_UPDATE_CHECK_MODAL_RETRY_MS = 500
 CAPTURE_API_SETTINGS_VERSION = 1
 CAPTURE_API_SETTINGS_VERSION_KEY = "video_source/capture_api_settings_version"
 
-# The application uses one stable logical layout. Small-screen support is
-# provided by the process-wide UI scale configured before QApplication is
-# created, so pages do not reflow or acquire layout-level scroll bars.
+# Preserve the default workspace; smaller windows reflow and scroll at the
+# current font size. Existing user-selected process-wide scaling is retained.
 MAIN_WINDOW_DEFAULT_SIZE = QSize(1150, 900)
-MAIN_WINDOW_MIN_SIZE = QSize(1150, 900)
+MAIN_WINDOW_MIN_SIZE = QSize(*DEFAULT_UI_BASELINE)
 MAIN_WINDOW_SCREEN_MARGIN = 16
 MAIN_WINDOW_GEOMETRY_KEYS = (
     "window/x",
@@ -1860,6 +1860,8 @@ class MainWindow(QMainWindow):
             video_source_connected=lambda: self._video_source_connected,
             frame_client_factory=self._new_broker_client,
         )
+        self.easycon_tab.workspace_splitter.settings = self._profile_settings
+        self.easycon_tab.workspace_splitter.restore_sizes()
         self.easycon_header_button.clicked.connect(
             self.easycon_tab.show_connection_dialog
         )
@@ -1976,6 +1978,47 @@ class MainWindow(QMainWindow):
         self.run_records_tab.log_panel.empty_navigation = self.readiness.show
         self.run_records_tab.log_panel._refresh_view_state()
         self.auto_tid_rng_tab.preparationRequested.connect(lambda: self.readiness.show_for(self.auto_tid_rng_tab))
+        self._install_page_headers()
+
+    def _install_page_headers(self) -> None:
+        self.page_headers = {}
+        definitions = (
+            (self.auto_rng_tab, "自动定点乱数", "自动定点", self.auto_rng_tab.config_panel, "auto"),
+            (self.auto_tid_rng_tab, "自动 TID 乱数", "自动 TID", self.auto_tid_rng_tab.config_scroll, "tid"),
+            (self.project_xs_tab, "Seed 捕捉", "Seed 捕捉", self.project_xs_splitter.widget(0), "seed"),
+            (self.bdsp_tab, "定点数据区", None, self.bdsp_config_scroll, "data"),
+            (self.easycon_tab, "伊机控", "伊机控", self.easycon_tab.sidebar_scroll, "easycon"),
+            (self.run_records_tab, "日志中心", None, None, "logs"),
+        )
+        for page, title, source, configuration, key in definitions:
+            header = PageHeader(title, page, log_callback=(lambda s=source: self._show_run_logs(s)) if page is not self.run_records_tab else None,
+                                configuration=configuration, settings=self._profile_settings, key=key)
+            page.layout().insertWidget(0, header)
+            self.page_headers[page] = header
+        self.auto_tid_rng_tab.title_label.hide()
+        self.auto_tid_rng_tab.subtitle_label.hide()
+        self.auto_tid_rng_tab.view_log_button.hide()
+        self.auto_rng_tab.autoProgressChanged.connect(lambda p: self.page_headers[self.auto_rng_tab].set_status(f"{p.phase.value} · 第 {p.loop_index} 轮"))
+        self.auto_tid_rng_tab.progressChanged.connect(lambda p: self.page_headers[self.auto_tid_rng_tab].set_status(f"{p.phase.value} · 第 {p.loop_index} 轮"))
+        self.page_headers[self.auto_rng_tab].set_status("等待开始")
+        self.page_headers[self.auto_tid_rng_tab].set_status("等待开始 · 未命中时自动重新测种")
+        self.page_headers[self.run_records_tab].set_status("轮次记录与详细日志")
+        self.readiness.timer.timeout.connect(self._refresh_page_status)
+        self._refresh_page_status()
+
+    def reveal_page_configuration(self, page) -> None:
+        header = getattr(self, "page_headers", {}).get(page)
+        if header is not None:
+            header.reveal_configuration()
+
+    def _refresh_page_status(self) -> None:
+        for panel in (self.auto_rng_tab, self.auto_tid_rng_tab):
+            self.page_headers[panel].set_status(panel.runtime_phase_label.text())
+        self.page_headers[self.project_xs_tab].set_status(
+            f"{self._capture_mode_label()} · 眨眼 {self.progress_value.text()}" if self._is_capturing()
+            else "视频已连接，可以捕捉或校正" if self._video_source_connected else "等待连接视频源")
+        self.page_headers[self.bdsp_tab].set_status({"initial": "设置条件后生成", "searching": "正在生成", "failed": "生成失败，请查看日志", "complete": f"已生成 {len(self._states)} 条结果"}.get(self._static_result_state, "等待生成"))
+        self.page_headers[self.easycon_tab].set_status("脚本运行中" if self.easycon_tab._controller_script_running() else self.easycon_tab.connection_presentation()[0])
 
     def _run_log_sink(self, source: str) -> Callable[[str, str], None]:
         def write(level: str, message: str) -> None:
@@ -2240,7 +2283,8 @@ class MainWindow(QMainWindow):
         self._startup_notice_dialog = dialog
 
     def _build_project_xs_tab(self) -> QWidget:
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = WorkspaceSplit(self._profile_settings, "seed", horizontal=(PROJECT_XS_HORIZONTAL_LEFT_WIDTH, 700))
+        self.project_xs_splitter = splitter
         splitter.setObjectName("ProjectXsSplitter")
         splitter.setChildrenCollapsible(False)
 
@@ -2266,12 +2310,17 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.status_group)
         right_layout.addWidget(self._build_preview_panel(), 1)
 
-        splitter.addWidget(left)
-        splitter.addWidget(right)
+        splitter.addWidget(scroll_surface(left))
+        splitter.addWidget(scroll_surface(right))
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([PROJECT_XS_HORIZONTAL_LEFT_WIDTH, 1050])
-        return splitter
+        splitter.restore_sizes()
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(splitter)
+        return page
 
     def _build_bdsp_tab(self) -> QWidget:
         panel = QWidget()
@@ -2283,7 +2332,12 @@ class MainWindow(QMainWindow):
         # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
         self.profile_group.setMaximumHeight(72)
-        layout.addWidget(self.profile_group)
+        profile_scroll = scroll_surface(self.profile_group)
+        profile_scroll.setFixedHeight(90)
+        configuration = QWidget()
+        configuration_layout = QVBoxLayout(configuration)
+        configuration_layout.setContentsMargins(0, 0, 0, 0)
+        configuration_layout.addWidget(profile_scroll)
 
         # 第 2 行：参数区（三列：乱数信息 + 设置 + 筛选项）
         params_widget = QWidget()
@@ -2299,11 +2353,17 @@ class MainWindow(QMainWindow):
         params_row.addWidget(self.rng_info_group)
         params_row.addWidget(self.static_group)
         params_row.addWidget(self.filter_group, 1)
-        layout.addWidget(params_widget)
+        configuration_layout.addWidget(params_widget)
+        self.bdsp_config_scroll = scroll_surface(configuration)
+        self.bdsp_reflow = ColumnReflow(self.bdsp_config_scroll, params_row)
 
         # 第 3 行 + 第 4 行：结果表格（工具栏 + 表格）
         self.results_panel = self._build_results()
-        layout.addWidget(self.results_panel, 1)
+        self.bdsp_splitter = WorkspaceSplit(self._profile_settings, "data", breakpoint=0, vertical=(430, 260), orientation=Qt.Orientation.Vertical)
+        self.bdsp_splitter.addWidget(self.bdsp_config_scroll)
+        self.bdsp_splitter.addWidget(self.results_panel)
+        self.bdsp_splitter.restore_sizes()
+        layout.addWidget(self.bdsp_splitter, 1)
         self.height_min.setToolTip(TERMS[10][1])
         self.weight_min.setToolTip(TERMS[10][1])
         self.iv_count_display.setToolTip(TERMS[9][1])
@@ -4126,6 +4186,14 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
         self._keep_window_on_screen()
+        if hasattr(self, "version_label"):
+            compact = self.width() < 1050
+            self.version_label.setVisible(not compact)
+            self.title_label.setMaximumWidth(175 if compact else 16777215)
+            title = APP_TITLE if self.lang == "zh" else self._text("title")
+            self.title_label.setText(self.title_label.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, 175) if compact else title)
+            self.title_label.setToolTip(APP_TITLE)
+            self.navigation_status.setVisible(not compact)
 
     def event(self, event) -> bool:  # type: ignore[override]
         handled = super().event(event)
@@ -9157,11 +9225,16 @@ class MainWindow(QMainWindow):
         if self._static_result_state == "searching" or has_results:
             self.static_empty_state.set_action()
         elif self._static_result_state == "complete":
-            self.static_empty_state.set_action("调整筛选条件", lambda: self.iv_min[0].setFocus())
+            self.static_empty_state.set_action("调整筛选条件", lambda: self._focus_static_configuration(self.iv_min[0]))
         else:
-            self.static_empty_state.set_action("设置 Seed 与参数", lambda: self.bdsp_seed64_inputs[0].setFocus())
+            self.static_empty_state.set_action("设置 Seed 与参数", lambda: self._focus_static_configuration(self.bdsp_seed64_inputs[0]))
         self.copy_button.setEnabled(has_results)
         self.export_button.setEnabled(has_results)
+
+    def _focus_static_configuration(self, control) -> None:
+        self.reveal_page_configuration(self.bdsp_tab)
+        control.setFocus()
+        QTimer.singleShot(0, self.bdsp_config_scroll, lambda: self.bdsp_config_scroll.ensureWidgetVisible(control))
 
 
     def _state_row(self, state: State8) -> list[str]:
