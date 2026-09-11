@@ -7932,13 +7932,69 @@ class MainWindow(QMainWindow):
                 discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
             )
             reidentify_started_at = time.perf_counter()
-            result = reidentify_from_observation_for(
-                state32_from_result(seed_result),
-                observation,
-                source_config,
-                search_min=search_min,
-                search_max=search_max,
-            )
+            # A long advance script can accumulate enough timing drift that
+            # the actual frame falls outside the small hint window. Keep the
+            # fast hinted search first, then retry with a wider window before
+            # reporting calibration failure. The captured observation is
+            # reused so this retry does not require another camera capture.
+            search_attempts: list[tuple[int, int]] = [(search_min, search_max)]
+            if hint is not None:
+                if source_config.reidentify_1_pk_npc:
+                    # Noisy reidentify uses search_max as a window length.
+                    # Cover the likely drift on both sides in two bounded
+                    # windows to retain its 100k-frame work limit.
+                    hinted = int(hint)
+                    for fallback_min in (
+                        max(0, hinted - NOISY_REIDENTIFY_MAX_SEARCH_FRAMES),
+                        hinted,
+                    ):
+                        candidate = (fallback_min, NOISY_REIDENTIFY_MAX_SEARCH_FRAMES)
+                        if candidate not in search_attempts:
+                            search_attempts.append(candidate)
+                else:
+                    candidate = (
+                        0,
+                        max(100_000, config.max_advances, search_criteria.max_advances),
+                    )
+                    if candidate not in search_attempts:
+                        search_attempts.append(candidate)
+
+            result = None
+            last_error: Exception | None = None
+            for attempt_index, (attempt_min, attempt_max) in enumerate(search_attempts):
+                try:
+                    result = reidentify_from_observation_for(
+                        state32_from_result(seed_result),
+                        observation,
+                        source_config,
+                        search_min=attempt_min,
+                        search_max=attempt_max,
+                    )
+                    if attempt_index:
+                        attempt_end = (
+                            attempt_min + attempt_max
+                            if source_config.reidentify_1_pk_npc
+                            else attempt_max
+                        )
+                        self.auto_rng_tab.captureLog.emit(
+                            f"校正扩大搜索范围后成功：{attempt_min}..{attempt_end}"
+                        )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt_index + 1 < len(search_attempts):
+                        attempt_end = (
+                            attempt_min + attempt_max
+                            if source_config.reidentify_1_pk_npc
+                            else attempt_max
+                        )
+                        self.auto_rng_tab.captureLog.emit(
+                            f"校正范围 {attempt_min}..{attempt_end} 未命中，"
+                            "扩大范围重试"
+                        )
+            if result is None:
+                assert last_error is not None
+                raise last_error
             log_reidentify_debug(
                 "校正",
                 source_config,

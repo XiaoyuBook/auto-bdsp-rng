@@ -5240,6 +5240,56 @@ def test_main_window_auto_rng_reidentify_uses_hint_limited_regular_search_range(
     assert search_ranges == [(40_000, 70_000, 2)]
 
 
+def test_main_window_auto_rng_reidentify_retries_wide_range_after_hint_miss(app, tmp_path, monkeypatch):
+    window = MainWindow()
+    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
+    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=0.0)
+    search_ranges: list[tuple[int, int]] = []
+
+    def fake_load_config(path, blink_count):
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 1, 1),
+                blink_count=blink_count,
+            ),
+            npc=0,
+        )
+
+    def fake_capture(config, *_args, **_kwargs):
+        return observation
+
+    def fake_reidentify(current_state, _observation, **kwargs):
+        search_ranges.append((kwargs["search_min"], kwargs["search_max"]))
+        if len(search_ranges) == 1:
+            raise ProjectXsIntegrationError("hint window miss")
+        return ProjectXsReidentifyResult(state=seed_state, observation=observation, advances=500_100)
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
+    monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation", fake_reidentify)
+
+    services = window._build_auto_rng_services(
+        AutoRngConfig(
+            script_dir=tmp_path,
+            seed_config_path=str(tmp_path / "seed.json"),
+            reidentify_config_path=str(tmp_path / "exit.json"),
+            max_advances=900_000,
+        )
+    )
+
+    result = services.reidentify(
+        AutoRngSeedResult(
+            seed=SeedPair64(0x1111111122222222, 0x3333333344444444),
+            expected_advances_hint=500_000,
+        )
+    )
+
+    assert search_ranges == [(490_000, 520_000), (0, 900_000)]
+    assert result.current_advances == 500_100
+
+
 def test_main_window_auto_rng_reidentify_uses_hint_limited_noisy_search_window(app, tmp_path, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
