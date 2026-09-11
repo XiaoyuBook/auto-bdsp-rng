@@ -64,6 +64,36 @@ def test_native_reidentify_by_intervals_matches_project_xs_python() -> None:
     assert (native_seed0, native_seed1) == _rng_seed_pair(py_rng)
 
 
+@pytest.mark.parametrize("start", [250_000, 500_000, 900_000])
+def test_native_reidentify_large_advances_matches_project_xs_python(start: int) -> None:
+    """The native fast path must preserve Project_Xs results at long offsets."""
+    from auto_bdsp_rng.rng_core import _native
+    from xorshift import Xorshift
+    import rngtool
+
+    seed = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    intervals = _player_blink_intervals(seed, start=start, blink_count=7)
+    py_rng, py_advances = rngtool.reidentiy_by_intervals(
+        Xorshift(*seed.words),
+        intervals,
+        npc=0,
+        search_min=0,
+        search_max=1_000_000,
+        return_advance=True,
+    )
+
+    native_seed0, native_seed1, native_advances = _native.reidentify_by_intervals(
+        *_seed_pair(seed),
+        intervals,
+        0,
+        0,
+        1_000_000,
+    )
+
+    assert native_advances == py_advances
+    assert (native_seed0, native_seed1) == _rng_seed_pair(py_rng)
+
+
 def test_native_reidentify_by_intervals_noisy_matches_project_xs_python_tie_breaking() -> None:
     from auto_bdsp_rng.rng_core import _native
     from xorshift import Xorshift
