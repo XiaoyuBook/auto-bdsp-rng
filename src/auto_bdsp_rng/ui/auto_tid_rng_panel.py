@@ -15,8 +15,8 @@ from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit, scroll_surface
 
-from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication
+from PySide6.QtCore import QObject, QRect, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QGroupBox,
+    QGraphicsDropShadowEffect,
     QHeaderView,
     QScrollArea,
     QHBoxLayout,
@@ -38,6 +39,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionToolButton,
+    QStylePainter,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -66,6 +70,50 @@ from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
 SCRIPT_DIR = script_directory()
 _TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
+
+
+class _TidViewButton(QToolButton):
+    """Native checkable button with a smaller, inline result count."""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._count_text = "0"
+        self._title_font = ui_font(12)
+        self._count_font = ui_font(11)
+        self.setCheckable(True)
+        self.setFixedHeight(26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.set_count(0)
+
+    def set_count(self, count: int) -> None:
+        self._count_text = f"{count:,}"
+        self.setText(f"{self._title} {self._count_text}")
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        title_font = QFont(self._title_font)
+        title_font.setWeight(QFont.Weight.Medium)
+        width = QFontMetrics(title_font).horizontalAdvance(self._title)
+        return QSize(width + QFontMetrics(self._count_font).horizontalAdvance(self._count_text) + 20, 26)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)
+        option.text = ""
+        painter = QStylePainter(self)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ToolButton, option)
+        painter.setPen(QColor("#087D59" if self.isChecked() else "#64707D"))
+        title_font = QFont(self._title_font)
+        title_font.setWeight(QFont.Weight.Medium if self.isChecked() else QFont.Weight.Normal)
+        title_width = QFontMetrics(title_font).horizontalAdvance(self._title)
+        count_width = QFontMetrics(self._count_font).horizontalAdvance(self._count_text)
+        left = (self.width() - title_width - count_width - 4) // 2
+        painter.setFont(title_font)
+        painter.drawText(QRect(left, 0, title_width, self.height()), Qt.AlignmentFlag.AlignCenter, self._title)
+        painter.setFont(self._count_font)
+        painter.drawText(QRect(left + title_width + 4, 0, count_width, self.height()), Qt.AlignmentFlag.AlignCenter, self._count_text)
 
 
 class _CopyableLog(QPlainTextEdit):
@@ -342,6 +390,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QFrame#AutoTidScripts { background: #ffffff; border: 1px solid $card_border; border-radius: 8px; }
             QFrame#AutoTidScriptBody { background: transparent; border: 0; }
             QWidget#AutoTidResults,
+            QWidget#AutoTidViewTools,
             QWidget#AutoTidTargets, QWidget#AutoTidTopControls, QWidget#TargetPoolActions, QWidget#AutoTidScriptFields,
             QWidget#AutoTidScriptPicker, QWidget#AutoTidSeedFields { background: transparent; }
             QListWidget#TargetPool { background: transparent; border: 0; padding: 0; }
@@ -711,7 +760,19 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.runtime_details_toggle.setArrowType(Qt.ArrowType.DownArrow)
         self.runtime_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         footer.addWidget(self.runtime_details_toggle)
-        self.target_data_button = self._link_button("定位目标", self._locate_target)
+        self.target_data_button = QPushButton("定位目标", self.runtime_card)
+        self.target_data_button.setObjectName("AutoTidLocate")
+        self.target_data_button.setIcon(workspace_icon("locate-fixed", "#202A33"))
+        self.target_data_button.setIconSize(QSize(14, 14))
+        self.target_data_button.setFixedHeight(30)
+        self.target_data_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.target_data_button.setStyleSheet("""
+            QPushButton#AutoTidLocate { background: #FFFFFF; color: #202A33; border: 1px solid #E6EBEF;
+                border-radius: 5px; min-height: 28px; max-height: 28px; padding: 0 9px; font-size: 12px; }
+            QPushButton#AutoTidLocate:hover { background: #EDF8F3; }
+            QPushButton#AutoTidLocate:disabled { color: #97A1AB; }
+        """)
+        self.target_data_button.clicked.connect(self._locate_target)
         self.target_data_button.setEnabled(False)
         self.target_data_button.setParent(self.runtime_card)
         self.target_data_button.hide()
@@ -844,20 +905,42 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         toolbar.addWidget(self.id_result_count)
         actions = QHBoxLayout()
         actions.setSpacing(8)
+        self.id_view_tools = QWidget()
+        self.id_view_tools.setObjectName("AutoTidViewTools")
+        self.id_view_tools.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        view_tools = QHBoxLayout(self.id_view_tools)
+        view_tools.setContentsMargins(0, 0, 0, 0)
+        view_tools.setSpacing(10)
+        self.id_filter_switch = QFrame()
+        self.id_filter_switch.setObjectName("AutoTidViewSwitch")
+        self.id_filter_switch.setFixedHeight(34)
+        self.id_filter_switch.setStyleSheet("""
+            QFrame#AutoTidViewSwitch { background: #F2F4F7; border: 1px solid #E6EBEF; border-radius: 6px; }
+            QFrame#AutoTidViewSwitch QToolButton { background: transparent; border: 0; border-radius: 4px; padding: 0; }
+            QFrame#AutoTidViewSwitch QToolButton:checked { background: #FFFFFF; }
+        """)
+        views = QHBoxLayout(self.id_filter_switch)
+        views.setContentsMargins(3, 3, 3, 3)
+        views.setSpacing(2)
         self.id_filter_group = QButtonGroup(self)
-        self.id_filter_all_button = QToolButton()
-        self.id_filter_targets_button = QToolButton()
-        for button, title in ((self.id_filter_all_button, "全部 TID"), (self.id_filter_targets_button, "仅目标 TID")):
-            button.setText(title)
-            button.setCheckable(True)
-            button.setFixedHeight(32)
-            button.setStyleSheet("QToolButton { padding: 4px 10px; border: 1px solid #E0E5EB; border-radius: 7px; color: #52606D; background: white; } QToolButton:checked { color: #087C58; background: #EAF7F1; border-color: #C9E8DA; }")
+        self.id_filter_all_button = _TidViewButton("全部 TID")
+        self.id_filter_targets_button = _TidViewButton("仅目标 TID")
+        for button in (self.id_filter_all_button, self.id_filter_targets_button):
             self.id_filter_group.addButton(button)
-            actions.addWidget(button)
+            views.addWidget(button)
+            shadow = QGraphicsDropShadowEffect(button)
+            shadow.setBlurRadius(3)
+            shadow.setOffset(0, 1)
+            shadow.setColor(QColor(32, 42, 51, 16))
+            button.setGraphicsEffect(shadow)
+            shadow.setEnabled(False)
+            button.toggled.connect(shadow.setEnabled)
+        view_tools.addWidget(self.id_filter_switch)
         self.id_filter_all_button.setChecked(True)
         self.id_filter_targets_button.setToolTip("显示本次启动配置中所有目标 Display TID 的匹配结果。")
         self.id_filter_targets_button.toggled.connect(self._apply_id_filter)
-        actions.addWidget(self.target_data_button)
+        view_tools.addWidget(self.target_data_button)
+        actions.addWidget(self.id_view_tools)
         self.target_data_button.show()
         actions.addStretch(1)
         self.copy_button = self._link_button("复制全部", self.copy_results)
@@ -1397,10 +1480,13 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         only_targets = self.id_filter_targets_button.isChecked()
         targets = set(self._active_config.target_display_tids or self._active_config.target_tids) if self._active_config is not None else set(self.target_display_tids())
         visible_count = 0
+        target_count = 0
         for row in range(self.id_table.rowCount()):
             item = self.id_table.item(row, 4)
             key = item.data(IDENTITY_ROLE) if item is not None else None
-            hidden = only_targets and (not key or key[1] not in targets)
+            matches_target = bool(key and key[1] in targets)
+            target_count += int(matches_target)
+            hidden = only_targets and not matches_target
             if self.id_table.isRowHidden(row) != hidden:
                 self.id_table.setRowHidden(row, hidden)
             if hidden:
@@ -1411,6 +1497,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             else:
                 visible_count += 1
         self._visible_id_count = visible_count
+        self.id_filter_all_button.set_count(len(self._id_states))
+        self.id_filter_targets_button.set_count(target_count)
         self.id_result_count.setText(f"{visible_count} / {len(self._id_states)} 条结果" if only_targets else f"{len(self._id_states)} 条结果")
         self.id_result_count.setToolTip("")
         self._refresh_id_result_state()

@@ -28,6 +28,7 @@ _SYMBOLS = {
     "record": '<circle cx="12" cy="12" r="7"/>',
     "pause": '<path d="M8 5v14M16 5v14"/>',
     "external": '<path d="M7 17 17 7M7 7h10v10"/>',
+    "locate-fixed": '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M1 12h2m18 0h2"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
     "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/>',
     "tv": '<rect x="3" y="7" width="18" height="14" rx="3"/><path d="m8 3 4 4 4-4M8 12v3m8-3v3"/>',

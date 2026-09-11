@@ -250,6 +250,8 @@ def test_tid_target_filter_matches_all_startup_targets_after_sort_and_edits(conf
     ))
     original = panel._table_text()
     item = panel.id_table.item(1, 4)
+    assert panel.id_filter_all_button.text() == "全部 TID 4"
+    assert panel.id_filter_targets_button.text() == "仅目标 TID 3"
     panel.id_filter_targets_button.click()
     panel._clear_targets()
     panel.add_target_display_tid(3)
@@ -258,6 +260,7 @@ def test_tid_target_filter_matches_all_startup_targets_after_sort_and_edits(conf
     assert visible == ["30", "40", "50"]
     assert panel.id_table.item(0, 4) is item
     assert panel.id_result_count.text() == "3 / 4 条结果"
+    assert panel.id_filter_targets_button.text() == "仅目标 TID 3"
     panel.target_data_button.click()
     assert panel.id_table.currentItem().text() == "000002"
     assert not panel.id_table._select_next_prefix_match("000003")
@@ -266,6 +269,7 @@ def test_tid_target_filter_matches_all_startup_targets_after_sort_and_edits(conf
     assert panel._table_text() == original
     panel.id_filter_all_button.click()
     assert all(not panel.id_table.isRowHidden(row) for row in range(4))
+    assert panel.id_filter_all_button.isChecked() and not panel.id_filter_targets_button.isChecked()
 
 
 def test_tid_filtered_empty_can_return_to_all_and_old_column_preferences_are_ignored(configured_tid_panel):
@@ -274,6 +278,7 @@ def test_tid_filtered_empty_can_return_to_all_and_old_column_preferences_are_ign
     panel.id_filter_targets_button.click()
     assert panel.id_table.isRowHidden(0)
     assert panel._visible_id_count == 0
+    assert panel.id_filter_targets_button.text() == "仅目标 TID 0"
     assert panel.copy_button.isEnabled()
     panel.id_filter_all_button.click()
     assert not panel.id_table.isRowHidden(0)
