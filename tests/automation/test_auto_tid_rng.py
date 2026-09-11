@@ -12,6 +12,7 @@ from auto_bdsp_rng.automation.auto_tid_rng import (
     AutoTidRngRunner,
     AutoTidRngServices,
     AutoTidSeedResult,
+    predict_tid_elapsed_seconds,
     parse_tid_text,
     reverse_lookup_span,
     select_target_display_tid,
@@ -25,6 +26,71 @@ def _project_xs_munchlax_interval(state: SeedState32) -> float:
     rng = BDSPXorshift(state)
     temp = (rng.next() & 0x7FFFFF) / 8388607.0
     return temp * 3.0 + (1.0 - temp) * 12.0 + 0.285
+
+
+@pytest.mark.parametrize("origin", [0, 37])
+def test_tid_row_times_match_original_project_xs_with_sparse_unsorted_frames(origin):
+    import runpy
+
+    original = runpy.run_path(str(Path(__file__).parents[2] / "third_party/Project_Xs_CHN/src/xorshift.py"))["Xorshift"]
+    words = (0x11111111, 0x22222222, 0x33333333, 0x44444444)
+    rng = original(*words)
+    expected = [0.0]
+    for _ in range(1000):
+        expected.append(expected[-1] + rng.rangefloat(3.0, 12.0) + 0.285)
+    frames = [origin + 1000, origin + 1, origin, origin + 136, origin + 136, origin - 1]
+    seed = SeedState32(*words)
+    actual = predict_tid_elapsed_seconds(seed, frames, current_advances=origin)
+    assert actual[:-1] == pytest.approx([expected[1000], expected[1], 0, expected[136], expected[136]], abs=1e-8)
+    assert actual[-1] is None
+    assert seed == SeedState32(*words)
+
+
+def test_tid_row_time_prediction_is_cancellable():
+    calls = []
+
+    def stopped():
+        calls.append(True)
+        return len(calls) == 2
+
+    assert predict_tid_elapsed_seconds(SeedPair64(1, 2), [100_000_000], should_stop=stopped) == ()
+    assert len(calls) == 2
+
+
+def test_tid_runner_shares_fixed_row_times_with_wait_progress_and_clears_on_reseed(tmp_path):
+    name_script = tmp_path / "取名.txt"
+    name_script.write_text("A 100\n", encoding="utf-8")
+    seed = SeedPair64(0x1111111122222222, 0x3333333344444444)
+    clock = [100.0]
+    emitted = []
+    states = tuple(IDState8(advances=i, tid=i, sid=10, tsv=0, display_tid=i) for i in range(8))
+
+    def search(*_args):
+        clock[0] += 2.0  # Search time must be included in the same clock origin.
+        return states
+
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(script_dir=tmp_path, name_script_path=name_script,
+                         start_phase=AutoTidRngPhase.CAPTURE_TIDSID, target_display_tids=(6,), delay=1),
+        services=AutoTidRngServices(
+            capture_seed=lambda: AutoTidSeedResult(seed, current_advances=2, measured_at=100.0, measured_wall_time=10000.0),
+            search_id_states=search, run_script_text=lambda *_: None,
+            monotonic=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            wall_time=lambda: 99999.0,
+        ), progress_callback=emitted.append,
+    )
+    result = runner.run()
+    assert result.phase == AutoTidRngPhase.COMPLETED
+    waiting = [p for p in emitted if p.phase == AutoTidRngPhase.WAIT_NAME_TRIGGER]
+    assert waiting and all(p.id_states is states for p in waiting)
+    assert all(p.id_elapsed_seconds is waiting[0].id_elapsed_seconds for p in waiting)
+    assert all(p.seed_measured_wall_time == 10000.0 for p in waiting)
+    assert result.id_elapsed_seconds[:3] == (None, None, 0.0)
+    assert result.wait_target_at == pytest.approx(100.0 + result.id_elapsed_seconds[5])
+    assert clock[0] == pytest.approx(result.wait_target_at)
+    runner._begin_cycle("重新测种")
+    assert runner.progress.id_states == runner.progress.id_elapsed_seconds == ()
+    assert runner.progress.seed_measured_wall_time is None
 
 
 def test_select_target_tid_uses_earliest_matching_frame() -> None:

@@ -204,6 +204,7 @@ class AutoTidSeedResult:
     npc: int = 0
     seed_text: str = ""
     measured_at: float | None = None
+    measured_wall_time: float | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +243,10 @@ class AutoTidRngProgress:
     # An empty tuple in ordinary progress is not a completed empty search.
     # Keep this appended so older positional construction remains compatible.
     id_search_completed: bool = False
+    # Immutable row timings, aligned with id_states; relative to the captured
+    # seed's current_advances, using the same schedule as the live counter.
+    id_elapsed_seconds: tuple[float | None, ...] = ()
+    seed_measured_wall_time: float | None = None
 
 
 def parse_tid_text(text: str) -> int | None:
@@ -319,6 +324,33 @@ def _seed_pair_from_result(seed_result: AutoTidSeedResult) -> SeedPair64:
     raise TypeError("Auto TID RNG seed result must contain SeedPair64 or SeedState32")
 
 
+def predict_tid_elapsed_seconds(
+    seed: SeedPair64 | SeedState32,
+    frames: Sequence[int],
+    *,
+    current_advances: int = 0,
+    should_stop: Callable[[], bool] | None = None,
+) -> tuple[float | None, ...]:
+    """Predict all requested arrivals in one pass without changing the seed.
+
+    The supplied seed is the state at current_advances. Earlier frames have no
+    known arrival time. An interrupted prediction returns an empty tuple.
+    """
+    if not frames:
+        return ()
+    counter = ProjectXsMunchlaxAdvanceCounter()
+    counter.reset(current_advances=current_advances, seed=seed, now=0.0)
+    elapsed = {int(current_advances): 0.0}
+    for frame in sorted(set(frames)):
+        while counter.current_advances < frame:
+            if counter.current_advances % 1024 == 0 and should_stop is not None and should_stop():
+                return ()
+            counter.advance_one_blink()
+        if frame >= current_advances:
+            elapsed[frame] = counter.last_tick_at if frame > current_advances else 0.0
+    return tuple(elapsed.get(frame) for frame in frames)
+
+
 def _default_search_id_states(
     seed_result: AutoTidSeedResult,
     frame_threshold: int,
@@ -366,6 +398,7 @@ class AutoTidRngServices:
     stop_current_script: Callable[[], None] | None = None
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
+    wall_time: Callable[[], float] = time.time
 
 
 class AutoTidRngRunner:
@@ -831,7 +864,9 @@ class AutoTidRngRunner:
         self._wait_phase = phase
         self._wait_started_at = start
         self._wait_target_advances = int(trigger)
-        self._wait_target_at = self._advance_counter.estimate_target_at(int(trigger))
+        elapsed = next((seconds for state, seconds in zip(self.progress.id_states, self.progress.id_elapsed_seconds)
+                        if int(state.advances) == int(trigger)), None)
+        self._wait_target_at = start + elapsed if elapsed is not None else self._advance_counter.estimate_target_at(int(trigger))
         if self._wait_target_at is None and int(trigger) <= int(seed.current_advances):
             self._wait_target_at = start
         self._wait_theoretical_seconds = (
@@ -877,6 +912,8 @@ class AutoTidRngRunner:
             ocr_advances=None,
             actual_delay=None,
             id_states=(),
+            id_elapsed_seconds=(),
+            seed_measured_wall_time=None,
             last_script_path=None,
             stop_reason="",
             wait_started_at=None,
@@ -936,6 +973,9 @@ class AutoTidRngRunner:
             return
         if seed.measured_at is None:
             seed = replace(seed, measured_at=self._read_monotonic())
+        if seed.measured_wall_time is None:
+            now = self._read_monotonic()
+            seed = replace(seed, measured_wall_time=self.services.wall_time() + (seed.measured_at - now))
         seed_text = self._seed_text_for_log(seed)
         if seed.seed_text != seed_text and seed_text != "-":
             seed = replace(seed, seed_text=seed_text)
@@ -950,12 +990,19 @@ class AutoTidRngRunner:
             ),
             seed_text=seed.seed_text,
             current_advances=seed.current_advances,
+            seed_measured_wall_time=seed.measured_wall_time,
         )
 
     def _search_target(self) -> None:
         seed = self._require_seed()
         target_display_tids = self._target_display_tids()
-        states = list(self.services.search_id_states(seed, self.config.frame_threshold, target_display_tids))
+        states = tuple(self.services.search_id_states(seed, self.config.frame_threshold, target_display_tids))
+        elapsed = predict_tid_elapsed_seconds(
+            seed.seed, [state.advances for state in states],
+            current_advances=seed.current_advances, should_stop=self.should_stop,
+        )
+        if self.should_stop():
+            return
         target = select_target_display_tid(states, target_display_tids, frame_threshold=self.config.frame_threshold)
         if target is None:
             message = f"阈值 {self.config.frame_threshold} 帧内未命中目标 Display TID，重新运行测种脚本"
@@ -963,7 +1010,8 @@ class AutoTidRngRunner:
                 AutoTidRngPhase.SEARCH_TARGET,
                 message,
                 current_advances=seed.current_advances,
-                id_states=tuple(states),
+                id_states=states,
+                id_elapsed_seconds=elapsed,
             )
             self._set_progress(
                 AutoTidRngPhase.SEARCH_TARGET,
@@ -974,7 +1022,8 @@ class AutoTidRngRunner:
                     f"Seed={self._seed_text_for_log(seed)}；当前Adv={int(seed.current_advances)}"
                 ),
                 current_advances=seed.current_advances,
-                id_states=tuple(states),
+                id_states=states,
+                id_elapsed_seconds=elapsed,
             )
             self._loop_or_complete("")
             return
@@ -998,7 +1047,8 @@ class AutoTidRngRunner:
             target_advances=target.advances,
             trigger_advances=trigger,
             current_advances=seed.current_advances,
-            id_states=tuple(states),
+            id_states=states,
+            id_elapsed_seconds=elapsed,
         )
 
     def _run_name_script(self) -> None:
@@ -1232,6 +1282,8 @@ class AutoTidRngRunner:
             "ocr_advances": updates.get("ocr_advances", self.progress.ocr_advances),
             "actual_delay": updates.get("actual_delay", self.progress.actual_delay),
             "id_states": updates.get("id_states", self.progress.id_states),
+            "id_elapsed_seconds": updates.get("id_elapsed_seconds", self.progress.id_elapsed_seconds),
+            "seed_measured_wall_time": updates.get("seed_measured_wall_time", self.progress.seed_measured_wall_time),
             "id_search_completed": "id_states" in updates and phase in (AutoTidRngPhase.SEARCH_TARGET, AutoTidRngPhase.WAIT_NAME_TRIGGER),
             "last_script_path": updates.get("last_script_path", self.progress.last_script_path),
             "log_message": message,

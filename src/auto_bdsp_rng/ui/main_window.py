@@ -7354,6 +7354,7 @@ class MainWindow(QMainWindow):
                 npc=max(0, int(tracking_config.pokemon_npc)),
                 seed_text=" ".join(seed_pair.format_seeds()),
                 measured_at=time.monotonic(),
+                measured_wall_time=time.time(),
             )
 
         def search_id_states_service(seed_result: AutoTidSeedResult, threshold: int, target_display_tids: Sequence[int]):
@@ -8879,6 +8880,9 @@ class MainWindow(QMainWindow):
         self.advances_value.setText(str(self._tracked_advances))
         self._update_auto_rng_header(advances=self._tracked_advances)
         self.auto_rng_tab.set_live_advances(self._tracked_advances)
+        if (isinstance(self._advance_counter, ProjectXsMunchlaxAdvanceCounter)
+                and self.auto_tid_rng_tab._manual_tid_timing):
+            self.auto_tid_rng_tab.update_tid_current_advances(self._tracked_advances)
 
     def _set_tracked_advances(self, advances: int) -> None:
         now = time.monotonic()
@@ -9201,7 +9205,9 @@ class MainWindow(QMainWindow):
             self.auto_tid_rng_tab.set_tid_seed(result.state)
             self._advance_step = 1
             self._advance_counter = ProjectXsMunchlaxAdvanceCounter()
-            self._advance_counter.reset(current_advances=0, seed=result.state, now=time.monotonic())
+            measured_at, measured_wall_time = time.monotonic(), time.time()
+            self._advance_counter.reset(current_advances=0, seed=result.state, now=measured_at)
+            self.auto_tid_rng_tab.set_tid_timing_origin(measured_wall_time)
         else:
             self._advance_step = int(self.npc_count.text() or 0) + 1
             self._advance_counter = ProjectXsAdvanceCounter()

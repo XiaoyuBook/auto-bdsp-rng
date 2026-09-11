@@ -66,7 +66,8 @@ def test_snapshot_dialog_does_not_save_or_start(window, monkeypatch):
 
 
 @pytest.mark.parametrize("tid", [False, True])
-def test_folded_runtime_details_keep_progress_and_user_expansion(window, tid):
+def test_folded_runtime_details_keep_progress_and_user_expansion(window, tid, monkeypatch):
+    monkeypatch.setattr("auto_bdsp_rng.ui.auto_tid_rng_panel.time.monotonic", lambda: 100.0)
     panel = window.auto_tid_rng_tab if tid else window.auto_rng_tab
     window.tabs.setCurrentWidget(panel)
     assert panel.runtime_metrics.isHidden()
@@ -76,17 +77,19 @@ def test_folded_runtime_details_keep_progress_and_user_expansion(window, tid):
     waiting = phase.WAIT_NAME_TRIGGER if tid else phase.FINAL_WAIT
     progress = progress_type(phase=waiting, loop_index=1, current_advances=100,
                              trigger_advances=200)
+    if tid:
+        progress = replace(progress, wait_target_at=163.5)
     panel.apply_progress(progress)
     assert not panel.runtime_metrics.isHidden()
     assert panel.runtime_details.isHidden()
     panel.runtime_details_toggle.click()
     panel.apply_progress(replace(progress, current_advances=142))
     assert not panel.runtime_details.isHidden()
-    assert panel.runtime_remaining_value.text() == "58 帧"
+    assert panel.runtime_remaining_value.text() == ("01:03.5" if tid else "58 帧")
     panel.runtime_details_toggle.click()
     panel.apply_progress(replace(progress, current_advances=151))
     assert panel.runtime_details.isHidden()
-    assert panel.runtime_remaining_value.text() == "49 帧"
+    assert panel.runtime_remaining_value.text() == ("01:03.5" if tid else "49 帧")
     panel.apply_progress(progress_type(phase=phase.IDLE))
     assert panel.runtime_metrics.isHidden()
     assert panel.runtime_footer.isHidden()

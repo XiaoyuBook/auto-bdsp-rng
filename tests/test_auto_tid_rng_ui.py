@@ -73,7 +73,8 @@ def test_tid_delete_and_readd_targets_updates_start_and_saved_state(configured_t
     assert restored.delay.value() == 20
 
 
-def test_tid_wait_updates_use_startup_delay_and_preserve_table_selection(configured_tid_panel, app):
+def test_tid_wait_updates_use_startup_delay_and_preserve_table_selection(configured_tid_panel, app, monkeypatch):
+    monkeypatch.setattr("auto_bdsp_rng.ui.auto_tid_rng_panel.time.monotonic", lambda: 100.0)
     panel = configured_tid_panel
     panel._start_clicked()
     states = (IDState8(advances=260, tid=10, sid=20, tsv=1, display_tid=1),
@@ -82,6 +83,7 @@ def test_tid_wait_updates_use_startup_delay_and_preserve_table_selection(configu
         phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=4,
         current_advances=212, target_advances=260, trigger_advances=240,
         target_display_tid=1, target_tid=10, id_states=states, id_search_completed=True,
+        wait_target_at=143.5,
     )
     panel.apply_progress(waiting)
     item = panel.id_table.item(1, 4)
@@ -91,7 +93,8 @@ def test_tid_wait_updates_use_startup_delay_and_preserve_table_selection(configu
     panel.apply_progress(replace(waiting, current_advances=215, log_message="", id_search_completed=False))
     assert panel.runtime_current_value.text() == "215"
     assert panel.runtime_target_value.text() == "260"
-    assert panel.runtime_remaining_value.text() == "25 帧"
+    assert panel.runtime_remaining_value.text() == "00:43.5"
+    assert panel.runtime_trigger_detail.text() == "触发帧 240 · delay 20"
     assert panel.runtime_delay_value.text() == "20 帧"
     assert "000001" in panel.runtime_description_label.text()
     assert panel.runtime_round_label.text() == "第 4 轮"
@@ -187,6 +190,163 @@ def test_tid_empty_search_replaces_existing_results(configured_tid_panel):
     assert panel.id_table.rowCount() == 0
     assert not panel.export_button.isEnabled()
     assert "未找到目标" in panel.runtime_description_label.text()
+
+
+def test_tid_dates_stay_fixed_and_countdown_does_not_touch_table(configured_tid_panel, app, monkeypatch, tmp_path):
+    import csv
+    from datetime import datetime
+
+    panel = configured_tid_panel
+    clock = [100.0]
+    monkeypatch.setattr("auto_bdsp_rng.ui.auto_tid_rng_panel.time.monotonic", lambda: clock[0])
+    states = tuple(IDState8(advances=i, tid=10+i, sid=20, tsv=1, display_tid=i+1) for i in range(3))
+    waiting = AutoTidRngProgress(
+        phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=1, current_advances=0,
+        target_advances=2, target_display_tid=3, trigger_advances=1, wait_target_at=143.5,
+        id_states=states, id_elapsed_seconds=(0.0, 3.25, 3661.0),
+        seed_measured_wall_time=datetime(2026, 8, 11, 23, 59, 58).timestamp(),
+    )
+    panel.apply_progress(waiting)
+    table = panel.id_table
+    date_items = [table.item(row, 6) for row in range(3)]
+    assert [item.text() for item in date_items] == ["当前帧", "2026.08.12 00:00:01", "2026.08.12 01:00:59"]
+    assert table.item(2, 5).text() == "01:01:01.0"
+    assert "2026.08.11 23:59:58" in date_items[0].toolTip()
+    exported = panel._table_text()
+    table.setCurrentCell(2, 4)
+    changed = []
+    table.model().dataChanged.connect(lambda first, last, roles: changed.append((first.row(), first.column(), last.row(), last.column())))
+    clock[0] += 1
+    QTest.qWait(150)
+    assert panel.runtime_remaining_value.text() == "00:42.5"
+    assert changed == []
+    assert table.currentRow() == 2
+    panel.apply_progress(replace(waiting, current_advances=1))
+    assert set(changed) == {(0, 6, 0, 6), (1, 6, 1, 6)}
+    assert [item.text() for item in date_items] == ["已过", "当前帧", "2026.08.12 01:00:59"]
+    assert table.item(2, 6) is date_items[2]
+    assert panel._table_text() == exported
+    table.sortItems(6, Qt.SortOrder.DescendingOrder)
+    panel.update_tid_current_advances(2)
+    assert [table.item(row, 0).text() for row in range(3)] == ["2", "1", "0"]
+    assert [table.item(row, 6).text() for row in range(3)] == ["当前帧", "已过", "已过"]
+    output = tmp_path / "ids.csv"
+    monkeypatch.setattr("auto_bdsp_rng.ui.auto_tid_rng_panel.QFileDialog.getSaveFileName", lambda *_: (str(output), ""))
+    panel.export_results()
+    with output.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[1][4:] == ["000001", "00:00.0", "2026.08.11 23:59:58"]
+    assert len(rows) == 4
+
+
+def test_tid_target_filter_matches_all_startup_targets_after_sort_and_edits(configured_tid_panel):
+    panel = configured_tid_panel
+    panel.add_target_display_tid(2)
+    panel._start_clicked()
+    states = tuple(IDState8(advances=i, tid=i, sid=20, tsv=1, display_tid=d) for i, d in ((40, 1), (10, 3), (30, 2), (50, 1)))
+    panel.apply_progress(AutoTidRngProgress(
+        phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=1, current_advances=0,
+        target_advances=30, target_display_tid=2, trigger_advances=10, id_states=states,
+    ))
+    original = panel._table_text()
+    item = panel.id_table.item(1, 4)
+    panel.id_filter_targets_button.click()
+    panel._clear_targets()
+    panel.add_target_display_tid(3)
+    panel.id_table_tools._sort_clicked(0)
+    visible = [panel.id_table.item(r, 0).text() for r in range(4) if not panel.id_table.isRowHidden(r)]
+    assert visible == ["30", "40", "50"]
+    assert panel.id_table.item(0, 4) is item
+    assert panel.id_result_count.text() == "3 / 4 条结果"
+    panel.target_data_button.click()
+    assert panel.id_table.currentItem().text() == "000002"
+    assert not panel.id_table._select_next_prefix_match("000003")
+    panel._show_id_search_status("未找到: 000003")
+    assert panel.id_result_count.text().startswith("3 / 4 条结果")
+    assert panel._table_text() == original
+    panel.id_filter_all_button.click()
+    assert all(not panel.id_table.isRowHidden(row) for row in range(4))
+
+
+def test_tid_filtered_empty_can_return_to_all_and_old_column_preferences_are_ignored(configured_tid_panel):
+    panel = configured_tid_panel
+    panel.set_id_states([IDState8(advances=1, tid=10, sid=20, tsv=1, display_tid=2)])
+    panel.id_filter_targets_button.click()
+    assert panel.id_table.isRowHidden(0)
+    assert panel._visible_id_count == 0
+    assert panel.copy_button.isEnabled()
+    panel.id_filter_all_button.click()
+    assert not panel.id_table.isRowHidden(0)
+    panel._settings.setValue("table_workbench/ids/hidden", "[4, 5, 6]")
+    panel._settings.setValue("table_workbench/ids/pin", True)
+    panel.id_table_tools.restore()
+    assert all(not panel.id_table.isColumnHidden(c) for c in range(7))
+    assert not panel.id_table_tools.pin_enabled
+    assert panel.id_table_tools.tools_button.isHidden()
+
+
+@pytest.mark.parametrize("phase", [AutoTidRngPhase.IDLE, AutoTidRngPhase.FAILED, AutoTidRngPhase.COMPLETED,
+                                  AutoTidRngPhase.RUN_NAME_SCRIPT, AutoTidRngPhase.RUN_SEED_SCRIPT])
+def test_tid_countdown_stops_when_wait_ends(configured_tid_panel, phase):
+    panel = configured_tid_panel
+    waiting = AutoTidRngProgress(phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=1, wait_target_at=200.0)
+    panel.apply_progress(waiting)
+    assert panel._countdown_timer.isActive()
+    panel.apply_progress(replace(waiting, phase=phase))
+    assert not panel._countdown_timer.isActive()
+    assert panel.runtime_remaining_value.text() == "—"
+    panel.apply_progress(waiting)
+    panel.close()
+    assert not panel._countdown_timer.isActive()
+
+
+def test_tid_manual_seed_has_relative_times_until_capture_origin_is_known(configured_tid_panel):
+    from datetime import datetime
+
+    panel = configured_tid_panel
+    panel.frame_threshold.setValue(2)
+    panel.set_tid_seed(SeedPair64(1, 2))
+    assert panel.id_table.item(0, 5).text() == "00:00.0"
+    assert panel.id_table.item(1, 5).text() != "—"
+    assert all(panel.id_table.item(r, 6).text() == "—" for r in range(3))
+    panel.set_tid_timing_origin(datetime(2026, 8, 11, 17, 40, 40).timestamp())
+    assert panel.id_table.item(0, 6).text() == "当前帧"
+    assert "2026.08.11 17:40:40" in panel.id_table.item(0, 6).toolTip()
+    assert panel.id_table.item(1, 6).text().startswith("2026.08.11")
+
+
+def test_tid_worker_return_stops_countdown_even_without_terminal_progress(configured_tid_panel):
+    panel = configured_tid_panel
+    waiting = AutoTidRngProgress(phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=1, wait_target_at=200.0)
+    panel.apply_progress(waiting)
+    panel._runner_finished(waiting)
+    assert not panel._countdown_timer.isActive()
+    assert panel.runtime_remaining_value.text() == "—"
+
+
+def test_manual_tid_capture_dates_share_counter_origin_and_follow_ticks(app, monkeypatch):
+    from datetime import datetime
+
+    window = MainWindow()
+    seed = SeedState32(0x01020304, 0x11121314, 0x21222324, 0x31323334)
+    origin = datetime(2026, 8, 11, 23, 59, 58).timestamp()
+    clock = [100.0]
+    monkeypatch.setattr(main_window_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(main_window_module.time, "time", lambda: origin)
+    monkeypatch.setattr(main_window_module, "capture_pokemon_blinks", lambda *_a, **_kw: SimpleNamespace(intervals=[]))
+    monkeypatch.setattr(main_window_module, "recover_tidsid_seed_from_observation", lambda observation: SimpleNamespace(state=seed))
+    window._latest_preview_frame = object()
+    window.capture_tidsid_seed()
+    window._capture_thread.join(timeout=2)
+    window._poll_capture_thread()
+    panel = window.auto_tid_rng_tab
+    next_tick = window._advance_counter.next_tick_at
+    assert panel.id_table.item(0, 6).text() == "当前帧"
+    assert panel.id_table.item(1, 6).text() == datetime.fromtimestamp(origin + next_tick - 100.0).strftime("%Y.%m.%d %H:%M:%S")
+    clock[0] = next_tick
+    window._advance_tick()
+    assert panel.id_table.item(0, 6).text() == "已过"
+    assert panel.id_table.item(1, 6).text() == "当前帧"
 
 
 def test_tid_script_refresh_preserves_saved_selection_and_collapsed_fields(configured_tid_panel):
@@ -452,7 +612,7 @@ def test_auto_tid_panel_keeps_targets_compact_and_gives_id_table_space(app, tmp_
     assert panel.target_list.flow() == QListView.Flow.LeftToRight
     assert panel.target_list.isWrapping()
     assert panel.id_table.minimumHeight() >= panel.id_table.verticalHeader().defaultSectionSize() * 5
-    assert panel.id_table.horizontalHeader().stretchLastSection()
+    assert panel.id_table.columnWidth(6) >= 180
 
 
 def test_auto_tid_content_is_added_directly_below_toolbar(app, tmp_path: Path) -> None:
@@ -710,6 +870,8 @@ def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Pat
     assert captured == [64]
     assert warmup_windows == [1.0]
     assert result.seed == seed_state.to_seed_pair64()
+    assert result.measured_at is not None
+    assert result.measured_wall_time is not None
     assert [box.text() for box in window.auto_tid_rng_tab.tid_seed_inputs] == list(seed_state.format_seed64_pair())
     # The automatic runner owns the search range frozen at startup; seed capture
     # only fills the seed fields, so edits to the form cannot generate other rows.

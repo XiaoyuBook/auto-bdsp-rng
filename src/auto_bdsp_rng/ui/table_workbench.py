@@ -23,10 +23,11 @@ class ResultItem(QTableWidgetItem):
 
 
 class TableWorkbench(QObject):
-    def __init__(self, table, toolbar, settings, key, *, pinned_columns=1):
+    def __init__(self, table, toolbar, settings, key, *, pinned_columns=1, column_settings=True):
         super().__init__(table)
         self.table, self.settings, self.key = table, settings, "table_workbench/" + key
         self.pinned_columns = pinned_columns
+        self.column_settings = column_settings
         self.pin_enabled = False
         self._updating = False
         self._refresh_timer = QTimer(self)
@@ -37,7 +38,7 @@ class TableWorkbench(QObject):
         self.copy_button.clicked.connect(self.copy_selected)
         self.copy_button.setEnabled(False)
         self.copy_button.setFixedHeight(32)
-        self.tools_button = QToolButton()
+        self.tools_button = QToolButton(table)
         self.tools_button.setText("表格设置")
         self.tools_button.setFixedHeight(32)
         self.tools_button.setStyleSheet(TABLE_TOOL_STYLE)
@@ -46,7 +47,10 @@ class TableWorkbench(QObject):
         self.tools_button.setMenu(self.menu)
         self.menu.aboutToShow.connect(self._build_menu)
         toolbar.addWidget(self.copy_button)
-        toolbar.addWidget(self.tools_button)
+        if column_settings:
+            toolbar.addWidget(self.tools_button)
+        else:
+            self.tools_button.hide()
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.itemSelectionChanged.connect(lambda: self.copy_button.setEnabled(bool(table.selectedIndexes())))
         table.horizontalHeader().setSectionsClickable(True)
@@ -112,7 +116,7 @@ class TableWorkbench(QObject):
     def restore(self):
         try:
             hidden = json.loads(str(self.settings.value(self.key + "/hidden", "[]")))
-            if isinstance(hidden, list):
+            if self.column_settings and isinstance(hidden, list):
                 for col in hidden:
                     if type(col) is int and self.pinned_columns <= col < self.table.columnCount():
                         self.table.setColumnHidden(col, True)
@@ -122,7 +126,10 @@ class TableWorkbench(QObject):
                 self.table.setSortingEnabled(True)
         except (ValueError, TypeError):
             pass
-        self.pin_enabled = str(self.settings.value(self.key + "/pin", "false")).lower() == "true"
+        self.pin_enabled = self.column_settings and str(self.settings.value(self.key + "/pin", "false")).lower() == "true"
+        if not self.column_settings:
+            for col in range(self.table.columnCount()):
+                self.table.setColumnHidden(col, False)
         self.schedule_refresh()
 
     def _build_menu(self):
@@ -185,7 +192,7 @@ class TableWorkbench(QObject):
             self._updating = False
 
     def selected_text(self):
-        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        rows = sorted({index.row() for index in self.table.selectedIndexes() if not self.table.isRowHidden(index.row())})
         if not rows:
             return ""
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]

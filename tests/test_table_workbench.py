@@ -42,27 +42,28 @@ def test_selected_rows_include_hidden_columns_and_preserve_display_tid(window):
     p.id_table.item(0, 0).setSelected(True)
     p.id_table.item(2, 4).setSelected(True)
     text = p.id_table_tools.selected_text()
-    assert text.splitlines()[1].split("\t") == ["9", "12", "13", "14", "000100"]
+    assert text.splitlines()[1].split("\t") == ["9", "12", "13", "14", "000100", "—", "—"]
     assert len(text.splitlines()) == 3
-    assert text.splitlines()[2].endswith("000002")
+    assert text.splitlines()[2].split("\t")[4] == "000002"
     assert p.id_table_tools.copy_button.isEnabled()
 
 
 def test_frozen_column_shares_selection_and_preferences(window):
-    p = window.auto_tid_rng_tab
-    p.set_id_states(states())
-    tools = p.id_table_tools
+    # Column preferences remain supported on the static result page.
+    table = window.table
+    table.setRowCount(1)
+    tools = window.static_table_tools
     tools.set_pinned(True)
     tools.refresh_frozen()
-    assert tools.frozen.model() is p.id_table.model()
-    assert tools.frozen.selectionModel() is p.id_table.selectionModel()
-    assert tools.frozen.columnWidth(0) == p.id_table.columnWidth(0)
+    assert tools.frozen.model() is table.model()
+    assert tools.frozen.selectionModel() is table.selectionModel()
+    assert tools.frozen.columnWidth(0) == table.columnWidth(0)
     assert tools.frozen.isColumnHidden(1)
     tools.set_column_visible(3, False)
     tools.pin_enabled = False
-    p.id_table.setColumnHidden(3, False)
+    table.setColumnHidden(3, False)
     tools.restore()
-    assert tools.pin_enabled and p.id_table.isColumnHidden(3)
+    assert tools.pin_enabled and table.isColumnHidden(3)
 
 
 def test_result_item_sorts_hex_and_numeric_by_value():
