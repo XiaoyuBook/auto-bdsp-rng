@@ -17,7 +17,9 @@ For a target version `X.Y.Z`, update these files in the same release commit:
 - `src/auto_bdsp_rng/__init__.py`
 - `CHANGELOG.md`
 
-`CHANGELOG.md` must start with a non-empty top-level heading exactly matching `# X.Y.Z`. Write its entries as user-facing release notes; GitHub Actions places that section under **本次更新** in the GitHub Release body.
+`CHANGELOG.md` must start with a non-empty top-level heading exactly matching `# X.Y.Z`. Write its entries as user-facing release notes; GitHub Actions places that section under **本次更新** in the GitHub Release body. Keep previous release entries intact; a new section may also summarize earlier changes when cumulative notes are needed.
+
+Before the new package is published, identify features documented from `main` as pending release and keep the README download section pointing to the latest published package. Update the download/version references when the new package is published.
 
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
 
