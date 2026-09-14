@@ -614,8 +614,6 @@ class StartupNoticeDialog(QDialog):
             " font-size: 12px; font-weight: 500; }"
             " QDialog#StartupNoticeDialog QLabel#StartupTitle { font-size: 22px;"
             " font-weight: 500; }"
-            " QDialog#StartupNoticeDialog QLabel#StartupLead { color: #68747E;"
-            " font-size: 13px; }"
             " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice { background: #FFFFFF;"
             " color: #202A33; border: 1px solid #DCE5E1; border-radius: 11px;"
             " min-height: 112px; padding: 0; text-align: left; }"
@@ -653,11 +651,6 @@ class StartupNoticeDialog(QDialog):
         title = QLabel("选择你的乱数方式")
         title.setObjectName("StartupTitle")
         layout.addWidget(title)
-
-        lead = QLabel("之后每次想乱新的目标，都可以使用引导模式重新开始。")
-        lead.setObjectName("StartupLead")
-        lead.setWordWrap(True)
-        layout.addWidget(lead)
 
         choices = QHBoxLayout()
         choices.setSpacing(12)
