@@ -146,12 +146,14 @@ def _set_bdsp_seed(window: MainWindow) -> None:
     window.bdsp_seed64_inputs[1].setText("1111111122222222")
 
 
-def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("level, mode", [("beginner", "guided"), ("expert", "standard")])
+def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_path, monkeypatch, level, mode):
     from auto_bdsp_rng import app_settings
     from auto_bdsp_rng.ui.startup_dialog import StartupNoticeDialog
     from tests.test_startup_webview import evaluate, wait_until
 
     monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "welcome.json")
+    app_settings.save_settings({"rng_mode": "standard" if mode == "guided" else "guided"})
     monkeypatch.setattr(main_window_module, "should_show_startup_notice", app_settings.should_show_startup_notice)
     window = MainWindow()
     window.show()
@@ -162,10 +164,13 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
     assert first.parentWidget() is window
     window.show_startup_choice()
     assert window._startup_notice_dialog is first
-    evaluate(first, "document.querySelector('[data-level=expert]').click()")
+    evaluate(first, f"document.querySelector('[data-level={level}]').click()")
     evaluate(first, "document.querySelector('.start').click()")
     wait_until(lambda: window._startup_notice_dialog is None)
-    assert app_settings.get_experience_level() == "expert"
+    assert app_settings.get_experience_level() == level
+    assert app_settings.get_rng_mode() == mode
+    assert window.rng_mode_button.text() == ("引导模式" if mode == "guided" else "标准模式")
+    assert window.rng_mode_button.property("mode") == mode
     window._maybe_show_startup_notice()
     assert window._startup_notice_dialog is None
     window.startup_choice_action.trigger()
@@ -175,7 +180,44 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
     assert isinstance(second, StartupNoticeDialog)
     second.reject()
     wait_until(lambda: window._startup_notice_dialog is None)
-    assert app_settings.get_experience_level() == "expert"
+    assert app_settings.get_experience_level() == level
+    assert window.rng_mode_button.property("mode") == mode
+
+
+def test_main_window_rng_mode_switch_preserves_workspace_and_recovers_save_failure(app, tmp_path, monkeypatch):
+    from auto_bdsp_rng import app_settings
+
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "modes.json")
+    app_settings.save_settings({"experience_level": "beginner", "startup_notice_acknowledged": True, "other": "保留"})
+    window = MainWindow()
+    assert window.rng_mode_button.text() == "引导模式"
+    assert window.rng_mode_button.menu() is None
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    window.bdsp_seed64_inputs[0].setText("123456789ABCDEF0")
+    warnings = []
+    monkeypatch.setattr(main_window_module.QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    def fail(*args):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as scope:
+        scope.setattr(app_settings.os, "replace", fail)
+        window.rng_mode_button.click()
+        assert warnings
+        assert window.rng_mode_button.text() == "引导模式"
+        assert window.rng_mode_button.property("mode") == "guided"
+        assert app_settings.get_rng_mode() == "guided"
+    for mode, label in (("standard", "标准模式"), ("guided", "引导模式"), ("standard", "标准模式")):
+        window.rng_mode_button.click()
+        assert window.rng_mode_button.text() == label
+        assert window.rng_mode_button.property("mode") == mode
+        assert app_settings.load_settings() == {
+            "experience_level": "beginner", "startup_notice_acknowledged": True, "other": "保留", "rng_mode": mode,
+        }
+        assert window.tabs.currentWidget() is window.project_xs_tab
+        assert window.bdsp_seed64_inputs[0].text() == "123456789ABCDEF0"
+    reopened = MainWindow()
+    assert reopened.rng_mode_button.text() == "标准模式"
 
 
 def _auto_rng_settings(tmp_path: Path) -> QSettings:

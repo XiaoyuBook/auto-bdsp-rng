@@ -71,6 +71,7 @@ def test_welcome_click_saves_choice_and_acknowledgement(chooser, level):
     assert chooser.selected_experience_level == level
     assert app_settings.load_settings() == {
         "other": "保留", "experience_level": level, "startup_notice_acknowledged": True,
+        "rng_mode": "guided" if level == "beginner" else "standard",
     }
     assert not app_settings.should_show_startup_notice()
 

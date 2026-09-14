@@ -174,7 +174,7 @@ class StartReadinessController(QObject):
             QPushButton#ReadinessButton:hover { color: $accent; background: $accent_soft; }
         """))
         self.button.clicked.connect(self.show)
-        window.header_layout.insertWidget(window.header_layout.count() - 3, self.button)
+        window.header_layout.insertWidget(window.header_layout.indexOf(window.video_source_header_button), self.button)
         self._button_layout = window.header_layout
         self.items = ()
         self._cache = {}
@@ -197,7 +197,8 @@ class StartReadinessController(QObject):
             self.dialog.module_combo.setCurrentIndex(int(tab is self.window.auto_tid_rng_tab))
             layout, index = tab.toolbar_actions, 0
         else:
-            layout, index = self.window.header_layout, self.window.header_layout.count() - 3
+            layout = self.window.header_layout
+            index = layout.indexOf(self.window.video_source_header_button)
         if layout is not self._button_layout:
             self._button_layout.removeWidget(self.button)
             layout.insertWidget(index, self.button)

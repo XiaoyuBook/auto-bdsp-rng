@@ -20,6 +20,7 @@ UI_SCALE_STEP = 5
 UI_SCALE_VALUES = tuple(range(UI_SCALE_MIN, UI_SCALE_MAX + 1, UI_SCALE_STEP))
 UiScale: TypeAlias = Literal["auto"] | int
 ExperienceLevel: TypeAlias = Literal["beginner", "expert"]
+RngMode: TypeAlias = Literal["standard", "guided"]
 
 
 def load_settings(path: Path | None = None) -> dict[str, Any]:
@@ -102,8 +103,28 @@ def set_experience_level(
         settings["experience_level"] = level
         if acknowledge_startup:
             settings["startup_notice_acknowledged"] = True
+            settings["rng_mode"] = "guided" if level == "beginner" else "standard"
         save_settings(settings, path)
     return level
+
+
+def get_rng_mode(path: Path | None = None) -> RngMode:
+    settings = load_settings(path)
+    mode = settings.get("rng_mode")
+    if mode in ("standard", "guided"):
+        return mode
+    # Existing users inherit their first-launch choice until they switch modes.
+    return "guided" if settings.get("experience_level") == "beginner" else "standard"
+
+
+def set_rng_mode(mode: RngMode, path: Path | None = None) -> RngMode:
+    if mode not in ("standard", "guided"):
+        raise ValueError("RNG mode must be 'standard' or 'guided'")
+    with _SETTINGS_LOCK:
+        settings = load_settings(path)
+        settings["rng_mode"] = mode
+        save_settings(settings, path)
+    return mode
 
 
 def is_run_log_enabled(path: Path | None = None) -> bool:
