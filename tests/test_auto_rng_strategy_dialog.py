@@ -164,8 +164,8 @@ def test_strategy_dialog_accept_persists_and_builds_config(app, tmp_path):
     restored = AutoRngPanel(script_dir=tmp_path, settings=restored_settings)
     config = restored.build_config()
 
-    assert restored.strategy_dialog.values() == (1_234_567, 12, "recapture_seed", 9, 234_567)
-    assert config.reseed_threshold_frames == 1_234_567
+    assert restored.strategy_dialog.values() == (1_000_000, 12, "recapture_seed", 9, 234_567)
+    assert config.reseed_threshold_frames == 1_000_000
     assert config.reidentify_max_attempts == 12
     assert config.reidentify_failure_policy == "recapture_seed"
     assert config.reidentify_seed_max_attempts == 9
@@ -211,7 +211,7 @@ def test_strategy_numeric_fields_use_c_locale_and_qt_integer_limit(app, tmp_path
     for field in numeric_fields:
         assert field.locale().name() == "C"
         assert field.lineEdit().locale().name() == "C"
-        assert field.maximum() == QT_INT_MAX
+        assert field.maximum() == (1_000_000 if field is panel.reseed_threshold_frames else QT_INT_MAX)
         assert field.suffix() == ""
         assert field.lineEdit().text() == str(field.value())
     assert panel.reidentify_max_attempts.minimum() == 1
@@ -238,7 +238,7 @@ def test_delay_strategy_button_and_dialog_defaults(app, tmp_path):
     assert panel.fixed_delay.isHidden()
     assert panel.fixed_delay.value() == 100
     assert panel.delay_settings_button.text() == "固定 delay · 下轮 100"
-    assert panel.delay_settings_button.size().width() == 180
+    assert panel.delay_settings_button.size().width() == 156
     assert panel.delay_settings_button.size().height() == 32
     assert dialog.windowTitle() == "delay 策略设置"
     assert [dialog.strategy_combo.itemData(index) for index in range(dialog.strategy_combo.count())] == [

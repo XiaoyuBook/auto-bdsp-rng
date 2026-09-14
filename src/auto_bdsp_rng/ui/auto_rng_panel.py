@@ -241,6 +241,7 @@ class AutoRngStrategyDialog(QDialog):
         self.form.setVerticalSpacing(12)
 
         self.reseed_threshold_frames = self._spin(0, DEFAULT_RESEED_THRESHOLD_FRAMES)
+        self.reseed_threshold_frames.setMaximum(1_000_000)
         self.reidentify_max_attempts = self._spin(1, DEFAULT_REIDENTIFY_MAX_ATTEMPTS)
         self.reidentify_failure_policy = QComboBox()
         self.reidentify_failure_policy.addItem("进入下一轮", "next_round")
@@ -253,6 +254,7 @@ class AutoRngStrategyDialog(QDialog):
             (
                 "校正帧数上限",
                 self.reseed_threshold_frames,
+                "最多 100 万帧，默认 90 万帧。\n"
                 "普通流程中，本次过帧量不超过该值时执行校正；超过该值时重新捕获 Seed。\n"
                 "过场脚本运行后若超过该值，会直接进入下一轮，不会原地重测 Seed。",
             ),
@@ -274,6 +276,8 @@ class AutoRngStrategyDialog(QDialog):
             (
                 "过场预留帧数",
                 self.reseeding_threshold,
+                "提前预留帧数，用于执行过场脚本和完成过场后的校正。\n"
+                "预留太少可能在过场或校正期间错过目标；可先保留默认 50 万帧，再根据实际消耗调整。\n"
                 "仅在选择了过场脚本时生效；设为 0 时关闭过场策略。",
             ),
         )
@@ -364,6 +368,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     targetDataRequested = Signal()
     targetDialogOpened = Signal()
     targetDialogClosed = Signal()
+    guideDialogOpened = Signal(str)
+    guideDialogClosed = Signal(str, int)
+    configSaved = Signal()
+    configSaveFailed = Signal(str)
+    configEdited = Signal()
     scriptEditRequested = Signal(object)
     latestMessageChanged = Signal(str)
     ivCalculatorRequested = Signal()
@@ -823,15 +832,19 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.delay_strategy_dialog.set_values(self._delay_strategy_config)
         self.delay_strategy_dialog.set_show_time(self._delay_show_sample_time)
         self._refresh_delay_dialog_preview()
-        if self.delay_strategy_dialog.exec() != QDialog.DialogCode.Accepted:
-            self.delay_strategy_dialog.set_values(self._delay_strategy_config)
-            self._refresh_delay_dialog_preview()
-            return
-        self._commit_delay_strategy_config(
-            self.delay_strategy_dialog.values(),
-            persist=True,
-            emit=True,
-        )
+        self.guideDialogOpened.emit("delay_strategy")
+        result = QDialog.DialogCode.Rejected
+        try:
+            result = self.delay_strategy_dialog.exec()
+            if result != QDialog.DialogCode.Accepted:
+                self.delay_strategy_dialog.set_values(self._delay_strategy_config)
+                self._refresh_delay_dialog_preview()
+                return
+            self._commit_delay_strategy_config(
+                self.delay_strategy_dialog.values(), persist=True, emit=True,
+            )
+        finally:
+            self.guideDialogClosed.emit("delay_strategy", int(result))
 
     @Slot(object)
     def _save_delay_strategy_draft(self, config: object) -> None:
@@ -1092,10 +1105,16 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def open_strategy_dialog(self) -> None:
         original_values = self.strategy_dialog.values()
-        if self.strategy_dialog.exec() == QDialog.DialogCode.Accepted:
-            self._save_strategy_settings()
-            return
-        self.strategy_dialog.set_values(*original_values)
+        self.guideDialogOpened.emit("correction_strategy")
+        result = QDialog.DialogCode.Rejected
+        try:
+            result = self.strategy_dialog.exec()
+            if result == QDialog.DialogCode.Accepted:
+                self._save_strategy_settings()
+                return
+            self.strategy_dialog.set_values(*original_values)
+        finally:
+            self.guideDialogClosed.emit("correction_strategy", int(result))
 
     def _build_script_group(self) -> QGroupBox:
         group = QGroupBox()
@@ -2008,6 +2027,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     def _mark_config_dirty(self, *_args: object) -> None:
         if self._config_state_tracking_ready:
             self._set_config_saved(False)
+            self.configEdited.emit()
 
     def _set_config_saved(self, saved: bool) -> None:
         if not hasattr(self, "config_saved_label"):
@@ -3325,7 +3345,13 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         s.setValue("target_nature", tf.nature_combo.currentIndex())
         s.setValue("target_skip_filter", tf.skip_filter.isChecked())
         s.sync()
+        if s.status() != s.Status.NoError:
+            self._set_config_saved(False)
+            self.config_saved_label.setText("保存失败")
+            self.configSaveFailed.emit("配置保存失败，请检查设置目录是否可写后重试。")
+            return
         self._set_config_saved(True)
+        self.configSaved.emit()
 
     def _save_script_state(self) -> None:
         s = self._settings

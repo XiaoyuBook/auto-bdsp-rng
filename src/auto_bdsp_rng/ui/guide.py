@@ -1,129 +1,113 @@
-"""A resumable guide entry and the first spotlight on the existing workspace."""
+"""Resumable spotlights on the existing workspace and its settings dialogs."""
 from __future__ import annotations
 
 import math
-from shiboken6 import isValid
 
+from shiboken6 import isValid
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF, QRegion
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QScrollArea, QStyle, QStyleOptionTab, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QMenu, QMessageBox, QScrollArea, QStyle,
+    QStyleOptionTab, QToolButton, QWidget,
+)
 
-from auto_bdsp_rng.app_settings import get_guide_progress, start_guide_progress
+from auto_bdsp_rng.app_settings import GUIDE_STEPS, advance_guide_progress, get_guide_progress, start_guide_progress
+from auto_bdsp_rng.ui.guide_steps import GuideStep, dialog_steps, workspace_step
+from auto_bdsp_rng.ui.guide_tip import GuideTip
 
 
 class GuideSpotlight(QWidget):
     paused = Signal()
 
-    def __init__(self, window) -> None:
-        super().__init__(window.centralWidget())
+    def __init__(self, window, dialog: QDialog | None = None) -> None:
+        super().__init__(dialog if dialog is not None else window.centralWidget())
         self.main_window = window
+        self.dialog = dialog
         self.target_button = window.auto_rng_tab.target_button
         self.target_card = self.target_button.parentWidget()
         self.tab_bar = window.tabs.tabBar()
         self.waiting_for_page = False
+        self.suspended = False
         self.setObjectName("GuideSpotlight")
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.hole = QRectF()
         self.arrow_start = QPointF()
         self.arrow_end = QPointF()
-        self.tip = QFrame(self)
-        self.tip.setObjectName("GuideTip")
-        self.tip.setFixedWidth(338)
-        self.tip.setStyleSheet("""
-            QFrame#GuideTip { background: white; border: 1px solid #DCE7E1; border-radius: 13px; }
-            QFrame#GuideTip QLabel, QFrame#GuideTip QPushButton {
-                font-family: 'Microsoft YaHei UI'; font-size: 13px; font-weight: 400; color: #52606D;
-                background: transparent; border: 0;
-            }
-            QFrame#GuideTip QLabel#GuideStep { color: #087C58; font-size: 12px; }
-            QFrame#GuideTip QLabel#GuideTitle { color: #202A33; font-size: 19px; font-weight: 500; }
-            QFrame#GuideTip QPushButton { border: 1px solid #E0E5EB; border-radius: 6px; padding: 6px 12px; }
-            QFrame#GuideTip QPushButton:disabled { color: #9AA7A0; background: #F7F9F8; }
-            QFrame#GuideTip QPushButton#GuideClose { border: 0; padding: 0; font-size: 19px; }
-            QFrame#GuideTip QPushButton#GuideClose:hover { background: #F0F8F4; color: #087C58; }
-            QFrame#GuideTip QLabel#GuideNote { color: #78847D; font-size: 11px; }
-        """)
-        layout = QVBoxLayout(self.tip)
-        layout.setContentsMargins(20, 16, 20, 18)
-        layout.setSpacing(12)
-        top = QHBoxLayout()
-        step = QLabel("第 1 步 · 设置目标精灵")
-        step.setObjectName("GuideStep")
-        top.addWidget(step, 1)
-        self.close_button = QPushButton("×")
-        self.close_button.setObjectName("GuideClose")
-        self.close_button.setFixedSize(28, 28)
-        self.close_button.setAccessibleName("暂时收起引导")
-        self.close_button.setToolTip("收起提示，保留进度")
+        self.tip = GuideTip(self)
+        self.close_button = self.tip.close_button
+        self.title, self.copy = self.tip.title, self.tip.copy
         self.close_button.clicked.connect(self.paused)
-        top.addWidget(self.close_button)
-        layout.addLayout(top)
-        self.title = QLabel()
-        self.title.setObjectName("GuideTitle")
-        layout.addWidget(self.title)
-        self.copy = QLabel()
-        self.copy.setWordWrap(True)
-        layout.addWidget(self.copy)
-        controls = QHBoxLayout()
-        # Later steps and their navigation rules are designed separately.
-        for text in ("上一步", "下一步", "跳过"):
-            if text == "跳过":
-                controls.addStretch(1)
-            button = QPushButton(text)
-            button.setFixedSize(72 if text != "跳过" else 56, 34)
-            button.setEnabled(False)
-            controls.addWidget(button)
-        layout.addLayout(controls)
-        note = QLabel("可随时收起提示，稍后继续。")
-        note.setObjectName("GuideNote")
-        layout.addWidget(note)
+        self.spec = workspace_step(window.auto_rng_tab, "target_selection")
         self.relayout = QTimer(self)
         self.relayout.setSingleShot(True)
         self.relayout.timeout.connect(self.reposition)
-        self.tab_bar.installEventFilter(self)
-        ancestor = self.target_card
-        while ancestor is not None:
-            ancestor.installEventFilter(self)
-            ancestor = ancestor.parentWidget()
+        self.tip.resized.connect(lambda: self.relayout.start(0))
+        self._watched: set[QWidget] = set()
         self.hide()
 
     @property
     def focus_target(self) -> QWidget:
-        return self.tab_bar if self.waiting_for_page else self.target_button
+        return self.tab_bar if self.waiting_for_page else self.spec.target
 
-    def reveal(self) -> None:
-        self.waiting_for_page = self.main_window.tabs.currentWidget() is not self.main_window.auto_rng_tab
-        if self.waiting_for_page:
+    def configure(self, spec: GuideStep, *, waiting_for_page: bool = False) -> None:
+        self.spec = spec
+        self.waiting_for_page = waiting_for_page
+        self.suspended = False
+        self.tip.show_step(spec, search=spec.key == "search_range" and not waiting_for_page)
+        if waiting_for_page:
             self.title.setText("先进入乱数操作页面")
             self.copy.setText("点击亮起的「自动定点乱数」标签，进入这次乱数的操作页面。")
-        else:
-            self.title.setText("先选好这次的目标")
-            self.copy.setText("点击亮起区域里的「设置」，选择这次想乱的精灵，以及你希望得到的结果。")
-            ancestor = self.target_card.parentWidget()
+        for widget in self._watched:
+            if isValid(widget):
+                widget.removeEventFilter(self)
+        self._watched.clear()
+        for target in (self.tab_bar,) if waiting_for_page else spec.highlights:
+            ancestor = target
             while ancestor is not None:
-                if isinstance(ancestor, QScrollArea):
-                    ancestor.ensureWidgetVisible(self.target_card)
+                if ancestor not in self._watched:
+                    ancestor.installEventFilter(self)
+                    self._watched.add(ancestor)
                 ancestor = ancestor.parentWidget()
-        if not self.reposition():
-            return
+        # Expanding the advanced rows changes the scroll area's content height
+        # asynchronously. The controller schedules a second pass after layout.
+
+    def reveal(self) -> None:
+        self.suspended = False
         self.show()
         self.raise_()
-        self.focus_target.setFocus(Qt.FocusReason.OtherFocusReason)
+        if self.reposition():
+            self.tip.show()
+            self.tip.raise_()
+        target = self.focus_target
+        if target.focusPolicy() == Qt.FocusPolicy.NoFocus:
+            target = next((child for child in target.findChildren(QWidget)
+                           if child.isVisible() and child.isEnabled() and child.focusPolicy() != Qt.FocusPolicy.NoFocus), self.close_button)
+        target.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.relayout.start(0)
+
+    def shade_all(self) -> None:
+        self.suspended = True
+        self.tip.hide()
+        self.reposition()
+
+    def hideEvent(self, event) -> None:
+        self.tip.hide()
+        self.relayout.stop()
+        super().hideEvent(event)
 
     def eventFilter(self, obj, event):
         if self.isVisible() and event.type() in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.LayoutRequest, QEvent.Type.Show):
             self.relayout.start(0)
         return False
 
-    def _target_rect(self, widget) -> QRectF:
+    def _target_rect(self, widget: QWidget) -> QRectF:
         if widget is self.tab_bar:
             index = self.main_window.tabs.indexOf(self.main_window.auto_rng_tab)
             option = QStyleOptionTab()
             self.tab_bar.initStyleOption(option, index)
             style = self.tab_bar.style()
             text_area = style.subElementRect(QStyle.SubElement.SE_TabBarTabText, option, self.tab_bar)
-            # tabRect includes the trailing gap between tabs. Frame the rendered
-            # label instead, with equal padding even at the left edge of the bar.
+            # tabRect includes the trailing 25px gap. Frame the actual text.
             rect = style.itemTextRect(
                 option.fontMetrics, text_area, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextShowMnemonic,
                 bool(option.state & QStyle.StateFlag.State_Enabled), option.text,
@@ -136,49 +120,91 @@ class GuideSpotlight(QWidget):
         while ancestor is not None:
             if isinstance(ancestor, QScrollArea):
                 viewport = ancestor.viewport()
-                viewport_origin = self.mapFromGlobal(viewport.mapToGlobal(QPoint()))
-                rect = rect.intersected(QRectF(QRect(viewport_origin, viewport.size())))
+                origin = self.mapFromGlobal(viewport.mapToGlobal(QPoint()))
+                rect = rect.intersected(QRectF(QRect(origin, viewport.size())))
             ancestor = ancestor.parentWidget()
         return rect
 
+    def _ensure_target_visible(self) -> None:
+        """Follow the current anchor after layout/scroll changes, without stale timers."""
+        if self.waiting_for_page:
+            return
+        target = self.focus_target
+        ancestor = target.parentWidget()
+        while ancestor is not None:
+            if ancestor.layout() is not None:
+                ancestor.layout().activate()
+            if isinstance(ancestor, QScrollArea):
+                ancestor.ensureWidgetVisible(target, 12, 12)
+            ancestor = ancestor.parentWidget()
+
     def reposition(self) -> bool:
         self.setGeometry(self.parentWidget().rect())
-        self.tip.setFixedHeight(self.tip.sizeHint().height())
-        width, height = self.tip.width(), self.tip.height()
-        bounds = self.rect().adjusted(12, 12, -12, -12)
+        if self.suspended:
+            self.hole = QRectF()
+            self.setMask(QRegion(self.rect()))
+            self.update()
+            return True
+        self._ensure_target_visible()
+        margin = 20 if self.dialog is not None else 12
+        bounds = self.rect().adjusted(margin, margin, -margin, -margin)
+        self.tip.setFixedWidth(min(400 if self.dialog is not None else 338, bounds.width()))
+        self.tip.fit_height(bounds.height())
         chosen = None
-        # Use global-to-local mapping between sibling widgets, and clip the
-        # opening to scroll viewports when the splitter reflows vertically.
-        targets = (self.tab_bar,) if self.waiting_for_page else (self.target_card, self.target_button)
-        for target in targets:
-            hole = self._target_rect(target).intersected(QRectF(self.rect()))
+        target_groups = ((self.tab_bar,),) if self.waiting_for_page else (self.spec.highlights, (self.spec.target,))
+        for group in target_groups:
+            hole = QRectF()
+            for target in group:
+                if target.isVisible():
+                    hole = hole.united(self._target_rect(target))
+            hole = hole.intersected(QRectF(self.rect()))
             if hole.isEmpty():
                 continue
+            width, height = self.tip.width(), self.tip.height()
+            x = max(bounds.left(), min(int(hole.center().x()) - width // 2, bounds.right() - width + 1))
+            y = max(bounds.top(), min(int(hole.top()), bounds.bottom() - height + 1))
             candidates = (
-                QRect(int(hole.right()) + 44, int(hole.top()), width, height),
-                QRect(int(hole.left()) - width - 44, int(hole.top()), width, height),
-                QRect(max(12, min(int(hole.center().x()) - width // 2, bounds.right() - width)), int(hole.bottom()) + 24, width, height),
-                QRect(max(12, min(int(hole.center().x()) - width // 2, bounds.right() - width)), int(hole.top()) - height - 24, width, height),
+                QRect(int(hole.right()) + 44, y, width, height),
+                QRect(int(hole.left()) - width - 44, y, width, height),
+                QRect(x, int(hole.bottom()) + 24, width, height),
+                QRect(x, int(hole.top()) - height - 24, width, height),
             )
-            if self.waiting_for_page:
+            if self.waiting_for_page or self.dialog is not None:
                 candidates = candidates[2:] + candidates[:2]
             chosen = next((r for r in candidates if bounds.contains(r)), None)
+            if chosen is None:
+                below = bounds.bottom() - int(hole.bottom()) - 24
+                above = int(hole.top()) - bounds.top() - 24
+                available = max(above, below)
+                if available >= 210:
+                    self.tip.fit_height(available)
+                    height = self.tip.height()
+                    chosen = QRect(x, int(hole.bottom()) + 24 if below >= above else int(hole.top()) - height - 24, width, height)
             if chosen is not None:
                 self.hole = hole
                 break
+        else:
+            chosen = None
         if chosen is None:
-            self.paused.emit()
+            # Do not draw an opening at an unclipped coordinate: it could expose
+            # an unrelated control while the anchor is outside its viewport.
+            self.hole = QRectF()
+            self.tip.hide()
+            self.setMask(QRegion(self.rect()))
+            self.update()
             return False
         self.tip.setGeometry(chosen)
+        if self.isVisible():
+            self.tip.show()
         target_center = self._target_rect(self.focus_target).center()
         if chosen.left() > self.hole.right():
-            y = target_center.y()
-            self.arrow_start = QPointF(chosen.left(), y)
-            self.arrow_end = QPointF(self.hole.right() + 7, y)
+            y = max(chosen.top() + 20, min(target_center.y(), chosen.bottom() - 20))
+            self.arrow_start = QPointF(min(chosen.left(), self.width() - 3), y)
+            self.arrow_end = QPointF(self.hole.right() + 7, target_center.y())
         elif chosen.right() < self.hole.left():
-            y = target_center.y()
-            self.arrow_start = QPointF(chosen.right(), y)
-            self.arrow_end = QPointF(self.hole.left() - 7, y)
+            y = max(chosen.top() + 20, min(target_center.y(), chosen.bottom() - 20))
+            self.arrow_start = QPointF(max(chosen.right(), 3), y)
+            self.arrow_end = QPointF(self.hole.left() - 7, target_center.y())
         else:
             x = max(chosen.left() + 20, min(target_center.x(), chosen.right() - 20))
             below = chosen.top() > self.hole.bottom()
@@ -196,15 +222,17 @@ class GuideSpotlight(QWidget):
         shade = QPainterPath()
         shade.setFillRule(Qt.FillRule.OddEvenFill)
         shade.addRect(QRectF(self.rect()))
-        shade.addRoundedRect(self.hole, 11, 11)
+        if not self.hole.isEmpty():
+            shade.addRoundedRect(self.hole, 11, 11)
         painter.fillPath(shade, QColor(0, 0, 0, 168))
+        if self.hole.isEmpty():
+            return
         painter.setPen(QPen(QColor("#83E8BF"), 2))
         painter.drawRoundedRect(self.hole, 11, 11)
         painter.setPen(QPen(QColor("#A2EBCD"), 2))
         painter.drawLine(self.arrow_start, self.arrow_end)
         delta = self.arrow_end - self.arrow_start
-        length = max(1, math.hypot(delta.x(), delta.y()))
-        unit = delta / length
+        unit = delta / max(1, math.hypot(delta.x(), delta.y()))
         base = self.arrow_end - unit * 7
         cross = QPointF(-unit.y(), unit.x()) * 4
         painter.setPen(Qt.PenStyle.NoPen)
@@ -215,15 +243,30 @@ class GuideSpotlight(QWidget):
 class GuideController(QObject):
     def __init__(self, window, button: QToolButton) -> None:
         super().__init__(window)
-        self.window = window
-        self.button = button
+        self.window, self.button = window, button
+        self.panel = window.auto_rng_tab
         self.overlay: GuideSpotlight | None = None
+        self.dialog_overlay: GuideSpotlight | None = None
+        self.active = False
+        self.step = "target_selection"
+        self.detail = ""
+        self._dialog_key: str | None = None
         self._resume_after_dialog = False
+        self._config_saved = False
+        self._dialog_layout_state = None
         self.menu = QMenu(button)
         self.restart_action = self.menu.addAction("重新开始引导", self.restart)
         button.clicked.connect(self.begin_or_resume)
-        window.auto_rng_tab.targetDialogOpened.connect(self._target_opened)
-        window.auto_rng_tab.targetDialogClosed.connect(self._target_closed)
+        self.panel.targetDialogOpened.connect(self._target_opened)
+        self.panel.targetDialogClosed.connect(self._target_closed)
+        self.panel.guideDialogOpened.connect(self._dialog_opened)
+        self.panel.guideDialogClosed.connect(self._dialog_closed)
+        self.panel.configSaved.connect(self._saved)
+        self.panel.configSaveFailed.connect(self._save_failed)
+        self.panel.configEdited.connect(self._config_edited)
+        self.panel.runStateChanged.connect(self._run_state_changed)
+        self.panel.delay_strategy_dialog.strategy_combo.currentIndexChanged.connect(self._dialog_values_changed)
+        self.panel.strategy_dialog.reidentify_failure_policy.currentIndexChanged.connect(self._dialog_values_changed)
         window.tabs.currentChanged.connect(self._page_changed)
         self.refresh()
 
@@ -246,66 +289,308 @@ class GuideController(QObject):
         self._begin(restart=True)
 
     def _begin(self, *, restart: bool) -> None:
-        if self.window._is_closing:
+        if self.window._is_closing or not self.button.isEnabled():
             return
         try:
-            if restart or get_guide_progress() is None:
-                start_guide_progress()
+            progress = get_guide_progress()
+            new_session = restart or progress is None
+            if new_session:
+                progress = start_guide_progress()
         except OSError:
             QMessageBox.warning(self.window, "无法开始引导", "无法保存引导进度，请检查设置目录是否可写后重试。")
             return
+        self.step = progress["step"]
+        self.detail = progress.get("detail", "") if isinstance(progress.get("detail", ""), str) else ""
+        self.active = True
         self.refresh()
         if self.overlay is None:
-            self.overlay = GuideSpotlight(self.window)
-            self.overlay.paused.connect(self.pause)
+            self.overlay = self._new_overlay()
+            self.overlay.tip.range_field = self.panel.max_advances
+            self.panel.max_advances.valueChanged.connect(self.overlay.tip.sync_range)
+        if new_session:
+            self.overlay.tip.reset_range()
+        if self.step == "task_configured" and not self.panel.config_saved_label.property("saved"):
+            if not self._persist("save_config"):
+                self.pause()
+                return
+        QApplication.instance().installEventFilter(self)
+        self._show_workspace()
+
+    def _new_overlay(self, dialog=None) -> GuideSpotlight:
+        overlay = GuideSpotlight(self.window, dialog)
+        overlay.paused.connect(self.pause)
+        overlay.tip.previous_button.clicked.connect(self.previous)
+        overlay.tip.next_button.clicked.connect(self.next)
+        overlay.tip.skip_button.clicked.connect(self.skip)
+        overlay.tip.rangeValidityChanged.connect(lambda _valid: self._navigation())
+        return overlay
+
+    def _persist(self, step: str, detail: str = "") -> bool:
+        try:
+            advance_guide_progress(step, detail)
+        except (OSError, ValueError):
+            self._current_overlay().copy.setText("无法保存引导进度，请检查设置目录是否可写后重试。当前步骤与参数已保留。")
+            self._current_overlay().relayout.start(0)
+            return False
+        if step != self.step:
+            self._config_saved = False
+        self.step, self.detail = step, detail
+        return True
+
+    def _go(self, step: str, detail: str = "") -> None:
+        if not self._persist(step, detail):
+            return
+        self._show_workspace()
+
+    def _show_workspace(self) -> None:
+        if not self.active or self.window._is_closing:
+            return
+        waiting = self.window.tabs.currentWidget() is not self.panel
+        if not waiting and self.step in ("shiny_threshold", "sync", "auto_reverse", "correction_strategy"):
+            self.panel.more_strategy_button.setChecked(True)
+            self.panel.strategy_group.layout().activate()
+        spec = workspace_step(self.panel, self.step)
+        self.overlay.configure(spec, waiting_for_page=waiting)
         self.overlay.reveal()
-        if self.overlay.isVisible():
-            QApplication.instance().installEventFilter(self)
+        self._navigation()
+        if self.step == "save_config" and self._config_saved:
+            self.overlay.title.setText("配置已保存")
+            self.overlay.copy.setText("本次任务参数已保存。点击下一步完成第 2 步。")
+            self.overlay.relayout.start(0)
+        if not waiting and self.step in ("delay_strategy", "correction_strategy") and self.detail:
+            QTimer.singleShot(0, self._open_current_dialog)
+
+    def _open_current_dialog(self) -> None:
+        if not self.active or self._dialog_key is not None or self.overlay.waiting_for_page:
+            return
+        if self.step == "delay_strategy":
+            self.panel.open_delay_strategy_dialog()
+        elif self.step == "correction_strategy":
+            self.panel.open_strategy_dialog()
+
+    def _current_overlay(self) -> GuideSpotlight:
+        return self.dialog_overlay if self._dialog_key is not None and self.dialog_overlay is not None else self.overlay
+
+    def _navigation(self) -> None:
+        if self.overlay is None:
+            return
+        overlay = self._current_overlay()
+        tip = overlay.tip
+        waiting = overlay.waiting_for_page
+        valid = self.overlay.tip.range_valid if self.step == "search_range" else True
+        tip.previous_button.setEnabled(not waiting and self.step != "target_selection")
+        tip.next_button.setEnabled(not waiting and valid and self.step != "task_configured" and (self.step != "save_config" or self._config_saved))
+        tip.skip_button.setEnabled(not waiting and valid and self.step not in ("save_config", "task_configured"))
+
+    def next(self) -> None:
+        if not self.active or not self._current_overlay().tip.next_button.isEnabled():
+            return
+        if self._dialog_key:
+            steps = dialog_steps(self.panel, self._dialog_key)
+            index = next((i for i, spec in enumerate(steps) if spec.key == self.detail), 0)
+            if index + 1 < len(steps):
+                if self._persist(self.step, steps[index + 1].key):
+                    self._show_dialog_step()
+            else:
+                self._leave_dialog(GUIDE_STEPS[GUIDE_STEPS.index(self.step) + 1])
+        elif self.step in ("delay_strategy", "correction_strategy"):
+            self._open_current_dialog()
+        else:
+            self._go(GUIDE_STEPS[GUIDE_STEPS.index(self.step) + 1])
+
+    def previous(self) -> None:
+        if not self.active or not self._current_overlay().tip.previous_button.isEnabled():
+            return
+        if self._dialog_key:
+            steps = dialog_steps(self.panel, self._dialog_key)
+            index = next((i for i, spec in enumerate(steps) if spec.key == self.detail), 0)
+            if index > 0:
+                if self._persist(self.step, steps[index - 1].key):
+                    self._show_dialog_step()
+            else:
+                self._leave_dialog(GUIDE_STEPS[GUIDE_STEPS.index(self.step) - 1])
+        else:
+            self._go(GUIDE_STEPS[GUIDE_STEPS.index(self.step) - 1])
+
+    def skip(self) -> None:
+        if not self.active or not self._current_overlay().tip.skip_button.isEnabled():
+            return
+        destination = "search_range" if self.step == "target_selection" else "save_config"
+        if self._dialog_key:
+            self._leave_dialog(destination)
+        else:
+            self._go(destination)
 
     def _page_changed(self, index: int) -> None:
-        if not self.window._is_closing and self.overlay is not None and isValid(self.overlay) and self.overlay.isVisible():
-            # Returning to the workspace is preparation for the saved step;
-            # changing tabs must not create or advance a guide record.
-            self.overlay.reveal()
+        if self.active and self._dialog_key is None and not self._resume_after_dialog:
+            self._show_workspace()
 
     def pause(self) -> None:
+        self.active = False
         QApplication.instance().removeEventFilter(self)
         self._resume_after_dialog = False
-        if self.overlay is not None:
-            self.overlay.hide()
-            self.overlay.relayout.stop()
-        self.button.setFocus(Qt.FocusReason.OtherFocusReason)
+        for overlay in (self.overlay, self.dialog_overlay):
+            if overlay is not None and isValid(overlay):
+                overlay.hide()
+        self._restore_dialog_layout()
+        if self._dialog_key:
+            self._dialog().setFocus()
+        else:
+            self.button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _run_state_changed(self, running: bool) -> None:
+        if running:
+            self.pause()
+        self.button.setEnabled(not running)
 
     def _target_opened(self) -> None:
-        self._resume_after_dialog = self.overlay is not None and self.overlay.isVisible()
+        self._resume_after_dialog = self.active
         if self._resume_after_dialog:
             QApplication.instance().removeEventFilter(self)
-            self.overlay.hide()
+            self.overlay.shade_all()
 
     def _target_closed(self) -> None:
         if self._resume_after_dialog:
             self._resume_after_dialog = False
             QTimer.singleShot(0, self.begin_or_resume)
 
-    def eventFilter(self, obj, event):
-        if self.overlay is None or not isValid(self.overlay) or not self.overlay.isVisible():
-            return False
-        if event.type() == QEvent.Type.Shortcut and self.window.isActiveWindow():
-            return True
-        if isinstance(obj, QWidget) and QWidget.window(obj) is self.window:
-            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+    def _dialog(self) -> QDialog:
+        return self.panel.delay_strategy_dialog if self._dialog_key == "delay_strategy" else self.panel.strategy_dialog
+
+    def _dialog_opened(self, key: str) -> None:
+        if not self.active or self.step != key:
+            return
+        self._dialog_key = key
+        if key == "correction_strategy":
+            dialog = self._dialog()
+            self._dialog_layout_state = (dialog, dialog.size(), dialog.minimumHeight(), dialog.layout().alignment())
+            # Leave room for the teaching card inside this compact form. Keep
+            # its real fields together; restore the normal layout on exit.
+            dialog.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
+            dialog.setMinimumHeight(min(610, dialog.screen().availableGeometry().height() - 48))
+        self.overlay.shade_all()
+        QTimer.singleShot(0, self._show_dialog_step)
+
+    def _restore_dialog_layout(self) -> None:
+        if self._dialog_layout_state is not None:
+            dialog, size, minimum, alignment = self._dialog_layout_state
+            self._dialog_layout_state = None
+            dialog.layout().setAlignment(alignment)
+            dialog.setMinimumHeight(minimum)
+            dialog.resize(size)
+
+    def _show_dialog_step(self) -> None:
+        if not self.active or not self._dialog_key or not self._dialog().isVisible():
+            return
+        if self.dialog_overlay is None:
+            self.dialog_overlay = self._new_overlay(self._dialog())
+        steps = dialog_steps(self.panel, self._dialog_key)
+        spec = next((spec for spec in steps if spec.key == self.detail), steps[0])
+        if spec.key != self.detail and not self._persist(self.step, spec.key):
+            self.pause()
+            return
+        self.dialog_overlay.configure(spec)
+        self.dialog_overlay.reveal()
+        self._navigation()
+
+    def _dialog_values_changed(self, *args) -> None:
+        if self.active and self._dialog_key:
+            QTimer.singleShot(0, self._show_dialog_step)
+
+    def _leave_dialog(self, destination: str) -> None:
+        if self._persist(destination):
+            # The existing opener commits the draft before emitting its closed signal.
+            self._dialog().accept()
+
+    def _dialog_closed(self, key: str, result: int) -> None:
+        if self._dialog_key != key:
+            return
+        self._restore_dialog_layout()
+        self._dialog_key = None
+        if self.dialog_overlay is not None:
+            self.dialog_overlay.hide()
+            self.dialog_overlay.deleteLater()
+            self.dialog_overlay = None
+        if not self.active:
+            return
+        if self.step == key:
+            destination = GUIDE_STEPS[GUIDE_STEPS.index(key) + 1] if result == QDialog.DialogCode.Accepted else key
+            if not self._persist(destination):
                 self.pause()
+                return
+        QTimer.singleShot(0, self._show_workspace)
+
+    def _saved(self) -> None:
+        if self.active and self.step == "save_config":
+            self._config_saved = True
+            self._show_workspace()
+
+    def _save_failed(self, message: str) -> None:
+        if self.active and self.step == "save_config":
+            self._config_saved = False
+            self.overlay.title.setText("配置尚未保存")
+            self.overlay.copy.setText(message)
+            self.overlay.relayout.start(0)
+            self._navigation()
+
+    def _config_edited(self) -> None:
+        self._config_saved = False
+        if self.active and self.step in ("save_config", "task_configured"):
+            if self.step == "task_configured":
+                self._go("save_config")
+            else:
+                self._show_workspace()
+
+    def _focusable(self, overlay: GuideSpotlight) -> list[QWidget]:
+        target = overlay.focus_target
+        # Preserve the original target → close order, then add navigation and choices.
+        candidates = [target, *target.findChildren(QWidget), overlay.close_button, *overlay.tip.findChildren(QWidget)]
+        result = []
+        for widget in candidates:
+            if widget not in result and widget.isVisible() and widget.isEnabled() and widget.focusPolicy() != Qt.FocusPolicy.NoFocus:
+                result.append(widget)
+        return result
+
+    def eventFilter(self, obj, event):
+        if not self.active or self.overlay is None or not isValid(self.overlay):
+            return False
+        overlay = self._current_overlay()
+        if not overlay.isVisible() or overlay.suspended:
+            return False
+        if event.type() == QEvent.Type.Shortcut:
+            return True
+        if not isinstance(obj, QWidget):
+            return False
+        owner = QWidget.window(obj)
+        owners = (self.window, overlay.tip, self._dialog() if self._dialog_key else self.window)
+        if owner not in owners:
+            return False  # Native combo popups keep their own keyboard handling.
+        event_type = event.type()
+        if event_type == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            self.pause()
+            return True
+        if event_type == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
                 return True
-            if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
-                target = self.overlay.close_button if obj is self.overlay.focus_target else self.overlay.focus_target
-                target.setFocus(Qt.FocusReason.TabFocusReason)
+            order = self._focusable(overlay)
+            if order:
+                current = obj if obj in order else QApplication.focusWidget()
+                index = order.index(current) if current in order else -1
+                back = event.key() == Qt.Key.Key_Backtab or event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                order[(index + (-1 if back else 1)) % len(order)].setFocus(Qt.FocusReason.TabFocusReason)
+            return True
+        if event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.ShortcutOverride, QEvent.Type.Wheel):
+            if overlay.waiting_for_page and obj is overlay.tab_bar:
+                if event_type == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                    self.window.tabs.setCurrentWidget(self.panel)
                 return True
-            if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.ShortcutOverride, QEvent.Type.Wheel):
-                if self.overlay.waiting_for_page and obj is self.overlay.tab_bar:
-                    if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
-                        self.window.tabs.setCurrentWidget(self.window.auto_rng_tab)
-                    return True
-                if obj is self.overlay.target_button or obj is self.overlay.tip or self.overlay.tip.isAncestorOf(obj):
-                    return False
-                return True
+            target = overlay.focus_target
+            if obj is target or target.isAncestorOf(obj) or obj is overlay.tip or overlay.tip.isAncestorOf(obj):
+                # Prevent QDialog's default button from accepting an unrelated row on Enter.
+                if self._dialog_key and event_type == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not isinstance(obj, QToolButton):
+                    from PySide6.QtWidgets import QPushButton
+                    if not isinstance(obj, QPushButton):
+                        return True
+                return False
+            return True
         return False
