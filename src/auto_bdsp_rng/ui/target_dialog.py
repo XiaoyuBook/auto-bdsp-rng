@@ -65,8 +65,8 @@ def _filter_desc(sf: StateFilter, shiny_mode: str) -> str:
             f"性格：{nature_label}",
             f"特性：{ability_label}",
             f"性别：{gender_label}",
-            f"Height：{_range_desc(sf.height_min, sf.height_max)}",
-            f"Weight：{_range_desc(sf.weight_min, sf.weight_max)}",
+            f"身高：{_range_desc(sf.height_min, sf.height_max)}",
+            f"体重：{_range_desc(sf.weight_min, sf.weight_max)}",
         )
     )
 

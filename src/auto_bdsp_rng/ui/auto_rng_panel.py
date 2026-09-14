@@ -1123,7 +1123,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.refresh_scripts_button.setToolTip("刷新脚本列表")
         self.refresh_scripts_button.setAccessibleName("刷新任务脚本列表")
         self.refresh_scripts_button.setFixedSize(72, 32)
-        self.refresh_scripts_button.setStyleSheet("QPushButton {color: #087C58; border: 0; background: transparent; padding: 0;} QPushButton:disabled {color: #9AA8A1;}")
+        self.refresh_scripts_button.setStyleSheet(
+            "QPushButton {color: #087C58; border: 0; background: transparent; padding: 0;} "
+            "QPushButton:disabled {color: #9AA8A1;}" + focus_styles("QPushButton")
+        )
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         self.runtime_script_header.layout().insertWidget(1, self.script_status_label)
         layout.addWidget(self.refresh_scripts_button, 0, 0, 1, 2, Qt.AlignmentFlag.AlignRight)
@@ -2377,10 +2380,6 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 color: #066A4B;
                 text-decoration: underline;
             }
-            QPushButton#TargetOpenButton:focus {
-                border: 1px solid $accent;
-                outline: 0;
-            }
             QPushButton#ScriptSaveButton:disabled {
                 color: #9AA8A1;
             }
@@ -2771,7 +2770,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-size: 10px;
             }
             """) + primary_button_styles("QToolButton#PrimaryButton") + focus_styles(
-                "QPushButton#RuntimeSetupButton",
+                "QPushButton#RuntimeSetupButton", "QPushButton#TargetOpenButton",
                 "QPushButton#ConfigSaveButton", "QPushButton#ScriptSaveButton",
                 "QPushButton#InlineLinkButton", "QPushButton#AutoRngRefreshScripts",
                 "QToolButton#PrimaryButton", "QPushButton#DangerButton",

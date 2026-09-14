@@ -24,7 +24,7 @@ WARNING = "#906423"
 WARNING_SOFT = "#FFF7E8"
 ERROR = "#AC4B42"
 ERROR_SOFT = "#FFF4F1"
-FOCUS = "#176B97"
+FOCUS = ACCENT
 CONTROL_HEIGHT = 32
 CONTROL_RADIUS = 7
 BUNDLED_FONT_FAMILY = "MiSans"
@@ -139,7 +139,7 @@ def workspace_styles(template: str) -> str:
 
 
 def focus_styles(*selectors: str) -> str:
-    """Keep input borders at one pixel and add an inset outline on buttons."""
+    """Use the shared accent color for a single solid focus border."""
     return ",\n".join(f"{selector}:focus" for selector in selectors) + (
-        f" {{ border: 1px solid {FOCUS}; outline: 2px dotted {FOCUS}; outline-offset: -3px; }}"
+        f" {{ border: 1px solid {FOCUS}; outline: 0; }}"
     )

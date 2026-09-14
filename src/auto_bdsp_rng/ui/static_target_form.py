@@ -287,7 +287,7 @@ class StaticTargetForm(QWidget):
 
         self.height_min = self._spin(0, 255, 0)
         self.height_max = self._spin(0, 255, 255)
-        grid.addWidget(_filter_label("Height", label_width), 4, 0)
+        grid.addWidget(_filter_label("身高", label_width), 4, 0)
         grid.addLayout(
             _range_row(
                 self.height_min,
@@ -301,7 +301,7 @@ class StaticTargetForm(QWidget):
 
         self.weight_min = self._spin(0, 255, 0)
         self.weight_max = self._spin(0, 255, 255)
-        grid.addWidget(_filter_label("Weight", label_width), 5, 0)
+        grid.addWidget(_filter_label("体重", label_width), 5, 0)
         grid.addLayout(
             _range_row(
                 self.weight_min,
@@ -399,7 +399,7 @@ class StaticTargetForm(QWidget):
         return (
             f"{self.encounter_combo.currentText()} Lv.{record.template.level} "
             f"IV Count {record.template.iv_count}; shiny={self.shiny_filter.currentText()}; "
-            f"Height {self.height_min.value()}-{self.height_max.value()}"
+            f"身高 {self.height_min.value()}-{self.height_max.value()}"
         )
 
     def _update_encounter_details(self) -> None:
