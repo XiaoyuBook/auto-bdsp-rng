@@ -24,7 +24,7 @@ from auto_bdsp_rng.blink_detection import (
     plan_timeline,
     track_advances,
 )
-from auto_bdsp_rng.capture_broker import DEFAULT_CAPTURE_API
+from auto_bdsp_rng.capture_broker import DEFAULT_CAPTURE_API, DEFAULT_CAPTURE_OPEN_TIMEOUT
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 
 
@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_broker.add_argument("--capture-api", type=int, default=DEFAULT_CAPTURE_API)
     capture_broker.add_argument("--manifest", default=None)
     capture_broker.add_argument("--first-frame-timeout", type=float, default=5.0)
+    capture_broker.add_argument("--open-timeout", type=float, default=DEFAULT_CAPTURE_OPEN_TIMEOUT)
     capture_broker.add_argument("--frame-timeout", type=float, default=1.0)
     capture_broker.add_argument("--parent-pid", type=int, default=0)
 
@@ -323,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             args.capture_api,
             manifest_path=args.manifest,
             first_frame_timeout=args.first_frame_timeout,
+            open_timeout=args.open_timeout,
             frame_timeout=args.frame_timeout,
             parent_pid=args.parent_pid,
         )

@@ -17,6 +17,8 @@ from auto_bdsp_rng.capture_broker import (
     BrokerState,
     CaptureBrokerClient,
     DEFAULT_CAPTURE_API,
+    DEFAULT_CAPTURE_OPEN_TIMEOUT,
+    DEFAULT_FIRST_FRAME_TIMEOUT,
     _ProcessStatus,
     _manifest_has_no_owner,
     _process_status,
@@ -33,8 +35,9 @@ class CaptureBrokerProcessError(RuntimeError):
 class CaptureBrokerProcess:
     """Own a Broker child process without ever opening the card in the GUI.
 
-    ``start`` waits for the first committed frame (up to five seconds by
-    default). Consumers use :meth:`client` to open their own read-only mapping.
+    ``start`` bounds child startup and device initialization separately from
+    the five-second first-frame wait. Consumers use :meth:`client` to open
+    their own read-only mapping.
     ``stop`` first requests a cooperative shutdown and only terminates a child
     that fails to exit inside the bounded grace period.
     """
@@ -45,7 +48,9 @@ class CaptureBrokerProcess:
         capture_api: int = DEFAULT_CAPTURE_API,
         *,
         manifest_path: str | Path | None = None,
-        first_frame_timeout: float = 5.0,
+        first_frame_timeout: float = DEFAULT_FIRST_FRAME_TIMEOUT,
+        open_timeout: float = DEFAULT_CAPTURE_OPEN_TIMEOUT,
+        startup_timeout: float = 10.0,
         frame_timeout: float = 1.0,
         stop_timeout: float = 2.0,
         parent_pid: int | None = None,
@@ -55,6 +60,8 @@ class CaptureBrokerProcess:
         self.capture_api = int(capture_api)
         self.manifest_path = Path(manifest_path) if manifest_path is not None else default_manifest_path()
         self.first_frame_timeout = max(0.1, float(first_frame_timeout))
+        self.open_timeout = max(0.1, float(open_timeout))
+        self.startup_timeout = max(0.1, float(startup_timeout))
         self.frame_timeout = max(0.1, float(frame_timeout))
         self.stop_timeout = max(0.1, float(stop_timeout))
         self.parent_pid = os.getpid() if parent_pid is None else max(0, int(parent_pid))
@@ -62,6 +69,7 @@ class CaptureBrokerProcess:
         self._process: subprocess.Popen[bytes] | None = None
         self._failure: str | None = None
         self._session_id: str | None = None
+        self.capture_diagnostics: dict[str, object] = {}
         self._lock = threading.RLock()
 
     @property
@@ -122,6 +130,8 @@ class CaptureBrokerProcess:
             str(self.manifest_path),
             "--first-frame-timeout",
             f"{self.first_frame_timeout:g}",
+            "--open-timeout",
+            f"{self.open_timeout:g}",
             "--frame-timeout",
             f"{self.frame_timeout:g}",
             "--parent-pid",
@@ -226,6 +236,7 @@ class CaptureBrokerProcess:
                 self.capture_api = int(capture_api)
             self._failure = None
             self._session_id = None
+            self.capture_diagnostics = {}
 
         self._recover_or_reject_existing_broker()
 
@@ -239,6 +250,11 @@ class CaptureBrokerProcess:
                 "stderr": subprocess.DEVNULL,
                 "close_fds": True,
             }
+            # OpenCV may be imported by the child entry point before the
+            # adapter is constructed, so configure MSMF in its environment.
+            child_environment = os.environ.copy()
+            child_environment.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+            popen_kwargs["env"] = child_environment
             if sys.platform == "win32":
                 creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 if creation_flags:
@@ -250,7 +266,8 @@ class CaptureBrokerProcess:
                 self._process = None
                 raise CaptureBrokerProcessError(f"无法启动共享视频源进程: {exc}") from exc
 
-        deadline = time.monotonic() + self.first_frame_timeout
+        startup_phase = "starting_process"
+        deadline = time.monotonic() + self.startup_timeout
         while time.monotonic() < deadline:
             process = self._process
             if process is None:
@@ -262,11 +279,23 @@ class CaptureBrokerProcess:
                 manifest = None
             if manifest is not None and manifest.pid == process.pid:
                 self._session_id = manifest.session_id
+                self.capture_diagnostics = dict(getattr(manifest, "capture", {}) or {})
                 if manifest.state is BrokerState.RUNNING:
                     return True
                 if manifest.state is BrokerState.FAILED:
                     self._failure = manifest.failure_message or "共享视频源报告采集失败"
                     break
+                # Each phase gets its own bounded budget, once. Repeated
+                # STARTING manifests must never keep a hung driver alive.
+                if startup_phase == "starting_process":
+                    startup_phase = "opening"
+                    deadline = time.monotonic() + self.open_timeout
+                if (
+                    startup_phase == "opening"
+                    and self.capture_diagnostics.get("phase") == "waiting_for_frame"
+                ):
+                    startup_phase = "waiting_for_frame"
+                    deadline = time.monotonic() + self.first_frame_timeout
             if exit_code is not None:
                 if (
                     manifest is not None
@@ -286,7 +315,12 @@ class CaptureBrokerProcess:
             time.sleep(0.025)
 
         if self._failure is None:
-            self._failure = "5 秒内未收到采集卡首帧"
+            if startup_phase == "starting_process":
+                self._failure = f"视频源进程在 {self.startup_timeout:g} 秒内未完成启动"
+            elif startup_phase == "opening":
+                self._failure = f"采集卡在 {self.open_timeout:g} 秒内未完成打开与格式设置"
+            else:
+                self._failure = f"采集卡打开后 {self.first_frame_timeout:g} 秒内未收到首帧"
         self.stop()
         return False
 

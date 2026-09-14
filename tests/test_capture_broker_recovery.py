@@ -218,25 +218,33 @@ def test_reused_pid_without_broker_resources_allows_reconnect(broker_record, par
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows named mutex and mapping lifetime")
-def test_controller_reconnects_to_real_child_after_stale_record(broker_record, monkeypatch):
+@pytest.mark.parametrize("open_delay", [0.0, 0.5])
+def test_controller_reconnects_to_real_child_after_stale_record(broker_record, monkeypatch, open_delay):
     manifest, ring = broker_record
     ring.close(unlink=True)
-    controller = CaptureBrokerProcess(manifest_path=manifest.manifest_path, first_frame_timeout=5.0)
+    controller = CaptureBrokerProcess(
+        manifest_path=manifest.manifest_path, first_frame_timeout=0.2, open_timeout=2.0,
+    )
     # Windows venv python.exe is a launcher with a different PID from the
     # interpreter. Use a direct child (as in the packaged app), with the same
     # source/dependency paths as this test process.
     child_code = "\n".join((
         "import sys",
+        "import time",
         f"sys.path[:] = {sys.path!r}",
         "import numpy as np",
         "from auto_bdsp_rng.capture_broker import CaptureBroker, FakeCapture",
-        "capture = FakeCapture([np.zeros((2, 4, 3), dtype=np.uint8)], repeat=True, read_delay=0.002)",
+        "class SlowCapture(FakeCapture):",
+        "    def open(self, device_index, capture_api):",
+        "        time.sleep(float(sys.argv[3]))",
+        "        return super().open(device_index, capture_api)",
+        "capture = SlowCapture([np.zeros((2, 4, 3), dtype=np.uint8)], repeat=True, read_delay=0.002)",
         "broker = CaptureBroker(0, manifest_path=sys.argv[1], parent_pid=int(sys.argv[2]),",
-        "    capture_factory=lambda *_args: capture, width=4, height=2)",
+        "    capture_factory=lambda *_args: capture, width=4, height=2, first_frame_timeout=0.2, open_timeout=2.0)",
         "raise SystemExit(0 if broker.serve_forever() else 2)",
     ))
     monkeypatch.setattr(controller, "_command", lambda: [
-        sys._base_executable, "-c", child_code, manifest.manifest_path, str(os.getpid())
+        sys._base_executable, "-c", child_code, manifest.manifest_path, str(os.getpid()), str(open_delay)
     ])
     child = None
     try:

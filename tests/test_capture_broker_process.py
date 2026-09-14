@@ -89,6 +89,90 @@ def test_capture_broker_process_uses_hidden_frozen_child_argument(monkeypatch, t
     assert command[command.index("--parent-pid") + 1] == "2468"
 
 
+def test_controller_waits_for_each_startup_phase_once(monkeypatch, tmp_path):
+    child = _FakeProcess()
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    def discover(_path):
+        if now[0] < 0.3:
+            raise process_module.BrokerError("child imports are still loading")
+        return SimpleNamespace(
+            pid=child.pid, session_id="session",
+            state=BrokerState.RUNNING if now[0] >= 0.9 else BrokerState.STARTING,
+            capture={"phase": "opening" if now[0] < 0.6 else "waiting_for_frame"},
+        )
+
+    monkeypatch.setattr(process_module, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=sleep))
+    monkeypatch.setattr(process_module, "discover_manifest", discover)
+    controller = CaptureBrokerProcess(
+        manifest_path=tmp_path / "broker.json", popen_factory=lambda *_args, **_kwargs: child,
+        startup_timeout=0.5, open_timeout=0.5, first_frame_timeout=0.5,
+    )
+    assert controller.start()
+    assert 0.9 <= now[0] < 1.0
+
+
+@pytest.mark.parametrize("phase, expected_detail", [
+    ("starting_process", "未完成启动"),
+    ("opening", "未完成打开与格式设置"),
+    ("waiting_for_frame", "打开后 0.2 秒内未收到首帧"),
+])
+def test_controller_bounds_stuck_startup_phases(monkeypatch, tmp_path, phase, expected_detail):
+    child = _FakeProcess()
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+        assert now[0] < 1.0, "unchanged manifest incorrectly reset the deadline"
+
+    def discover(_path):
+        if phase == "starting_process":
+            raise process_module.BrokerError("no child manifest")
+        return SimpleNamespace(
+            pid=child.pid, session_id="session", state=BrokerState.STARTING,
+            capture={"phase": phase, "reported_fps": 15.0},
+        )
+
+    monkeypatch.setattr(process_module, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=sleep))
+    monkeypatch.setattr(process_module, "discover_manifest", discover)
+    controller = CaptureBrokerProcess(
+        manifest_path=tmp_path / "broker.json", popen_factory=lambda *_args, **_kwargs: child,
+        startup_timeout=0.2, open_timeout=0.2, first_frame_timeout=0.2,
+    )
+    monkeypatch.setattr(controller, "_recover_or_reject_existing_broker", lambda: None)
+    monkeypatch.setattr(controller, "_request_stop", lambda: None)
+    monkeypatch.setattr(controller, "_remove_owned_manifest", lambda _pid: None)
+
+    assert not controller.start()
+    assert expected_detail in controller.failure
+    assert child.returncode == 0
+    assert controller.process is None
+    if phase != "starting_process":
+        assert controller.capture_diagnostics["reported_fps"] == 15.0
+
+
+def test_child_receives_msmf_environment_before_imports(monkeypatch, tmp_path):
+    child = _FakeProcess()
+    launches = []
+
+    def popen(_command, **kwargs):
+        launches.append(kwargs)
+        return child
+
+    monkeypatch.delenv("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", raising=False)
+    monkeypatch.setattr(process_module, "discover_manifest", lambda _path: SimpleNamespace(
+        pid=child.pid, session_id="session", state=BrokerState.RUNNING,
+    ))
+    controller = CaptureBrokerProcess(manifest_path=tmp_path / "broker.json", popen_factory=popen)
+    monkeypatch.setattr(controller, "_recover_or_reject_existing_broker", lambda: None)
+    assert controller.start()
+    assert launches[0]["env"]["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] == "0"
+    assert "OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS" not in process_module.os.environ
+
+
 def test_capture_broker_process_rejects_a_live_owner_before_spawning(monkeypatch, tmp_path):
     manifest = SimpleNamespace(
         pid=9876,

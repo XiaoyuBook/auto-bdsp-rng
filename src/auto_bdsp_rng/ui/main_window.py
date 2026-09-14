@@ -5170,10 +5170,18 @@ class MainWindow(QMainWindow):
                 append("frame_timeout_s", getattr(manifest, "frame_timeout_seconds", None))
                 capture_info = getattr(manifest, "capture", None)
                 if isinstance(capture_info, dict):
-                    for key in ("device_index", "api", "fourcc", "fps"):
+                    for key in (
+                        "device_index", "api", "fourcc", "fps", "phase", "actual_api",
+                        "actual_width", "actual_height", "reported_fps", "reported_fourcc",
+                        "rejected_properties",
+                    ):
                         append(f"capture_{key}", capture_info.get(key))
 
         if manifest is None:
+            cached_capture = getattr(process, "capture_diagnostics", None)
+            if isinstance(cached_capture, dict):
+                for key, value in cached_capture.items():
+                    append(f"capture_{key}", value)
             # A failed/removed manifest should not hide the controller's own
             # configuration.  These are only fallback fields; a verified
             # manifest remains the authoritative source above.
@@ -5478,6 +5486,11 @@ class MainWindow(QMainWindow):
         if self._is_closing or self._video_source_cancel_requested:
             return
         if not success:
+            self._write_run_log(
+                "视频源",
+                f"视频源连接失败；{self._video_source_diagnostic_snapshot()}",
+                level="ERROR",
+            )
             stopped, stop_error = self._stop_capture_broker_process(
                 process,
                 context="清理启动失败的 Broker 时出错",
@@ -5518,6 +5531,7 @@ class MainWindow(QMainWindow):
         self._release_preview_capture()
         self._preview_timer.start()
         self.statusBar().showMessage("共享视频源已连接，预览将持续显示")
+        self._write_run_log("视频源", f"视频源已连接；{self._video_source_diagnostic_snapshot()}")
         self.video_source_dialog.hide()
 
     def _capture_broker_start_finished(

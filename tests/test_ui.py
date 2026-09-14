@@ -645,7 +645,7 @@ def test_main_preview_targets_30_fps(app):
     assert window._preview_timer.timerType() == Qt.TimerType.PreciseTimer
 
 
-def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(app):
+def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(app, monkeypatch):
     class Client:
         def close(self):
             return None
@@ -666,7 +666,10 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
             self.stopped = True
 
     process = BrokerProcess()
+    process.capture_diagnostics = {"actual_width": 1920, "actual_height": 1080, "reported_fps": 30.0}
     window = MainWindow(capture_broker_process=process)
+    logged = []
+    monkeypatch.setattr(window, "_write_run_log", lambda source, message, **kwargs: logged.append(str(message)))
 
     assert window.video_source_status_dot.property("state") == "disconnected"
     window.show_video_source_dialog()
@@ -683,6 +686,7 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
         QTest.qWait(5)
     assert window._video_source_connected
     assert window._capture_broker_start_thread is None
+    assert any("capture_reported_fps=30.0" in message for message in logged)
     config = window._config_from_form().capture
 
     assert process.started == (0, 1400)
@@ -749,6 +753,7 @@ def test_shared_video_source_start_failure_preserves_broker_reason(app, monkeypa
 
     class BrokerProcess:
         failure = expected
+        capture_diagnostics = {"phase": "waiting_for_frame", "reported_fps": 15.0}
 
         def start(self, *, device_index, capture_api):
             del device_index, capture_api
@@ -763,6 +768,8 @@ def test_shared_video_source_start_failure_preserves_broker_reason(app, monkeypa
         lambda _parent, title, message: dialogs.append((title, message)),
     )
     window = MainWindow(capture_broker_process=BrokerProcess())
+    logged = []
+    monkeypatch.setattr(window, "_write_run_log", lambda source, message, **kwargs: logged.append(str(message)))
 
     assert window.connect_video_source()
     deadline = time.perf_counter() + 2
@@ -771,6 +778,10 @@ def test_shared_video_source_start_failure_preserves_broker_reason(app, monkeypa
         QTest.qWait(5)
 
     assert dialogs == [("视频源连接失败", expected)]
+    assert any(
+        "capture_phase=waiting_for_frame" in message and "capture_reported_fps=15.0" in message
+        for message in logged
+    )
     assert "未检测到捕捉画面" not in dialogs[0][1]
     assert not window._video_source_connected
     assert window.video_source_status.text() == "连接失败"

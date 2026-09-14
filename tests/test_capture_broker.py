@@ -349,6 +349,54 @@ def test_start_timeout_rechecks_a_running_state_during_manifest_publish(tmp_path
         broker.stop()
 
 
+def test_device_initialization_does_not_consume_first_frame_timeout(tmp_path: Path):
+    class SlowOpeningCapture(FakeCapture):
+        def open(self, device_index, capture_api):
+            time.sleep(0.1)
+            return super().open(device_index, capture_api)
+
+    capture = SlowOpeningCapture([_frame(35)], repeat=True, read_delay=0.002)
+    broker = _broker(tmp_path, capture, first_frame_timeout=0.03, frame_timeout=0.2)
+    try:
+        assert broker.start()
+        assert BrokerManifest.load(broker.manifest_path).state is BrokerState.RUNNING
+    finally:
+        broker.stop()
+
+
+@pytest.mark.parametrize("blocked_phase", ["opening", "waiting_for_frame"])
+def test_broker_bounds_initialization_and_first_frame_separately(tmp_path: Path, blocked_phase):
+    unblock = threading.Event()
+
+    class BlockingCapture(FakeCapture):
+        def open(self, device_index, capture_api):
+            if blocked_phase == "opening":
+                assert unblock.wait(3)
+            return super().open(device_index, capture_api)
+
+        def read(self):
+            if blocked_phase == "waiting_for_frame":
+                assert unblock.wait(3)
+            return super().read()
+
+    capture = BlockingCapture([_frame(36)], repeat=True)
+    broker = _broker(tmp_path, capture, first_frame_timeout=0.1, frame_timeout=0.2)
+    broker.open_timeout = 0.1
+    started = time.monotonic()
+    try:
+        assert not broker.start()
+        assert time.monotonic() - started < 1.0
+        assert broker.manifest.capture["phase"] == blocked_phase
+        assert ("打开与格式设置" if blocked_phase == "opening" else "打开后") in str(broker.failure)
+        unblock.set()
+        assert broker.wait(1.0)
+        assert broker.state is BrokerState.FAILED
+    finally:
+        unblock.set()
+        broker.stop()
+    assert capture.released
+
+
 def test_failed_state_cannot_regress_to_running(tmp_path: Path):
     broker = _broker(tmp_path, FakeCapture([]))
     ring = FrameRing.create(width=4, height=2, slot_count=3, state=BrokerState.STARTING)

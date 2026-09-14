@@ -57,6 +57,7 @@ CAPTURE_API_MSMF = 1400
 DEFAULT_CAPTURE_API = CAPTURE_API_MSMF
 DEFAULT_SLOT_COUNT = 4
 DEFAULT_FIRST_FRAME_TIMEOUT = 5.0
+DEFAULT_CAPTURE_OPEN_TIMEOUT = 15.0
 DEFAULT_FRAME_TIMEOUT = 1.0
 DEFAULT_POLL_INTERVAL = 0.005
 DEFAULT_PARENT_POLL_INTERVAL = 0.1
@@ -177,6 +178,9 @@ class OpenCVCapture:
     """
 
     def __init__(self, device_index: int = 0, capture_api: int = DEFAULT_CAPTURE_API) -> None:
+        # Some capture-card drivers stall while MSMF builds GPU transforms.
+        # Set this before importing OpenCV; explicit user overrides still win.
+        os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
         try:
             import cv2  # type: ignore
         except Exception as exc:  # pragma: no cover - depends on installation
@@ -185,12 +189,23 @@ class OpenCVCapture:
         self.device_index = int(device_index)
         self.capture_api = int(capture_api)
         self._capture: Any | None = None
+        self._diagnostics: dict[str, Any] = {}
 
     def open(self, device_index: int | None = None, capture_api: int | None = None) -> bool:
         if device_index is not None:
             self.device_index = int(device_index)
         if capture_api is not None:
             self.capture_api = int(capture_api)
+        self._diagnostics = {}
+        backend_name = {
+            CAPTURE_API_MSMF: "Media Foundation",
+            CAPTURE_API_DIRECTSHOW: "DirectShow",
+        }.get(self.capture_api)
+        if backend_name and not self._cv2.videoio_registry.hasBackend(self.capture_api):
+            detail = ""
+            if self.capture_api == CAPTURE_API_MSMF and os.environ.get("OPENCV_VIDEOIO_PRIORITY_MSMF") == "0":
+                detail = "检测到 OPENCV_VIDEOIO_PRIORITY_MSMF=0 禁用了此后端；移除此设置并重启软件后可重试。"
+            raise CaptureOpenError(f"当前 OpenCV 的 {backend_name} 采集后端不可用。{detail}")
         self._capture = self._cv2.VideoCapture(self.device_index, self.capture_api)
         return bool(self._capture.isOpened())
 
@@ -198,11 +213,42 @@ class OpenCVCapture:
         if self._capture is None:
             return
         cv2 = self._cv2
-        self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
-        self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
-        code = cv2.VideoWriter_fourcc(*fourcc)
-        self._capture.set(cv2.CAP_PROP_FOURCC, code)
-        self._capture.set(cv2.CAP_PROP_FPS, float(fps))
+        backend = int(self._capture.get(cv2.CAP_PROP_BACKEND)) or self.capture_api
+        # DSHOW's FPS setter rebuilds the capture graph. Apply the compressed
+        # input subtype last so that rebuild cannot revert it to raw YUY2.
+        properties = [
+            ("fps", cv2.CAP_PROP_FPS, float(fps)),
+            ("width", cv2.CAP_PROP_FRAME_WIDTH, int(width)),
+            ("height", cv2.CAP_PROP_FRAME_HEIGHT, int(height)),
+        ]
+        # MSMF FOURCC is the decoded output format, not the device's native
+        # input subtype. Leave its BGR conversion enabled and negotiate the
+        # native media type using the requested size/FPS instead of MJPG output.
+        if backend != CAPTURE_API_MSMF:
+            properties.append(("fourcc", cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc)))
+        rejected = []
+        for name, prop, value in properties:
+            if not self._capture.set(prop, value):
+                rejected.append(name)
+        self._diagnostics = {"actual_api": backend, "rejected_properties": rejected}
+        for name, prop in (
+            ("actual_width", cv2.CAP_PROP_FRAME_WIDTH),
+            ("actual_height", cv2.CAP_PROP_FRAME_HEIGHT),
+            ("reported_fps", cv2.CAP_PROP_FPS),
+            ("reported_fourcc", cv2.CAP_PROP_FOURCC),
+        ):
+            try:
+                value = float(self._capture.get(prop))
+                if math.isfinite(value):
+                    if name == "reported_fourcc":
+                        value = "".join(chr((int(value) >> shift) & 0xFF) for shift in (0, 8, 16, 24)).strip("\x00")
+                    self._diagnostics[name] = value
+            except Exception:
+                # Unsupported diagnostic getters must not break working video.
+                pass
+
+    def diagnostics(self) -> dict[str, Any]:
+        return dict(self._diagnostics)
 
     def read(self) -> tuple[bool, np.ndarray | None]:
         if self._capture is None or not self._capture.isOpened():
@@ -1365,6 +1411,7 @@ class CaptureBroker:
         fourcc: str = DEFAULT_FOURCC,
         slot_count: int = DEFAULT_SLOT_COUNT,
         first_frame_timeout: float = DEFAULT_FIRST_FRAME_TIMEOUT,
+        open_timeout: float = DEFAULT_CAPTURE_OPEN_TIMEOUT,
         frame_timeout: float = DEFAULT_FRAME_TIMEOUT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         session_id: str | None = None,
@@ -1380,6 +1427,7 @@ class CaptureBroker:
         self.fourcc = str(fourcc)
         self.slot_count = int(slot_count)
         self.first_frame_timeout = float(first_frame_timeout)
+        self.open_timeout = max(0.1, float(open_timeout))
         self.frame_timeout = float(frame_timeout)
         self.poll_interval = max(0.0005, float(poll_interval))
         self.parent_pid = max(0, int(parent_pid))
@@ -1395,12 +1443,15 @@ class CaptureBroker:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._first_frame_event = threading.Event()
+        self._capture_ready_event = threading.Event()
         self._done_event = threading.Event()
         self._lifecycle_lock = threading.RLock()
         self._state_lock = threading.RLock()
         self._state = BrokerState.STOPPED
         self._failure: BaseException | None = None
         self._manifest: BrokerManifest | None = None
+        self._capture_phase = "opening"
+        self._capture_details: dict[str, Any] = {}
 
     @property
     def state(self) -> BrokerState:
@@ -1433,6 +1484,8 @@ class CaptureBroker:
             ):
                 return False
             self._state = state
+            if state is BrokerState.RUNNING:
+                self._capture_phase = "capturing"
             if failure is not None:
                 self._failure = failure
             if self._ring is not None:
@@ -1471,6 +1524,9 @@ class CaptureBroker:
                 "api": self.capture_api,
                 "fourcc": self.fourcc,
                 "fps": self.fps,
+                "phase": self._capture_phase,
+                "open_timeout_seconds": self.open_timeout,
+                **self._capture_details,
             },
             first_frame_timeout_seconds=self.first_frame_timeout,
             frame_timeout_seconds=self.frame_timeout,
@@ -1530,8 +1586,11 @@ class CaptureBroker:
                     self._check_existing_manifest()
                     self._stop_event.clear()
                     self._first_frame_event.clear()
+                    self._capture_ready_event.clear()
                     self._done_event.clear()
                     self._failure = None
+                    self._capture_phase = "opening"
+                    self._capture_details = {}
                     self._ring = FrameRing.create(
                         width=self.width,
                         height=self.height,
@@ -1564,6 +1623,11 @@ class CaptureBroker:
                     raise
         if not wait:
             return True
+        if timeout is None and not self._capture_ready_event.wait(self.open_timeout):
+            with self._state_lock:
+                if not self._capture_ready_event.is_set() and self._state is BrokerState.STARTING:
+                    self._fail(CaptureOpenError(f"采集卡在 {self.open_timeout:g} 秒内未完成打开与格式设置"))
+                    return False
         wait_timeout = self.first_frame_timeout if timeout is None else max(0.0, timeout)
         if not self._first_frame_event.wait(wait_timeout):
             # A RUNNING manifest publish can briefly outlive the event wait
@@ -1574,7 +1638,7 @@ class CaptureBroker:
                     return True
                 if self._state is not BrokerState.STARTING:
                     return False
-                self._fail(CaptureOpenError("共享视频源首帧等待超时"))
+                self._fail(CaptureOpenError(f"采集卡打开后 {wait_timeout:g} 秒内未收到首帧"))
                 return False
         return self.state is BrokerState.RUNNING
 
@@ -1612,10 +1676,19 @@ class CaptureBroker:
         return True
 
     def _run(self) -> None:
-        first_deadline = time.monotonic() + self.first_frame_timeout
         last_frame_time: float | None = None
         try:
             self._capture = self._open_capture()
+            with self._state_lock:
+                if self._stop_event.is_set():
+                    return
+                diagnostics = getattr(self._capture, "diagnostics", None)
+                if callable(diagnostics):
+                    self._capture_details = diagnostics()
+                self._capture_phase = "waiting_for_frame"
+                self._write_manifest(BrokerState.STARTING, strict=True)
+                self._capture_ready_event.set()
+            first_deadline = time.monotonic() + self.first_frame_timeout
             while not self._stop_event.is_set():
                 if self._poll_stop_command():
                     self._stop_event.set()
@@ -1631,7 +1704,7 @@ class CaptureBroker:
                     break
                 now = time.monotonic()
                 if not self._first_frame_event.is_set() and now >= first_deadline:
-                    self._fail(CaptureOpenError("共享视频源首帧等待超时"))
+                    self._fail(CaptureOpenError(f"采集卡打开后 {self.first_frame_timeout:g} 秒内未收到首帧"))
                     return
                 if last_frame_time is not None and now - last_frame_time >= self.frame_timeout:
                     self._fail(
@@ -1669,6 +1742,7 @@ class CaptureBroker:
             if self._stop_event.is_set() and self.state is not BrokerState.FAILED:
                 self._set_state(BrokerState.STOPPED)
             self._first_frame_event.set()
+            self._capture_ready_event.set()
             self._done_event.set()
 
     def _fail(self, error: BaseException) -> None:
@@ -1682,6 +1756,7 @@ class CaptureBroker:
             pass
         finally:
             self._first_frame_event.set()
+            self._capture_ready_event.set()
 
     def wait(self, timeout: float | None = None) -> bool:
         return self._done_event.wait(timeout)
@@ -1840,6 +1915,7 @@ __all__ = [
     "CAPTURE_API_DIRECTSHOW",
     "CAPTURE_API_MSMF",
     "DEFAULT_CAPTURE_API",
+    "DEFAULT_CAPTURE_OPEN_TIMEOUT",
     "DEFAULT_FIRST_FRAME_TIMEOUT",
     "DEFAULT_FOURCC",
     "DEFAULT_FPS",

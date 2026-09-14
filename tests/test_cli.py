@@ -36,11 +36,14 @@ def test_capture_broker_hidden_command_runs_standalone_service(monkeypatch, tmp_
             str(manifest),
             "--parent-pid",
             "2468",
+            "--open-timeout",
+            "12.5",
         ]
     ) == 0
     assert calls[0][0:2] == (3, 700)
     assert calls[0][2]["manifest_path"] == str(manifest)
     assert calls[0][2]["parent_pid"] == 2468
+    assert calls[0][2]["open_timeout"] == 12.5
 
 
 def test_capture_broker_hidden_command_defaults_to_media_foundation(monkeypatch):
