@@ -606,7 +606,7 @@ class StartupNoticeDialog(QDialog):
         self.setFont(ui_font())
         self.setWindowTitle("选择乱数方式")
         self.setObjectName("StartupNoticeDialog")
-        self.resize(560, 360)
+        self.setFixedSize(560, 360)
         self.setStyleSheet(
             "QDialog#StartupNoticeDialog { background: #ffffff; color: #202A33; }"
             " QDialog#StartupNoticeDialog QLabel { background: transparent; color: #202A33; }"
@@ -618,11 +618,19 @@ class StartupNoticeDialog(QDialog):
             " font-size: 13px; }"
             " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice { background: #FFFFFF;"
             " color: #202A33; border: 1px solid #DCE5E1; border-radius: 11px;"
-            " min-height: 112px; padding: 14px; text-align: left; }"
+            " min-height: 112px; padding: 0; text-align: left; }"
             " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice:hover {"
             " border-color: #087C58; background: #F7FAF8; }"
             " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice:checked {"
-            " background: #F3F8F5; color: #087C58; border: 2px solid #087C58; padding: 13px; }"
+            " background: #F3F8F5; color: #087C58; border: 2px solid #087C58; }"
+            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice QLabel {"
+            " background: transparent; }"
+            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice QLabel#ChoiceTitle {"
+            " color: #202A33; font-size: 15px; font-weight: 500; }"
+            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice:checked QLabel#ChoiceTitle {"
+            " color: #087C58; }"
+            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice QLabel#ChoiceDescription {"
+            " color: #68747E; font-size: 12px; }"
             " QDialog#StartupNoticeDialog QLabel#StartupReminder { color: #68747E;"
             " font-size: 11px; }"
             " QDialog#StartupNoticeDialog QPushButton#StartupPrimary { background: #087C58;"
@@ -691,12 +699,27 @@ class StartupNoticeDialog(QDialog):
         self.ok_button = ok_button
 
     def _create_experience_button(self, title: str, description: str, level: str) -> QPushButton:
-        button = QPushButton(f"{title}\n{description}")
+        button = QPushButton()
         button.setObjectName("ExperienceChoice")
         button.setCheckable(True)
         button.setProperty("experienceLevel", level)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setToolTip(description)
+        button.setFixedHeight(112)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button_layout = QVBoxLayout(button)
+        button_layout.setContentsMargins(16, 12, 16, 12)
+        button_layout.setSpacing(5)
+        title_label = QLabel(title, button)
+        title_label.setObjectName("ChoiceTitle")
+        title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        button_layout.addWidget(title_label)
+        description_label = QLabel(description, button)
+        description_label.setObjectName("ChoiceDescription")
+        description_label.setWordWrap(True)
+        description_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        description_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        button_layout.addWidget(description_label, 1)
         self._experience_buttons.addButton(button)
         button.toggled.connect(self._handle_experience_toggled)
         return button

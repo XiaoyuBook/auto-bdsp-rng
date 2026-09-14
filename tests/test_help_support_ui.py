@@ -69,7 +69,9 @@ def test_startup_notice_dialog_requires_experience_selection(app):
 
     dialog = StartupNoticeDialog()
     assert dialog.windowTitle() == "选择乱数方式"
-    assert "进入引导模式，根据引导完成自己的第一次乱数" in dialog.beginner_button.text()
+    assert "进入引导模式，根据引导完成自己的第一次乱数" in (
+        dialog.beginner_button.findChild(QLabel, "ChoiceDescription").text()
+    )
     assert dialog.selected_experience_level is None
     assert dialog.ok_button.isEnabled() is False
 
