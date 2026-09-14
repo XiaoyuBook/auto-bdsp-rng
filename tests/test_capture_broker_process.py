@@ -10,6 +10,13 @@ from auto_bdsp_rng.capture_broker_process import CaptureBrokerProcess, CaptureBr
 import auto_bdsp_rng.capture_broker_process as process_module
 
 
+@pytest.fixture(autouse=True)
+def keep_stub_manifests_independent_of_windows_resources(monkeypatch):
+    # These lifecycle unit tests use PID/session-only stubs. Real named mutex
+    # and mapping ownership are exercised in test_capture_broker_recovery.py.
+    monkeypatch.setattr(process_module, "_manifest_has_no_owner", lambda *_args: False)
+
+
 class _FakeProcess:
     def __init__(self, pid: int = 4321) -> None:
         self.pid = pid
@@ -136,16 +143,11 @@ def test_capture_broker_process_cooperatively_stops_an_orphan(monkeypatch, tmp_p
     alive = {9876: True, 2468: False}
     stop_requests = []
 
-    class ExistingBrokerClient:
-        def __init__(self):
-            self.manifest = manifest
-
-        def request_stop(self):
-            stop_requests.append(True)
-            alive[9876] = False
-
-        def close(self):
-            return None
+    def request_stop(expected_manifest, path):
+        assert expected_manifest is manifest
+        assert path == tmp_path / "broker.json"
+        stop_requests.append(True)
+        alive[9876] = False
 
     monkeypatch.setattr(process_module, "discover_manifest", lambda _path: manifest)
     monkeypatch.setattr(
@@ -158,9 +160,9 @@ def test_capture_broker_process_cooperatively_stops_an_orphan(monkeypatch, tmp_p
         ),
     )
     monkeypatch.setattr(
-        process_module.CaptureBrokerClient,
-        "connect",
-        lambda *_args, **_kwargs: ExistingBrokerClient(),
+        process_module,
+        "_request_manifest_stop",
+        request_stop,
     )
     controller = CaptureBrokerProcess(manifest_path=tmp_path / "broker.json")
 
@@ -374,21 +376,17 @@ def test_capture_broker_process_never_stops_a_manifest_owned_by_another_process(
     child = _FakeProcess(pid=4321)
     requested = []
 
-    class ExistingBrokerClient:
-        manifest = SimpleNamespace(pid=9876, session_id="existing-session")
-
-        def request_stop(self):
-            requested.append(True)
-
-        def close(self):
-            return None
-
     controller = CaptureBrokerProcess(manifest_path=tmp_path / "broker.json")
     controller._process = child
     monkeypatch.setattr(
-        process_module.CaptureBrokerClient,
-        "connect",
-        lambda *_args, **_kwargs: ExistingBrokerClient(),
+        process_module.BrokerManifest,
+        "load",
+        lambda _path: SimpleNamespace(pid=9876, session_id="existing-session"),
+    )
+    monkeypatch.setattr(
+        process_module,
+        "_request_manifest_stop",
+        lambda *_args: requested.append(True),
     )
 
     controller._request_stop()

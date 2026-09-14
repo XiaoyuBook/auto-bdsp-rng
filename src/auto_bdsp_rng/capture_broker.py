@@ -1138,6 +1138,62 @@ def discover_manifest(
     return manifest
 
 
+def _manifest_has_no_owner(
+    manifest: BrokerManifest,
+    manifest_path: Path,
+    *,
+    lifetime_mutex_held: bool = False,
+) -> bool:
+    """Confirm a stale Windows record even if its PID has been reused.
+
+    A broker creates its mapping before publishing the manifest and holds the
+    lifetime mutex until cleanup. Only an absent mapping under that mutex is
+    proof; access failures and a changed session must remain inconclusive.
+    """
+
+    if os.name != "nt" or not manifest.mapping_name:
+        return False
+    mutex = None
+    if not lifetime_mutex_held:
+        mutex = _BrokerLifetimeMutex(manifest_path)
+        try:
+            mutex.acquire()
+        except BrokerError:
+            return False
+    try:
+        try:
+            current = BrokerManifest.load(manifest_path)
+        except BrokerError:
+            return False
+        if current.pid != manifest.pid or current.session_id != manifest.session_id:
+            return False
+        try:
+            mapping = SharedMemory(name=manifest.mapping_name, create=False)
+        except FileNotFoundError:
+            return True
+        except (OSError, ValueError):
+            return False
+        else:
+            mapping.close()
+            return False
+    finally:
+        if mutex is not None:
+            mutex.release()
+
+
+def _request_manifest_stop(manifest: BrokerManifest, manifest_path: Path) -> None:
+    """Send a session-scoped stop without depending on readable frame memory."""
+
+    current = BrokerManifest.load(manifest_path)
+    if current.pid != manifest.pid or current.session_id != manifest.session_id:
+        raise BrokerUnavailableError("共享视频源会话已更换，未发送停止请求")
+    control_path = Path(manifest.control_path) if manifest.control_path else _stop_command_path(manifest_path)
+    _atomic_json_write(
+        control_path,
+        {"session_id": manifest.session_id, "command": "stop", "requested_at_ns": time.monotonic_ns()},
+    )
+
+
 class CaptureBrokerClient:
     """Read-only client for one broker session."""
 
@@ -1246,11 +1302,7 @@ class CaptureBrokerClient:
         """Ask a broker process to stop through its manifest control file."""
 
         self._ensure_open()
-        control_path = Path(self.manifest.control_path) if self.manifest.control_path else _stop_command_path(self.manifest_path)
-        _atomic_json_write(
-            control_path,
-            {"session_id": self.manifest.session_id, "command": "stop", "requested_at_ns": time.monotonic_ns()},
-        )
+        _request_manifest_stop(self.manifest, self.manifest_path)
 
     def close(self) -> None:
         if not self._closed:
@@ -1452,7 +1504,11 @@ class CaptureBroker:
             existing = BrokerManifest.load(self.manifest_path)
         except BrokerError:
             return
-        if existing.state in (BrokerState.STARTING, BrokerState.RUNNING) and _pid_is_alive(existing.pid):
+        if (
+            existing.state in (BrokerState.STARTING, BrokerState.RUNNING)
+            and _pid_is_alive(existing.pid)
+            and not _manifest_has_no_owner(existing, self.manifest_path, lifetime_mutex_held=True)
+        ):
             raise BrokerAlreadyRunningError(
                 f"已有共享视频源正在运行 (pid={existing.pid}, session={existing.session_id})"
             )
@@ -1682,14 +1738,15 @@ class CaptureBroker:
                 self.stop(remove_manifest=False)
                 return False
 
-            parent_lost = False
+            shutdown_requested = False
             while not self.wait(self.parent_poll_interval):
-                if parent_guard.status() is _ProcessStatus.DEAD:
-                    parent_lost = True
+                if parent_guard.status() is _ProcessStatus.DEAD or self._poll_stop_command():
+                    shutdown_requested = True
                     break
 
-            if parent_lost:
-                # A blocked OpenCV read must not keep an orphan process alive.
+            if shutdown_requested:
+                # Poll control independently of OpenCV: a blocked read must not
+                # keep a stopped or orphaned standalone process alive.
                 # The capture thread is daemonized, so returning from this
                 # standalone child lets the OS close the device handle even if
                 # cooperative cleanup cannot finish within the grace period.

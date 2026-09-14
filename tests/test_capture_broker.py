@@ -764,7 +764,8 @@ def test_standalone_broker_process_exits_when_its_gui_owner_dies(tmp_path: Path)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows parent HANDLE behavior")
-def test_standalone_broker_hard_exits_when_capture_read_is_blocked(tmp_path: Path):
+@pytest.mark.parametrize("shutdown_trigger", ["parent_exit", "stop_request"])
+def test_standalone_broker_hard_exits_when_capture_read_is_blocked(tmp_path: Path, shutdown_trigger):
     manifest_path = tmp_path / "capture_broker.json"
     owner = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -820,16 +821,22 @@ def test_standalone_broker_hard_exits_when_capture_read_is_blocked(tmp_path: Pat
         )
         broker_pid = running_manifest.pid
 
-        owner.terminate()
-        owner.wait(timeout=2)
+        if shutdown_trigger == "parent_exit":
+            owner.terminate()
+            owner.wait(timeout=2)
+        else:
+            with CaptureBrokerClient.connect(manifest_path) as client:
+                client.request_stop()
 
         try:
             exit_code = broker_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             broker_process.kill()
             _stdout, stderr = broker_process.communicate(timeout=2)
-            pytest.fail(f"blocked-read Broker remained alive after owner exit: {stderr}")
+            pytest.fail(f"blocked-read Broker remained alive after {shutdown_trigger}: {stderr}")
         assert exit_code == 0
+        if shutdown_trigger == "stop_request":
+            assert owner.poll() is None
         assert broker_pid is not None
         assert broker_module._process_status(broker_pid) is broker_module._ProcessStatus.DEAD
 

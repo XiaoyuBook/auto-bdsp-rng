@@ -18,7 +18,9 @@ from auto_bdsp_rng.capture_broker import (
     CaptureBrokerClient,
     DEFAULT_CAPTURE_API,
     _ProcessStatus,
+    _manifest_has_no_owner,
     _process_status,
+    _request_manifest_stop,
     default_manifest_path,
     discover_manifest,
 )
@@ -162,28 +164,19 @@ class CaptureBrokerProcess:
             return None
         return (
             None
-            if _process_status(manifest.pid) is _ProcessStatus.DEAD
+            if (
+                _process_status(manifest.pid) is _ProcessStatus.DEAD
+                or _manifest_has_no_owner(manifest, self.manifest_path)
+            )
             else manifest
         )
 
     def _request_orphan_stop(self, manifest: BrokerManifest) -> bool:
         try:
-            client = CaptureBrokerClient.connect(
-                self.manifest_path,
-                require_live_pid=True,
-            )
+            _request_manifest_stop(manifest, self.manifest_path)
         except (BrokerError, OSError):
             return False
-        try:
-            if client.manifest.pid != manifest.pid or client.manifest.session_id != manifest.session_id:
-                return False
-            try:
-                client.request_stop()
-            except (BrokerError, OSError):
-                return False
-            return True
-        finally:
-            client.close()
+        return True
 
     def _recover_or_reject_existing_broker(self) -> None:
         manifest = self._live_existing_manifest()
@@ -306,20 +299,19 @@ class CaptureBrokerProcess:
         if owned_pid is None:
             return
         try:
-            client = CaptureBrokerClient.connect(self.manifest_path, require_live_pid=False)
-        except BrokerError:
-            return
-        try:
+            manifest = BrokerManifest.load(self.manifest_path)
             # The discovery path is shared by all Broker launches. A child that
             # has not published its own manifest yet must never stop an older
             # Broker merely because that manifest happens to be discoverable.
-            if client.manifest.pid != owned_pid:
+            if manifest.pid != owned_pid:
                 return
-            if self._session_id is not None and client.manifest.session_id != self._session_id:
+            if self._session_id is not None and manifest.session_id != self._session_id:
                 return
-            client.request_stop()
-        finally:
-            client.close()
+            _request_manifest_stop(manifest, self.manifest_path)
+        except (BrokerError, OSError):
+            # Failure to write the cooperative request must still allow the
+            # owned-child timeout/termination path in stop() to run.
+            return
 
     def _remove_owned_manifest(self, process_pid: int | None) -> None:
         try:
