@@ -19,6 +19,7 @@ UI_SCALE_MAX = 125
 UI_SCALE_STEP = 5
 UI_SCALE_VALUES = tuple(range(UI_SCALE_MIN, UI_SCALE_MAX + 1, UI_SCALE_STEP))
 UiScale: TypeAlias = Literal["auto"] | int
+ExperienceLevel: TypeAlias = Literal["beginner", "expert"]
 
 
 def load_settings(path: Path | None = None) -> dict[str, Any]:
@@ -73,6 +74,29 @@ def set_startup_notice_acknowledged(acknowledged: bool, path: Path | None = None
         settings = load_settings(path)
         settings["startup_notice_acknowledged"] = bool(acknowledged)
         return save_settings(settings, path)
+
+
+def get_experience_level(path: Path | None = None) -> ExperienceLevel | None:
+    """Return the saved first-launch RNG experience selection, if valid."""
+
+    value = load_settings(path).get("experience_level")
+    if value in ("beginner", "expert"):
+        return value
+    return None
+
+
+def should_show_experience_level(path: Path | None = None) -> bool:
+    return get_experience_level(path) is None
+
+
+def set_experience_level(level: ExperienceLevel, path: Path | None = None) -> ExperienceLevel:
+    if level not in ("beginner", "expert"):
+        raise ValueError("experience level must be 'beginner' or 'expert'")
+    with _SETTINGS_LOCK:
+        settings = load_settings(path)
+        settings["experience_level"] = level
+        save_settings(settings, path)
+    return level
 
 
 def is_run_log_enabled(path: Path | None = None) -> bool:

@@ -144,6 +144,7 @@ from auto_bdsp_rng.app_settings import (
     get_ui_scale,
     is_auto_update_check_enabled,
     is_run_log_enabled,
+    set_experience_level,
     set_auto_update_check_enabled,
     set_run_log_enabled,
     set_startup_notice_acknowledged,
@@ -2257,6 +2258,9 @@ class MainWindow(QMainWindow):
         dialog.setModal(True)
 
         def persist_choice() -> None:
+            level = dialog.selected_experience_level
+            if level in ("beginner", "expert"):
+                set_experience_level(level)  # type: ignore[arg-type]
             if dialog.dont_show_again.isChecked():
                 set_startup_notice_acknowledged(True)
 
