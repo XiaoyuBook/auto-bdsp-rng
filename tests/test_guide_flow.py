@@ -3,13 +3,14 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSettings, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QScrollArea
+from PySide6.QtWidgets import QLabel, QScrollArea
 
 from auto_bdsp_rng import app_settings
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import DelayStrategy
 from auto_bdsp_rng.ui import MainWindow
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
-from auto_bdsp_rng.ui.guide_steps import dialog_steps
+from auto_bdsp_rng.ui.guide_steps import dialog_steps, workspace_step
+from auto_bdsp_rng.ui.guide_tip import GuideTip
 from tests.test_ui import app, isolated_ui_qsettings  # noqa: F401 -- reuse isolated GUI fixtures
 
 
@@ -46,6 +47,23 @@ def in_dialog(controller, callback):
     QTest.qWait(30)
     if errors:
         raise errors[0]
+
+
+def assert_body_text_is_readable(tip):
+    for label in tip.body.findChildren(QLabel):
+        if not label.wordWrap() or not label.isVisibleTo(tip.body):
+            continue
+        # Measure the same text with a fresh, unconstrained label. Checking only
+        # the card bounds misses paragraphs clipped inside their own widgets.
+        probe = QLabel(label.text())
+        probe.setWordWrap(True)
+        probe.setFont(label.font())
+        required = probe.heightForWidth(label.width())
+        probe.deleteLater()
+        assert label.height() >= required, (label.text(), label.height(), required)
+        bottom = label.mapTo(tip.body, label.rect().bottomLeft()).y()
+        assert bottom < tip.body.height()
+        assert bottom < tip.scroll.verticalScrollBar().maximum() + tip.scroll.viewport().height()
 
 
 def test_guide_progress_keeps_legacy_session_and_atomic_position(tmp_path, monkeypatch):
@@ -223,7 +241,7 @@ def test_each_workspace_anchor_survives_resize_and_hidden_strategy_rows(guided):
     window, panel, controller = guided
     for width, height in ((1150, 760), (860, 600)):
         window.resize(width, height)
-        for key in ("search_range", "max_wait", "shiny_threshold", "sync", "auto_reverse", "correction_strategy", "save_config"):
+        for key in app_settings.GUIDE_STEPS:
             controller._go(key)
             QTest.qWait(40)
             overlay = controller.overlay
@@ -234,6 +252,38 @@ def test_each_workspace_anchor_survives_resize_and_hidden_strategy_rows(guided):
             assert overlay.hole.contains(center), (width, key)
             assert not overlay.mask().contains(center), (width, key)
             assert overlay.tip.rect().contains(overlay.tip.next_button.geometry())
+            assert_body_text_is_readable(overlay.tip)
+
+
+def test_guide_text_survives_scrollbars_width_changes_and_shorter_steps(guided):
+    window, panel, controller = guided
+    controller.pause()
+    tip = GuideTip(window.centralWidget())
+    tip.range_field = panel.max_advances
+    tip.show()
+    for width in (338, 280, 400):
+        tip.setFixedWidth(width)
+        for key in ("max_wait", "sync", "auto_reverse", "search_range"):
+            tip.show_step(workspace_step(panel, key), search=key == "search_range")
+            if key == "search_range":
+                tip.presets["custom"].click()
+            tip.fit_height(230)
+            QTest.qWait(20)
+            assert_body_text_is_readable(tip)
+            scrollbar = tip.scroll.verticalScrollBar()
+            assert scrollbar.maximum() > 0
+            scrollbar.setValue(scrollbar.maximum())
+            QTest.qWait(20)
+            bottom = tip.body.mapTo(tip.scroll.viewport(), tip.body.rect().bottomLeft()).y()
+            assert bottom < tip.scroll.viewport().height()
+            assert tip.rect().contains(tip.next_button.geometry())
+        tip.show_step(workspace_step(panel, "save_config"))
+        tip.fit_height(700)
+        QTest.qWait(20)
+        assert_body_text_is_readable(tip)
+        assert tip.scroll.verticalScrollBar().maximum() == 0
+        assert tip.height() < 350
+    tip.hide()
 
 
 def test_workspace_guide_scrolls_hidden_advanced_target_into_view(guided):
@@ -302,6 +352,7 @@ def test_dialog_guide_stays_inside_dialog_and_restores_layout(guided, key, heigh
             assert dialog.isAncestorOf(tip)
             assert overlay.rect().adjusted(16, 16, -16, -16).contains(tip.geometry())
             assert not overlay.hole.intersects(tip.geometry())
+            assert_body_text_is_readable(tip)
             center = spec.target.mapToGlobal(spec.target.rect().center())
             assert overlay.hole.contains(overlay.mapFromGlobal(center))
             for area in dialog.findChildren(QScrollArea):

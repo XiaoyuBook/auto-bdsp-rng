@@ -185,18 +185,31 @@ class GuideTip(QFrame):
 
     def fit_height(self, available: int) -> None:
         self.ensurePolished()
-        width = self.width() - 40
-        self.body_layout.invalidate()
-        natural = self.body_layout.totalHeightForWidth(width)
-        natural = max(natural, self.body_layout.sizeHint().height())
+        margins = self.layout().contentsMargins()
+        width = self.contentsRect().width() - margins.left() - margins.right()
+        natural = self._measure_body(width)
         chrome = 34 + 28 + 36 + max(34, self.next_button.sizeHint().height()) + 18
         height = min(natural + chrome, max(chrome + 50, available))
         scrolling = natural + chrome > height
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn if scrolling else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         if scrolling:
-            natural = max(natural, self.body_layout.totalHeightForWidth(width - 16))
+            scrollbar_width = self.scroll.verticalScrollBar().sizeHint().width()
+            natural = self._measure_body(width - scrollbar_width)
         self.body.setMinimumHeight(natural)
         self.setFixedHeight(height)
+
+    def _measure_body(self, width: int) -> int:
+        # An AlignTop box layout can assign a wrapped QLabel its sizeHint height
+        # (computed at a wider width), even when the body has room for all lines.
+        # Give each paragraph its actual wrapped height before measuring the
+        # scroll content. Reset old limits so shorter steps can shrink again.
+        for label in self.body.findChildren(QLabel):
+            if label.wordWrap() and label.isVisibleTo(self.body):
+                label.setMinimumHeight(0)
+                label.setMaximumHeight(16777215)
+                label.setFixedHeight(label.heightForWidth(max(1, width)))
+        self.body_layout.invalidate()
+        return max(self.body_layout.totalHeightForWidth(width), self.body_layout.sizeHint().height())
 
     def show_step(self, spec, *, search: bool = False) -> None:
         self.step.setText(spec.caption)
