@@ -160,6 +160,7 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
     wait_until(lambda: getattr(window, "_startup_notice_dialog", None) is not None)
     first = window._startup_notice_dialog
     wait_until(lambda: first.ready)
+    window.tabs.setCurrentWidget(window.project_xs_tab)
     assert isinstance(first, StartupNoticeDialog)
     assert first.parentWidget() is window
     window.show_startup_choice()
@@ -171,6 +172,8 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
     if level == "beginner":
         wait_until(lambda: window.guide_controller.overlay is not None and window.guide_controller.overlay.isVisible())
         assert window.guide_button.text() == "继续引导"
+        assert window.tabs.currentWidget() is window.project_xs_tab
+        assert window.guide_controller.overlay.waiting_for_page
         window.guide_controller.pause()
     else:
         assert window.guide_controller.overlay is None
@@ -191,6 +194,7 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
 
 
 def test_main_window_guide_start_resume_restart_and_completed_entry(app, tmp_path, monkeypatch):
+    from PySide6.QtTest import QTest
     from auto_bdsp_rng import app_settings
 
     monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guides.json")
@@ -208,24 +212,36 @@ def test_main_window_guide_start_resume_restart_and_completed_entry(app, tmp_pat
     assert window.guide_button.text() == "继续引导"
     assert [a.text() for a in window.guide_button.menu().actions()] == ["重新开始引导"]
     assert window.guide_controller.overlay.isVisible()
-    assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert window.tabs.currentWidget() is window.project_xs_tab
+    assert window.guide_controller.overlay.waiting_for_page
+    assert first["step"] == "target_selection"
     window.guide_controller.overlay.close_button.click()
     assert not window.guide_controller.overlay.isVisible()
     window.tabs.setCurrentWidget(window.auto_tid_rng_tab)
     window.guide_button.click()
     assert app_settings.get_guide_progress() == first
     assert window.guide_controller.overlay.isVisible()
+    assert window.tabs.currentWidget() is window.auto_tid_rng_tab
+    bar = window.tabs.tabBar()
+    QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(window.tabs.indexOf(window.auto_rng_tab)).center())
     assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert not window.guide_controller.overlay.waiting_for_page
+    assert app_settings.get_guide_progress() == first
     window.guide_controller.pause()
     reopened = MainWindow()
     assert reopened.guide_button.text() == "继续引导"
     assert reopened.guide_controller.overlay is None
     window.tabs.setCurrentWidget(window.bdsp_tab)
     window.guide_controller.restart_action.trigger()
-    assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert window.tabs.currentWidget() is window.bdsp_tab
+    assert window.guide_controller.overlay.waiting_for_page
     second = app_settings.get_guide_progress()
     assert second["session_id"] != first["session_id"]
     assert second["step"] == "target_selection"
+    QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(window.tabs.indexOf(window.auto_rng_tab)).center())
+    assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert not window.guide_controller.overlay.waiting_for_page
+    assert app_settings.get_guide_progress() == second
     assert window.bdsp_seed64_inputs[0].text() == "123456789ABCDEF0"
     assert app_settings.load_settings()["other"] == "保留"
     window.guide_controller.pause()
@@ -285,6 +301,7 @@ def test_main_window_guide_spotlight_tracks_real_controls_after_move_resize_and_
     QTest.qWait(100)
     window.guide_button.click()
     overlay = window.guide_controller.overlay
+    assert not overlay.waiting_for_page
     target = window.auto_rng_tab.target_button
     for width, height, x, y in ((1150, 760, 190, 80), (860, 600, 60, 190), (1150, 760, 230, 120)):
         window.move(x, y)
@@ -317,6 +334,67 @@ def test_main_window_guide_spotlight_tracks_real_controls_after_move_resize_and_
     QTest.keyClick(overlay.close_button, Qt.Key.Key_Escape)
     assert not overlay.isVisible()
     assert app_settings.get_guide_progress() is not None
+
+
+def test_main_window_guide_page_prompt_tracks_tab_and_waits_for_activation(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QStyle, QStyleOptionTab
+    from auto_bdsp_rng import app_settings
+
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guide.json")
+    window = MainWindow()
+    monkeypatch.setattr(window, "_screen_available_geometry", lambda: QRect(0, 0, 2000, 1400))
+    window.tabs.setCurrentWidget(window.easycon_tab)
+    window.show()
+    QTest.qWait(100)
+    window.guide_button.click()
+    overlay = window.guide_controller.overlay
+    bar = window.tabs.tabBar()
+    progress = app_settings.get_guide_progress()
+    for width, height, x, y in ((1150, 760, 190, 80), (860, 600, 60, 190), (1150, 760, 230, 120)):
+        window.move(x, y)
+        window.resize(width, height)
+        QTest.qWait(100)
+        assert overlay.isVisible() and overlay.waiting_for_page
+        assert window.tabs.currentWidget() is window.easycon_tab
+        position = QPoint()
+        ancestor = bar
+        while ancestor is not overlay.parentWidget():
+            position += ancestor.pos()
+            ancestor = ancestor.parentWidget()
+        index = window.tabs.indexOf(window.auto_rng_tab)
+        option = QStyleOptionTab()
+        bar.initStyleOption(option, index)
+        text_area = bar.style().subElementRect(QStyle.SubElement.SE_TabBarTabText, option, bar).translated(position)
+        assert abs(overlay.hole.center().x() - text_area.center().x()) <= 1
+        assert abs(overlay.hole.center().y() - text_area.center().y()) <= 1
+        assert overlay.hole.left() < text_area.left() - 5
+        assert overlay.hole.right() > text_area.right() + 5
+        assert not overlay.mask().contains(text_area.center())
+        # The trailing gap is covered, while the label remains clickable.
+        gap = position + bar.tabRect(index).topRight() + QPoint(-2, bar.tabRect(index).height() // 2)
+        assert overlay.mask().contains(gap)
+        for index in range(1, window.tabs.count()):
+            assert overlay.mask().contains(position + bar.tabRect(index).center())
+        assert overlay.rect().contains(overlay.tip.geometry())
+        assert not overlay.hole.intersects(overlay.tip.geometry())
+    QTest.keyClick(bar, Qt.Key.Key_Right)
+    QTest.keyClick(bar, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
+    assert window.tabs.currentWidget() is window.easycon_tab
+    QTest.keyClick(overlay.close_button, Qt.Key.Key_Tab)
+    assert bar.hasFocus()
+    QTest.keyClick(bar, Qt.Key.Key_Space)
+    QTest.qWait(100)
+    assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert overlay.isVisible() and not overlay.waiting_for_page
+    assert window.auto_rng_tab.target_button.hasFocus()
+    assert app_settings.get_guide_progress() == progress
+    QTest.keyClick(window.auto_rng_tab.target_button, Qt.Key.Key_Escape)
+    assert not overlay.isVisible()
+    window.guide_button.click()
+    assert overlay.isVisible() and not overlay.waiting_for_page
+    assert app_settings.get_guide_progress() == progress
 
 
 def _auto_rng_settings(tmp_path: Path) -> QSettings:

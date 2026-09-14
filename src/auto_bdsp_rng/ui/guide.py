@@ -6,7 +6,7 @@ from shiboken6 import isValid
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF, QRegion
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QScrollArea, QStyle, QStyleOptionTab, QToolButton, QVBoxLayout, QWidget
 
 from auto_bdsp_rng.app_settings import get_guide_progress, start_guide_progress
 
@@ -19,6 +19,8 @@ class GuideSpotlight(QWidget):
         self.main_window = window
         self.target_button = window.auto_rng_tab.target_button
         self.target_card = self.target_button.parentWidget()
+        self.tab_bar = window.tabs.tabBar()
+        self.waiting_for_page = False
         self.setObjectName("GuideSpotlight")
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.hole = QRectF()
@@ -56,12 +58,12 @@ class GuideSpotlight(QWidget):
         self.close_button.clicked.connect(self.paused)
         top.addWidget(self.close_button)
         layout.addLayout(top)
-        title = QLabel("先选好这次的目标")
-        title.setObjectName("GuideTitle")
-        layout.addWidget(title)
-        copy = QLabel("点击亮起区域里的「设置」，选择这次想乱的精灵，以及你希望得到的结果。")
-        copy.setWordWrap(True)
-        layout.addWidget(copy)
+        self.title = QLabel()
+        self.title.setObjectName("GuideTitle")
+        layout.addWidget(self.title)
+        self.copy = QLabel()
+        self.copy.setWordWrap(True)
+        layout.addWidget(self.copy)
         controls = QHBoxLayout()
         # Later steps and their navigation rules are designed separately.
         for text in ("上一步", "下一步", "跳过"):
@@ -78,23 +80,35 @@ class GuideSpotlight(QWidget):
         self.relayout = QTimer(self)
         self.relayout.setSingleShot(True)
         self.relayout.timeout.connect(self.reposition)
+        self.tab_bar.installEventFilter(self)
         ancestor = self.target_card
         while ancestor is not None:
             ancestor.installEventFilter(self)
             ancestor = ancestor.parentWidget()
         self.hide()
 
+    @property
+    def focus_target(self) -> QWidget:
+        return self.tab_bar if self.waiting_for_page else self.target_button
+
     def reveal(self) -> None:
-        ancestor = self.target_card.parentWidget()
-        while ancestor is not None:
-            if isinstance(ancestor, QScrollArea):
-                ancestor.ensureWidgetVisible(self.target_card)
-            ancestor = ancestor.parentWidget()
+        self.waiting_for_page = self.main_window.tabs.currentWidget() is not self.main_window.auto_rng_tab
+        if self.waiting_for_page:
+            self.title.setText("先进入乱数操作页面")
+            self.copy.setText("点击亮起的「自动定点乱数」标签，进入这次乱数的操作页面。")
+        else:
+            self.title.setText("先选好这次的目标")
+            self.copy.setText("点击亮起区域里的「设置」，选择这次想乱的精灵，以及你希望得到的结果。")
+            ancestor = self.target_card.parentWidget()
+            while ancestor is not None:
+                if isinstance(ancestor, QScrollArea):
+                    ancestor.ensureWidgetVisible(self.target_card)
+                ancestor = ancestor.parentWidget()
         if not self.reposition():
             return
         self.show()
         self.raise_()
-        self.target_button.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.focus_target.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def eventFilter(self, obj, event):
         if self.isVisible() and event.type() in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.LayoutRequest, QEvent.Type.Show):
@@ -102,6 +116,20 @@ class GuideSpotlight(QWidget):
         return False
 
     def _target_rect(self, widget) -> QRectF:
+        if widget is self.tab_bar:
+            index = self.main_window.tabs.indexOf(self.main_window.auto_rng_tab)
+            option = QStyleOptionTab()
+            self.tab_bar.initStyleOption(option, index)
+            style = self.tab_bar.style()
+            text_area = style.subElementRect(QStyle.SubElement.SE_TabBarTabText, option, self.tab_bar)
+            # tabRect includes the trailing gap between tabs. Frame the rendered
+            # label instead, with equal padding even at the left edge of the bar.
+            rect = style.itemTextRect(
+                option.fontMetrics, text_area, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextShowMnemonic,
+                bool(option.state & QStyle.StateFlag.State_Enabled), option.text,
+            ).adjusted(-10, -8, 10, 8)
+            origin = self.mapFromGlobal(self.tab_bar.mapToGlobal(rect.topLeft()))
+            return QRectF(QRect(origin, rect.size()))
         origin = self.mapFromGlobal(widget.mapToGlobal(QPoint()))
         rect = QRectF(QRect(origin, widget.size())).adjusted(-4, -4, 4, 4)
         ancestor = widget.parentWidget()
@@ -121,7 +149,8 @@ class GuideSpotlight(QWidget):
         chosen = None
         # Use global-to-local mapping between sibling widgets, and clip the
         # opening to scroll viewports when the splitter reflows vertically.
-        for target in (self.target_card, self.target_button):
+        targets = (self.tab_bar,) if self.waiting_for_page else (self.target_card, self.target_button)
+        for target in targets:
             hole = self._target_rect(target).intersected(QRectF(self.rect()))
             if hole.isEmpty():
                 continue
@@ -131,6 +160,8 @@ class GuideSpotlight(QWidget):
                 QRect(max(12, min(int(hole.center().x()) - width // 2, bounds.right() - width)), int(hole.bottom()) + 24, width, height),
                 QRect(max(12, min(int(hole.center().x()) - width // 2, bounds.right() - width)), int(hole.top()) - height - 24, width, height),
             )
+            if self.waiting_for_page:
+                candidates = candidates[2:] + candidates[:2]
             chosen = next((r for r in candidates if bounds.contains(r)), None)
             if chosen is not None:
                 self.hole = hole
@@ -139,7 +170,7 @@ class GuideSpotlight(QWidget):
             self.paused.emit()
             return False
         self.tip.setGeometry(chosen)
-        target_center = self._target_rect(self.target_button).center()
+        target_center = self._target_rect(self.focus_target).center()
         if chosen.left() > self.hole.right():
             y = target_center.y()
             self.arrow_start = QPointF(chosen.left(), y)
@@ -193,6 +224,7 @@ class GuideController(QObject):
         button.clicked.connect(self.begin_or_resume)
         window.auto_rng_tab.targetDialogOpened.connect(self._target_opened)
         window.auto_rng_tab.targetDialogClosed.connect(self._target_closed)
+        window.tabs.currentChanged.connect(self._page_changed)
         self.refresh()
 
     def refresh(self) -> None:
@@ -223,13 +255,18 @@ class GuideController(QObject):
             QMessageBox.warning(self.window, "无法开始引导", "无法保存引导进度，请检查设置目录是否可写后重试。")
             return
         self.refresh()
-        self.window.tabs.setCurrentWidget(self.window.auto_rng_tab)
         if self.overlay is None:
             self.overlay = GuideSpotlight(self.window)
             self.overlay.paused.connect(self.pause)
         self.overlay.reveal()
         if self.overlay.isVisible():
             QApplication.instance().installEventFilter(self)
+
+    def _page_changed(self, index: int) -> None:
+        if not self.window._is_closing and self.overlay is not None and isValid(self.overlay) and self.overlay.isVisible():
+            # Returning to the workspace is preparation for the saved step;
+            # changing tabs must not create or advance a guide record.
+            self.overlay.reveal()
 
     def pause(self) -> None:
         QApplication.instance().removeEventFilter(self)
@@ -255,15 +292,19 @@ class GuideController(QObject):
             return False
         if event.type() == QEvent.Type.Shortcut and self.window.isActiveWindow():
             return True
-        if isinstance(obj, QWidget) and obj.window() is self.window:
+        if isinstance(obj, QWidget) and QWidget.window(obj) is self.window:
             if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
                 self.pause()
                 return True
             if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
-                target = self.overlay.close_button if obj is self.overlay.target_button else self.overlay.target_button
+                target = self.overlay.close_button if obj is self.overlay.focus_target else self.overlay.focus_target
                 target.setFocus(Qt.FocusReason.TabFocusReason)
                 return True
             if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.ShortcutOverride, QEvent.Type.Wheel):
+                if self.overlay.waiting_for_page and obj is self.overlay.tab_bar:
+                    if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                        self.window.tabs.setCurrentWidget(self.window.auto_rng_tab)
+                    return True
                 if obj is self.overlay.target_button or obj is self.overlay.tip or self.overlay.tip.isAncestorOf(obj):
                     return False
                 return True
