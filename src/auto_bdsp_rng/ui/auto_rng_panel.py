@@ -2377,6 +2377,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 color: #066A4B;
                 text-decoration: underline;
             }
+            QPushButton#TargetOpenButton:focus {
+                border: 1px solid $accent;
+                outline: 0;
+            }
             QPushButton#ScriptSaveButton:disabled {
                 color: #9AA8A1;
             }
@@ -2767,7 +2771,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 font-size: 10px;
             }
             """) + primary_button_styles("QToolButton#PrimaryButton") + focus_styles(
-                "QPushButton#RuntimeSetupButton", "QPushButton#TargetOpenButton",
+                "QPushButton#RuntimeSetupButton",
                 "QPushButton#ConfigSaveButton", "QPushButton#ScriptSaveButton",
                 "QPushButton#InlineLinkButton", "QPushButton#AutoRngRefreshScripts",
                 "QToolButton#PrimaryButton", "QPushButton#DangerButton",

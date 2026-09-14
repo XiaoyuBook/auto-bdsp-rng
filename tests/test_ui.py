@@ -211,14 +211,18 @@ def test_main_window_guide_start_resume_restart_and_completed_entry(app, tmp_pat
     assert window.tabs.currentWidget() is window.auto_rng_tab
     window.guide_controller.overlay.close_button.click()
     assert not window.guide_controller.overlay.isVisible()
+    window.tabs.setCurrentWidget(window.auto_tid_rng_tab)
     window.guide_button.click()
     assert app_settings.get_guide_progress() == first
     assert window.guide_controller.overlay.isVisible()
+    assert window.tabs.currentWidget() is window.auto_rng_tab
     window.guide_controller.pause()
     reopened = MainWindow()
     assert reopened.guide_button.text() == "继续引导"
     assert reopened.guide_controller.overlay is None
+    window.tabs.setCurrentWidget(window.bdsp_tab)
     window.guide_controller.restart_action.trigger()
+    assert window.tabs.currentWidget() is window.auto_rng_tab
     second = app_settings.get_guide_progress()
     assert second["session_id"] != first["session_id"]
     assert second["step"] == "target_selection"
