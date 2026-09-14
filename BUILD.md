@@ -87,6 +87,14 @@ At runtime, the GUI passes each GitHub Release asset SHA-256 to a onefile helper
 
 The application packages its Python EasyCon parser/runtime, `pyserial`, and the Tesseract files under `packaging/easycon_native/`. Building and running the product does not require .NET, an EasyCon installation, `EASYCON_ROOT`, EasyConBridge, or `ezcon.exe`. The old Bridge project remains in the repository for compatibility reference only and is not published by `scripts/build_exe.py`.
 
+## First-launch WebView
+
+The first-launch mode chooser uses PySide6 Qt WebEngine and QWebChannel to load
+`docs/assets/welcome/index.html` locally. The existing PySide6 collection and
+PyInstaller Qt WebEngine hooks collect the Chromium helper process and runtime
+resources; the `docs/assets` release-copy step includes the HTML page. Keep these
+files with the executable. The page uses system fonts and does not fetch web assets.
+
 ## OCR
 
 The Windows release package includes `paddlepaddle` and `paddleocr` so OCR shiny checks, stats-page OCR, and notes-page OCR are available from the green zip. This makes the zip larger and can make the first OCR use slower while Paddle initializes its models.

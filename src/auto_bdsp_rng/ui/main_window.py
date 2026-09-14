@@ -144,10 +144,8 @@ from auto_bdsp_rng.app_settings import (
     get_ui_scale,
     is_auto_update_check_enabled,
     is_run_log_enabled,
-    set_experience_level,
     set_auto_update_check_enabled,
     set_run_log_enabled,
-    set_startup_notice_acknowledged,
     set_ui_scale,
     should_show_startup_notice,
 )
@@ -1968,6 +1966,9 @@ class MainWindow(QMainWindow):
             request_restart=self._request_ui_scale_restart,
         )
         self.help_menu_controller.install(self.help_button)
+        self.startup_choice_action = self.help_menu_controller.help_menu.addAction(
+            "选择乱数方式…", self.show_startup_choice
+        )
         self.help_menu_controller.help_menu.addAction("术语与操作帮助", lambda: show_terminology(self))
         self.update_controller.busyChanged.connect(
             lambda busy: self.help_menu_controller.check_updates_action.setEnabled(not busy)
@@ -2254,19 +2255,21 @@ class MainWindow(QMainWindow):
     def _maybe_show_startup_notice(self) -> None:
         if not should_show_startup_notice():
             return
+        self.show_startup_choice()
+
+    def show_startup_choice(self) -> None:
+        if self._is_closing:
+            return
+        existing = getattr(self, "_startup_notice_dialog", None)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
         dialog = StartupNoticeDialog(self)
-        dialog.setModal(True)
-
-        def persist_choice() -> None:
-            level = dialog.selected_experience_level
-            if level in ("beginner", "expert"):
-                set_experience_level(level)  # type: ignore[arg-type]
-            if dialog.dont_show_again.isChecked():
-                set_startup_notice_acknowledged(True)
-
-        dialog.accepted.connect(persist_choice)
-        dialog.show()
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.finished.connect(lambda _result: setattr(self, "_startup_notice_dialog", None))
         self._startup_notice_dialog = dialog
+        dialog.show()
 
     def _build_project_xs_tab(self) -> QWidget:
         splitter = WorkspaceSplit(self._profile_settings, "seed", horizontal=(PROJECT_XS_HORIZONTAL_LEFT_WIDTH, 700))

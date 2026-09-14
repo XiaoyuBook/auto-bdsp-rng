@@ -7,7 +7,6 @@ from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
     QDialog,
     QFrame,
     QGridLayout,
@@ -23,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.resources import app_icon_path, resource_path
-from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
+from auto_bdsp_rng.ui.startup_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.sponsor_dialog import SponsorAssets, find_sponsor_assets
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 from auto_bdsp_rng.ui.workspace_controls import workspace_icon
@@ -598,140 +597,3 @@ class AboutDialog(QDialog):
             border-color: {soft};
         }}
         """ + primary_button_styles("QPushButton#PrimaryButton"))
-
-
-class StartupNoticeDialog(QDialog):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setFont(ui_font())
-        self.setWindowTitle("选择乱数方式")
-        self.setObjectName("StartupNoticeDialog")
-        self.setFixedSize(560, 360)
-        self.setStyleSheet(
-            "QDialog#StartupNoticeDialog { background: #ffffff; color: #202A33; }"
-            " QDialog#StartupNoticeDialog QLabel { background: transparent; color: #202A33; }"
-            " QDialog#StartupNoticeDialog QLabel#StartupWelcomeMark { color: #087C58;"
-            " font-size: 12px; font-weight: 500; }"
-            " QDialog#StartupNoticeDialog QLabel#StartupTitle { font-size: 22px;"
-            " font-weight: 500; }"
-            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice { background: #FFFFFF;"
-            " color: #202A33; border: 1px solid #DCE5E1; border-radius: 11px;"
-            " min-height: 112px; padding: 0; text-align: left; }"
-            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice:hover {"
-            " border-color: #087C58; background: #F7FAF8; }"
-            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice:checked {"
-            " background: #F3F8F5; color: #087C58; border: 2px solid #087C58; }"
-            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice QLabel {"
-            " background: transparent; }"
-            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice QLabel#ChoiceTitle {"
-            " color: #202A33; font-size: 15px; font-weight: 500; }"
-            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice:checked QLabel#ChoiceTitle {"
-            " color: #087C58; }"
-            " QDialog#StartupNoticeDialog QPushButton#ExperienceChoice QLabel#ChoiceDescription {"
-            " color: #68747E; font-size: 12px; }"
-            " QDialog#StartupNoticeDialog QLabel#StartupReminder { color: #68747E;"
-            " font-size: 11px; }"
-            " QDialog#StartupNoticeDialog QPushButton#StartupPrimary { background: #087C58;"
-            " color: #FFFFFF; border: 0; border-radius: 8px; min-height: 36px; padding: 0 18px; }"
-            " QDialog#StartupNoticeDialog QPushButton#StartupPrimary:hover { background: #066A4B; }"
-            " QDialog#StartupNoticeDialog QPushButton#StartupPrimary:disabled { background: #B8C8C0; }"
-            " QDialog#StartupNoticeDialog QCheckBox { color: #68747E; font-size: 12px; }"
-        )
-        self._build_ui()
-
-    def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 20)
-        layout.setSpacing(8)
-
-        welcome_mark = QLabel("欢迎使用 · 首次启动设置")
-        welcome_mark.setObjectName("StartupWelcomeMark")
-        layout.addWidget(welcome_mark)
-
-        title = QLabel("选择你的乱数方式")
-        title.setObjectName("StartupTitle")
-        layout.addWidget(title)
-
-        choices = QHBoxLayout()
-        choices.setSpacing(12)
-        self._experience_buttons = QButtonGroup(self)
-        self._experience_buttons.setExclusive(True)
-        self.beginner_button = self._create_experience_button(
-            "我是小白", "进入引导模式，根据引导完成自己的第一次乱数。", "beginner"
-        )
-        self.expert_button = self._create_experience_button(
-            "我是乱数高手", "直接进入完整工作区，自由使用现有的自动乱数和搜索功能。", "expert"
-        )
-        choices.addWidget(self.beginner_button, 1)
-        choices.addWidget(self.expert_button, 1)
-        layout.addLayout(choices)
-
-        self.selection_hint = QLabel("请选择一种方式开始。")
-        self.selection_hint.setObjectName("StartupReminder")
-        layout.addWidget(self.selection_hint)
-
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFrameShadow(QFrame.Shadow.Plain)
-        separator.setStyleSheet("color: #DCE5E1;")
-        layout.addWidget(separator)
-
-        footer = QHBoxLayout()
-        footer.setSpacing(12)
-        self.dont_show_again = QCheckBox("不再提示")
-        self.dont_show_again.setChecked(True)
-        footer.addWidget(self.dont_show_again)
-        footer.addStretch(1)
-
-        ok_button = QPushButton("开始使用")
-        ok_button.setObjectName("StartupPrimary")
-        ok_button.setEnabled(False)
-        ok_button.clicked.connect(self.accept)
-        footer.addWidget(ok_button)
-        layout.addLayout(footer)
-        self.ok_button = ok_button
-
-    def _create_experience_button(self, title: str, description: str, level: str) -> QPushButton:
-        button = QPushButton()
-        button.setObjectName("ExperienceChoice")
-        button.setCheckable(True)
-        button.setProperty("experienceLevel", level)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setToolTip(description)
-        button.setFixedHeight(112)
-        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        button_layout = QVBoxLayout(button)
-        button_layout.setContentsMargins(16, 12, 16, 12)
-        button_layout.setSpacing(5)
-        title_label = QLabel(title, button)
-        title_label.setObjectName("ChoiceTitle")
-        title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        button_layout.addWidget(title_label)
-        description_label = QLabel(description, button)
-        description_label.setObjectName("ChoiceDescription")
-        description_label.setWordWrap(True)
-        description_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        description_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        button_layout.addWidget(description_label, 1)
-        self._experience_buttons.addButton(button)
-        button.toggled.connect(self._handle_experience_toggled)
-        return button
-
-    def _handle_experience_toggled(self, checked: bool) -> None:
-        if not checked:
-            return
-        button = self._experience_buttons.checkedButton()
-        level = str(button.property("experienceLevel")) if button is not None else ""
-        self.ok_button.setEnabled(bool(level))
-        self.selection_hint.setText(
-            "将进入引导模式，开始设置本次乱数目标。"
-            if level == "beginner"
-            else "将直接进入标准工作区。"
-        )
-
-    @property
-    def selected_experience_level(self) -> str | None:
-        button = self._experience_buttons.checkedButton()
-        if button is None:
-            return None
-        return str(button.property("experienceLevel"))

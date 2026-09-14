@@ -52,6 +52,19 @@ def test_pyinstaller_spec_collects_project_xs_win32ui_dependency():
     assert '"win32ui"' in spec
 
 
+def test_release_copy_keeps_welcome_webview_page(monkeypatch, tmp_path):
+    source = ROOT / "docs/assets/welcome"
+    project = tmp_path / "project 中文"
+    shutil.copytree(source, project / "docs/assets/welcome")
+    dist = tmp_path / "dist with spaces"
+    monkeypatch.setattr(build_script_module, "ROOT", project)
+    monkeypatch.setattr(build_script_module, "DIST_DIR", dist)
+    monkeypatch.setattr(build_script_module, "PROJECT_XS_ROOT", project / "missing-xs")
+    monkeypatch.setattr(build_script_module, "PROJECT_XS_OVERRIDES", project / "missing-overrides")
+    build_script_module.copy_release_files()
+    assert (dist / "docs/assets/welcome/index.html").read_bytes() == (source / "index.html").read_bytes()
+
+
 def test_capture_device_enumerator_is_installed_and_bundled():
     root = Path(__file__).resolve().parents[1]
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")

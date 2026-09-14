@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' qrc:; connect-src 'none';">
+  <title>选择你的乱数方式</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { font-family: 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif; font-size: 13px; font-weight: 400; color: #202a33; background: #e9efec; }
+    button { font: inherit; }
+    .stage { min-height: 100vh; padding: 32px 20px; display: grid; place-items: center; }
+    .welcome { width: min(570px, 100%); padding: 28px 30px 22px; border: 1px solid #dce5e1; border-radius: 16px; background: #fff; box-shadow: 0 20px 64px #173b2926, 0 3px 12px #173b2908; }
+    .kicker { color: #087c58; font-size: 12px; font-weight: 500; line-height: 18px; margin: 0 0 9px; }
+    h1 { font-size: 22px; font-weight: 500; line-height: 32px; margin: 0 0 24px; }
+    .choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .choice { position: relative; width: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 9px; min-height: 136px; padding: 17px 16px; border: 1px solid #dce5e1; border-radius: 11px; background: #fff; text-align: left; color: #202a33; cursor: pointer; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
+    .choice:hover { background: #f8fbf9; border-color: #9bbdad; }
+    .choice[aria-pressed="true"] { background: #f3f8f5; border-color: #087c58; box-shadow: inset 0 0 0 1px #087c58; }
+    .choice:focus-visible, .start:focus-visible { outline: 2px solid #087c58; outline-offset: 4px; }
+    .choice-title { font-size: 15px; line-height: 22px; font-weight: 500; padding-right: 18px; }
+    .choice-copy { color: #68747e; font-size: 12px; line-height: 20px; }
+    .choice[aria-pressed="true"] .choice-title { color: #087c58; }
+    .choice[aria-pressed="true"]::after { content: '✓'; position: absolute; top: 17px; right: 14px; color: #087c58; font-size: 14px; }
+    .feedback { min-height: 20px; font-size: 12px; line-height: 20px; margin: 14px 0 0; color: #68747e; }
+    footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; border-top: 1px solid #e5ebe7; padding-top: 17px; }
+    .reminder { font-size: 11px; line-height: 18px; color: #68747e; }
+    .start { flex-shrink: 0; min-width: 128px; height: 36px; border: 0; border-radius: 8px; color: #fff; background: #087c58; padding: 0 16px; cursor: pointer; }
+    .start:hover:enabled { background: #066a4b; }
+    .start:disabled { background: #bfd1c7; cursor: default; }
+    @media (max-width: 530px) { .stage { padding: 18px 12px; } .welcome { padding: 22px 20px 20px; } .choices { grid-template-columns: 1fr; } .choice { min-height: 110px; } footer { align-items: flex-start; flex-wrap: wrap; } }
+    @media (prefers-reduced-motion: reduce) { .choice { transition: none; } }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="welcome" aria-labelledby="welcome-title">
+      <p class="kicker">欢迎使用 · 首次启动设置</p>
+      <h1 id="welcome-title">选择你的乱数方式</h1>
+      <div class="choices" role="group" aria-label="选择乱数方式">
+        <button class="choice" data-level="beginner" aria-pressed="false" type="button">
+          <span class="choice-title">我是小白</span>
+          <span class="choice-copy">进入引导模式，根据引导完成自己的第一次乱数</span>
+        </button>
+        <button class="choice" data-level="expert" aria-pressed="false" type="button">
+          <span class="choice-title">我是乱数高手</span>
+          <span class="choice-copy">直接进入完整工作区，自由使用现有的自动乱数和搜索功能。</span>
+        </button>
+      </div>
+      <p class="feedback" role="status" aria-live="polite">正在加载…</p>
+      <footer>
+        <span class="reminder">本软件永久免费且开源</span>
+        <button class="start" type="button" disabled>开始使用</button>
+      </footer>
+    </section>
+  </main>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script>
+    (() => {
+      const buttons = [...document.querySelectorAll('.choice')];
+      const start = document.querySelector('.start');
+      const feedback = document.querySelector('.feedback');
+      let selected = null;
+      let bridge = null;
+      window.welcomeReady = false;
+      let submitting = false;
+      buttons.forEach(button => button.addEventListener('click', () => {
+        if (submitting) return;
+        selected = button.dataset.level;
+        buttons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        start.disabled = !bridge;
+        start.textContent = selected === 'beginner' ? '进入引导模式' : '进入工作区';
+        feedback.textContent = selected === 'beginner' ? '将进入引导模式。' : '将直接进入标准工作区。';
+      }));
+      start.addEventListener('click', () => {
+        if (!bridge || !selected || submitting) return;
+        submitting = true;
+        start.disabled = true;
+        bridge.choose(selected);
+      });
+      new QWebChannel(qt.webChannelTransport, channel => {
+        bridge = channel.objects.welcomeBridge;
+        bridge.saveFailed.connect(message => {
+          submitting = false;
+          start.disabled = false;
+          feedback.textContent = message;
+        });
+        if (selected) start.disabled = false;
+        else feedback.textContent = '请选择一种方式开始。';
+        document.fonts.ready.then(() => {
+          bridge.pageReady();
+          window.welcomeReady = true;
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

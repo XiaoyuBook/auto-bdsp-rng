@@ -64,30 +64,6 @@ def test_app_settings_invalid_experience_level_defaults_to_unselected(tmp_path, 
     assert app_settings.should_show_experience_level() is True
 
 
-def test_startup_notice_dialog_requires_experience_selection(app):
-    from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
-
-    dialog = StartupNoticeDialog()
-    assert dialog.windowTitle() == "选择乱数方式"
-    assert "进入引导模式，根据引导完成自己的第一次乱数" in (
-        dialog.beginner_button.findChild(QLabel, "ChoiceDescription").text()
-    )
-    assert dialog.selected_experience_level is None
-    assert dialog.ok_button.isEnabled() is False
-
-    dialog.beginner_button.click()
-    app.processEvents()
-    assert dialog.selected_experience_level == "beginner"
-    assert dialog.ok_button.isEnabled() is True
-    assert "引导模式" in dialog.selection_hint.text()
-
-    dialog.expert_button.click()
-    app.processEvents()
-    assert dialog.selected_experience_level == "expert"
-    assert "标准工作区" in dialog.selection_hint.text()
-    dialog.deleteLater()
-
-
 def test_app_settings_run_log_defaults_on_and_preserves_other_keys(tmp_path, monkeypatch):
     import auto_bdsp_rng.app_settings as app_settings
 

@@ -89,12 +89,19 @@ def should_show_experience_level(path: Path | None = None) -> bool:
     return get_experience_level(path) is None
 
 
-def set_experience_level(level: ExperienceLevel, path: Path | None = None) -> ExperienceLevel:
+def set_experience_level(
+    level: ExperienceLevel,
+    path: Path | None = None,
+    *,
+    acknowledge_startup: bool = False,
+) -> ExperienceLevel:
     if level not in ("beginner", "expert"):
         raise ValueError("experience level must be 'beginner' or 'expert'")
     with _SETTINGS_LOCK:
         settings = load_settings(path)
         settings["experience_level"] = level
+        if acknowledge_startup:
+            settings["startup_notice_acknowledged"] = True
         save_settings(settings, path)
     return level
 

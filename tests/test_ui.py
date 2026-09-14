@@ -146,6 +146,38 @@ def _set_bdsp_seed(window: MainWindow) -> None:
     window.bdsp_seed64_inputs[1].setText("1111111122222222")
 
 
+def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_path, monkeypatch):
+    from auto_bdsp_rng import app_settings
+    from auto_bdsp_rng.ui.startup_dialog import StartupNoticeDialog
+    from tests.test_startup_webview import evaluate, wait_until
+
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "welcome.json")
+    monkeypatch.setattr(main_window_module, "should_show_startup_notice", app_settings.should_show_startup_notice)
+    window = MainWindow()
+    window.show()
+    wait_until(lambda: getattr(window, "_startup_notice_dialog", None) is not None)
+    first = window._startup_notice_dialog
+    wait_until(lambda: first.ready)
+    assert isinstance(first, StartupNoticeDialog)
+    assert first.parentWidget() is window
+    window.show_startup_choice()
+    assert window._startup_notice_dialog is first
+    evaluate(first, "document.querySelector('[data-level=expert]').click()")
+    evaluate(first, "document.querySelector('.start').click()")
+    wait_until(lambda: window._startup_notice_dialog is None)
+    assert app_settings.get_experience_level() == "expert"
+    window._maybe_show_startup_notice()
+    assert window._startup_notice_dialog is None
+    window.startup_choice_action.trigger()
+    wait_until(lambda: window._startup_notice_dialog is not None)
+    second = window._startup_notice_dialog
+    wait_until(lambda: second.ready)
+    assert isinstance(second, StartupNoticeDialog)
+    second.reject()
+    wait_until(lambda: window._startup_notice_dialog is None)
+    assert app_settings.get_experience_level() == "expert"
+
+
 def _auto_rng_settings(tmp_path: Path) -> QSettings:
     settings = QSettings(str(tmp_path / "auto_rng.ini"), QSettings.Format.IniFormat)
     settings.clear()
