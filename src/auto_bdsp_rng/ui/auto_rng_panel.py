@@ -362,6 +362,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     runLogRequested = Signal()
     roundRecordsRequested = Signal()
     targetDataRequested = Signal()
+    targetDialogOpened = Signal()
+    targetDialogClosed = Signal()
     scriptEditRequested = Signal(object)
     latestMessageChanged = Signal(str)
     ivCalculatorRequested = Signal()
@@ -2994,8 +2996,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     def open_target_dialog(self) -> None:
         dialog = TargetDialog(self, self._target_version)
         dialog.set_targets(self.targets())
-        if dialog.exec() == dialog.DialogCode.Accepted:
-            self.set_targets(dialog.get_targets())
+        self.targetDialogOpened.emit()
+        try:
+            if dialog.exec() == dialog.DialogCode.Accepted:
+                self.set_targets(dialog.get_targets())
+        finally:
+            self.targetDialogClosed.emit()
 
     def target_summary_text(self) -> str:
         return "; ".join(label.text() for label in getattr(self, "target_summary_labels", []))

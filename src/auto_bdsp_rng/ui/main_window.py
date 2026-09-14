@@ -140,14 +140,11 @@ from auto_bdsp_rng.automation.auto_rng.search import (
 from auto_bdsp_rng.automation.auto_rng.zoom_recovery import recover_zoom_overlay
 from auto_bdsp_rng.app_settings import (
     UI_SCALE_AUTO,
-    RngMode,
     UiScale,
-    get_rng_mode,
     get_ui_scale,
     is_auto_update_check_enabled,
     is_run_log_enabled,
     set_auto_update_check_enabled,
-    set_rng_mode,
     set_run_log_enabled,
     set_ui_scale,
     should_show_startup_notice,
@@ -161,6 +158,7 @@ from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
+from auto_bdsp_rng.ui.guide import GuideController
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
@@ -1649,6 +1647,7 @@ class MainWindow(QMainWindow):
         self._sync_seed64_from_state32()
         self._apply_language()
         self._restore_window_geometry()
+        self.guide_controller = GuideController(self, self.guide_button)
         self.statusBar().showMessage(self._text("ready"))
         QTimer.singleShot(0, self._maybe_show_startup_notice)
 
@@ -1820,13 +1819,11 @@ class MainWindow(QMainWindow):
         self.help_button.setToolTip("帮助")
         self.help_button.setAccessibleName("帮助")
         self.help_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.rng_mode_button = QToolButton()
-        self.rng_mode_button.setObjectName("RngModeButton")
-        self.rng_mode_button.setFixedSize(104, 32)
-        self.rng_mode_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.rng_mode_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.rng_mode_button.clicked.connect(self._toggle_rng_mode)
-        self._refresh_rng_mode()
+        self.guide_button = QToolButton()
+        self.guide_button.setObjectName("GuideButton")
+        self.guide_button.setFixedSize(104, 32)
+        self.guide_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.guide_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.brand_logo = QLabel()
         self.brand_logo.setObjectName("BrandLogo")
         self.brand_logo.setFixedSize(32, 32)
@@ -1850,7 +1847,7 @@ class MainWindow(QMainWindow):
             badge.hide()
         header_layout.addWidget(self.video_source_header_button)
         header_layout.addWidget(self.easycon_header_button)
-        header_layout.addWidget(self.rng_mode_button)
+        header_layout.addWidget(self.guide_button)
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
@@ -2268,30 +2265,6 @@ class MainWindow(QMainWindow):
             return
         self.show_startup_choice()
 
-    def _refresh_rng_mode(self) -> None:
-        self._rng_mode = get_rng_mode()
-        label = "引导模式" if self._rng_mode == "guided" else "标准模式"
-        target = "标准模式" if self._rng_mode == "guided" else "引导模式"
-        self.rng_mode_button.setText(label)
-        self.rng_mode_button.setAccessibleName(f"当前{label}，点击切换到{target}")
-        self.rng_mode_button.setToolTip(f"当前：{label}，点击切换到{target}")
-        self.rng_mode_button.setProperty("mode", self._rng_mode)
-        style = self.rng_mode_button.style()
-        style.unpolish(self.rng_mode_button)
-        style.polish(self.rng_mode_button)
-        self.rng_mode_button.update()
-
-    def _toggle_rng_mode(self) -> None:
-        if self._is_closing:
-            return
-        mode: RngMode = "standard" if self._rng_mode == "guided" else "guided"
-        try:
-            set_rng_mode(mode)
-        except OSError:
-            QMessageBox.warning(self, "无法切换模式", "无法保存模式选择，请检查设置目录是否可写后重试。")
-            return
-        self._refresh_rng_mode()
-
     def show_startup_choice(self) -> None:
         if self._is_closing:
             return
@@ -2302,7 +2275,12 @@ class MainWindow(QMainWindow):
             return
         dialog = StartupNoticeDialog(self)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.accepted.connect(self._refresh_rng_mode)
+        def apply_startup_choice() -> None:
+            self.guide_controller.refresh()
+            if dialog.selected_experience_level == "beginner":
+                QTimer.singleShot(0, self.guide_controller.begin_or_resume)
+
+        dialog.accepted.connect(apply_startup_choice)
         dialog.finished.connect(lambda _result: setattr(self, "_startup_notice_dialog", None))
         self._startup_notice_dialog = dialog
         dialog.show()
@@ -3580,22 +3558,26 @@ class MainWindow(QMainWindow):
                 background: #055B41;
                 border-color: #055B41;
             }
-            QToolButton#RngModeButton {
-                background: #F7F8FA;
-                border: 1px solid #E0E5EB;
+            QToolButton#GuideButton {
+                background: #F0F8F4;
+                border: 1px solid #C5DFD2;
                 border-radius: 7px;
-                color: #52606D;
+                color: #087C58;
                 padding: 0;
                 font-size: 13px;
                 font-weight: 500;
             }
-            QToolButton#RngModeButton[mode="guided"] {
-                background: #F0F8F4;
-                border-color: #C5DFD2;
-                color: #087C58;
+            QToolButton#GuideButton[resumable="true"] {
+                padding-right: 18px;
             }
-            QToolButton#RngModeButton:hover,
-            QToolButton#RngModeButton:pressed {
+            QToolButton#GuideButton[resumable="true"]::menu-button {
+                width: 20px;
+                border-left: 1px solid #C5DFD2;
+                border-top-right-radius: 7px;
+                border-bottom-right-radius: 7px;
+            }
+            QToolButton#GuideButton:hover,
+            QToolButton#GuideButton:pressed {
                 background: #EAF4EF;
                 border-color: #8EBBA6;
                 color: #087C58;
@@ -4314,6 +4296,7 @@ class MainWindow(QMainWindow):
             return
         self._save_profile_settings()
         self._save_window_geometry()
+        self.guide_controller.pause()
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
         super().closeEvent(event)

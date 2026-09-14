@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
@@ -20,7 +21,6 @@ UI_SCALE_STEP = 5
 UI_SCALE_VALUES = tuple(range(UI_SCALE_MIN, UI_SCALE_MAX + 1, UI_SCALE_STEP))
 UiScale: TypeAlias = Literal["auto"] | int
 ExperienceLevel: TypeAlias = Literal["beginner", "expert"]
-RngMode: TypeAlias = Literal["standard", "guided"]
 
 
 def load_settings(path: Path | None = None) -> dict[str, Any]:
@@ -103,28 +103,38 @@ def set_experience_level(
         settings["experience_level"] = level
         if acknowledge_startup:
             settings["startup_notice_acknowledged"] = True
-            settings["rng_mode"] = "guided" if level == "beginner" else "standard"
+            if level == "beginner" and not _unfinished_guide(settings.get("guide_progress")):
+                settings["guide_progress"] = _new_guide_progress()
         save_settings(settings, path)
     return level
 
 
-def get_rng_mode(path: Path | None = None) -> RngMode:
-    settings = load_settings(path)
-    mode = settings.get("rng_mode")
-    if mode in ("standard", "guided"):
-        return mode
-    # Existing users inherit their first-launch choice until they switch modes.
-    return "guided" if settings.get("experience_level") == "beginner" else "standard"
+def _new_guide_progress() -> dict[str, Any]:
+    return {"version": 1, "session_id": uuid.uuid4().hex, "step": "target_selection", "status": "in_progress"}
 
 
-def set_rng_mode(mode: RngMode, path: Path | None = None) -> RngMode:
-    if mode not in ("standard", "guided"):
-        raise ValueError("RNG mode must be 'standard' or 'guided'")
+def _unfinished_guide(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and type(value.get("version")) is int and value["version"] == 1
+        and isinstance(value.get("session_id"), str) and bool(value["session_id"])
+        and value.get("step") == "target_selection"
+        and value.get("status") == "in_progress"
+    )
+
+
+def get_guide_progress(path: Path | None = None) -> dict[str, Any] | None:
+    value = load_settings(path).get("guide_progress")
+    return dict(value) if _unfinished_guide(value) else None
+
+
+def start_guide_progress(path: Path | None = None) -> dict[str, Any]:
     with _SETTINGS_LOCK:
         settings = load_settings(path)
-        settings["rng_mode"] = mode
+        progress = _new_guide_progress()
+        settings["guide_progress"] = progress
         save_settings(settings, path)
-    return mode
+    return dict(progress)
 
 
 def is_run_log_enabled(path: Path | None = None) -> bool:

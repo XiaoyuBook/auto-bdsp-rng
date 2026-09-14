@@ -146,14 +146,14 @@ def _set_bdsp_seed(window: MainWindow) -> None:
     window.bdsp_seed64_inputs[1].setText("1111111122222222")
 
 
-@pytest.mark.parametrize("level, mode", [("beginner", "guided"), ("expert", "standard")])
-def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_path, monkeypatch, level, mode):
+@pytest.mark.parametrize("level", ["beginner", "expert"])
+def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_path, monkeypatch, level):
     from auto_bdsp_rng import app_settings
     from auto_bdsp_rng.ui.startup_dialog import StartupNoticeDialog
     from tests.test_startup_webview import evaluate, wait_until
 
     monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "welcome.json")
-    app_settings.save_settings({"rng_mode": "standard" if mode == "guided" else "guided"})
+    app_settings.save_settings({"rng_mode": "guided"})
     monkeypatch.setattr(main_window_module, "should_show_startup_notice", app_settings.should_show_startup_notice)
     window = MainWindow()
     window.show()
@@ -168,9 +168,15 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
     evaluate(first, "document.querySelector('.start').click()")
     wait_until(lambda: window._startup_notice_dialog is None)
     assert app_settings.get_experience_level() == level
-    assert app_settings.get_rng_mode() == mode
-    assert window.rng_mode_button.text() == ("引导模式" if mode == "guided" else "标准模式")
-    assert window.rng_mode_button.property("mode") == mode
+    if level == "beginner":
+        wait_until(lambda: window.guide_controller.overlay is not None and window.guide_controller.overlay.isVisible())
+        assert window.guide_button.text() == "继续引导"
+        window.guide_controller.pause()
+    else:
+        assert window.guide_controller.overlay is None
+        assert window.guide_button.text() == "开始引导"
+        assert window.guide_button.menu() is None
+    progress = app_settings.get_guide_progress()
     window._maybe_show_startup_notice()
     assert window._startup_notice_dialog is None
     window.startup_choice_action.trigger()
@@ -181,43 +187,132 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
     second.reject()
     wait_until(lambda: window._startup_notice_dialog is None)
     assert app_settings.get_experience_level() == level
-    assert window.rng_mode_button.property("mode") == mode
+    assert app_settings.get_guide_progress() == progress
 
 
-def test_main_window_rng_mode_switch_preserves_workspace_and_recovers_save_failure(app, tmp_path, monkeypatch):
+def test_main_window_guide_start_resume_restart_and_completed_entry(app, tmp_path, monkeypatch):
     from auto_bdsp_rng import app_settings
 
-    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "modes.json")
-    app_settings.save_settings({"experience_level": "beginner", "startup_notice_acknowledged": True, "other": "保留"})
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guides.json")
+    app_settings.save_settings({"experience_level": "beginner", "rng_mode": "guided", "other": "保留"})
     window = MainWindow()
-    assert window.rng_mode_button.text() == "引导模式"
-    assert window.rng_mode_button.menu() is None
+    window.show()
+    app.processEvents()
+    assert window.guide_button.text() == "开始引导"
+    assert window.guide_button.menu() is None
     window.tabs.setCurrentWidget(window.project_xs_tab)
     window.bdsp_seed64_inputs[0].setText("123456789ABCDEF0")
+    window.guide_button.click()
+    first = app_settings.get_guide_progress()
+    assert first is not None
+    assert window.guide_button.text() == "继续引导"
+    assert [a.text() for a in window.guide_button.menu().actions()] == ["重新开始引导"]
+    assert window.guide_controller.overlay.isVisible()
+    assert window.tabs.currentWidget() is window.auto_rng_tab
+    window.guide_controller.overlay.close_button.click()
+    assert not window.guide_controller.overlay.isVisible()
+    window.guide_button.click()
+    assert app_settings.get_guide_progress() == first
+    assert window.guide_controller.overlay.isVisible()
+    window.guide_controller.pause()
+    reopened = MainWindow()
+    assert reopened.guide_button.text() == "继续引导"
+    assert reopened.guide_controller.overlay is None
+    window.guide_controller.restart_action.trigger()
+    second = app_settings.get_guide_progress()
+    assert second["session_id"] != first["session_id"]
+    assert second["step"] == "target_selection"
+    assert window.bdsp_seed64_inputs[0].text() == "123456789ABCDEF0"
+    assert app_settings.load_settings()["other"] == "保留"
+    window.guide_controller.pause()
+    settings = app_settings.load_settings()
+    settings["guide_progress"]["status"] = "completed"
+    app_settings.save_settings(settings)
+    window.guide_controller.refresh()
+    assert window.guide_button.text() == "开始引导"
+    assert window.guide_button.menu() is None
+
+
+def test_main_window_guide_write_failure_preserves_progress_and_workspace(app, tmp_path, monkeypatch):
+    from auto_bdsp_rng import app_settings
+    from auto_bdsp_rng.ui import guide as guide_module
+
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guides.json")
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    window.tabs.setCurrentWidget(window.project_xs_tab)
     warnings = []
-    monkeypatch.setattr(main_window_module.QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(guide_module.QMessageBox, "warning", lambda *args: warnings.append(args))
 
     def fail(*args):
         raise OSError("disk full")
 
     with monkeypatch.context() as scope:
         scope.setattr(app_settings.os, "replace", fail)
-        window.rng_mode_button.click()
+        window.guide_button.click()
         assert warnings
-        assert window.rng_mode_button.text() == "引导模式"
-        assert window.rng_mode_button.property("mode") == "guided"
-        assert app_settings.get_rng_mode() == "guided"
-    for mode, label in (("standard", "标准模式"), ("guided", "引导模式"), ("standard", "标准模式")):
-        window.rng_mode_button.click()
-        assert window.rng_mode_button.text() == label
-        assert window.rng_mode_button.property("mode") == mode
-        assert app_settings.load_settings() == {
-            "experience_level": "beginner", "startup_notice_acknowledged": True, "other": "保留", "rng_mode": mode,
-        }
+        assert window.guide_button.text() == "开始引导"
+        assert window.guide_controller.overlay is None
+        assert app_settings.get_guide_progress() is None
         assert window.tabs.currentWidget() is window.project_xs_tab
-        assert window.bdsp_seed64_inputs[0].text() == "123456789ABCDEF0"
-    reopened = MainWindow()
-    assert reopened.rng_mode_button.text() == "标准模式"
+    window.guide_button.click()
+    progress = app_settings.get_guide_progress()
+    window.guide_controller.pause()
+    with monkeypatch.context() as scope:
+        scope.setattr(app_settings.os, "replace", fail)
+        window.guide_controller.restart_action.trigger()
+        assert app_settings.get_guide_progress() == progress
+        assert not window.guide_controller.overlay.isVisible()
+        window.guide_button.click()
+        assert window.guide_controller.overlay.isVisible()
+
+
+def test_main_window_guide_spotlight_tracks_real_controls_after_move_resize_and_scroll(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QScrollArea
+    from auto_bdsp_rng import app_settings
+
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guide.json")
+    window = MainWindow()
+    monkeypatch.setattr(window, "_screen_available_geometry", lambda: QRect(0, 0, 2000, 1400))
+    window.show()
+    QTest.qWait(100)
+    window.guide_button.click()
+    overlay = window.guide_controller.overlay
+    target = window.auto_rng_tab.target_button
+    for width, height, x, y in ((1150, 760, 190, 80), (860, 600, 60, 190), (1150, 760, 230, 120)):
+        window.move(x, y)
+        window.resize(width, height)
+        QTest.qWait(100)
+        # Compute bounds by walking the widget hierarchy, independently of the
+        # global-coordinate conversion used by the spotlight.
+        position = QPoint()
+        ancestor = target
+        while ancestor is not overlay.parentWidget():
+            position += ancestor.pos()
+            ancestor = ancestor.parentWidget()
+        assert overlay.hole.contains(QRect(position, target.size()))
+        assert not overlay.mask().contains(position + target.rect().center())
+        assert overlay.rect().contains(overlay.tip.geometry())
+        assert not overlay.hole.intersects(overlay.tip.geometry())
+        assert overlay.mask().contains(QPoint(5, 5))
+    window.resize(860, 600)
+    QTest.qWait(100)
+    ancestor = target.parentWidget()
+    while not isinstance(ancestor, QScrollArea):
+        ancestor = ancestor.parentWidget()
+    assert ancestor.verticalScrollBar().maximum() >= 12
+    ancestor.verticalScrollBar().setValue(12)
+    QTest.qWait(100)
+    position = overlay.mapFromGlobal(target.mapToGlobal(target.rect().center()))
+    assert overlay.hole.contains(position)
+    QTest.keyClick(target, Qt.Key.Key_Tab)
+    assert overlay.close_button.hasFocus()
+    QTest.keyClick(overlay.close_button, Qt.Key.Key_Escape)
+    assert not overlay.isVisible()
+    assert app_settings.get_guide_progress() is not None
 
 
 def _auto_rng_settings(tmp_path: Path) -> QSettings:

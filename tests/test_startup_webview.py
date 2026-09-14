@@ -69,10 +69,14 @@ def test_welcome_click_saves_choice_and_acknowledgement(chooser, level):
     evaluate(chooser, "document.querySelector('.start').click()")
     wait_until(lambda: not chooser.isVisible())
     assert chooser.selected_experience_level == level
-    assert app_settings.load_settings() == {
+    expected = {
         "other": "保留", "experience_level": level, "startup_notice_acknowledged": True,
-        "rng_mode": "guided" if level == "beginner" else "standard",
     }
+    if level == "beginner":
+        progress = app_settings.get_guide_progress()
+        assert progress is not None and progress["step"] == "target_selection"
+        expected["guide_progress"] = progress
+    assert app_settings.load_settings() == expected
     assert not app_settings.should_show_startup_notice()
 
 
