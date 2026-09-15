@@ -156,9 +156,13 @@ class ExecutionFollower(QObject):
         header.addWidget(self.follow)
         self.locate = QPushButton("定位执行行")
         self.locate.setIcon(workspace_icon("locate-fixed", "#18805A"))
+        self.locate.setCursor(Qt.CursorShape.PointingHandCursor)
         self.locate.setStyleSheet(
-            "QPushButton { background: transparent; color: #18805A; border: 0; padding: 3px 4px; }"
-            "QPushButton:disabled { color: #96A39B; }"
+            "QPushButton { background: #FFFFFF; color: #18805A; border: 1px solid #B9D9C8;"
+            " border-radius: 5px; padding: 4px 9px; font-size: 12px; }"
+            "QPushButton:hover { background: #E8F6ED; border-color: #18805A; }"
+            "QPushButton:pressed { background: #D8EFDF; }"
+            "QPushButton:disabled { background: #F3F5F4; color: #96A39B; border-color: #DDE5E0; }"
         )
         self.locate.setToolTip("跳转到当前或停止前的最后执行位置")
         self.locate.clicked.connect(self.locate_point)
@@ -179,6 +183,12 @@ class ExecutionFollower(QObject):
         self.location_label.setWordWrap(True)
         self.location_label.setStyleSheet("font-size: 12px; color: #64737D;")
         layout.addWidget(self.location_label)
+        self.pause_note = QLabel()
+        self.pause_note.setWordWrap(True)
+        self.pause_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.pause_note.setStyleSheet("font-size: 12px; color: #A6681B;")
+        layout.addWidget(self.pause_note)
+        self._resume_error = ""
         self._show_idle()
 
         self.viewer = type(panel.editor)()
@@ -215,6 +225,13 @@ class ExecutionFollower(QObject):
         self.location_label.setToolTip("")
         self.location_label.hide()
         self.locate.setEnabled(False)
+        self._resume_error = ""
+        self.pause_note.hide()
+
+    def show_resume_error(self, message: str) -> None:
+        self._resume_error = message
+        self.pause_note.setText(f"未继续：{message}" if message else "已暂停，可修改尚未执行的代码，点击“继续运行”应用修改。游戏和 RNG 仍会继续推进。")
+        self.pause_note.setVisible(bool(message) or self.panel._native_script_paused())
 
     def clear(self) -> None:
         trace = self._trace()
@@ -392,7 +409,7 @@ class ExecutionFollower(QObject):
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
-        self.panel.editor.setReadOnly(busy)
+        self.panel.editor.setReadOnly(busy and not self.panel._native_script_paused())
         self.panel.open_button.setEnabled(not busy)
         self.panel.new_button.setEnabled(not busy)
         self.panel.save_button.setEnabled(not busy and not self.viewing_snapshot)
@@ -425,9 +442,14 @@ class ExecutionFollower(QObject):
         self.bar.show()
         self.location_label.show()
         state_text = {"running": "执行中", "completed": "已完成 · 保留最后位置",
+                      "pausing": "正在暂停 · 等待当前动作结束", "paused": "已暂停 · 可修改后续代码",
+                      "resuming": "正在继续",
                       "stopped": "已停止 · 保留最后位置", "failed": "执行失败 · 保留最后位置"}
         label = state_text.get(snapshot.state, "当前执行")
         self.state_label.setText(label if snapshot.point else label.split(" · ")[0])
+        if changed_state:
+            self.show_resume_error(self._resume_error if snapshot.state == "paused" else "")
+            self.pause_note.setVisible(snapshot.state == "paused")
         if self._display_state != snapshot.state:
             self._display_state = snapshot.state
             self.state_label.setStyleSheet(ui_styles(
@@ -455,8 +477,8 @@ class ExecutionFollower(QObject):
             self.viewer.set_execution_line(None)
         else:
             action = f"第 {point.location.line} 行 · {point.action}"
-            if point.duration_ms is not None and snapshot.state == "running":
-                remaining = max(0, point.duration_ms / 1000 - (monotonic() - point.started_at))
+            if point.duration_ms is not None and snapshot.state in {"running", "pausing", "paused"}:
+                remaining = point.duration_ms / 1000 if snapshot.state == "paused" else max(0, point.duration_ms / 1000 - (monotonic() - point.started_at))
                 action += f" · 剩余约 {remaining:.1f} 秒"
             self.action_label.setText(action)
             location = f"{Path(point.location.source).name} · 第 {point.location.line} 行"

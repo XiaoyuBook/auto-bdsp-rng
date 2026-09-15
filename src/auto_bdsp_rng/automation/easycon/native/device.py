@@ -998,6 +998,19 @@ class NintendoSwitchDevice:
         self._log("Reset")
         self._queue_report(snapshot, wait=wait)
 
+    def suspend_inputs(self) -> tuple[SwitchReport, DirectionKey]:
+        with self._state_lock:
+            saved = self._report.copy(), self._directions
+        self.reset()
+        return saved
+
+    def restore_inputs(self, saved: tuple[SwitchReport, DirectionKey]) -> None:
+        with self._state_lock:
+            self._report = saved[0].copy()
+            self._directions = saved[1]
+            snapshot = self._report.copy()
+        self._queue_report(snapshot)
+
     def disconnect(self, *, release: bool = True, timeout: float = 1.0) -> bool:
         transport = self.transport
         thread = self._report_thread

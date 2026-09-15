@@ -38,6 +38,8 @@ from auto_bdsp_rng.automation.easycon.native.ast import (
 )
 from auto_bdsp_rng.automation.easycon.native.errors import ScriptCancelled, ScriptRuntimeError, SourceLocation
 from auto_bdsp_rng.automation.easycon.native.trace import ExecutionPoint, LoopProgress, execution_point
+from auto_bdsp_rng.automation.easycon.native.live_edit import LiveProgram
+from auto_bdsp_rng.automation.easycon.native.pause import PauseControl
 
 
 CancelEvent = threading.Event | Callable[[], bool] | None
@@ -433,6 +435,7 @@ class _Evaluator:
         random_source: random.Random,
         beep: Callable[[int, int], None] | None,
         trace: Callable[[ExecutionPoint], None] | None,
+        control: PauseControl | None,
     ) -> None:
         self.program = program
         self.gamepad = gamepad
@@ -446,6 +449,10 @@ class _Evaluator:
         self.trace = trace
         self.call_sites: list[SourceLocation] = []
         self.loops: tuple[LoopProgress, ...] = ()
+        self.control = control
+        self.live = LiveProgram(program) if control is not None else None
+        if control is not None:
+            control.replace_program = self._replace_program
         self.started_ns = time.monotonic_ns()
         self.cancel_line_break = False
         self.last_value: object = None
@@ -479,6 +486,17 @@ class _Evaluator:
             elif isinstance(statement, ExternDeclaration):
                 self.extern_declarations[statement.name] = statement
 
+    def _replace_program(self, program: Program, external_getters: Mapping[str, ExternalGetter]):
+        assert self.live is not None
+        self.live.apply(program)
+        self.program = program
+        self.external_getters = external_getters
+        self.functions.clear()
+        self.extern_declarations.clear()
+        self._register_declarations()
+        self.main_globals.declare(_scope_declarations(program.main.statements))
+        return self.live.relocate
+
     def run(self) -> object:
         try:
             for unit in self.program.libraries:
@@ -501,6 +519,27 @@ class _Evaluator:
     def _execute_statements(
         self, statements: tuple[Statement, ...], environment: _Environment, *, skip_declarations: bool = False
     ) -> None:
+        if self.live is not None:
+            sequence = self.live.sequence(statements)
+            declared = None
+            index = 0
+            while index < len(sequence.statements):
+                statement = sequence.statements[index]
+                self._check_cancelled(statement.location)
+                if self.control.requested.is_set():
+                    self._observe(statement.location, "即将执行")
+                    self.control.checkpoint()
+                if index >= len(sequence.statements):
+                    break
+                if declared is not sequence.statements:
+                    declared = sequence.statements
+                    environment.declare(_scope_declarations(declared))
+                statement = sequence.statements[index]
+                sequence.consumed = max(sequence.consumed, index + 1)
+                if not (skip_declarations and isinstance(statement, (FunctionDeclaration, ExternDeclaration, ImportStatement))):
+                    self._execute_statement(statement, environment)
+                index += 1
+            return
         environment.declare(_scope_declarations(statements))
         for statement in statements:
             self._check_cancelled(statement.location)
@@ -512,7 +551,8 @@ class _Evaluator:
 
     def _observe(self, location: SourceLocation, action: str, duration_ms: int | None = None) -> None:
         if self.trace is not None:
-            self.trace(execution_point(location, action, duration_ms, self.call_sites[-1] if self.call_sites else None, self.loops))
+            point = execution_point(location, action, duration_ms, self.call_sites[-1] if self.call_sites else None, self.loops)
+            self.trace(self.live.relocate(point) if self.live is not None else point)
 
     def _execute_statement(self, statement: Statement, environment: _Environment) -> None:
         try:
@@ -652,6 +692,8 @@ class _Evaluator:
         self._check_cancelled(location)
         function_info = self.functions.get(name)
         if function_info is not None:
+            if self.live is not None:
+                self.live.called_functions.add(name)
             declaration, global_environment = function_info
             if len(arguments) != len(declaration.parameters):
                 raise ScriptRuntimeError(
@@ -749,11 +791,14 @@ class _Evaluator:
         self._check_cancelled(location)
         self._observe(location, f"等待 {duration / 1000:g} 秒", duration)
         try:
-            method = getattr(self.waiter, "wait", None)
-            if callable(method):
-                method(duration, self.cancel_event)
+            if self.control is not None:
+                self.control.wait(self.waiter, duration, lambda remaining: self._observe(location, f"等待 {duration / 1000:g} 秒", remaining))
             else:
-                self.waiter(duration, self.cancel_event)  # type: ignore[operator]
+                method = getattr(self.waiter, "wait", None)
+                if callable(method):
+                    method(duration, self.cancel_event)
+                else:
+                    self.waiter(duration, self.cancel_event)  # type: ignore[operator]
         except ScriptCancelled as exc:
             if exc.location is None:
                 raise ScriptCancelled(exc.message, location) from exc
@@ -821,7 +866,7 @@ class _Evaluator:
                 iteration += 1
                 loop_environment.values[statement.variable] = current
                 if self._execute_loop_body(
-                    statement.body, loop_environment, LoopProgress(statement.location, iteration, total),
+                    statement, loop_environment, LoopProgress(statement.location, iteration, total),
                     f"循环 · ${statement.variable} = {current}",
                 ):
                     return
@@ -833,7 +878,7 @@ class _Evaluator:
             for iteration in range(max(0, count)):
                 self._check_cancelled(statement.location)
                 if self._execute_loop_body(
-                    statement.body, loop_environment, LoopProgress(statement.location, iteration + 1, count),
+                    statement, loop_environment, LoopProgress(statement.location, iteration + 1, count),
                     f"循环 {iteration + 1} / {count}",
                 ):
                     return
@@ -844,7 +889,7 @@ class _Evaluator:
             self._check_cancelled(statement.location)
             iteration += 1
             if self._execute_loop_body(
-                statement.body, loop_environment, LoopProgress(statement.location, iteration), "继续循环",
+                statement, loop_environment, LoopProgress(statement.location, iteration), "继续循环",
             ):
                 return
 
@@ -857,18 +902,21 @@ class _Evaluator:
             self._check_cancelled(statement.location)
             iteration += 1
             if self._execute_loop_body(
-                statement.body, environment, LoopProgress(statement.location, iteration), "进入本次循环",
+                statement, environment, LoopProgress(statement.location, iteration), "进入本次循环",
             ):
                 return
 
     def _execute_loop_body(
-        self, body: tuple[Statement, ...], environment: _Environment, progress: LoopProgress, action: str,
+        self, statement: ForStatement | WhileStatement, environment: _Environment, progress: LoopProgress, action: str,
     ) -> bool:
         outer_loops = self.loops
         self.loops = (*outer_loops, progress)
         try:
             self._observe(progress.location, action)
-            self._execute_statements(body, environment)
+            if self.control is not None:
+                self.control.checkpoint()
+            current = self.live.node(statement) if self.live is not None else statement
+            self._execute_statements(current.body, environment)
         except _ContinueSignal:
             return False
         except _BreakSignal as signal:
@@ -900,6 +948,7 @@ def evaluate_program(
     random_source: random.Random | None = None,
     beep: Callable[[int, int], None] | None = None,
     trace: Callable[[ExecutionPoint], None] | None = None,
+    control: PauseControl | None = None,
 ) -> object:
     evaluator = _Evaluator(
         program,
@@ -912,6 +961,7 @@ def evaluate_program(
         random_source=random_source or random.Random(),
         beep=beep,
         trace=trace,
+        control=control,
     )
     return evaluator.run()
 

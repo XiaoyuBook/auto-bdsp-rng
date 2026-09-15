@@ -486,7 +486,8 @@ class NativeScriptWorker(QObject):
 
     def run(self) -> None:
         try:
-            result = self.backend.run_script_text(  # type: ignore[attr-defined]
+            run = getattr(self.backend, "run_editable_script_text", self.backend.run_script_text)
+            result = run(
                 self.script_text,
                 self.script_name,
                 script_dir=self.script_dir,
@@ -1357,6 +1358,14 @@ class EasyConPanel(QWidget):
         )
         self.run_button.setStyleSheet(self.run_button.styleSheet() + primary_button_styles("QPushButton#PrimaryButton"))
         layout.addWidget(self.run_button)
+
+        self.pause_button = QPushButton("暂停")
+        self.pause_button.setFixedSize(70, 32)
+        self.pause_button.setIcon(workspace_icon("pause", "#087C58"))
+        self.pause_button.setStyleSheet(btn_style)
+        self.pause_button.setToolTip("暂停 WAIT 并保留剩余时间；按键或摇杆完成当前动作后暂停")
+        self.pause_button.clicked.connect(self.pause_native_script)
+        layout.addWidget(self.pause_button)
 
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("DangerButton")
@@ -2244,6 +2253,9 @@ class EasyConPanel(QWidget):
 
     def toggle_run(self) -> None:
         if self._is_native_mode():
+            if self._native_script_paused():
+                self.resume_native_script()
+                return
             if self._native_status() == EasyConStatus.RUNNING:
                 self.stop_native_script()
                 return
@@ -2321,6 +2333,9 @@ class EasyConPanel(QWidget):
         self._update_run_enabled()
 
     def run_script_via_native(self) -> None:
+        if self._native_script_paused():
+            self.resume_native_script()
+            return
         if self._native_status() == EasyConStatus.RUNNING:
             self.stop_native_script()
             return
@@ -2444,6 +2459,36 @@ class EasyConPanel(QWidget):
         self.release_native_script_run()
         if thread is not None:
             thread.deleteLater()
+
+    def _native_script_paused(self) -> bool:
+        return bool(self._is_native_mode() and self.native_run_thread is not None
+                    and getattr(self.native_backend, "is_paused", False))
+
+    def pause_native_script(self) -> None:
+        if self.native_run_thread is None:
+            return
+        pause = getattr(self.native_backend, "pause_current_script", None)
+        if callable(pause) and pause():
+            self.execution.poll()
+            self._append_log("info", "已请求暂停：WAIT 可立即暂停，按键或摇杆完成当前动作后暂停")
+
+    def resume_native_script(self) -> None:
+        if not self._native_script_paused():
+            return
+        try:
+            self.native_backend.resume_script_text(self.editor.toPlainText())
+        except Exception as exc:
+            location = getattr(exc, "location", None)
+            detail = getattr(exc, "message", str(exc))
+            message = f"{Path(location.source).name} · 第 {location.line} 行：{detail}" if location is not None else str(exc)
+            self.execution.show_resume_error(message)
+            self._append_log("error", f"仍保持暂停，未应用修改：{message}")
+            return
+        self.execution.show_resume_error("")
+        self.execution.show_current()
+        self.execution.poll()
+        self._refresh_script_action_buttons()
+        self._append_log("info", "已应用编辑器中的代码，从暂停位置继续运行")
 
     def stop_native_script(self) -> None:
         try:
@@ -2784,6 +2829,8 @@ class EasyConPanel(QWidget):
             self._append_log("error", "单片机连接失败，请检查串口、reset 和端口占用情况。")
 
     def _tick_run_timer(self) -> None:
+        if self._native_script_paused():
+            return
         self.run_seconds += 1
         hours, remainder = divmod(self.run_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -2838,14 +2885,18 @@ class EasyConPanel(QWidget):
 
     def _refresh_script_action_buttons(self) -> None:
         running = self._controller_script_running()
+        paused = self._native_script_paused()
         if hasattr(self, "run_button"):
-            # Running and stopping have separate controls in the compact
-            # toolbar. Keep the primary action stable and disable it while
-            # any backend owns the script slot; ``toggle_run`` remains a
-            # compatibility API for callers that invoke it directly.
-            self.run_button.setText("运行脚本")
+            # Resume the manual worker in place; other active backends retain
+            # exclusive ownership of the script slot.
+            self.run_button.setText("继续运行" if paused else "运行脚本")
             viewing_snapshot = hasattr(self, "execution") and self.execution.viewing_snapshot
-            self.run_button.setEnabled(not running and not viewing_snapshot and self._can_run())
+            self.run_button.setEnabled(paused or (not running and not viewing_snapshot and self._can_run()))
+        if hasattr(self, "pause_button"):
+            self.pause_button.setVisible(self._is_native_mode())
+            self.pause_button.setEnabled(bool(running and self.native_run_thread is not None
+                                             and getattr(self.native_backend, "can_pause", False)
+                                             and self.execution.snapshot.state == "running"))
         if hasattr(self, "stop_button"):
             self.stop_button.setEnabled(running)
         if hasattr(self, "execution") and hasattr(self, "open_button"):

@@ -38,6 +38,7 @@ from auto_bdsp_rng.automation.easycon.native.runtime import (
 )
 from auto_bdsp_rng.automation.easycon.native.validation import validate_program
 from auto_bdsp_rng.automation.easycon.native.trace import ExecutionPoint
+from auto_bdsp_rng.automation.easycon.native.pause import PauseControl
 
 
 def _read_utf8(path: Path) -> str:
@@ -152,6 +153,7 @@ class ScriptProgram:
         random_source: random.Random | None = None,
         beep: Callable[[int, int], None] | None = None,
         trace: Callable[[ExecutionPoint], None] | None = None,
+        control: PauseControl | None = None,
     ) -> object:
         return evaluate_program(
             self.ast,
@@ -164,6 +166,7 @@ class ScriptProgram:
             random_source=random_source,
             beep=beep,
             trace=trace,
+            control=control,
         )
 
 

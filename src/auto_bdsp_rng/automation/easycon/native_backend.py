@@ -45,6 +45,7 @@ from auto_bdsp_rng.capture_broker import (
 )
 from auto_bdsp_rng.resources import resource_path
 from auto_bdsp_rng.automation.easycon.native.trace import ExecutionTrace
+from auto_bdsp_rng.automation.easycon.native.pause import PauseControl
 
 
 LogCallback = Callable[[str, str], None]
@@ -159,6 +160,8 @@ class NativeEasyConBackend(EasyConBackend):
         self._run_done.set()
         self._running = False
         self.execution_trace = ExecutionTrace()
+        self._pause_control: PauseControl | None = None
+        self._resume_editable: Callable[[str], None] | None = None
         self._closed = False
         self._stick_directions: dict[str, set[str]] = {"LS": set(), "RS": set()}
 
@@ -240,12 +243,16 @@ class NativeEasyConBackend(EasyConBackend):
             script_dir=task.script_path.parent,
         )
 
+    def run_editable_script_text(self, script_text: str, name: str | None = None, *, script_dir: str | Path | None = None) -> EasyConRunResult:
+        return self.run_script_text(script_text, name, script_dir=script_dir, _allow_pause=True)
+
     def run_script_text(
         self,
         script_text: str,
         name: str | None = None,
         *,
         script_dir: str | Path | None = None,
+        _allow_pause: bool = False,
     ) -> EasyConRunResult:
         if not self._run_lock.acquire(blocking=False):
             raise NativeEasyConBusyError("已有伊机控脚本正在运行")
@@ -253,6 +260,11 @@ class NativeEasyConBackend(EasyConBackend):
         started_at = datetime.now()
         output = _RunOutput(self._emit)
         cancel = threading.Event()
+        control = PauseControl(
+            cancel, self.execution_trace.finish,
+            lambda: self._device.suspend_inputs() if self._device.is_connected else None,
+            lambda saved: self._device.restore_inputs(saved) if saved is not None else None,
+        ) if _allow_pause else None
         client: Any | None = None
         with self._state_lock:
             if self._closed:
@@ -260,6 +272,7 @@ class NativeEasyConBackend(EasyConBackend):
                 raise RuntimeError("原生伊机控后端已关闭")
             self._running = True
             self._run_cancel = cancel
+            self._pause_control = control
             self._run_done.clear()
         self._emit("INFO", f"开始运行原生伊机控脚本: {script_path.name}")
         self.execution_trace.begin(source)
@@ -285,8 +298,9 @@ class NativeEasyConBackend(EasyConBackend):
                 except Exception as exc:
                     raise BrokerUnavailableError(f"当前语句需要读取游戏画面，请先连接可用的视频源：{exc}") from exc
 
-            getters = {}
-            if program.requires_image_search:
+            def make_getters(candidate):
+                if not candidate.requires_image_search:
+                    return {}
                 roots: list[Path] = []
                 if actual_script_dir is not None:
                     roots.append(actual_script_dir)
@@ -294,24 +308,47 @@ class NativeEasyConBackend(EasyConBackend):
                 if app_root not in roots:
                     roots.append(app_root)
                 labels = load_image_labels(roots)
-                missing = sorted(program.external_labels.difference(labels.labels))
+                missing = sorted(candidate.external_labels.difference(labels.labels))
                 if missing:
                     raise ScriptCompileError(f"找不到搜图标签: {', '.join(missing)}")
                 if labels.failed_files:
                     failed = ", ".join(str(path) for path in labels.failed_files)
                     self._emit("WARNING", f"无法加载部分搜图标签: {failed}")
-                getters = labels.external_getters(
+                return labels.external_getters(
                     read_script_frame,
                     ocr_reader=self._ocr_reader,
                     result_callback=self._image_result_callback,
                 )
+
+            def resume_editable(text: str) -> None:
+                candidate = self._engine.compile(text, source=source, script_dir=actual_script_dir)
+                if candidate.has_gamepad_actions and not self._device.is_connected:
+                    raise DeviceNotConnectedError("脚本包含手柄操作，请先连接伊机控串口")
+                new_getters = make_getters(candidate)
+
+                def apply() -> None:
+                    assert control is not None and control.replace_program is not None
+                    relocate = control.replace_program(candidate.ast, new_getters)
+                    point = self.execution_trace.snapshot().point
+                    if point is not None:
+                        self.execution_trace.record(relocate(point))
+                    self.execution_trace.set_sources(tuple(
+                        (unit.source, unit.text) for unit in (candidate.ast.main, *candidate.ast.libraries)
+                    ))
+
+                assert control is not None
+                control.resume(apply)
+
+            getters = make_getters(program)
+            self._resume_editable = resume_editable if control is not None else None
             program.run(
-                gamepad=self._gamepad if program.has_gamepad_actions else None,
+                gamepad=self._gamepad if program.has_gamepad_actions or control is not None else None,
                 external_getters=getters,
                 output=output,
                 cancel_event=cancel,
                 waiter=self._waiter,
                 trace=self.execution_trace.record,
+                control=control,
             )
             trace_state = "completed"
             self._emit("INFO", "原生伊机控脚本运行完成")
@@ -357,6 +394,8 @@ class NativeEasyConBackend(EasyConBackend):
                 message,
             )
         finally:
+            if control is not None:
+                control.finish()
             self._reset_after_script()
             self.execution_trace.finish(trace_state)
             if client is not None:
@@ -365,14 +404,39 @@ class NativeEasyConBackend(EasyConBackend):
             with self._state_lock:
                 self._running = False
                 self._run_cancel = None
+                self._pause_control = None
+                self._resume_editable = None
                 self._run_done.set()
             self._run_lock.release()
 
     def stop_current_script(self) -> None:
         with self._state_lock:
             cancel = self._run_cancel
-        if cancel is not None:
+            control = self._pause_control
+        if control is not None:
+            control.stop()
+        elif cancel is not None:
             cancel.set()
+
+    @property
+    def can_pause(self) -> bool:
+        control = self._pause_control
+        return control is not None and not control.finished
+
+    @property
+    def is_paused(self) -> bool:
+        control = self._pause_control
+        return bool(control is not None and control.paused and control.requested.is_set() and not control.cancel.is_set())
+
+    def pause_current_script(self) -> bool:
+        control = self._pause_control
+        return control.request_pause() if control is not None else False
+
+    def resume_script_text(self, script_text: str) -> None:
+        resume = self._resume_editable
+        if not self.is_paused or resume is None:
+            raise RuntimeError("当前没有已暂停的手动脚本")
+        resume(script_text)
 
     def stop(self) -> None:
         self.stop_current_script()

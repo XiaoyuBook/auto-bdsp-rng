@@ -55,6 +55,10 @@ def test_execution_highlight_scrolls_without_moving_edit_cursor_and_preserves_st
     trace.finish("stopped")
     panel.execution.poll()
     assert panel.editor.execution_line == 70
+    panel.execution.follow.setChecked(False)
+    panel.editor.verticalScrollBar().setValue(0)
+    panel.execution.locate.click()
+    assert panel.editor.execution_line == 70
     assert "已停止" in panel.execution.state_label.text()
     assert "70" in panel.execution.action_label.text()
     panel.shutdown()
