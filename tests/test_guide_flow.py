@@ -160,6 +160,9 @@ def test_device_connection_step_guides_video_source_then_easycon(guided, monkeyp
     assert controller.dialog_overlay.isVisible()
     assert controller.dialog_overlay.spec.target is window.capture_device_combo
     controller.next()
+    assert controller.detail == "api"
+    assert controller.dialog_overlay.spec.target is window.capture_api_combo
+    controller.next()
     assert controller.detail == "connect"
     assert controller.dialog_overlay.spec.target is window.video_source_button
 
