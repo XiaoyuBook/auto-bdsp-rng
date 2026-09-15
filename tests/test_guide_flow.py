@@ -154,18 +154,32 @@ def test_device_connection_step_guides_video_source_then_easycon(guided, monkeyp
     assert controller.overlay.spec.caption == "第 3 步 · 连接设备"
     assert not controller.overlay.tip.next_button.isEnabled()
 
-    window._video_source_connected = True
-    controller._navigation()
-    assert controller.overlay.tip.next_button.isEnabled()
+    window.video_source_header_button.click()
+    QTest.qWait(30)
+    assert controller._dialog_key == "video_source"
+    assert controller.dialog_overlay.isVisible()
+    assert controller.dialog_overlay.spec.target is window.capture_device_combo
     controller.next()
-    assert controller.step == "connect_devices"
+    assert controller.detail == "connect"
+    assert controller.dialog_overlay.spec.target is window.video_source_button
+
+    window._video_source_connected = True
+    window.video_source_dialog.hide()
+    controller._connection_status_changed()
+    assert controller._dialog_key is None
     assert controller.detail == "easycon"
     assert controller.overlay.spec.target is window.easycon_header_button
-    assert not controller.overlay.tip.next_button.isEnabled()
 
+    window.easycon_header_button.click()
+    QTest.qWait(30)
+    assert controller._dialog_key == "easycon"
+    assert controller.dialog_overlay.spec.target is window.easycon_tab.port_combo
+    controller.next()
+    assert controller.detail == "connect"
+    assert controller.dialog_overlay.spec.target is window.easycon_tab.connect_button
     monkeypatch.setattr(window.easycon_tab, "_native_is_connected", lambda: True)
     controller._navigation()
-    assert controller.overlay.tip.next_button.isEnabled()
+    assert controller.dialog_overlay.tip.next_button.isEnabled()
     controller.next()
     assert controller.step == "devices_connected"
 

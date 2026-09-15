@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.app_settings import GUIDE_STEPS, advance_guide_progress, get_guide_progress, start_guide_progress
-from auto_bdsp_rng.ui.guide_steps import GuideStep, dialog_steps, workspace_step
+from auto_bdsp_rng.ui.guide_steps import GuideStep, connection_dialog_steps, dialog_steps, workspace_step
 from auto_bdsp_rng.ui.guide_tip import GuideTip
 
 
@@ -272,6 +272,8 @@ class GuideController(QObject):
         self.panel.delay_strategy_dialog.strategy_combo.currentIndexChanged.connect(self._dialog_values_changed)
         self.panel.strategy_dialog.reidentify_failure_policy.currentIndexChanged.connect(self._dialog_values_changed)
         window.tabs.currentChanged.connect(self._page_changed)
+        window.video_source_header_button.clicked.connect(lambda: self._connection_dialog_opened("video_source"))
+        window.easycon_header_button.clicked.connect(lambda: self._connection_dialog_opened("easycon"))
         self.refresh()
 
     def refresh(self) -> None:
@@ -386,7 +388,10 @@ class GuideController(QObject):
         waiting = overlay.waiting_for_page
         valid = self.overlay.tip.range_valid if self.step == "search_range" else True
         if self.step == "connect_devices":
-            valid = self._connection_ready(self.detail or "video_source")
+            if self._dialog_key:
+                valid = self.detail not in ("connect", "confirm") or self._connection_ready(self._dialog_key)
+            else:
+                valid = self._connection_ready(self.detail or "video_source")
         tip.previous_button.setEnabled(not waiting and self.step != "target_selection")
         tip.next_button.setEnabled(not waiting and valid and self.step != "devices_connected" and (self.step != "save_config" or self._config_saved))
         tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured"))
@@ -395,11 +400,13 @@ class GuideController(QObject):
         if not self.active or not self._current_overlay().tip.next_button.isEnabled():
             return
         if self._dialog_key:
-            steps = dialog_steps(self.panel, self._dialog_key)
+            steps = connection_dialog_steps(self.panel, self._dialog_key) if self._dialog_key in ("video_source", "easycon") else dialog_steps(self.panel, self._dialog_key)
             index = next((i for i, spec in enumerate(steps) if spec.key == self.detail), 0)
             if index + 1 < len(steps):
                 if self._persist(self.step, steps[index + 1].key):
                     self._show_dialog_step()
+            elif self._dialog_key in ("video_source", "easycon"):
+                self._finish_connection_dialog()
             else:
                 self._leave_dialog(GUIDE_STEPS[GUIDE_STEPS.index(self.step) + 1])
         elif self.step == "connect_devices":
@@ -418,11 +425,13 @@ class GuideController(QObject):
         if not self.active or not self._current_overlay().tip.previous_button.isEnabled():
             return
         if self._dialog_key:
-            steps = dialog_steps(self.panel, self._dialog_key)
+            steps = connection_dialog_steps(self.panel, self._dialog_key) if self._dialog_key in ("video_source", "easycon") else dialog_steps(self.panel, self._dialog_key)
             index = next((i for i, spec in enumerate(steps) if spec.key == self.detail), 0)
             if index > 0:
                 if self._persist(self.step, steps[index - 1].key):
                     self._show_dialog_step()
+            elif self._dialog_key in ("video_source", "easycon"):
+                self._close_connection_dialog(resume=True)
             else:
                 self._leave_dialog(GUIDE_STEPS[GUIDE_STEPS.index(self.step) - 1])
         elif self.step == "connect_devices":
@@ -478,7 +487,42 @@ class GuideController(QObject):
             QTimer.singleShot(0, self.begin_or_resume)
 
     def _dialog(self) -> QDialog:
+        if self._dialog_key == "video_source":
+            return self.window.video_source_dialog
+        if self._dialog_key == "easycon":
+            return self.window.easycon_tab.connection_dialog
         return self.panel.delay_strategy_dialog if self._dialog_key == "delay_strategy" else self.panel.strategy_dialog
+
+    def _connection_dialog_opened(self, device: str) -> None:
+        if not self.active or self.step != "connect_devices" or self._dialog_key is not None:
+            return
+        self._dialog_key = device
+        self.detail = "device" if device == "video_source" else "port"
+        self.overlay.shade_all()
+        QTimer.singleShot(0, self._show_dialog_step)
+
+    def _close_connection_dialog(self, *, resume: bool = False) -> None:
+        dialog = self._dialog()
+        key = self._dialog_key
+        self._dialog_key = None
+        if self.dialog_overlay is not None:
+            self.dialog_overlay.hide()
+            self.dialog_overlay.deleteLater()
+            self.dialog_overlay = None
+        if dialog.isVisible():
+            dialog.hide()
+        if resume and key:
+            self._show_workspace()
+
+    def _finish_connection_dialog(self) -> None:
+        key = self._dialog_key
+        if key == "video_source" and self._connection_ready("video_source"):
+            self._close_connection_dialog()
+            self._persist(self.step, "easycon")
+            self._show_workspace()
+        elif key == "easycon" and self._connection_ready("easycon"):
+            self._close_connection_dialog()
+            self._go("devices_connected")
 
     def _dialog_opened(self, key: str) -> None:
         if not self.active or self.step != key:
@@ -507,7 +551,7 @@ class GuideController(QObject):
             return
         if self.dialog_overlay is None:
             self.dialog_overlay = self._new_overlay(self._dialog())
-        steps = dialog_steps(self.panel, self._dialog_key)
+        steps = connection_dialog_steps(self.panel, self._dialog_key) if self._dialog_key in ("video_source", "easycon") else dialog_steps(self.panel, self._dialog_key)
         spec = next((spec for spec in steps if spec.key == self.detail), steps[0])
         if spec.key != self.detail and not self._persist(self.step, spec.key):
             self.pause()
@@ -571,6 +615,13 @@ class GuideController(QObject):
 
     def _connection_status_changed(self, *args) -> None:
         if self.active and self.step == "connect_devices":
+            if self._dialog_key in ("video_source", "easycon"):
+                if not self._dialog().isVisible():
+                    if self._connection_ready(self._dialog_key):
+                        self._finish_connection_dialog()
+                    else:
+                        self._close_connection_dialog(resume=True)
+                return
             self._navigation()
 
     def _focusable(self, overlay: GuideSpotlight) -> list[QWidget]:

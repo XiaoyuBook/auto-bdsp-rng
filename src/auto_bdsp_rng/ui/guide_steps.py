@@ -139,3 +139,27 @@ def dialog_steps(panel, key: str) -> list[GuideStep]:
                             "点击「确定」应用当前设置。点击下一步也会确认设置，返回主界面保存任务配置。",
                             dialog.ok_button, (dialog.ok_button,)))
     return result
+
+
+def connection_dialog_steps(panel, device: str) -> list[GuideStep]:
+    """Return the small, real-control sequence for the third-step dialogs."""
+    window = panel.window()
+    if device == "video_source":
+        dialog = window.video_source_dialog
+        return [
+            GuideStep("device", "第 3 步 · 连接视频源", "选择视频设备",
+                      "确认这里选择的是实际采集画面的设备。通常可以先保留当前选择。",
+                      window.capture_device_combo, (window.capture_device_combo,)),
+            GuideStep("connect", "第 3 步 · 连接视频源", "连接视频源",
+                      "点击「连接」，等待状态变为已连接。连接成功后会自动进入伊机控连接。",
+                      window.video_source_button, (window.video_source_button,)),
+        ]
+    dialog = window.easycon_tab.connection_dialog
+    return [
+        GuideStep("port", "第 3 步 · 连接伊机控", "选择连接端口",
+                  "选择伊机控使用的串口或当前连接方式。没有特殊需求时可以保留现有选择。",
+                  window.easycon_tab.port_combo, (window.easycon_tab.port_combo,)),
+        GuideStep("connect", "第 3 步 · 连接伊机控", "连接伊机控",
+                  "点击「连接」，等待顶部状态变为已连接。连接成功后完成第 3 步。",
+                  window.easycon_tab.connect_button, (window.easycon_tab.connect_button,)),
+    ]
