@@ -5538,6 +5538,7 @@ class MainWindow(QMainWindow):
         self._set_video_source_config_enabled(True)
         self.easycon_tab.video_source_state_changed()
         self._refresh_automation_start_state()
+        self.video_source_dialog.hide()
 
     def _finish_video_source_connection(
         self,

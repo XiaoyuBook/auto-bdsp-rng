@@ -635,11 +635,10 @@ class GuideController(QObject):
     def _connection_status_changed(self, *args) -> None:
         if self.active and self.step == "connect_devices":
             if self._dialog_key in ("video_source", "easycon"):
-                if not self._dialog().isVisible():
-                    if self._connection_ready(self._dialog_key):
-                        self._finish_connection_dialog()
-                    else:
-                        self._close_connection_dialog(resume=True)
+                if self.detail == "connect" and self._connection_ready(self._dialog_key):
+                    self._finish_connection_dialog()
+                elif not self._dialog().isVisible():
+                    self._close_connection_dialog(resume=True)
                 return
             self._navigation()
 
