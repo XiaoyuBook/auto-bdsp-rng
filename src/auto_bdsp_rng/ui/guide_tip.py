@@ -214,7 +214,10 @@ class GuideTip(QFrame):
     def show_step(self, spec, *, search: bool = False) -> None:
         self.step.setText(spec.caption)
         self.title.setText(spec.title)
-        self.copy.setText(spec.copy)
+        # GuideStep.copy may contain small, static emphasis spans for key
+        # warnings. Convert source newlines to explicit rich-text breaks while
+        # keeping all other instructional text unchanged.
+        self.copy.setText(spec.copy.replace("\n", "<br>"))
         self.range_options.setVisible(search)
         self.scroll.verticalScrollBar().setValue(0)
 

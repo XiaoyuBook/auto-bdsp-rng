@@ -8,6 +8,9 @@ from PySide6.QtWidgets import QWidget
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import DelayStrategy
 
 
+GUIDE_EMPHASIS = '#C2410C'
+
+
 @dataclass(frozen=True)
 class GuideStep:
     key: str
@@ -32,7 +35,7 @@ def workspace_step(panel, key: str) -> GuideStep:
     entries = {
         "search_range": ("2.1 · 搜索范围", "选一个搜索范围",
                          "范围越大，能查找更远的候选；推进到较远目标也需要更长时间。\n"
-                         "御三家乱数时，搜索范围与 2.3 的「最大等待」应保持一致，例如都设为 5000 帧。", panel.max_advances),
+                         f'<span style="color:{GUIDE_EMPHASIS}; font-weight:600">御三家乱数时，搜索范围与 2.3 的「最大等待」应保持一致，例如都设为 5000 帧。</span>', panel.max_advances),
         "delay_strategy": ("2.2 · delay 策略", "设置这次的 delay",
                            "delay 用来补偿脚本操作到实际遇敌之间的帧数。数值越大，撞闪脚本启动得越早。\n"
                            "点击亮起的按钮，在设置窗口中选择策略并确认参数。", panel.delay_settings_button),
@@ -45,7 +48,7 @@ def workspace_step(panel, key: str) -> GuideStep:
                             "请按实际战斗文本耗时设置；可在 Seed 页使用「校准闪光判定」。设为 0 关闭自动 OCR 判闪。", panel.shiny_threshold_seconds),
         "sync": ("2.5 · 同步", "让设置与队首精灵一致",
                  "需要利用同步特性筛选性格时，按当前队首选择「首位普通精灵」或「首位同步精灵」，并填写同步精灵的性格。\n"
-                 "同步也会影响体型，对体型进行二次判定。想乱体型证时，建议配置同步，并与实际队首精灵保持一致。\n"
+                 f'<span style="color:{GUIDE_EMPHASIS}; font-weight:600">同步也会影响体型，对体型进行二次判定。想乱体型证时，建议配置同步，并与实际队首精灵保持一致。</span>\n'
                  "不使用同步时保持关闭。开启后，流程会按目标需要配合过帧脚本切换队首。", panel.sync_field),
         "auto_reverse": ("2.6 · 自动反查", "记录实际命中的 delay",
                          "开启后，流程会结合捕获的精灵信息，在目标附近反查实际命中帧，并记录 delay 样本。动态 delay 策略可使用这些样本。\n"
