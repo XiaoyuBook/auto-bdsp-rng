@@ -307,6 +307,16 @@ class GuideController(QObject):
             return
         self.step = progress["step"]
         self.detail = progress.get("detail", "") if isinstance(progress.get("detail", ""), str) else ""
+        # Older builds used a visible task_configured page after saving. It is
+        # now only a compatibility marker; resume directly at step three.
+        if self.step == "task_configured":
+            try:
+                progress = advance_guide_progress("connect_devices", "video_source")
+            except (OSError, ValueError):
+                QMessageBox.warning(self.window, "无法继续引导", "无法更新引导进度，请检查设置目录是否可写后重试。")
+                return
+            self.step = progress["step"]
+            self.detail = progress["detail"]
         self.active = True
         self._connection_timer.start()
         self.refresh()
@@ -418,6 +428,8 @@ class GuideController(QObject):
                 self._go("devices_connected")
         elif self.step in ("delay_strategy", "correction_strategy"):
             self._open_current_dialog()
+        elif self.step == "save_config":
+            self._go("connect_devices", "video_source")
         else:
             self._go(GUIDE_STEPS[GUIDE_STEPS.index(self.step) + 1])
 

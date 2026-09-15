@@ -124,13 +124,8 @@ def test_range_choices_custom_validation_skip_save_and_resume(guided):
     assert tip.next_button.isEnabled() and controller.step == "save_config"
     assert int(panel._settings.value("max_advances")) == 10_000_000
     controller.next()
-    assert controller.step == "task_configured"
-    assert app_settings.get_guide_progress()["status"] == "in_progress"
-    controller.pause()
-    controller.begin_or_resume()
-    assert controller.step == "task_configured" and tip.next_button.isEnabled()
-    controller.next()
     assert controller.step == "connect_devices" and controller.detail == "video_source"
+    assert app_settings.get_guide_progress()["status"] == "in_progress"
     controller.pause()
     controller.begin_or_resume()
     assert controller.step == "connect_devices" and controller.detail == "video_source"
