@@ -37,6 +37,7 @@ from auto_bdsp_rng.automation.easycon.native.runtime import (
     evaluate_program,
 )
 from auto_bdsp_rng.automation.easycon.native.validation import validate_program
+from auto_bdsp_rng.automation.easycon.native.trace import ExecutionPoint
 
 
 def _read_utf8(path: Path) -> str:
@@ -150,6 +151,7 @@ class ScriptProgram:
         waiter: WaiterProtocol | Callable[[int, CancelEvent], None] | None = None,
         random_source: random.Random | None = None,
         beep: Callable[[int, int], None] | None = None,
+        trace: Callable[[ExecutionPoint], None] | None = None,
     ) -> object:
         return evaluate_program(
             self.ast,
@@ -161,6 +163,7 @@ class ScriptProgram:
             waiter=waiter,
             random_source=random_source,
             beep=beep,
+            trace=trace,
         )
 
 

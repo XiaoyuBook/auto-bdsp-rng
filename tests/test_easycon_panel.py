@@ -694,7 +694,7 @@ def test_easycon_panel_exposes_only_native_product_mode(easycon_panel):
     assert all("后端:" not in text and "已长期连接" not in text for text in visible_status_texts)
 
 
-def test_easycon_panel_native_script_requires_broker_and_preserves_source_dir(easycon_panel):
+def test_easycon_panel_native_script_runs_without_video_and_preserves_source_dir(easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
     easycon_panel._load_script_item(easycon_panel.script_list.item(0))
@@ -704,11 +704,8 @@ def test_easycon_panel_native_script_requires_broker_and_preserves_source_dir(ea
     easycon_panel.connect_native()
 
     easycon_panel._video_source_connected = lambda: False
-    easycon_panel.run_script()
-    assert backend.script_runs == []
-    assert "请先在 Seed 捕捉页面连接视频源" in easycon_panel.log_view.toPlainText()
-
-    easycon_panel._video_source_connected = lambda: True
+    easycon_panel.video_source_state_changed()
+    assert easycon_panel.run_button.isEnabled()
     legacy_generated_dir = panel_module.SCRIPT_DIR / ".generated"
     assert legacy_generated_dir.exists() is False
     easycon_panel.run_script()

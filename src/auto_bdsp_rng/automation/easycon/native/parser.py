@@ -411,6 +411,7 @@ class _ProgramParser:
     _CLOSERS = frozenset({"ELIF", "ELSE", "ENDIF", "NEXT", "END", "ENDFUNC"})
 
     def __init__(self, text: str, source: str, library: bool) -> None:
+        self.text = text
         self.source = source
         self.library = library
         self.lines: list[_Line] = []
@@ -431,7 +432,7 @@ class _ProgramParser:
             for statement in statements:
                 if not isinstance(statement, allowed):
                     raise ScriptCompileError("库脚本只允许变量、常量、函数和 EXTERN 声明", statement.location)
-        return ParsedUnit(self.source, statements, self.library)
+        return ParsedUnit(self.source, statements, self.library, self.text)
 
     def _validate_import_order(self, statements: tuple[Statement, ...]) -> None:
         executable_seen = False

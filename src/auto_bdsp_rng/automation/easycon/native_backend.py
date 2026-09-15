@@ -44,6 +44,7 @@ from auto_bdsp_rng.capture_broker import (
     CaptureBrokerClient,
 )
 from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.automation.easycon.native.trace import ExecutionTrace
 
 
 LogCallback = Callable[[str, str], None]
@@ -157,6 +158,7 @@ class NativeEasyConBackend(EasyConBackend):
         self._run_done = threading.Event()
         self._run_done.set()
         self._running = False
+        self.execution_trace = ExecutionTrace()
         self._closed = False
         self._stick_directions: dict[str, set[str]] = {"LS": set(), "RS": set()}
 
@@ -260,42 +262,58 @@ class NativeEasyConBackend(EasyConBackend):
             self._run_cancel = cancel
             self._run_done.clear()
         self._emit("INFO", f"开始运行原生伊机控脚本: {script_path.name}")
+        self.execution_trace.begin(source)
+        trace_state = "failed"
         try:
             program = self._engine.compile(
                 script_text,
                 source=source,
                 script_dir=actual_script_dir,
             )
+            self.execution_trace.set_sources(tuple(
+                (unit.source, unit.text) for unit in (program.ast.main, *program.ast.libraries)
+            ))
             if program.has_gamepad_actions and not self._device.is_connected:
                 raise DeviceNotConnectedError("脚本包含手柄操作，请先连接伊机控串口")
 
-            client = self._frame_client_factory()
-            self._read_frame(client)
-            roots: list[Path] = []
-            if actual_script_dir is not None:
-                roots.append(actual_script_dir)
-            app_root = resource_path()
-            if app_root not in roots:
-                roots.append(app_root)
-            labels = load_image_labels(roots)
-            missing = sorted(program.external_labels.difference(labels.labels))
-            if missing:
-                raise ScriptCompileError(f"找不到搜图标签: {', '.join(missing)}")
-            if labels.failed_files:
-                failed = ", ".join(str(path) for path in labels.failed_files)
-                self._emit("WARNING", f"无法加载部分搜图标签: {failed}")
-            getters = labels.external_getters(
-                lambda: self._read_frame(client),
-                ocr_reader=self._ocr_reader,
-                result_callback=self._image_result_callback,
-            )
+            def read_script_frame() -> np.ndarray:
+                nonlocal client
+                try:
+                    if client is None:
+                        client = self._frame_client_factory()
+                    return self._read_frame(client)
+                except Exception as exc:
+                    raise BrokerUnavailableError(f"当前语句需要读取游戏画面，请先连接可用的视频源：{exc}") from exc
+
+            getters = {}
+            if program.requires_image_search:
+                roots: list[Path] = []
+                if actual_script_dir is not None:
+                    roots.append(actual_script_dir)
+                app_root = resource_path()
+                if app_root not in roots:
+                    roots.append(app_root)
+                labels = load_image_labels(roots)
+                missing = sorted(program.external_labels.difference(labels.labels))
+                if missing:
+                    raise ScriptCompileError(f"找不到搜图标签: {', '.join(missing)}")
+                if labels.failed_files:
+                    failed = ", ".join(str(path) for path in labels.failed_files)
+                    self._emit("WARNING", f"无法加载部分搜图标签: {failed}")
+                getters = labels.external_getters(
+                    read_script_frame,
+                    ocr_reader=self._ocr_reader,
+                    result_callback=self._image_result_callback,
+                )
             program.run(
                 gamepad=self._gamepad if program.has_gamepad_actions else None,
                 external_getters=getters,
                 output=output,
                 cancel_event=cancel,
                 waiter=self._waiter,
+                trace=self.execution_trace.record,
             )
+            trace_state = "completed"
             self._emit("INFO", "原生伊机控脚本运行完成")
             return self._result(
                 EasyConStatus.COMPLETED,
@@ -306,6 +324,7 @@ class NativeEasyConBackend(EasyConBackend):
                 "",
             )
         except (ScriptCancelled, DeviceCancelledError) as exc:
+            trace_state = "stopped"
             self._emit("WARNING", "原生伊机控脚本已停止")
             return self._result(
                 EasyConStatus.CANCELLED,
@@ -339,6 +358,7 @@ class NativeEasyConBackend(EasyConBackend):
             )
         finally:
             self._reset_after_script()
+            self.execution_trace.finish(trace_state)
             if client is not None:
                 with suppress(Exception):
                     client.close()

@@ -190,6 +190,7 @@ class ParsedUnit:
     source: str
     statements: tuple[Statement, ...]
     library: bool = False
+    text: str = ""
 
 
 @dataclass(frozen=True, slots=True)

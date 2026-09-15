@@ -1547,6 +1547,7 @@ class MainWindow(QMainWindow):
         self._ui_scale_percent = max(1.0, float(ui_scale_percent))
         self._ui_scale_source = str(ui_scale_source)
         self._dev_mock_devices = bool(dev_mock_devices)
+        self._mock_video_frame = None
         self._run_log_manager = run_log_manager or RunLogManager()
         self._run_log_buffer = RunLogBuffer(self)
         self._run_log_manager.set_error_callback(self._queue_run_log_failure)
@@ -1874,7 +1875,7 @@ class MainWindow(QMainWindow):
             parent=self.tabs,
             run_log_sink=self._run_log_sink("伊机控"),
             video_source_connected=lambda: self._video_source_connected,
-            frame_client_factory=self._new_broker_client,
+            frame_client_factory=self._new_easycon_frame_client,
             dev_mock_devices=self._dev_mock_devices,
         )
         self.easycon_tab.workspace_splitter.settings = self._profile_settings
@@ -5072,6 +5073,7 @@ class MainWindow(QMainWindow):
             widget.setEnabled(enabled)
 
     def _set_video_source_disconnected_ui(self, status: str = "未连接") -> None:
+        self._mock_video_frame = None
         self.video_source_button.setEnabled(True)
         self.video_source_button.setText("连接")
         state = "failed" if status == "连接失败" else "disconnected"
@@ -5417,6 +5419,14 @@ class MainWindow(QMainWindow):
     def _new_broker_client(self) -> object:
         return self._new_broker_client_for(self._capture_broker_process)
 
+    def _new_easycon_frame_client(self) -> object:
+        frame = self._mock_video_frame
+        if self._dev_mock_devices and self._video_source_connected and frame is not None:
+            from auto_bdsp_rng.automation.easycon.native.mock_video import MockVideoClient
+
+            return MockVideoClient(frame, lambda: self._video_source_connected and self._mock_video_frame is frame)
+        return self._new_broker_client()
+
     def _shared_capture_config(self, capture: BlinkCaptureConfig) -> BlinkCaptureConfig:
         if not self._video_source_connected:
             return capture
@@ -5475,6 +5485,7 @@ class MainWindow(QMainWindow):
         if self.capture_device_combo.currentData() == MOCK_CAPTURE_DEVICE:
             self._connect_mock_video_source()
             return True
+        self._mock_video_frame = None
         start_thread = self._capture_broker_start_thread
         if self._video_source_connecting or self._video_source_stop_pending:
             return False
@@ -5538,15 +5549,18 @@ class MainWindow(QMainWindow):
         import cv2
         import numpy as np
 
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
         sample_path = resource_path("docs", "assets", "guide-eye", "screenshot.jpg")
         try:
             sample = cv2.imdecode(np.frombuffer(sample_path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
             if sample is not None:
-                self._latest_preview_frame = cv2.resize(sample[574:1150, 518:1542], (1280, 720))
-                self._latest_annotated_preview_frame = self._latest_preview_frame
-                self._display_frame(self._latest_preview_frame)
+                frame = cv2.resize(sample[574:1150, 518:1542], (1280, 720))
         except OSError:
             pass
+        self._mock_video_frame = frame.copy()
+        self._latest_preview_frame = frame
+        self._latest_annotated_preview_frame = frame
+        self._display_frame(frame)
         self._video_source_connecting = False
         self._video_source_connected = True
         self._video_source_stop_pending = False

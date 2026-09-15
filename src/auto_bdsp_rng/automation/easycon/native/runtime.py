@@ -37,6 +37,7 @@ from auto_bdsp_rng.automation.easycon.native.ast import (
     WhileStatement,
 )
 from auto_bdsp_rng.automation.easycon.native.errors import ScriptCancelled, ScriptRuntimeError, SourceLocation
+from auto_bdsp_rng.automation.easycon.native.trace import ExecutionPoint, LoopProgress, execution_point
 
 
 CancelEvent = threading.Event | Callable[[], bool] | None
@@ -410,6 +411,14 @@ class _OutputSink:
         self.print(message, True)
 
 
+_ACTION_LABELS = {
+    Assignment: "设置变量", Wait: "计算等待时间", ButtonAction: "执行按键",
+    StickAction: "操作摇杆", CallStatement: "调用函数", IfStatement: "判断条件",
+    ForStatement: "进入循环", WhileStatement: "判断循环条件", BreakStatement: "退出循环",
+    ContinueStatement: "继续下一轮", ReturnStatement: "函数返回",
+}
+
+
 class _Evaluator:
     def __init__(
         self,
@@ -423,6 +432,7 @@ class _Evaluator:
         waiter: WaiterProtocol | Callable[[int, CancelEvent], None],
         random_source: random.Random,
         beep: Callable[[int, int], None] | None,
+        trace: Callable[[ExecutionPoint], None] | None,
     ) -> None:
         self.program = program
         self.gamepad = gamepad
@@ -433,6 +443,9 @@ class _Evaluator:
         self.waiter = waiter
         self.random = random_source
         self.beep = beep
+        self.trace = trace
+        self.call_sites: list[SourceLocation] = []
+        self.loops: tuple[LoopProgress, ...] = ()
         self.started_ns = time.monotonic_ns()
         self.cancel_line_break = False
         self.last_value: object = None
@@ -497,8 +510,17 @@ class _Evaluator:
                 continue
             self._execute_statement(statement, environment)
 
+    def _observe(self, location: SourceLocation, action: str, duration_ms: int | None = None) -> None:
+        if self.trace is not None:
+            self.trace(execution_point(location, action, duration_ms, self.call_sites[-1] if self.call_sites else None, self.loops))
+
     def _execute_statement(self, statement: Statement, environment: _Environment) -> None:
         try:
+            if self.trace is not None:
+                action = _ACTION_LABELS.get(type(statement), "执行语句")
+                if isinstance(statement, (Assignment, CallStatement)):
+                    action += f" {statement.name}"
+                self._observe(statement.location, action)
             if isinstance(statement, Assignment):
                 value = self._evaluate(statement.expression, environment)
                 if statement.operator != "=":
@@ -524,6 +546,7 @@ class _Evaluator:
                 return
             if isinstance(statement, IfStatement):
                 for branch in statement.branches:
+                    self._observe(branch.condition.location, "判断条件")
                     if _truth(self._evaluate(branch.condition, environment)):
                         self._execute_statements(
                             branch.body,
@@ -639,9 +662,12 @@ class _Evaluator:
                 locals_environment.values[parameter.name] = _coerce_declared_type(argument, parameter.type_name)
                 locals_environment.readonly.add(parameter.name)
             try:
+                self.call_sites.append(location)
                 self._execute_statements(declaration.body, locals_environment)
             except _ReturnSignal as signal:
                 return _coerce_declared_type(signal.value, declaration.return_type)
+            finally:
+                self.call_sites.pop()
             return None
         builtin_name = name.upper()
         if builtin_name in {"WAIT", "PRINT", "ALERT", "RAND", "TIME", "AMIIBO", "BEEP", "APPEND", "LEN"}:
@@ -721,6 +747,7 @@ class _Evaluator:
         if duration < 0:
             raise ScriptRuntimeError("等待时间不能小于 0", location)
         self._check_cancelled(location)
+        self._observe(location, f"等待 {duration / 1000:g} 秒", duration)
         try:
             method = getattr(self.waiter, "wait", None)
             if callable(method):
@@ -737,8 +764,10 @@ class _Evaluator:
         if self.gamepad is None:
             return
         if statement.action == "down":
+            self._observe(statement.location, f"按下 {statement.button}（持续按住）")
             self.gamepad.press_buttons(statement.button)
         elif statement.action == "up":
+            self._observe(statement.location, f"松开 {statement.button}")
             self.gamepad.release_buttons(statement.button)
         else:
             duration = _require_int(
@@ -746,6 +775,7 @@ class _Evaluator:
             )
             if duration < 0:
                 raise ScriptRuntimeError("按键持续时间不能小于 0", statement.location)
+            self._observe(statement.location, f"按住 {statement.button} {duration} 毫秒", duration)
             self.gamepad.click_buttons(statement.button, duration, self.cancel_event)
         self._check_cancelled(statement.location)
 
@@ -753,7 +783,12 @@ class _Evaluator:
         if self.gamepad is None:
             return
         x, y = _stick_xy(statement.direction)
+        side = "左摇杆" if statement.side.upper() in {"LS", "LSTICK"} else "右摇杆"
+        direction = {"UP": "向上", "DOWN": "向下", "LEFT": "向左", "RIGHT": "向右",
+                     "UPLEFT": "向左上", "UPRIGHT": "向右上", "DOWNLEFT": "向左下",
+                     "DOWNRIGHT": "向右下", "RESET": "回中"}.get(str(statement.direction).upper(), str(statement.direction))
         if statement.duration is None:
+            self._observe(statement.location, f"{side}{direction}")
             self.gamepad.set_stick(statement.side, x, y)
         else:
             duration = _require_int(
@@ -761,6 +796,7 @@ class _Evaluator:
             )
             if duration < 0:
                 raise ScriptRuntimeError("摇杆持续时间不能小于 0", statement.location)
+            self._observe(statement.location, f"{side}{direction} {duration} 毫秒", duration)
             self.gamepad.click_stick(statement.side, x, y, duration, self.cancel_event)
         self._check_cancelled(statement.location)
 
@@ -778,35 +814,60 @@ class _Evaluator:
                 {statement.variable},
                 default_unassigned=environment.default_unassigned,
             )
+            total = max(0, (upper - current) // step + 1)
+            iteration = 0
             while (step > 0 and current <= upper) or (step < 0 and current >= upper):
                 self._check_cancelled(statement.location)
+                iteration += 1
                 loop_environment.values[statement.variable] = current
-                if self._execute_loop_body(statement.body, loop_environment):
+                if self._execute_loop_body(
+                    statement.body, loop_environment, LoopProgress(statement.location, iteration, total),
+                    f"循环 · ${statement.variable} = {current}",
+                ):
                     return
                 current = _int32(current + step)
             return
         if statement.count is not None:
             count = _require_int(self._evaluate(statement.count, environment), statement.location, "FOR 次数")
             loop_environment = _Environment(environment, default_unassigned=environment.default_unassigned)
-            for _ in range(max(0, count)):
+            for iteration in range(max(0, count)):
                 self._check_cancelled(statement.location)
-                if self._execute_loop_body(statement.body, loop_environment):
+                if self._execute_loop_body(
+                    statement.body, loop_environment, LoopProgress(statement.location, iteration + 1, count),
+                    f"循环 {iteration + 1} / {count}",
+                ):
                     return
             return
         loop_environment = _Environment(environment, default_unassigned=environment.default_unassigned)
+        iteration = 0
         while True:
             self._check_cancelled(statement.location)
-            if self._execute_loop_body(statement.body, loop_environment):
+            iteration += 1
+            if self._execute_loop_body(
+                statement.body, loop_environment, LoopProgress(statement.location, iteration), "继续循环",
+            ):
                 return
 
     def _while(self, statement: WhileStatement, environment: _Environment) -> None:
-        while _truth(self._evaluate(statement.condition, environment)):
+        iteration = 0
+        while True:
+            self._observe(statement.location, "判断循环条件")
+            if not _truth(self._evaluate(statement.condition, environment)):
+                return
             self._check_cancelled(statement.location)
-            if self._execute_loop_body(statement.body, environment):
+            iteration += 1
+            if self._execute_loop_body(
+                statement.body, environment, LoopProgress(statement.location, iteration), "进入本次循环",
+            ):
                 return
 
-    def _execute_loop_body(self, body: tuple[Statement, ...], environment: _Environment) -> bool:
+    def _execute_loop_body(
+        self, body: tuple[Statement, ...], environment: _Environment, progress: LoopProgress, action: str,
+    ) -> bool:
+        outer_loops = self.loops
+        self.loops = (*outer_loops, progress)
         try:
+            self._observe(progress.location, action)
             self._execute_statements(body, environment)
         except _ContinueSignal:
             return False
@@ -814,6 +875,8 @@ class _Evaluator:
             if signal.level == 1:
                 return True
             raise _BreakSignal(signal.level - 1) from signal
+        finally:
+            self.loops = outer_loops
         return False
 
 
@@ -836,6 +899,7 @@ def evaluate_program(
     waiter: WaiterProtocol | Callable[[int, CancelEvent], None] | None = None,
     random_source: random.Random | None = None,
     beep: Callable[[int, int], None] | None = None,
+    trace: Callable[[ExecutionPoint], None] | None = None,
 ) -> object:
     evaluator = _Evaluator(
         program,
@@ -847,6 +911,7 @@ def evaluate_program(
         waiter=waiter or HighPrecisionWaiter(),
         random_source=random_source or random.Random(),
         beep=beep,
+        trace=trace,
     )
     return evaluator.run()
 

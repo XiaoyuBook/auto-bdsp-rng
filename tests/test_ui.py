@@ -288,7 +288,8 @@ def test_main_window_guide_write_failure_preserves_progress_and_workspace(app, t
         assert window.guide_controller.overlay.isVisible()
 
 
-def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("video_connected", [True, False])
+def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_path, monkeypatch, video_connected):
     from auto_bdsp_rng import app_settings
 
     monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "mock-devices.json")
@@ -308,8 +309,51 @@ def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_pa
     window.easycon_tab.port_combo.setCurrentIndex(port_index)
     assert window.easycon_tab.connect_native()
     assert window.easycon_tab._native_is_connected()
+    # Exercise the development entry points, not a separately injected frame client.
+    def unexpected_broker():
+        raise AssertionError("Mock 视频源不应连接真实 Broker")
+    monkeypatch.setattr(window, "_new_broker_client", unexpected_broker)
+    client = window._new_easycon_frame_client()
+    frame = client.read_array()
+    assert frame.shape == (720, 1280, 3)
+    frame[:] = 0
+    assert np.any(client.read_array() != 0)
+    if not video_connected:
+        window.disconnect_video_source(force=True)
+        assert not window._video_source_connected
+    script = tmp_path / "mock-run.ecs"
+    script.write_text("A 10\nWAIT 400\n", encoding="utf-8")
+    panel = window.easycon_tab
+    panel.load_script(script)
+    assert panel.run_button.isEnabled()
+    panel.run_button.click()
+    deadline = time.monotonic() + 3
+    while panel.editor.execution_line != 2 and time.monotonic() < deadline:
+        QTest.qWait(20)
+    assert panel.editor.execution_line == 2
+    while panel.native_run_thread is not None and time.monotonic() < deadline:
+        QTest.qWait(20)
+    assert panel.native_run_thread is None
+    panel.execution.poll()
+    assert panel.execution.snapshot.state == "completed"
+    assert panel.editor.execution_line == 2
     window.easycon_tab.disconnect_native()
     window.disconnect_video_source(force=True)
+    with pytest.raises(RuntimeError, match="Mock"):
+        client.read_array()
+    assert window._mock_video_frame is None
+    window.connect_video_source()
+    with pytest.raises(RuntimeError, match="Mock"):
+        client.read_array()
+    replacement = window._new_easycon_frame_client()
+    assert replacement.read_array().shape == (720, 1280, 3)
+    replacement.close()
+    with pytest.raises(RuntimeError, match="Mock"):
+        replacement.read_array()
+    window.disconnect_video_source(force=True)
+    real_client = object()
+    monkeypatch.setattr(window, "_new_broker_client", lambda: real_client)
+    assert window._new_easycon_frame_client() is real_client
     window.close()
 
 

@@ -21,6 +21,7 @@ from auto_bdsp_rng.automation.easycon.native_backend import (
     NativeEasyConBackend,
     NativeEasyConBusyError,
 )
+from auto_bdsp_rng.capture_broker import BrokerUnavailableError
 
 
 class FakeFrameClient:
@@ -85,7 +86,7 @@ def _write_label(path: Path, template: np.ndarray) -> None:
     )
 
 
-def test_native_backend_keeps_serial_connected_and_requires_broker_for_every_script() -> None:
+def test_native_backend_keeps_serial_connected_without_opening_video() -> None:
     client = FakeFrameClient(np.zeros((12, 16, 3), dtype=np.uint8))
     waiter = RecordingWaiter()
     backend = _backend(client, waiter=waiter)
@@ -95,8 +96,8 @@ def test_native_backend_keeps_serial_connected_and_requires_broker_for_every_scr
         assert result.status is EasyConStatus.COMPLETED
         assert result.exit_code == 0
         assert result.port == "mock"
-        assert client.read_count == 1
-        assert client.closed
+        assert client.read_count == 0
+        assert not client.closed
         assert waiter.values == [25]
         assert backend.connected_port == "mock"
         assert backend.status() is EasyConStatus.BRIDGE_CONNECTED
@@ -114,6 +115,61 @@ def test_native_backend_report_snapshot_does_not_expose_device_state() -> None:
 
         assert backend.get_report() != snapshot
         assert backend.get_report().button != 0
+    finally:
+        backend.close()
+
+
+def test_video_is_opened_only_when_execution_reads_an_image_label(tmp_path: Path) -> None:
+    frame = np.random.default_rng(42).integers(0, 256, size=(12, 16, 3), dtype=np.uint8)
+    _write_label(tmp_path / "ImgLabel" / "目标.IL", frame[5:8, 6:10])
+    client = FakeFrameClient(frame)
+    requests = []
+    connected = False
+
+    def frame_factory():
+        requests.append(True)
+        if not connected:
+            raise BrokerUnavailableError("视频源未连接")
+        return client
+
+    backend = NativeEasyConBackend(frame_client_factory=frame_factory, waiter=RecordingWaiter())
+    backend.connect("mock")
+    try:
+        for text in ("A 10\nWAIT 25", "IF false\n$score = @目标\nENDIF\nA 10"):
+            result = backend.run_script_text(text, "main.ecs", script_dir=tmp_path)
+            assert result.status is EasyConStatus.COMPLETED
+        assert requests == []
+
+        result = backend.run_script_text("WAIT 1\n$score = @目标", "main.ecs", script_dir=tmp_path)
+        assert result.status is EasyConStatus.FAILED
+        assert "连接可用的视频源" in result.stderr and "main.ecs:2" in result.stderr
+        assert backend.execution_trace.snapshot().point.location.line == 2
+        assert len(requests) == 1
+
+        connected = True
+        result = backend.run_script_text("$first = @目标\n$second = @目标", "main.ecs", script_dir=tmp_path)
+        assert result.status is EasyConStatus.COMPLETED
+        assert len(requests) == 2  # A single client is reused by both reads.
+        assert client.read_count == 2 and client.closed
+    finally:
+        backend.close()
+
+
+def test_unavailable_video_at_image_read_releases_client_and_controller(tmp_path: Path) -> None:
+    _write_label(tmp_path / "ImgLabel" / "目标.IL", np.zeros((3, 4, 3), dtype=np.uint8))
+
+    class DisconnectedClient(FakeFrameClient):
+        def read_array(self):
+            raise RuntimeError("视频源已断开")
+
+    client = DisconnectedClient(np.zeros((12, 16, 3), dtype=np.uint8))
+    backend = _backend(client, waiter=RecordingWaiter())
+    try:
+        result = backend.run_script_text("A DOWN\n$score = @目标", "main.ecs", script_dir=tmp_path)
+        assert result.status is EasyConStatus.FAILED
+        assert "视频源已断开" in result.stderr
+        assert client.closed
+        assert backend._device.get_report() == SwitchReport()
     finally:
         backend.close()
 
@@ -169,7 +225,8 @@ def test_native_backend_loads_original_il_from_script_directory(tmp_path: Path) 
 
         assert result.status is EasyConStatus.COMPLETED
         assert "100" in result.stdout
-        assert client.read_count == 2
+        assert client.read_count == 1
+        assert client.closed
         assert image_results[-1].label_name == "目标"
         assert image_results[-1].match_rect == (6, 5, 4, 3)
     finally:
@@ -191,14 +248,21 @@ def test_native_backend_reports_missing_il_as_compile_failure(tmp_path: Path) ->
 
 def test_native_backend_cancels_one_script_and_rejects_a_second() -> None:
     client = FakeFrameClient(np.zeros((12, 16, 3), dtype=np.uint8))
-    backend = _backend(client)
+    entered = threading.Event()
+
+    class Waiter:
+        def wait(self, milliseconds, cancel_event):
+            entered.set()
+            cancel_event.wait(2)
+
+    backend = _backend(client, waiter=Waiter())
     results = []
     thread = threading.Thread(
         target=lambda: results.append(backend.run_script_text("A DOWN\nFOR\nWAIT 10000\nNEXT", "long.ecs"))
     )
     try:
         thread.start()
-        assert client.read_event.wait(1.0)
+        assert entered.wait(1.0)
         with pytest.raises(NativeEasyConBusyError):
             backend.run_script_text("WAIT 1", "second.ecs")
         backend.stop_current_script()

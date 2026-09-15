@@ -9,7 +9,7 @@ from pathlib import Path, PureWindowsPath
 from time import monotonic
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPixmap, QTextCursor, QTextFormat
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -70,6 +70,7 @@ from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import NoWheelComboBox as QComboBox
 from auto_bdsp_rng.ui.controller_overlay import ControllerStateOverlay
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
+from auto_bdsp_rng.ui.easycon_execution import ExecutionFollower, ScriptSourceTree
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
 from auto_bdsp_rng.ui.workspace_controls import ConnectionDialog, PrimaryButton, set_disconnect_action, workspace_icon
@@ -316,6 +317,7 @@ class EasyConScriptEditor(QPlainTextEdit):
 
     def __init__(self) -> None:
         super().__init__()
+        self.execution_line: int | None = None
         self.line_number_area = LineNumberArea(self)
         self.setAcceptDrops(True)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -323,12 +325,13 @@ class EasyConScriptEditor(QPlainTextEdit):
         self.blockCountChanged.connect(self._update_line_number_area_width)
         self.updateRequest.connect(self._update_line_number_area)
         self.cursorPositionChanged.connect(self._highlight_current_line)
+        self.textChanged.connect(lambda: self.set_execution_line(None))
         self._update_line_number_area_width()
         self._highlight_current_line()
 
     def line_number_area_width(self) -> int:
         digits = len(str(max(1, self.blockCount())))
-        return 12 + self.fontMetrics().horizontalAdvance("9") * digits
+        return 30 + self.fontMetrics().horizontalAdvance("9") * digits
 
     def line_number_area_paint_event(self, event) -> None:  # type: ignore[no-untyped-def]
         painter = QPainter(self.line_number_area)
@@ -342,7 +345,15 @@ class EasyConScriptEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(block_number + 1)
-                painter.setPen(QColor("#687480"))
+                executing = block_number + 1 == self.execution_line
+                if executing:
+                    painter.fillRect(0, top, self.line_number_area.width(), bottom - top, QColor("#E8F6ED"))
+                    painter.setPen(QPen(QColor("#18805A"), 1.5))
+                    middle = top + self.fontMetrics().height() // 2
+                    painter.drawLine(5, middle, 14, middle)
+                    painter.drawLine(10, middle - 4, 14, middle)
+                    painter.drawLine(10, middle + 4, 14, middle)
+                painter.setPen(QColor("#18805A" if executing else "#687480"))
                 painter.drawText(
                     0,
                     top,
@@ -382,12 +393,45 @@ class EasyConScriptEditor(QPlainTextEdit):
             self._update_line_number_area_width()
 
     def _highlight_current_line(self) -> None:
-        selection = QTextEdit.ExtraSelection()
-        selection.format.setBackground(QColor("#F7F8FA"))
-        selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
-        selection.cursor = self.textCursor()
-        selection.cursor.clearSelection()
-        self.setExtraSelections([selection])
+        selections = []
+        if not self.isReadOnly() and self.execution_line is None:
+            selection = QTextEdit.ExtraSelection()
+            selection.format.setBackground(QColor("#F7F8FA"))
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            selections.append(selection)
+        if self.execution_line is not None:
+            block = self.document().findBlockByNumber(self.execution_line - 1)
+            if block.isValid():
+                selection = QTextEdit.ExtraSelection()
+                selection.format.setBackground(QColor("#E8F6ED"))
+                selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+                selection.cursor = QTextCursor(block)
+                selections.append(selection)
+        self.setExtraSelections(selections)
+
+    def set_execution_line(self, line: int | None, *, follow: bool = False) -> None:
+        self.execution_line = line
+        self._highlight_current_line()
+        self.line_number_area.update()
+        if line is None or not follow:
+            return
+        block = self.document().findBlockByNumber(line - 1)
+        if not block.isValid():
+            return
+        rect = self.blockBoundingGeometry(block).translated(self.contentOffset())
+        if rect.top() < 0 or rect.bottom() > self.viewport().height():
+            visible_lines = self.viewport().height() // max(1, self.fontMetrics().lineSpacing())
+            self.verticalScrollBar().setValue(max(0, line - 1 - visible_lines // 3))
+        # The existing editor area itself can scroll in short main windows.
+        ancestor = self.parentWidget()
+        while ancestor is not None:
+            if isinstance(ancestor, QScrollArea) and ancestor.widget() is not None and ancestor.isVisible():
+                center = self.viewport().mapToGlobal(self.cursorRect(QTextCursor(block)).center())
+                position = ancestor.widget().mapFromGlobal(center)
+                ancestor.ensureVisible(position.x(), position.y(), 16, self.fontMetrics().lineSpacing() * 2)
+            ancestor = ancestor.parentWidget()
 
     def dragEnterEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if _first_supported_drop(event.mimeData()) is not None:
@@ -982,6 +1026,13 @@ class EasyConPanel(QWidget):
         layout.setContentsMargins(16, 18, 16, 16)
         layout.setSpacing(8)
 
+        source_title = QLabel("脚本")
+        source_title.setStyleSheet(ui_styles("font-weight: 500; font-size: 13px; background: transparent;"))
+        layout.addWidget(source_title)
+        self.script_sources = ScriptSourceTree()
+        layout.addWidget(self.script_sources)
+        layout.addSpacing(6)
+
         log_header = QLabel("运行概览")
         log_header.setStyleSheet(
             ui_styles(f"font-weight: 500; font-size: 15px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};")
@@ -1147,6 +1198,7 @@ class EasyConPanel(QWidget):
 
         # 编辑器标题行
         editor_header = QWidget()
+        self.editor_header = editor_header
         editor_header.setFixedHeight(40)
         editor_header.setStyleSheet(f"background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER};")
         editor_header_layout = QHBoxLayout(editor_header)
@@ -1187,7 +1239,10 @@ class EasyConPanel(QWidget):
             }}
             """
         )
-        editor_frame_layout.addWidget(self.editor, 1)
+        self.execution = ExecutionFollower(self)
+        layout.insertWidget(0, self.execution.bar)
+        editor_frame_layout.addWidget(self.execution.source_header)
+        editor_frame_layout.addWidget(self.execution.stack, 1)
         layout.addWidget(editor_frame, 1)
 
         output_header = QFrame()
@@ -1764,6 +1819,11 @@ class EasyConPanel(QWidget):
             item = QListWidgetItem(path.name)
             item.setData(Qt.ItemDataRole.UserRole, path)
             self.script_list.addItem(item)
+        if hasattr(self, "execution"):
+            self.execution.refresh_sources()
+
+    def script_library_directory(self) -> Path:
+        return SCRIPT_DIR
 
     def _ensure_native_backend(self) -> object:
         if self._shutting_down:
@@ -1855,18 +1915,6 @@ class EasyConPanel(QWidget):
 
     def _native_is_connected(self) -> bool:
         return self._native_status() in (EasyConStatus.BRIDGE_CONNECTED, EasyConStatus.RUNNING)
-
-    def _has_video_source(self) -> bool:
-        if self._video_source_connected is None:
-            return True
-        try:
-            return bool(self._video_source_connected())
-        except Exception:
-            return False
-
-    def _require_video_source(self) -> None:
-        if not self._has_video_source():
-            raise RuntimeError("请先在 Seed 捕捉页面连接视频源")
 
     def video_source_state_changed(self) -> None:
         """Refresh script controls after MainWindow connects or disconnects Broker."""
@@ -2000,16 +2048,24 @@ class EasyConPanel(QWidget):
         self._update_bridge_controls()
 
     def open_script_dialog(self) -> None:
+        if self._controller_script_running():
+            return
         path, _ = QFileDialog.getOpenFileName(self, "打开伊机控脚本", str(SCRIPT_DIR), "EasyCon scripts (*.txt *.ecs)")
         if path:
             self.load_script(Path(path))
 
     def load_script(self, path: Path) -> bool:
+        if self._controller_script_running():
+            self._append_log("warn", "请先停止当前脚本，再打开其他脚本")
+            return False
         path = remap_legacy_script_path(path, script_dir=SCRIPT_DIR)
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             QMessageBox.warning(self, "脚本编码不明确", "脚本不是 UTF-8 编码，暂不加载以避免乱码。")
+            return False
+        except OSError as exc:
+            self._append_log("warn", f"无法打开脚本：{exc}")
             return False
         parameters = parse_script_parameters(text)
         self.parameter_defaults = {parameter.name: parameter.default for parameter in parameters}
@@ -2029,6 +2085,7 @@ class EasyConPanel(QWidget):
         self.template_mode_label.setText("模板副本" if any(value == "填入这里" for value in self.parameter_defaults.values()) else "普通脚本")
         self._update_run_enabled()
         self._append_log("info", f"已加载脚本: {path.name}")
+        self.execution.clear()
         try:
             self._remember_recent_script(path)
         except OSError as exc:
@@ -2041,6 +2098,8 @@ class EasyConPanel(QWidget):
             self.load_script(path)
 
     def new_script(self) -> None:
+        if self._controller_script_running():
+            return
         self.current_script_path = None
         self.current_script_name = "未命名文档.txt"
         self.current_script_newline = "\n"
@@ -2048,8 +2107,12 @@ class EasyConPanel(QWidget):
         self._saved_editor_text = ""
         self.editor.setPlainText("")
         self._append_log("info", "已新建空白脚本")
+        self.execution.clear()
 
     def save_script(self) -> Path | None:
+        if self._controller_script_running() or self.execution.viewing_snapshot:
+            self._append_log("warn", "请停止运行并返回当前脚本后再保存")
+            return None
         if not self.editor.toPlainText().strip():
             self._append_log("warn", "没有可保存的脚本内容")
             return None
@@ -2090,6 +2153,7 @@ class EasyConPanel(QWidget):
         self.current_script_name = output.name
         self._saved_editor_text = self.editor.toPlainText()
         self.script_name_label.setText(output.name)
+        self.execution.refresh_sources()
         self._update_dirty_indicator()
         self._remember_recent_script(output)
         self._append_log("info", f"已保存: {output.name}")
@@ -2259,12 +2323,6 @@ class EasyConPanel(QWidget):
     def run_script_via_native(self) -> None:
         if self._native_status() == EasyConStatus.RUNNING:
             self.stop_native_script()
-            return
-        try:
-            self._require_video_source()
-        except RuntimeError as exc:
-            self._append_log("warn", str(exc))
-            self.easycon_status.showMessage(str(exc))
             return
         if not self._stop_virtual_controller_for_script():
             return
@@ -2504,6 +2562,8 @@ class EasyConPanel(QWidget):
         self._update_status_labels()
 
     def begin_external_native_script(self, name: str) -> None:
+        # Do not dismiss a trace that has already started on the worker thread.
+        self.execution.set_busy(True)
         started_at = datetime.now()
         self.stop_requested = False
         self.current_run_stdout = []
@@ -2698,6 +2758,7 @@ class EasyConPanel(QWidget):
         self.current_run_stdout = []
         self.current_run_stderr = []
         self._update_run_enabled()
+        self.execution.poll()
 
     def _cleanup_cli_script(self) -> None:
         path = self._cli_script_path
@@ -2733,7 +2794,7 @@ class EasyConPanel(QWidget):
             status = self._native_status()
             if status == EasyConStatus.RUNNING:
                 return True
-            if status != EasyConStatus.BRIDGE_CONNECTED or not self._has_video_source():
+            if status != EasyConStatus.BRIDGE_CONNECTED:
                 return False
         elif self._is_bridge_mode():
             if self.bridge_status != EasyConStatus.BRIDGE_CONNECTED:
@@ -2757,6 +2818,8 @@ class EasyConPanel(QWidget):
     def _on_editor_changed(self) -> None:
         self._update_run_enabled()
         self._update_dirty_indicator()
+        if hasattr(self, "execution"):
+            self.execution.editor_changed()
 
     def has_unsaved_script_changes(self) -> bool:
         return self.editor.toPlainText() != self._saved_editor_text
@@ -2781,9 +2844,12 @@ class EasyConPanel(QWidget):
             # any backend owns the script slot; ``toggle_run`` remains a
             # compatibility API for callers that invoke it directly.
             self.run_button.setText("运行脚本")
-            self.run_button.setEnabled(not running and self._can_run())
+            viewing_snapshot = hasattr(self, "execution") and self.execution.viewing_snapshot
+            self.run_button.setEnabled(not running and not viewing_snapshot and self._can_run())
         if hasattr(self, "stop_button"):
             self.stop_button.setEnabled(running)
+        if hasattr(self, "execution") and hasattr(self, "open_button"):
+            self.execution.set_busy(running)
 
     def _update_run_enabled(self) -> None:
         self._refresh_script_action_buttons()
@@ -3272,6 +3338,7 @@ class EasyConPanel(QWidget):
         return cli_stopped
 
     def shutdown(self, *, wait_ms: int = 2000) -> bool:
+        self.execution.timer.stop()
         if not self._shutting_down:
             self._shutting_down = True
             self.run_timer.stop()
