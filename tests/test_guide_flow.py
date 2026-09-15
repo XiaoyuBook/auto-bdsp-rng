@@ -182,6 +182,21 @@ def test_device_connection_step_guides_video_source_then_easycon(guided, monkeyp
     assert controller.step == "devices_connected"
 
 
+def test_guide_continues_to_seed_capture_and_independent_preview(guided):
+    window, panel, controller = guided
+    controller._go("devices_connected")
+    controller.next()
+    assert controller.step == "seed_capture_page"
+    assert controller.overlay.waiting_for_page
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    QTest.qWait(30)
+    assert controller.step == "independent_preview"
+    assert not controller.overlay.waiting_for_page
+    assert controller.overlay.spec.target is window.picture_in_picture_button
+    window.picture_in_picture_button.click()
+    assert controller.step == "preview_opened"
+
+
 def test_delay_dialog_follows_strategy_and_keeps_edits_when_skipping(guided):
     window, panel, controller = guided
     controller.next()

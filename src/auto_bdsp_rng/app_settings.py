@@ -117,6 +117,7 @@ GUIDE_STEPS = (
     "target_selection", "search_range", "delay_strategy", "max_wait",
     "shiny_threshold", "sync", "auto_reverse", "correction_strategy",
     "save_config", "task_configured", "connect_devices", "devices_connected",
+    "seed_capture_page", "independent_preview", "preview_opened",
 )
 
 

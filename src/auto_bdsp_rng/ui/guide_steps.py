@@ -66,6 +66,12 @@ def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
                             "目标与任务参数已经准备好。点击下一步进入第 3 步，连接视频源和伊机控。", panel.save_config_button),
         "devices_connected": ("第 3 步 · 已完成", "设备已连接",
                               "视频源和伊机控都已连接，可以收起提示并开始后续操作。", panel.window().easycon_header_button),
+        "seed_capture_page": ("第 4 步 · Seed 捕捉", "进入 Seed 捕捉页面",
+                              "点击亮起的「Seed 捕捉」标签，进入接下来要使用的捕捉页面。", panel.window().project_xs_tab),
+        "independent_preview": ("第 4 步 · Seed 捕捉", "打开独立预览",
+                                "点击亮起的「独立预览」，在单独窗口中查看视频源画面。", panel.window().picture_in_picture_button),
+        "preview_opened": ("第 4 步 · 已完成", "独立预览已打开",
+                           "独立预览已打开，可以收起提示并继续后续操作。", panel.window().picture_in_picture_button),
     }
     caption, title, copy, target = entries[key]
     field = panel.delay_settings_field if key == "delay_strategy" else target

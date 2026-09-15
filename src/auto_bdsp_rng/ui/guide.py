@@ -26,6 +26,7 @@ class GuideSpotlight(QWidget):
         self.target_button = window.auto_rng_tab.target_button
         self.target_card = self.target_button.parentWidget()
         self.tab_bar = window.tabs.tabBar()
+        self.page_widget = window.auto_rng_tab
         self.waiting_for_page = False
         self.suspended = False
         self.setObjectName("GuideSpotlight")
@@ -55,8 +56,9 @@ class GuideSpotlight(QWidget):
         self.suspended = False
         self.tip.show_step(spec, search=spec.key == "search_range" and not waiting_for_page)
         if waiting_for_page:
-            self.title.setText("先进入乱数操作页面")
-            self.copy.setText("点击亮起的「自动定点乱数」标签，进入这次乱数的操作页面。")
+            page_name = "Seed 捕捉" if self.page_widget is self.main_window.project_xs_tab else "自动定点乱数"
+            self.title.setText("先进入操作页面")
+            self.copy.setText(f"点击亮起的「{page_name}」标签，进入这次乱数的操作页面。")
         for widget in self._watched:
             if isValid(widget):
                 widget.removeEventFilter(self)
@@ -102,7 +104,7 @@ class GuideSpotlight(QWidget):
 
     def _target_rect(self, widget: QWidget) -> QRectF:
         if widget is self.tab_bar:
-            index = self.main_window.tabs.indexOf(self.main_window.auto_rng_tab)
+            index = self.main_window.tabs.indexOf(self.page_widget)
             option = QStyleOptionTab()
             self.tab_bar.initStyleOption(option, index)
             style = self.tab_bar.style()
@@ -272,6 +274,7 @@ class GuideController(QObject):
         self.panel.delay_strategy_dialog.strategy_combo.currentIndexChanged.connect(self._dialog_values_changed)
         self.panel.strategy_dialog.reidentify_failure_policy.currentIndexChanged.connect(self._dialog_values_changed)
         window.tabs.currentChanged.connect(self._page_changed)
+        window.picture_in_picture_button.clicked.connect(self._preview_opened)
         window.video_source_header_button.clicked.connect(lambda: self._connection_dialog_opened("video_source"))
         window.easycon_header_button.clicked.connect(lambda: self._connection_dialog_opened("easycon"))
         self.refresh()
@@ -362,7 +365,12 @@ class GuideController(QObject):
     def _show_workspace(self) -> None:
         if not self.active or self.window._is_closing:
             return
-        waiting = self.window.tabs.currentWidget() is not self.panel
+        page = self.window.project_xs_tab if self.step in ("seed_capture_page", "independent_preview", "preview_opened") else self.panel
+        if self.step == "seed_capture_page" and self.window.tabs.currentWidget() is page:
+            self._go("independent_preview")
+            return
+        waiting = self.window.tabs.currentWidget() is not page
+        self.overlay.page_widget = page
         if not waiting and self.step in ("shiny_threshold", "sync", "auto_reverse", "correction_strategy"):
             self.panel.more_strategy_button.setChecked(True)
             self.panel.strategy_group.layout().activate()
@@ -403,7 +411,7 @@ class GuideController(QObject):
             else:
                 valid = self._connection_ready(self.detail or "video_source")
         tip.previous_button.setEnabled(not waiting and self.step != "target_selection")
-        tip.next_button.setEnabled(not waiting and valid and self.step != "devices_connected" and (self.step != "save_config" or self._config_saved))
+        tip.next_button.setEnabled(not waiting and valid and self.step != "preview_opened" and (self.step != "save_config" or self._config_saved))
         tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured"))
 
     def next(self) -> None:
@@ -467,6 +475,10 @@ class GuideController(QObject):
     def _page_changed(self, index: int) -> None:
         if self.active and self._dialog_key is None and not self._resume_after_dialog:
             self._show_workspace()
+
+    def _preview_opened(self) -> None:
+        if self.active and self.step == "independent_preview":
+            self._go("preview_opened")
 
     def pause(self) -> None:
         self.active = False
