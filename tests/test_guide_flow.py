@@ -115,6 +115,7 @@ def test_range_choices_custom_validation_skip_save_and_resume(guided):
     assert controller.step == "search_range" and panel.max_advances.value() == 10_000_000
     controller.skip()
     assert controller.step == "save_config"
+    tip = controller.overlay.tip
     assert not tip.next_button.isEnabled()
     controller.next()
     assert controller.step == "save_config"
@@ -127,7 +128,13 @@ def test_range_choices_custom_validation_skip_save_and_resume(guided):
     assert app_settings.get_guide_progress()["status"] == "in_progress"
     controller.pause()
     controller.begin_or_resume()
-    assert controller.step == "task_configured" and not tip.next_button.isEnabled()
+    assert controller.step == "task_configured" and tip.next_button.isEnabled()
+    controller.next()
+    assert controller.step == "connect_devices" and controller.detail == "video_source"
+    controller.pause()
+    controller.begin_or_resume()
+    assert controller.step == "connect_devices" and controller.detail == "video_source"
+    controller._go("task_configured")
     controller.previous()
     assert controller.step == "save_config" and not tip.next_button.isEnabled()
     controller._go("search_range")
@@ -138,6 +145,29 @@ def test_range_choices_custom_validation_skip_save_and_resume(guided):
     controller.next()
     assert tip.next_button.isEnabled() and tip.custom_container.isHidden()
     assert panel.max_advances.value() == 10_000_000
+
+
+def test_device_connection_step_guides_video_source_then_easycon(guided, monkeypatch):
+    window, panel, controller = guided
+    controller._go("connect_devices")
+    assert controller.detail == "video_source"
+    assert controller.overlay.spec.caption == "第 3 步 · 连接设备"
+    assert not controller.overlay.tip.next_button.isEnabled()
+
+    window._video_source_connected = True
+    controller._navigation()
+    assert controller.overlay.tip.next_button.isEnabled()
+    controller.next()
+    assert controller.step == "connect_devices"
+    assert controller.detail == "easycon"
+    assert controller.overlay.spec.target is window.easycon_header_button
+    assert not controller.overlay.tip.next_button.isEnabled()
+
+    monkeypatch.setattr(window.easycon_tab, "_native_is_connected", lambda: True)
+    controller._navigation()
+    assert controller.overlay.tip.next_button.isEnabled()
+    controller.next()
+    assert controller.step == "devices_connected"
 
 
 def test_delay_dialog_follows_strategy_and_keeps_edits_when_skipping(guided):

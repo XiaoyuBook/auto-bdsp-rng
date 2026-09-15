@@ -26,7 +26,7 @@ def _row(form, field: QWidget) -> tuple[QWidget, ...]:
     return (label, field) if label is not None else (field,)
 
 
-def workspace_step(panel, key: str) -> GuideStep:
+def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
     if key == "target_selection":
         return GuideStep(key, "第 1 步 · 设置目标精灵", "先选好这次的目标",
                          "点击亮起区域里的「设置」，选择这次想乱的精灵，以及你希望得到的结果。\n"
@@ -39,6 +39,9 @@ def workspace_step(panel, key: str) -> GuideStep:
         "delay_strategy": ("2.2 · delay 策略", "设置这次的 delay",
                            "delay 用来补偿脚本操作到实际遇敌之间的帧数。数值越大，撞闪脚本启动得越早。\n"
                            "点击亮起的按钮，在设置窗口中选择策略并确认参数。", panel.delay_settings_button),
+        "connect_devices": ("第 3 步 · 连接设备", "连接视频源和伊机控",
+                             "先连接视频源，再连接伊机控。点击亮起的状态按钮打开对应设置，完成连接后点击下一步继续。",
+                             panel.window().video_source_header_button if detail != "easycon" else panel.window().easycon_header_button),
         "max_wait": ("2.3 · 最大等待", "何时改为实时等待",
                      "距离撞闪脚本启动帧不超过这个值时，软件停止使用过帧脚本，改为实时等待。\n"
                      "数值越大，越早进入实时等待；越小，越依赖过帧脚本接近目标。\n"
@@ -60,11 +63,16 @@ def workspace_step(panel, key: str) -> GuideStep:
                         "点击亮起的「保存配置」，保存刚才确认的参数。\n"
                         "保存成功后，再点击下一步完成本步。右侧的脚本选择需要单独保存。", panel.save_config_button),
         "task_configured": ("第 2 步 · 已完成", "任务配置已保存",
-                            "目标与任务参数已经准备好。当前引导到这里，可以收起提示。", panel.save_config_button),
+                            "目标与任务参数已经准备好。点击下一步进入第 3 步，连接视频源和伊机控。", panel.save_config_button),
+        "devices_connected": ("第 3 步 · 已完成", "设备已连接",
+                              "视频源和伊机控都已连接，可以收起提示并开始后续操作。", panel.window().easycon_header_button),
     }
     caption, title, copy, target = entries[key]
     field = panel.delay_settings_field if key == "delay_strategy" else target
-    highlights = (target,) if key in ("save_config", "task_configured") else _row(panel.strategy_form, field)
+    if key == "connect_devices":
+        highlights = (target,)
+    else:
+        highlights = (target,) if key in ("save_config", "task_configured") else _row(panel.strategy_form, field)
     return GuideStep(key, caption, title, copy, target, highlights)
 
 

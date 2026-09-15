@@ -116,7 +116,7 @@ def _new_guide_progress() -> dict[str, Any]:
 GUIDE_STEPS = (
     "target_selection", "search_range", "delay_strategy", "max_wait",
     "shiny_threshold", "sync", "auto_reverse", "correction_strategy",
-    "save_config", "task_configured",
+    "save_config", "task_configured", "connect_devices", "devices_connected",
 )
 
 
