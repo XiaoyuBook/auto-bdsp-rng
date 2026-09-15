@@ -182,7 +182,7 @@ def test_device_connection_step_guides_video_source_then_easycon(guided, monkeyp
     assert controller.step == "devices_connected"
 
 
-def test_guide_continues_to_seed_capture_and_independent_preview(guided):
+def test_guide_continues_to_seed_capture_configuration(guided):
     window, panel, controller = guided
     controller._go("devices_connected")
     controller.next()
@@ -190,11 +190,20 @@ def test_guide_continues_to_seed_capture_and_independent_preview(guided):
     assert controller.overlay.waiting_for_page
     window.tabs.setCurrentWidget(window.project_xs_tab)
     QTest.qWait(30)
-    assert controller.step == "independent_preview"
+    assert controller.step == "seed_capture_config"
     assert not controller.overlay.waiting_for_page
-    assert controller.overlay.spec.target is window.picture_in_picture_button
-    window.picture_in_picture_button.click()
-    assert controller.step == "preview_opened"
+    assert controller.overlay.spec.target is window.config_combo
+    controller.next()
+    assert controller.step == "seed_capture_actions"
+    assert controller.overlay.spec.target is window.capture_button
+    controller.next()
+    assert controller.step == "seed_capture_tools"
+    controller.next()
+    assert controller.step == "seed_capture_save"
+    assert controller.overlay.spec.target is window.save_config_button
+    controller.next()
+    assert controller.step == "auto_flow_config"
+    assert controller.overlay.spec.target is window.seed_config_combo
 
 
 def test_delay_dialog_follows_strategy_and_keeps_edits_when_skipping(guided):
@@ -320,7 +329,7 @@ def test_guide_text_survives_scrollbars_width_changes_and_shorter_steps(guided):
     tip.show()
     for width in (338, 280, 400):
         tip.setFixedWidth(width)
-        for key in ("max_wait", "sync", "auto_reverse", "search_range"):
+        for key in ("max_wait", "sync", "auto_reverse", "search_range", "seed_capture_actions", "seed_capture_tools"):
             tip.show_step(workspace_step(panel, key), search=key == "search_range")
             if key == "search_range":
                 tip.presets["custom"].click()

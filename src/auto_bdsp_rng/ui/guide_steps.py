@@ -68,17 +68,38 @@ def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
                               "视频源和伊机控都已连接，可以收起提示并开始后续操作。", panel.window().easycon_header_button),
         "seed_capture_page": ("第 4 步 · Seed 捕捉", "进入 Seed 捕捉页面",
                               "点击亮起的「Seed 捕捉」标签，进入接下来要使用的捕捉页面。", panel.window().project_xs_tab),
-        "independent_preview": ("第 4 步 · Seed 捕捉", "打开独立预览",
-                                "点击亮起的「独立预览」，在单独窗口中查看视频源画面。", panel.window().picture_in_picture_button),
-        "preview_opened": ("第 4 步 · 已完成", "独立预览已打开",
-                           "独立预览已打开，可以收起提示并继续后续操作。", panel.window().picture_in_picture_button),
+        "seed_capture_config": ("4.1 · Seed 捕捉配置", "先选好捕捉配置",
+                                "Seed 捕捉页中的参数都来自上方所选的配置文件。请先选择配置，再按需要修改参数；如果不清楚如何调整，可以参考 B 站上的乱数教学配置。\n"
+                                f'<span style="color:#087C58; font-weight:600">这里选择的捕捉配置用于手动乱数，也是右侧预览画面中识别框的来源。</span>\n'
+                                f'<span style="color:#087C58; font-weight:600">使用自动乱数时，右侧画面仍显示这里选择的配置，但实际运行会使用“自动流程配置”中指定的配置。</span>', panel.window().config_combo),
+        "seed_capture_actions": ("4.2 · Seed 捕捉操作", "认识三种捕捉操作",
+                                 '「捕捉 Seed」用于获取当前 Seed，捕捉眨眼 <span style="color:#087C58; font-weight:600">40 次</span>。\n'
+                                 '「校正」用于根据新的眨眼间隔校正当前帧，一般捕捉眨眼 <span style="color:#087C58; font-weight:600">7 次</span>。\n'
+                                 '「TID/SID 测种」用于专门捕捉 TID/SID Seed，捕捉<span style="color:#087C58; font-weight:600">小卡比兽眨眼 64 次</span>。\n\n'
+                                 "Seed（种子）记录游戏随机数生成器的状态。相同 Seed 按相同规则推进，会产生相同的随机数序列。软件通过眨眼反推出 Seed，再结合遇敌条件预测闪光、个体值等结果，帮助你在目标帧触发遇敌。\n"
+                                 "这里的「帧数」指随机数推进次数，不是视频画面的帧数。", panel.window().capture_button),
+        "seed_capture_tools": ("4.3 · 识别与眼睛设置", "设置识别所需的画面参数",
+                               f'「框选 ROI」用于指定识别范围，<span style="color:#087C58; font-weight:600">请用鼠标右键在右侧画面中拖动框选</span>，软件只会在这个范围内识别眼睛；「截取眼睛」用于更新眼睛模板，请截取游戏画面中实际人物的眼睛。\n'
+                               f'「识别阈值」是识别区域内画面与眼睛模板的匹配判定阈值，一般设置为 <span style="color:#087C58; font-weight:600">0.7</span> 比较合适。若测种或校正失败，可以观察人物眨眼时识别框是否同步变色；没有变色或识别不稳定时，优先检查 ROI、眼睛模板和阈值。\n'
+                               f'NPC 数和下面的高级时序暂不展开，默认值为 0，先保持不动；如需使用相关功能，再参考手动乱数教学视频中的配置填写。预览中看到的眼睛框来自这里的设置，但它不一定就是自动流程实际使用的那份配置。\n'
+                               f'<span style="color:{GUIDE_EMPHASIS}; font-weight:600">使用过场脚本的美梦神、噩梦神或火钢，建议先观看手动乱数教学视频；这类目标的「校正配置」与「捕捉 Seed 配置」不同，请分别参考教学配置填写。</span>', panel.window().select_roi_button),
+        "seed_capture_save": ("4.4 · 保存配置", "保存 Seed 捕捉配置",
+                              "前面的参数确认无误后，点击亮起的「保存配置」，保存本次 Seed 捕捉使用的配置。保存后再点击下一步，继续设置自动流程配置。", panel.window().save_config_button),
+        "auto_flow_config": ("4.5 · 自动流程配置", "理解自动流程使用的配置",
+                             "「Seed 配置」用于自动流程捕捉 Seed；通常不启用过场脚本时，校正也使用 Seed 配置，不会启用「校正配置」。只有启用过场脚本时，过场脚本运行后的校正才会改用校正配置。这里的两个下拉框分别选择对应配置文件。", panel.window().seed_config_combo),
     }
     caption, title, copy, target = entries[key]
     field = panel.delay_settings_field if key == "delay_strategy" else target
-    if key == "connect_devices":
+    if key == "seed_capture_actions":
+        highlights = (panel.window().capture_button, panel.window().reidentify_button, panel.window().tidsid_button)
+    elif key == "seed_capture_tools":
+        highlights = (panel.window().select_roi_button, panel.window().raw_screenshot_button, panel.window().threshold, panel.window().npc_count)
+    elif key == "auto_flow_config":
+        highlights = (panel.window().seed_config_combo, panel.window().reidentify_config_combo)
+    elif key == "connect_devices":
         highlights = (target,)
     else:
-        highlights = (target,) if key in ("save_config", "task_configured") else _row(panel.strategy_form, field)
+        highlights = (target,) if key in ("save_config", "task_configured", "seed_capture_save") else _row(panel.strategy_form, field)
     return GuideStep(key, caption, title, copy, target, highlights)
 
 

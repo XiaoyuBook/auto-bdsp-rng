@@ -117,8 +117,11 @@ GUIDE_STEPS = (
     "target_selection", "search_range", "delay_strategy", "max_wait",
     "shiny_threshold", "sync", "auto_reverse", "correction_strategy",
     "save_config", "task_configured", "connect_devices", "devices_connected",
-    "seed_capture_page", "independent_preview", "preview_opened",
+    "seed_capture_page", "seed_capture_config", "seed_capture_actions",
+    "seed_capture_tools", "seed_capture_save", "auto_flow_config",
 )
+
+LEGACY_GUIDE_STEPS = frozenset(("independent_preview", "preview_opened", "capture_overview_done"))
 
 
 def _unfinished_guide(value: Any) -> bool:
@@ -126,7 +129,7 @@ def _unfinished_guide(value: Any) -> bool:
         isinstance(value, dict)
         and type(value.get("version")) is int and value["version"] == 1
         and isinstance(value.get("session_id"), str) and bool(value["session_id"])
-        and value.get("step") in GUIDE_STEPS
+        and (value.get("step") in GUIDE_STEPS or value.get("step") in LEGACY_GUIDE_STEPS)
         and value.get("status") == "in_progress"
     )
 

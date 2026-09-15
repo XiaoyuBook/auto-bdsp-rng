@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QStyleOptionTab, QToolButton, QWidget,
 )
 
-from auto_bdsp_rng.app_settings import GUIDE_STEPS, advance_guide_progress, get_guide_progress, start_guide_progress
+from auto_bdsp_rng.app_settings import GUIDE_STEPS, LEGACY_GUIDE_STEPS, advance_guide_progress, get_guide_progress, start_guide_progress
 from auto_bdsp_rng.ui.guide_steps import GuideStep, connection_dialog_steps, dialog_steps, workspace_step
 from auto_bdsp_rng.ui.guide_tip import GuideTip
 
@@ -320,6 +320,22 @@ class GuideController(QObject):
                 return
             self.step = progress["step"]
             self.detail = progress["detail"]
+        elif self.step == "capture_overview_done":
+            try:
+                progress = advance_guide_progress("auto_flow_config")
+            except (OSError, ValueError):
+                QMessageBox.warning(self.window, "无法继续引导", "无法更新引导进度，请检查设置目录是否可写后重试。")
+                return
+            self.step = progress["step"]
+            self.detail = progress.get("detail", "")
+        elif self.step in LEGACY_GUIDE_STEPS:
+            try:
+                progress = advance_guide_progress("seed_capture_config")
+            except (OSError, ValueError):
+                QMessageBox.warning(self.window, "无法继续引导", "无法更新引导进度，请检查设置目录是否可写后重试。")
+                return
+            self.step = progress["step"]
+            self.detail = progress.get("detail", "")
         self.active = True
         self._connection_timer.start()
         self.refresh()
@@ -365,9 +381,9 @@ class GuideController(QObject):
     def _show_workspace(self) -> None:
         if not self.active or self.window._is_closing:
             return
-        page = self.window.project_xs_tab if self.step in ("seed_capture_page", "independent_preview", "preview_opened") else self.panel
+        page = self.window.project_xs_tab if self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save", "auto_flow_config") else self.panel
         if self.step == "seed_capture_page" and self.window.tabs.currentWidget() is page:
-            self._go("independent_preview")
+            self._go("seed_capture_config")
             return
         waiting = self.window.tabs.currentWidget() is not page
         self.overlay.page_widget = page
@@ -411,8 +427,8 @@ class GuideController(QObject):
             else:
                 valid = self._connection_ready(self.detail or "video_source")
         tip.previous_button.setEnabled(not waiting and self.step != "target_selection")
-        tip.next_button.setEnabled(not waiting and valid and self.step != "preview_opened" and (self.step != "save_config" or self._config_saved))
-        tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured"))
+        tip.next_button.setEnabled(not waiting and valid and self.step not in ("preview_opened",) and (self.step != "save_config" or self._config_saved))
+        tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured", "auto_flow_config"))
 
     def next(self) -> None:
         if not self.active or not self._current_overlay().tip.next_button.isEnabled():
@@ -438,6 +454,8 @@ class GuideController(QObject):
             self._open_current_dialog()
         elif self.step == "save_config":
             self._go("connect_devices", "video_source")
+        elif self.step == "auto_flow_config":
+            self.pause()
         else:
             self._go(GUIDE_STEPS[GUIDE_STEPS.index(self.step) + 1])
 
@@ -466,7 +484,12 @@ class GuideController(QObject):
     def skip(self) -> None:
         if not self.active or not self._current_overlay().tip.skip_button.isEnabled():
             return
-        destination = "search_range" if self.step == "target_selection" else "save_config"
+        if self.step == "target_selection":
+            destination = "search_range"
+        elif self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save"):
+            destination = "auto_flow_config"
+        else:
+            destination = "save_config"
         if self._dialog_key:
             self._leave_dialog(destination)
         else:
@@ -478,7 +501,7 @@ class GuideController(QObject):
 
     def _preview_opened(self) -> None:
         if self.active and self.step == "independent_preview":
-            self._go("preview_opened")
+            self._go("seed_capture_config")
 
     def pause(self) -> None:
         self.active = False
