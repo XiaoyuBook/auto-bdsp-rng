@@ -498,12 +498,19 @@ class GuideController(QObject):
             return
         self._dialog_key = device
         self.detail = "device" if device == "video_source" else "port"
+        dialog = self._dialog()
+        self._dialog_layout_state = (dialog, dialog.size(), dialog.minimumHeight(), dialog.layout().alignment())
+        dialog.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
+        available_height = dialog.screen().availableGeometry().height() - 48
+        dialog.setMinimumHeight(min(610, available_height))
+        dialog.resize(dialog.width(), max(dialog.height(), dialog.minimumHeight()))
         self.overlay.shade_all()
         QTimer.singleShot(0, self._show_dialog_step)
 
     def _close_connection_dialog(self, *, resume: bool = False) -> None:
         dialog = self._dialog()
         key = self._dialog_key
+        self._restore_dialog_layout()
         self._dialog_key = None
         if self.dialog_overlay is not None:
             self.dialog_overlay.hide()
