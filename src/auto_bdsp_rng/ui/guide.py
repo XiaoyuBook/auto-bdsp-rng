@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.app_settings import GUIDE_STEPS, LEGACY_GUIDE_STEPS, advance_guide_progress, get_guide_progress, start_guide_progress
 from auto_bdsp_rng.ui.guide_steps import GuideStep, connection_dialog_steps, dialog_steps, workspace_step
 from auto_bdsp_rng.ui.guide_tip import GuideTip
+from auto_bdsp_rng.ui.eye_guide import EyeGuide
 
 
 class GuideSpotlight(QWidget):
@@ -150,7 +151,8 @@ class GuideSpotlight(QWidget):
         self._ensure_target_visible()
         margin = 20 if self.dialog is not None else 12
         bounds = self.rect().adjusted(margin, margin, -margin, -margin)
-        self.tip.setFixedWidth(min(400 if self.dialog is not None else 338, bounds.width()))
+        width = 300 if self.spec.target is self.main_window.preview_label else (400 if self.dialog is not None else 338)
+        self.tip.setFixedWidth(min(width, bounds.width()))
         self.tip.fit_height(bounds.height())
         chosen = None
         target_groups = ((self.tab_bar,),) if self.waiting_for_page else (self.spec.highlights, (self.spec.target,))
@@ -277,6 +279,7 @@ class GuideController(QObject):
         window.picture_in_picture_button.clicked.connect(self._preview_opened)
         window.video_source_header_button.clicked.connect(lambda: self._connection_dialog_opened("video_source"))
         window.easycon_header_button.clicked.connect(lambda: self._connection_dialog_opened("easycon"))
+        self.eye_guide = EyeGuide(self)
         self.refresh()
 
     def refresh(self) -> None:
@@ -370,6 +373,7 @@ class GuideController(QObject):
             return False
         if step != self.step:
             self._config_saved = False
+            self.eye_guide.config_saved = False
         self.step, self.detail = step, detail
         return True
 
@@ -387,6 +391,8 @@ class GuideController(QObject):
             return
         waiting = self.window.tabs.currentWidget() is not page
         self.overlay.page_widget = page
+        if not waiting and self.eye_guide.prepare():
+            return
         if not waiting and self.step in ("shiny_threshold", "sync", "auto_reverse", "correction_strategy"):
             self.panel.more_strategy_button.setChecked(True)
             self.panel.strategy_group.layout().activate()
@@ -396,6 +402,8 @@ class GuideController(QObject):
         self.overlay.configure(spec, waiting_for_page=waiting)
         self.overlay.reveal()
         self._navigation()
+        if self.step == "seed_capture_save":
+            self.eye_guide.show_save_status()
         if self.step == "save_config" and self._config_saved:
             self.overlay.title.setText("配置已保存")
             self.overlay.copy.setText("本次任务参数已保存。点击下一步完成第 2 步。")
@@ -429,6 +437,14 @@ class GuideController(QObject):
         tip.previous_button.setEnabled(not waiting and self.step != "target_selection")
         tip.next_button.setEnabled(not waiting and valid and self.step not in ("preview_opened",) and (self.step != "save_config" or self._config_saved))
         tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured", "auto_flow_config"))
+        if self.step == "seed_capture_tools":
+            tip.next_button.setText("观看演示" if not self.detail else "下一步")
+            tip.next_button.setEnabled(not waiting and not self.detail)
+        else:
+            tip.next_button.setText("下一步")
+        if self.step == "seed_capture_save":
+            tip.next_button.setEnabled(not waiting and self.eye_guide.config_saved)
+            tip.skip_button.setEnabled(False)
 
     def next(self) -> None:
         if not self.active or not self._current_overlay().tip.next_button.isEnabled():
@@ -456,13 +472,17 @@ class GuideController(QObject):
             self._go("connect_devices", "video_source")
         elif self.step == "auto_flow_config":
             self.pause()
+        elif self.step == "seed_capture_tools":
+            self.eye_guide.next()
         else:
             self._go(GUIDE_STEPS[GUIDE_STEPS.index(self.step) + 1])
 
     def previous(self) -> None:
         if not self.active or not self._current_overlay().tip.previous_button.isEnabled():
             return
-        if self._dialog_key:
+        if self.step == "seed_capture_tools" and self.detail:
+            self.eye_guide.previous()
+        elif self._dialog_key:
             steps = connection_dialog_steps(self.panel, self._dialog_key) if self._dialog_key in ("video_source", "easycon") else dialog_steps(self.panel, self._dialog_key)
             index = next((i for i, spec in enumerate(steps) if spec.key == self.detail), 0)
             if index > 0:
@@ -484,10 +504,11 @@ class GuideController(QObject):
     def skip(self) -> None:
         if not self.active or not self._current_overlay().tip.skip_button.isEnabled():
             return
+        self.eye_guide.cancel_selection()
         if self.step == "target_selection":
             destination = "search_range"
-        elif self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save"):
-            destination = "auto_flow_config"
+        elif self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools"):
+            destination = "seed_capture_save"
         else:
             destination = "save_config"
         if self._dialog_key:
@@ -504,7 +525,9 @@ class GuideController(QObject):
             self._go("seed_capture_config")
 
     def pause(self) -> None:
+        self.eye_guide.cancel_selection()
         self.active = False
+        self.eye_guide.pause()
         self._connection_timer.stop()
         QApplication.instance().removeEventFilter(self)
         self._resume_after_dialog = False
@@ -718,7 +741,7 @@ class GuideController(QObject):
         if event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.ShortcutOverride, QEvent.Type.Wheel):
             if overlay.waiting_for_page and obj is overlay.tab_bar:
                 if event_type == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
-                    self.window.tabs.setCurrentWidget(self.panel)
+                    self.window.tabs.setCurrentWidget(overlay.page_widget)
                 return True
             target = overlay.focus_target
             if obj is target or target.isAncestorOf(obj) or obj is overlay.tip or overlay.tip.isAncestorOf(obj):

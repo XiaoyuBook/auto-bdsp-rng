@@ -27,6 +27,17 @@ def _row(form, field: QWidget) -> tuple[QWidget, ...]:
 
 
 def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
+    if key == "seed_capture_tools" and detail in ("roi_button", "roi_drag", "eye_button", "eye_drag", "roi_adjust"):
+        window = panel.window()
+        actions = {
+            "roi_button": ("现在由你框选 ROI", "点击左侧的「框选眼睛区域」，接着在自己的游戏画面中框出识别范围。", window.select_roi_button),
+            "roi_drag": ("在画面中框选识别范围", '在右侧画面中<span style="color:#087C58; font-weight:600">按住鼠标右键拖动</span>，框住一只眼睛并留一点余量。松开后确认使用此区域。', window.preview_label),
+            "eye_button": ("接下来截取眼睛模板", "点击右侧的「截取眼睛」，使用实际人物睁开的眼睛更新模板。", window.raw_screenshot_button),
+            "eye_drag": ("贴着一只睁开的眼睛框选", '在刚才的 ROI 内<span style="color:#087C58; font-weight:600">按住鼠标右键拖动</span>，框选一只睁开的眼睛。模板要小于 ROI；松开后确认使用。', window.preview_label),
+            "roi_adjust": ("让识别范围容纳新模板", "新截取的眼睛超出了原 ROI，请在右侧画面中按住鼠标右键重新框选识别范围，完整包含眼睛并留一点余量。", window.preview_label),
+        }
+        title, copy, target = actions[detail]
+        return GuideStep(key, "4.3 · 动手框选", title, copy, target, (target,))
     if key == "target_selection":
         return GuideStep(key, "第 1 步 · 设置目标精灵", "先选好这次的目标",
                          "点击亮起区域里的「设置」，选择这次想乱的精灵，以及你希望得到的结果。\n"

@@ -300,6 +300,11 @@ def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_pa
     assert video_index >= 0 and port_index >= 0
     window.capture_device_combo.setCurrentIndex(video_index)
     assert window.connect_video_source() and window._video_source_connected
+    assert window._latest_preview_frame.shape == (720, 1280, 3)
+    assert not window.preview_label.pixmap().isNull()
+    window.start_roi_selection()
+    assert window._selection_mode == "roi" and window.preview_label.selection_enabled()
+    window._cancel_preview_selection()
     window.easycon_tab.port_combo.setCurrentIndex(port_index)
     assert window.easycon_tab.connect_native()
     assert window.easycon_tab._native_is_connected()

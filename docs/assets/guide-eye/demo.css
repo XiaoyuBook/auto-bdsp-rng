@@ -1,0 +1,49 @@
+html, body { margin: 0; height: 100%; background: #161d19; overflow: hidden; }
+    #rng-roi-demo { color-scheme: light; font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; color: #25362e; display: flex; flex-direction: column; height: 100%; }
+    #rng-roi-demo * { box-sizing: border-box; }
+    #rng-roi-demo .demo-stage { background: #161d19; flex: 1; min-height: 0; overflow: auto; }
+    #rng-roi-demo .scene-wrap { position: relative; container-type: inline-size; width: 100%; max-width: max(360px, calc(123.90625vh - 96px)); margin: 0 auto; overflow: hidden; }
+    #rng-roi-demo .scene { display: block; width: 100%; aspect-ratio: 1586 / 1280; touch-action: none; }
+    #rng-roi-demo .demo-tip { position: absolute; left: 33%; right: 3%; top: 17%; padding: 20px 24px; border: 1px solid #c3e6d5; border-radius: 14px; background: #fcfefd; box-shadow: 0 8px 28px #0003; display: flex; align-items: center; gap: 20px; pointer-events: none; }
+    #rng-roi-demo .tip-copy { flex: 1; min-width: 0; }
+    #rng-roi-demo .eyebrow { color: #087c58; font-size: 12px; margin-bottom: 9px; }
+    #rng-roi-demo .step-title { font-size: 20px; font-weight: 500; line-height: 1.4; margin: 0 0 10px; }
+    #rng-roi-demo .step-detail { font-size: 14px; line-height: 1.6; margin: 0; }
+    #rng-roi-demo .gesture { margin-top: 12px; display: flex; align-items: center; gap: 9px; color: #087c58; font-size: 13px; }
+    #rng-roi-demo .mouse { position: relative; width: 21px; height: 30px; border: 1.5px solid #6f867b; border-radius: 10px; overflow: hidden; flex: 0 0 auto; }
+    #rng-roi-demo .mouse::before { content: ""; position: absolute; top: 0; left: 0; width: 50%; height: 45%; border-right: 1px solid #6f867b; background: transparent; }
+    #rng-roi-demo .mouse::after { content: ""; position: absolute; top: 0; right: 0; width: 50%; height: 45%; background: transparent; }
+    #rng-roi-demo .mouse[data-button="left"]::before { background: #17b67e; }
+    #rng-roi-demo .mouse[data-button="right"]::after { background: #17b67e; }
+    #rng-roi-demo .loupe-wrap { flex: 0 0 144px; width: 144px; }
+    #rng-roi-demo .loupe { width: 144px; height: 126px; display: block; border: 1px solid #bdd9ca; border-radius: 8px; background: #b6ab94; }
+    #rng-roi-demo .loupe-label { font-size: 11px; text-align: center; margin-top: 6px; color: #667c70; }
+    #rng-roi-demo .timeline { position: absolute; bottom: 0; left: 0; width: 100%; height: 4px; background: #ffffff29; pointer-events: none; }
+    #rng-roi-demo .elapsed { height: 100%; width: 0; background: #55dba4; }
+    #rng-roi-demo .demo-footer { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 16px 20px; background: #fcfefd; border: 1px solid #dbe8e1; border-top: 0; border-radius: 0 0 10px 10px; }
+    #rng-roi-demo .mode-note { flex: 1; min-width: 140px; font-size: 12px; color: #687e72; }
+    #rng-roi-demo .footer-actions { display: flex; align-items: center; gap: 10px; }
+    #rng-roi-demo button { font: inherit; font-size: 14px; font-weight: 500; line-height: 1.4; padding: 10px 16px; cursor: pointer; border-radius: 8px; border: 1px solid #cddfd5; color: #426452; background: white; }
+    #rng-roi-demo button:hover { background: #edf8f1; }
+    #rng-roi-demo button.primary { color: white; background: #087c58; border-color: #087c58; }
+    #rng-roi-demo button.primary:hover { background: #076b4d; }
+    #rng-roi-demo button:disabled { opacity: .55; cursor: default; }
+    #rng-roi-demo .demo-footer { flex: 0 0 auto; border-radius: 0; }
+    #rng-roi-demo .error { display: block; color: #b83f24; }
+    #rng-roi-demo [hidden] { display: none !important; }
+    @container (max-width: 750px) {
+      #rng-roi-demo .demo-tip { padding: 14px 16px; gap: 12px; }
+      #rng-roi-demo .loupe-wrap { flex-basis: 108px; width: 108px; }
+      #rng-roi-demo .loupe { width: 108px; height: 95px; }
+      #rng-roi-demo .step-title { font-size: 17px; margin-bottom: 6px; }
+      #rng-roi-demo .eyebrow { margin-bottom: 5px; }
+      #rng-roi-demo .gesture { margin-top: 7px; }
+    }
+    @container (max-width: 560px) {
+      #rng-roi-demo .demo-tip { position: relative; left: auto; right: auto; top: auto; border-radius: 0; border: 0; border-top: 1px solid #dbe8e1; min-height: 178px; box-shadow: none; }
+    }
+    @media (max-width: 560px) {
+      #rng-roi-demo .demo-footer { padding: 12px; gap: 10px; }
+      #rng-roi-demo .mode-note { flex-basis: 100%; }
+      #rng-roi-demo .footer-actions { width: 100%; justify-content: flex-end; }
+    }

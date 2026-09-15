@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self' qrc:; connect-src 'none'; base-uri 'none'; object-src 'none'">
+  <title>框选 ROI 与眼睛模板</title>
+  <link rel="stylesheet" href="demo.css">
+  <script src="qrc:///qtwebchannel/qwebchannel.js" defer></script>
+  <script src="demo.js" defer></script>
+</head>
+<body>
+<div id="rng-roi-demo" aria-label="ROI 与眼睛模板框选演示">
+  <div class="demo-stage"><div class="scene-wrap">
+    <canvas class="scene" role="img" aria-label="点击左侧框选眼睛区域，右键拖出 ROI；点击右侧截取眼睛，右键框选一只睁开的眼睛；最后保存配置。"></canvas>
+    <div class="demo-tip">
+      <div class="tip-copy" aria-live="polite">
+        <div class="eyebrow">操作演示 · 1 / 5</div>
+        <div class="step-title">先点击「框选眼睛区域」</div>
+        <p class="step-detail">先确定软件要在哪个范围内识别眼睛。</p>
+        <div class="gesture"><span class="mouse" data-button="left" aria-hidden="true"></span><span class="gesture-text">左键点击按钮</span></div>
+      </div>
+      <div class="loupe-wrap" hidden>
+        <canvas class="loupe" role="img" aria-label="人物眼睛附近的放大视图"></canvas>
+        <div class="loupe-label">眼睛局部放大</div>
+      </div>
+    </div>
+    <div class="timeline" aria-hidden="true"><div class="elapsed"></div></div>
+  </div></div>
+  <div class="demo-footer">
+    <span class="mode-note">循环演示，学会后在自己的游戏画面中操作<span class="error" role="alert"></span></span>
+    <div class="footer-actions">
+      <button type="button" class="close">暂时收起</button>
+      <button type="button" class="pause">暂停</button>
+      <button type="button" class="primary learned" disabled>我已学会</button>
+    </div>
+  </div>
+  <img class="source" src="screenshot.jpg" alt="" hidden>
+</div>
+</body>
+</html>

@@ -1503,6 +1503,10 @@ class CaptureBrokerStartThread(QThread):
 
 
 class MainWindow(QMainWindow):
+    captureSelectionStarted = Signal(str)
+    captureSelectionFinished = Signal(str, bool)
+    captureConfigSaved = Signal()
+    captureConfigSaveFailed = Signal(str)
     autoCaptureFrameChanged = Signal(object)
     autoCaptureProgressChanged = Signal(int, int)
     captureKeepAwakeRequested = Signal(int, int)
@@ -4944,10 +4948,12 @@ class MainWindow(QMainWindow):
         try:
             config = self._config_from_form()
             save_project_xs_config(config, config.source_path)
-        except ProjectXsIntegrationError as exc:
+        except (ProjectXsIntegrationError, OSError, ValueError) as exc:
             self._show_error("Save config failed", exc)
+            self.captureConfigSaveFailed.emit(str(exc))
             return
         self.statusBar().showMessage(self._text("config_saved"))
+        self.captureConfigSaved.emit()
 
     def set_capture_broker_process(self, process: object | None) -> None:
         """Install the independently hosted Broker process controller."""
@@ -5527,6 +5533,20 @@ class MainWindow(QMainWindow):
 
     def _connect_mock_video_source(self) -> None:
         """Connect the development-only video source without opening hardware."""
+        # A static game frame lets developers exercise the real right-drag
+        # handlers without a capture card. It is never fed to a real Broker.
+        import cv2
+        import numpy as np
+
+        sample_path = resource_path("docs", "assets", "guide-eye", "screenshot.jpg")
+        try:
+            sample = cv2.imdecode(np.frombuffer(sample_path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+            if sample is not None:
+                self._latest_preview_frame = cv2.resize(sample[574:1150, 518:1542], (1280, 720))
+                self._latest_annotated_preview_frame = self._latest_preview_frame
+                self._display_frame(self._latest_preview_frame)
+        except OSError:
+            pass
         self._video_source_connecting = False
         self._video_source_connected = True
         self._video_source_stop_pending = False
@@ -5921,6 +5941,7 @@ class MainWindow(QMainWindow):
                 self._roi_before_selection = None
                 self._restore_preview_after_selection()
                 self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+                self.captureSelectionFinished.emit(mode, False)
                 return
         frame_copy = getattr(self._latest_preview_frame, "copy", None)
         self._selection_preview_frame = (
@@ -5929,6 +5950,7 @@ class MainWindow(QMainWindow):
         self._display_frame(self._selection_preview_frame)
         self._set_preview_selection_enabled(True)
         self._sync_picture_in_picture_frame()
+        self.captureSelectionStarted.emit(mode)
 
     def _handle_preview_selection(self, roi: object) -> None:
         if self._selection_mode not in {"eye", "roi", "ocr_region", "tid_ocr_region"}:
@@ -5937,7 +5959,10 @@ class MainWindow(QMainWindow):
             self._cancel_preview_selection()
             return
         if self._selection_mode == "eye":
-            self.apply_selected_eye(roi)
+            if self.guide_controller.eye_guide.selecting_eye:
+                self.apply_selected_eye(roi, preserve_roi=True)
+            else:
+                self.apply_selected_eye(roi)
         elif self._selection_mode == "ocr_region":
             self.apply_selected_ocr_region(roi)
         elif self._selection_mode == "tid_ocr_region":
@@ -5977,12 +6002,15 @@ class MainWindow(QMainWindow):
         ) == QMessageBox.StandardButton.Ok
 
     def _cancel_preview_selection(self) -> None:
+        mode = self._selection_mode
         self._set_preview_selection_enabled(False)
         self._roi_before_selection = None
         self._ocr_selection_field = None
         self._selection_mode = None
         self._restore_preview_after_selection()
         self.statusBar().showMessage("已取消框选，继续使用之前的设置")
+        if mode in ("roi", "eye"):
+            self.captureSelectionFinished.emit(mode, False)
 
     def _restore_preview_after_selection(self) -> None:
         self._selection_preview_frame = None
@@ -6037,6 +6065,7 @@ class MainWindow(QMainWindow):
             self._selection_mode = None
             self._restore_preview_after_selection()
             self._show_error("ROI failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            self.captureSelectionFinished.emit("roi", False)
             return
         self._set_roi_values((x, y, width, height))
         self._set_preview_selection_enabled(False)
@@ -6050,8 +6079,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         self.statusBar().showMessage(f"{self._text('roi_selected')}: {x}, {y}, {width}, {height}")
+        self.captureSelectionFinished.emit("roi", True)
 
-    def apply_selected_eye(self, roi: object) -> None:
+    def apply_selected_eye(self, roi: object, *, preserve_roi: bool = False) -> None:
         x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
         try:
             import cv2
@@ -6080,14 +6110,26 @@ class MainWindow(QMainWindow):
             self._selection_mode = None
             self._restore_preview_after_selection()
             self._show_error("Eye capture failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
+            self.captureSelectionFinished.emit("eye", False)
             return
         self._eye_image_path = output_path
+        if preserve_roi:
+            rx, ry, rw, rh = (int(field.text() or 0) for field in (self.x, self.y, self.w, self.h))
+            if rx <= left and ry <= top and right <= rx + rw and bottom <= ry + rh:
+                self._selection_mode = None
+                self._roi_before_selection = None
+                self._set_preview_selection_enabled(False)
+                self._restore_preview_after_selection()
+                self.statusBar().showMessage("眼睛模板已应用，已保留框选的 ROI，请保存配置。")
+                self.captureSelectionFinished.emit("eye", True)
+                return
         self._selection_mode = "roi"
         self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         self._restore_preview_after_selection()
         self._display_frame(self._latest_preview_frame if self._latest_preview_frame is not None else frame)
         self._set_preview_selection_enabled(True)
         self.statusBar().showMessage(f"{self._text('eye_captured_select_roi')}: {output_path}")
+        self.captureSelectionFinished.emit("eye", True)
 
     def _set_roi_values(self, roi: tuple[int, int, int, int]) -> None:
         self.x.setText(str(roi[0]))

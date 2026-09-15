@@ -199,8 +199,19 @@ def test_guide_continues_to_seed_capture_configuration(guided):
     controller.next()
     assert controller.step == "seed_capture_tools"
     controller.next()
+    assert controller.detail == "demo" and controller.eye_guide.dialog is not None
+    controller.eye_guide.dialog.reject()
+    assert not controller.active
+    controller.begin_or_resume()
+    assert controller.eye_guide.dialog is not None
+    controller.eye_guide._learned()
+    QTest.qWait(50)
+    assert controller.detail == "roi_button"
+    controller.skip()
     assert controller.step == "seed_capture_save"
     assert controller.overlay.spec.target is window.save_config_button
+    assert not controller.overlay.tip.next_button.isEnabled()
+    window.captureConfigSaved.emit()
     controller.next()
     assert controller.step == "auto_flow_config"
     assert controller.overlay.spec.target is window.seed_config_combo
