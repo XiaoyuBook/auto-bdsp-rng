@@ -288,6 +288,26 @@ def test_main_window_guide_write_failure_preserves_progress_and_workspace(app, t
         assert window.guide_controller.overlay.isVisible()
 
 
+def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_path, monkeypatch):
+    from auto_bdsp_rng import app_settings
+
+    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "mock-devices.json")
+    window = MainWindow(dev_mock_devices=True)
+    window.show()
+    QTest.qWait(30)
+    video_index = window.capture_device_combo.findData("mock_video")
+    port_index = window.easycon_tab.port_combo.findData("mock")
+    assert video_index >= 0 and port_index >= 0
+    window.capture_device_combo.setCurrentIndex(video_index)
+    assert window.connect_video_source() and window._video_source_connected
+    window.easycon_tab.port_combo.setCurrentIndex(port_index)
+    assert window.easycon_tab.connect_native()
+    assert window.easycon_tab._native_is_connected()
+    window.easycon_tab.disconnect_native()
+    window.disconnect_video_source(force=True)
+    window.close()
+
+
 def test_main_window_guide_spotlight_tracks_real_controls_after_move_resize_and_scroll(app, tmp_path, monkeypatch):
     from PySide6.QtCore import QRect
     from PySide6.QtTest import QTest

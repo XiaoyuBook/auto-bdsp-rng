@@ -707,6 +707,7 @@ class EasyConPanel(QWidget):
         video_source_connected: Callable[[], bool] | None = None,
         frame_client_factory: Callable[[], object] | None = None,
         keyboard_hook_factory: Callable[..., WindowsKeyboardHook] | None = None,
+        dev_mock_devices: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setFont(ui_font())
@@ -714,6 +715,7 @@ class EasyConPanel(QWidget):
         self.native_backend = native_backend
         self._video_source_connected = video_source_connected
         self._frame_client_factory = frame_client_factory
+        self._dev_mock_devices = bool(dev_mock_devices)
         self.native_run_thread: QThread | None = None
         self.native_run_worker: NativeScriptWorker | None = None
         self._native_run_reserved = False
@@ -1909,6 +1911,9 @@ class EasyConPanel(QWidget):
         self.port_combo.blockSignals(True)
         self.port_combo.clear()
         self.port_combo.addItems(ports)
+        if self._dev_mock_devices:
+            self.port_combo.addItem("Mock 串口", MOCK_PORT)
+            ports.append("Mock 串口")
         selected = self._select_preferred_port(ports)
         if selected is not None:
             self.port_combo.setCurrentText(selected)
@@ -1950,6 +1955,8 @@ class EasyConPanel(QWidget):
     def _connection_port(self) -> str:
         """Return the backend port without exposing test-only mock entries in the UI."""
         selected_port = self.port_combo.currentText().strip()
+        if self.port_combo.currentData() == MOCK_PORT:
+            return MOCK_PORT
         if selected_port.casefold() in INTERNAL_TEST_PORTS:
             return ""
         if self._is_native_mode() and selected_port:

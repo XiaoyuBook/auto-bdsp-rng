@@ -14,7 +14,7 @@ if not exist "%PYTHON%" (
 )
 
 title auto-bdsp-rng development GUI
-"%PYTHON%" -m auto_bdsp_rng gui
+"%PYTHON%" -m auto_bdsp_rng gui --mock-devices
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%" == "0" (

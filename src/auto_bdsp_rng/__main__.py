@@ -40,10 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser(
+    gui_parser = subparsers.add_parser(
         "gui",
         help="Start the PySide6 desktop interface.",
     )
+    gui_parser.add_argument("--mock-devices", action="store_true", help=argparse.SUPPRESS)
 
     capture_broker = subparsers.add_parser(
         "capture-broker",
@@ -311,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "gui":
         from auto_bdsp_rng.ui import run
 
-        return run()
+        return run(dev_mock_devices=args.mock_devices)
     if args.command == "capture-broker":
         from auto_bdsp_rng.capture_broker import (
             BROKER_ALREADY_RUNNING_EXIT_CODE,

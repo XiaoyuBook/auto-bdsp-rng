@@ -219,6 +219,7 @@ STARTUP_UPDATE_CHECK_DELAY_MS = 1000
 STARTUP_UPDATE_CHECK_MODAL_RETRY_MS = 500
 CAPTURE_API_SETTINGS_VERSION = 1
 CAPTURE_API_SETTINGS_VERSION_KEY = "video_source/capture_api_settings_version"
+MOCK_CAPTURE_DEVICE = "mock_video"
 
 # Preserve the default workspace; smaller windows reflow and scroll at the
 # current font size. Existing user-selected process-wide scaling is retained.
@@ -1526,6 +1527,7 @@ class MainWindow(QMainWindow):
         ui_scale: UiScale = UI_SCALE_AUTO,
         ui_scale_percent: float = 100.0,
         ui_scale_source: str = "fallback",
+        dev_mock_devices: bool = False,
     ) -> None:
         super().__init__()
         self.setFont(ui_font())
@@ -1540,6 +1542,7 @@ class MainWindow(QMainWindow):
         self._ui_scale = ui_scale
         self._ui_scale_percent = max(1.0, float(ui_scale_percent))
         self._ui_scale_source = str(ui_scale_source)
+        self._dev_mock_devices = bool(dev_mock_devices)
         self._run_log_manager = run_log_manager or RunLogManager()
         self._run_log_buffer = RunLogBuffer(self)
         self._run_log_manager.set_error_callback(self._queue_run_log_failure)
@@ -1868,6 +1871,7 @@ class MainWindow(QMainWindow):
             run_log_sink=self._run_log_sink("伊机控"),
             video_source_connected=lambda: self._video_source_connected,
             frame_client_factory=self._new_broker_client,
+            dev_mock_devices=self._dev_mock_devices,
         )
         self.easycon_tab.workspace_splitter.settings = self._profile_settings
         self.easycon_tab.workspace_splitter.restore_sizes()
@@ -5348,6 +5352,7 @@ class MainWindow(QMainWindow):
             raise ProjectXsIntegrationError("采集卡设备序号无效") from exc
 
     def refresh_capture_devices(self) -> None:
+        selected_mock = self.capture_device_combo.currentData() == MOCK_CAPTURE_DEVICE
         selected_name = self.capture_device_combo.currentText().partition(" - ")[2].strip()
         try:
             selected_index = self._capture_device_index()
@@ -5367,7 +5372,11 @@ class MainWindow(QMainWindow):
         for index, name in devices:
             label = f"{index} - {name}" if name else str(index)
             self.capture_device_combo.addItem(label, index)
+        if self._dev_mock_devices:
+            self.capture_device_combo.addItem("Mock 视频源", MOCK_CAPTURE_DEVICE)
         selected = -1
+        if self._dev_mock_devices and selected_mock:
+            selected = self.capture_device_combo.findData(MOCK_CAPTURE_DEVICE)
         if selected_name:
             selected = next(
                 (
@@ -5457,6 +5466,9 @@ class MainWindow(QMainWindow):
     def connect_video_source(self) -> bool:
         if self._video_source_connected:
             return True
+        if self.capture_device_combo.currentData() == MOCK_CAPTURE_DEVICE:
+            self._connect_mock_video_source()
+            return True
         start_thread = self._capture_broker_start_thread
         if self._video_source_connecting or self._video_source_stop_pending:
             return False
@@ -5512,6 +5524,20 @@ class MainWindow(QMainWindow):
         self._set_video_source_config_enabled(False)
         thread.start()
         return True
+
+    def _connect_mock_video_source(self) -> None:
+        """Connect the development-only video source without opening hardware."""
+        self._video_source_connecting = False
+        self._video_source_connected = True
+        self._video_source_stop_pending = False
+        self._video_source_stop_error = None
+        self._video_source_pending_status = "未连接"
+        self.video_source_button.setEnabled(True)
+        self.video_source_button.setText("断开连接")
+        self._set_video_source_status("已连接（Mock）", "connected")
+        self._set_video_source_config_enabled(True)
+        self.easycon_tab.video_source_state_changed()
+        self._refresh_automation_start_state()
 
     def _finish_video_source_connection(
         self,
@@ -10020,6 +10046,7 @@ def create_window(
     *,
     ui_scale: UiScale = UI_SCALE_AUTO,
     ui_scale_environment: UiScaleEnvironmentResult | None = None,
+    dev_mock_devices: bool = False,
 ) -> MainWindow:
     scale_environment = ui_scale_environment or UiScaleEnvironmentResult(
         percent=100.0,
@@ -10032,10 +10059,11 @@ def create_window(
         ui_scale=ui_scale,
         ui_scale_percent=scale_environment.percent or 100.0,
         ui_scale_source=scale_environment.source,
+        dev_mock_devices=dev_mock_devices,
     )
 
 
-def run() -> int:
+def run(*, dev_mock_devices: bool = False) -> int:
     ui_scale = get_ui_scale()
     ui_scale_environment = configure_ui_scale_environment(ui_scale)
     app = QApplication.instance() or QApplication([])
@@ -10095,6 +10123,7 @@ def run() -> int:
             run_log_manager=run_log_manager,
             ui_scale=ui_scale,
             ui_scale_environment=ui_scale_environment,
+            dev_mock_devices=dev_mock_devices,
         )
         if run_log_startup_error is not None:
             QTimer.singleShot(
