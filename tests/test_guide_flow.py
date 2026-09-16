@@ -360,17 +360,18 @@ def test_recording_demo_pause_resume_and_learning_handoff(guided):
     assert window.easycon_tab.editor.toPlainText() == original_script
 
 
-def test_recording_practice_ends_with_seed_page_and_independent_preview(guided):
+def test_independent_preview_precedes_easycon_intro_and_recording(guided):
     window, panel, controller = guided
-    window.tabs.setCurrentWidget(window.easycon_tab)
-    controller._go("easycon_recording", "practice")
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    controller._go("auto_flow_config")
     original = window.easycon_tab.editor.toPlainText()
     controller.next()
-    assert controller.step == "easycon_recording" and controller.detail == "preview"
-    assert window.tabs.currentWidget() is window.easycon_tab
+    assert controller.step == "script_preview"
+    assert not controller.overlay.waiting_for_page
+    assert controller.overlay.spec.caption == "5.1 · 准备操作"
+    window.tabs.setCurrentWidget(window.easycon_tab)
     assert controller.overlay.waiting_for_page
     assert controller.overlay.page_widget is window.project_xs_tab
-    assert controller.overlay.spec.caption.startswith("5.2")
     assert "Seed 捕捉" in controller.overlay.copy.text()
     QTest.qWait(40)
     bar = window.tabs.tabBar()
@@ -385,52 +386,73 @@ def test_recording_practice_ends_with_seed_page_and_independent_preview(guided):
     controller.next()
     controller.skip()
     controller._preview_opened()  # A notification without a visible window cannot advance.
-    assert controller.detail == "preview"
+    assert controller.step == "script_preview"
     try:
         QTest.mouseClick(window.picture_in_picture_button, Qt.MouseButton.LeftButton)
         assert window._picture_in_picture is not None and window._picture_in_picture.isVisible()
-        assert controller.step == "auto_script_config"
+        assert controller.step == "easycon_intro"
         assert controller.overlay.waiting_for_page
-        assert controller.overlay.page_widget is panel
+        assert controller.overlay.page_widget is window.easycon_tab
+        window.tabs.setCurrentWidget(window.easycon_tab)
+        assert controller.overlay.spec.caption.startswith("5.1")
+        # Recording now goes directly to script configuration, without reopening preview.
+        controller._go("easycon_recording", "practice")
+        controller.next()
+        assert controller.step == "auto_script_config"
+        window.tabs.setCurrentWidget(panel)
+        controller.previous()
+        assert controller.step == "easycon_recording" and controller.detail == "practice"
         assert window.easycon_tab.editor.toPlainText() == original
     finally:
         if window._picture_in_picture is not None:
             window._picture_in_picture.close()
 
 
-def test_recording_preview_resumes_and_previous_returns_to_its_last_action(guided):
+def test_preview_resumes_and_previous_from_intro_returns_to_preview(guided):
     window, panel, controller = guided
-    controller._go("easycon_recording", "preview")
+    controller._go("script_preview")
     session = app_settings.get_guide_progress()["session_id"]
     controller.pause()
     window.tabs.setCurrentWidget(window.easycon_tab)
     controller.begin_or_resume()
-    assert controller.step == "easycon_recording" and controller.detail == "preview"
+    assert controller.step == "script_preview"
     assert controller.overlay.waiting_for_page
     assert controller.easycon_demo_dialog is None
     window.tabs.setCurrentWidget(window.project_xs_tab)
     controller.previous()
-    assert controller.detail == "practice"
-    window.tabs.setCurrentWidget(window.easycon_tab)
+    assert controller.step == "auto_flow_config"
     controller.next()
-    window.tabs.setCurrentWidget(window.project_xs_tab)
+    assert controller.step == "script_preview"
     try:
         window.picture_in_picture_button.click()
-        assert controller.step == "auto_script_config"
-        window.tabs.setCurrentWidget(panel)
+        assert controller.step == "easycon_intro"
+        window.tabs.setCurrentWidget(window.easycon_tab)
         controller.previous()
-        assert controller.step == "easycon_recording" and controller.detail == "preview"
+        assert controller.step == "script_preview"
         window.tabs.setCurrentWidget(window.project_xs_tab)
         # An already open preview can be brought forward with the same button.
         assert window._picture_in_picture.isVisible()
         preview = window._picture_in_picture
         window.picture_in_picture_button.click()
-        assert controller.step == "auto_script_config"
+        assert controller.step == "easycon_intro"
         assert window._picture_in_picture is preview
         assert app_settings.get_guide_progress()["session_id"] == session
     finally:
         if window._picture_in_picture is not None:
             window._picture_in_picture.close()
+
+
+def test_old_recording_preview_progress_resumes_after_finished_recording(guided):
+    window, panel, controller = guided
+    controller.pause()
+    progress = app_settings.advance_guide_progress("easycon_recording", "preview")
+    window.tabs.setCurrentWidget(panel)
+    controller.begin_or_resume()
+    assert controller.step == "auto_script_config" and controller.detail == ""
+    assert not controller.overlay.waiting_for_page
+    assert controller.easycon_demo_dialog is None
+    assert app_settings.get_guide_progress()["session_id"] == progress["session_id"]
+    assert app_settings.get_guide_progress()["step"] == "auto_script_config"
 
 
 def test_guide_text_survives_scrollbars_width_changes_and_shorter_steps(guided):

@@ -118,7 +118,7 @@ GUIDE_STEPS = (
     "shiny_threshold", "sync", "auto_reverse", "correction_strategy",
     "save_config", "task_configured", "connect_devices", "devices_connected",
     "seed_capture_page", "seed_capture_config", "seed_capture_actions",
-    "seed_capture_tools", "seed_capture_save", "auto_flow_config",
+    "seed_capture_tools", "seed_capture_save", "auto_flow_config", "script_preview",
     "easycon_intro", "easycon_recording", "auto_script_config", "easycon_script_config",
 )
 

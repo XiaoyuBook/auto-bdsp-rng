@@ -32,7 +32,7 @@ def demo(app, monkeypatch):
     parent.deleteLater()
 
 
-def test_native_recording_w_moves_report_and_streams_commands(demo):
+def test_native_recording_wasd_moves_report_and_streams_commands(demo):
     panel = demo.panel
     initial = panel.editor.toPlainText()
     assert not demo.vpad_proxy.isVisible()
@@ -45,21 +45,36 @@ def test_native_recording_w_moves_report_and_streams_commands(demo):
     demo.advance_to(5000)
     assert panel.record_btn.text() == "停止录制"
     assert panel.recording_state_label.text() == "录制中"
-    demo.advance_to(7400)
-    assert demo.keyboard.down
-    assert demo.backend.get_report().ly == 1
-    assert demo.vpad.report.ly == 1
-    assert panel.editor.toPlainText() == initial + "LS UP\n"
-    assert panel.script_save_state_label.text() == "未保存"
-    demo.advance_to(9200)
-    assert not demo.keyboard.down
-    assert demo.vpad.report.ly == 128
-    assert panel.editor.toPlainText() == initial + "LS UP\nWAIT 1800\nLS RESET\n"
-    demo.advance_to(11600)
-    assert panel.editor.toPlainText() == initial + "LS UP\nWAIT 1800\nLS RESET\n"
+    expected = initial
+    for start, key, command, position in (
+        (7400, "W", "UP", (128, 1)),
+        (9900, "A", "LEFT", (1, 128)),
+        (12400, "S", "DOWN", (128, 255)),
+        (14900, "D", "RIGHT", (255, 128)),
+    ):
+        if start != 7400:
+            expected += "WAIT 1000\n"
+        expected += f"LS {command}\n"
+        demo.advance_to(start)
+        assert demo.keyboard.pressed_key == key
+        assert (demo.backend.get_report().lx, demo.backend.get_report().ly) == position
+        assert (demo.vpad.report.lx, demo.vpad.report.ly) == position
+        assert panel.editor.toPlainText() == expected
+        assert panel.script_save_state_label.text() == "未保存"
+        demo.advance_to(start + 1499)
+        assert demo.keyboard.pressed_key == key
+        assert panel.editor.toPlainText() == expected
+        demo.advance_to(start + 1500)
+        expected += "WAIT 1500\nLS RESET\n"
+        assert not demo.keyboard.down
+        assert (demo.vpad.report.lx, demo.vpad.report.ly) == (128, 128)
+        assert panel.editor.toPlainText() == expected
+    assert panel._recording
+    demo.advance_to(20100)
+    assert panel.editor.toPlainText() == expected
     assert panel.record_btn.text() == "开始录制"
     assert panel.script_save_state_label.text() == "未保存"
-    demo.advance_to(22700)
+    demo.advance_to(31200)
     assert not demo.vpad_proxy.isVisible()
     assert panel.script_save_state_label.text() == "已保存"
     assert panel._keyboard_hook is None
@@ -75,8 +90,8 @@ def test_pause_replay_and_exit_release_memory_device(demo):
     assert demo.elapsed == before
     assert demo.keyboard.down
     demo.toggle_playing()
-    demo.advance_to(11600)
-    assert "WAIT 1800" in demo.panel.editor.toPlainText()
+    demo.advance_to(20100)
+    assert demo.panel.editor.toPlainText().count("WAIT 1500") == 4
     demo.restart()
     demo.timer.stop()
     assert "LS UP" not in demo.panel.editor.toPlainText()

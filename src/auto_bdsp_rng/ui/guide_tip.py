@@ -157,17 +157,24 @@ class GuideTip(QFrame):
         self.range_options.hide()
         self.scroll.setWidget(self.body)
         layout.addWidget(self.scroll, 1)
-        controls = QHBoxLayout()
+        self.status = QLabel("脚本运行中，请观察独立预览；结束后可确认结果。")
+        self.status.setObjectName("GuideFeedback")
+        self.status.setWordWrap(True)
+        self.status.hide()
+        layout.addWidget(self.status)
+        controls = QGridLayout()
+        self.controls = controls
+        self.script_confirmation = False
         controls.setSpacing(8)
         self.previous_button = QPushButton("上一步")
         self.next_button = QPushButton("下一步")
         self.next_button.setObjectName("GuideNext")
         self.skip_button = QPushButton("跳过讲解")
         self.skip_button.setObjectName("GuideSkip")
-        controls.addWidget(self.previous_button)
-        controls.addWidget(self.next_button)
-        controls.addStretch(1)
-        controls.addWidget(self.skip_button)
+        controls.addWidget(self.previous_button, 0, 0)
+        controls.addWidget(self.next_button, 0, 1)
+        controls.setColumnStretch(2, 1)
+        controls.addWidget(self.skip_button, 0, 3)
         for button in (self.previous_button, self.next_button, self.skip_button, self.close_button):
             button.setAutoDefault(False)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -189,6 +196,10 @@ class GuideTip(QFrame):
         width = self.contentsRect().width() - margins.left() - margins.right()
         natural = self._measure_body(width)
         chrome = 34 + 28 + 36 + max(34, self.next_button.sizeHint().height()) + 18
+        if self.script_confirmation:
+            chrome += self.skip_button.sizeHint().height() + self.controls.spacing()
+            self.status.setFixedHeight(max(42, self.status.heightForWidth(width)))
+            chrome += self.status.height() + self.layout().spacing()
         height = min(natural + chrome, max(chrome + 50, available))
         scrolling = natural + chrome > height
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn if scrolling else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -212,6 +223,7 @@ class GuideTip(QFrame):
         return max(self.body_layout.totalHeightForWidth(width), self.body_layout.sizeHint().height())
 
     def show_step(self, spec, *, search: bool = False) -> None:
+        self.set_script_confirmation(getattr(spec, "script_confirmation", False))
         self.step.setText(spec.caption)
         self.title.setText(spec.title)
         # GuideStep.copy may contain small, static emphasis spans for key
@@ -220,6 +232,25 @@ class GuideTip(QFrame):
         self.copy.setText(spec.copy.replace("\n", "<br>"))
         self.range_options.setVisible(search)
         self.scroll.verticalScrollBar().setValue(0)
+
+    def set_script_confirmation(self, enabled: bool) -> None:
+        if self.script_confirmation == enabled:
+            return
+        self.script_confirmation = enabled
+        self.status.setVisible(enabled)
+        for button in (self.previous_button, self.next_button, self.skip_button):
+            self.controls.removeWidget(button)
+        self.controls.setColumnStretch(0, int(enabled))
+        self.controls.setColumnStretch(1, int(enabled))
+        self.controls.setColumnStretch(2, int(not enabled))
+        if enabled:
+            self.controls.addWidget(self.next_button, 0, 0)
+            self.controls.addWidget(self.previous_button, 0, 1)
+            self.controls.addWidget(self.skip_button, 1, 0, 1, 2)
+        else:
+            self.controls.addWidget(self.previous_button, 0, 0)
+            self.controls.addWidget(self.next_button, 0, 1)
+            self.controls.addWidget(self.skip_button, 0, 3)
 
     def reset_range(self) -> None:
         for button in self.presets.values():

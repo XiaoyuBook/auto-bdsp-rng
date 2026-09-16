@@ -19,6 +19,8 @@ class GuideStep:
     copy: str
     target: QWidget
     highlights: tuple[QWidget, ...]
+    separate_highlights: bool = False
+    script_confirmation: bool = False
 
 
 def _row(form, field: QWidget) -> tuple[QWidget, ...]:
@@ -27,6 +29,12 @@ def _row(form, field: QWidget) -> tuple[QWidget, ...]:
 
 
 def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
+    if key == "script_preview":
+        window = panel.window()
+        return GuideStep(key, "5.1 · 准备操作", "先打开独立预览",
+                         "点击亮起的「独立预览」，把游戏画面放到独立窗口中。切换到伊机控后，也能继续观察游戏画面。\n"
+                         "打开后，我们再认识伊机控，并学习录制和配置脚本。",
+                         window.picture_in_picture_button, (window.picture_in_picture_button,))
     if key == "easycon_intro":
         window = panel.window()
         easycon = window.easycon_tab
@@ -37,23 +45,16 @@ def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
     if key == "easycon_recording":
         window = panel.window()
         easycon = window.easycon_tab
-        if detail == "preview":
-            return GuideStep(key, "5.2 · 脚本录制", "最后，打开独立预览",
-                             "点击亮起的「独立预览」，把游戏画面放到独立窗口中，方便接下来调整和测试脚本时观察画面。\n"
-                             "打开后，继续设置自动流程使用的脚本。",
-                             window.picture_in_picture_button, (window.picture_in_picture_button,))
         if detail == "practice":
             return GuideStep(key, "5.2 · 脚本录制", "现在由你录制一小段操作",
                              "先把键盘控制切到「控制」，点击「开始录制」，按映射键完成操作，再点「停止录制」。\n"
-                             "操作命令会实时追加到当前脚本末尾；松开按键时会补上保持时长和松开命令。停止录制后可以编辑；确认无误后点击下一步，前往 Seed 捕捉页打开独立预览。",
+                             "操作命令会实时追加到当前脚本末尾；松开按键时会补上保持时长和松开命令。停止录制后可以编辑；确认无误后点击下一步，继续设置自动流程使用的脚本。",
                              easycon.record_btn, (easycon.controller_mode_buttons["active"], easycon.record_btn))
         return GuideStep(key, "5.2 · 脚本录制", "脚本录制动画准备中", "观看动画后，在真实伊机控页面完成一次录制。",
                          easycon.record_btn, (easycon.record_btn,))
     if key == "auto_script_config":
-        return GuideStep(key, "5.3 · 自动流程脚本配置", "为自动流程选择脚本",
-                         "自动流程中的每个脚本下拉框对应一个阶段：测种、过帧、撞闪、过场、反查和逃跑。\n"
-                         "先从下拉框选择脚本；带有铅笔按钮的项目可以直接打开并编辑。过场目标的配置请结合手动乱数教学视频确认。",
-                         panel.runtime_script_card, (panel.runtime_script_card,))
+        from auto_bdsp_rng.ui.script_guide_steps import script_step
+        return script_step(panel, detail)
     if key == "easycon_script_config":
         easycon = panel.window().easycon_tab
         return GuideStep(key, "5.4 · 脚本配置", "在编辑器中检查并保存脚本",

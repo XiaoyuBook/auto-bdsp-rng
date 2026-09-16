@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import cos, pi
 from pathlib import Path
 from time import monotonic
 
@@ -16,6 +17,16 @@ from auto_bdsp_rng.automation.easycon.native.device import MemoryTransport, Nint
 from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
 from auto_bdsp_rng.ui.controller_overlay import ControllerStateOverlay
 from auto_bdsp_rng.ui.easycon_panel import EasyConPanel
+
+
+RECORD_START_MS = 5000
+HOLD_MS = 1500
+INPUT_ACTIONS = (
+    (7400, Qt.Key.Key_W, "W", "UP", "向上 ↑"),
+    (9900, Qt.Key.Key_A, "A", "LEFT", "向左 ←"),
+    (12400, Qt.Key.Key_S, "S", "DOWN", "向下 ↓"),
+    (14900, Qt.Key.Key_D, "D", "RIGHT", "向右 →"),
+)
 
 
 class _LessonPanel(EasyConPanel):
@@ -48,28 +59,50 @@ class _LessonPanel(EasyConPanel):
 class _Keyboard(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setFixedSize(224, 164)
+        self.setFixedSize(280, 196)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.down = False
+        self.pressed_key: str | None = None
+        self.progress = 0.0
+        self.pulse = 0.0
+        self.caption = "W / A / S / D · 各 1.5 秒"
+
+    @property
+    def down(self) -> bool:
+        return self.pressed_key is not None
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setFont(self.font())
+        font = self.font()
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#F1F7F3"))
         p.drawRoundedRect(QRectF(self.rect()), 10, 10)
-        for key, x, y in (("W", 80, 6), ("A", 22, 64), ("S", 80, 64), ("D", 138, 64)):
-            pressed = key == "W" and self.down
-            r = QRectF(x, y + (3 if pressed else 0), 50, 48)
+        for key, x, y in (("W", 108, 8), ("A", 34, 76), ("S", 108, 76), ("D", 182, 76)):
+            pressed = key == self.pressed_key
+            r = QRectF(x, y + (3 if pressed else 0), 64, 56)
+            if pressed:
+                p.setPen(QPen(QColor(4, 184, 135, int(110 + self.pulse * 100)), 2.5))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                margin = 3 + self.pulse * 3
+                p.drawRoundedRect(r.adjusted(-margin, -margin, margin, margin), 11, 11)
             p.setPen(QPen(QColor("#087C58" if pressed else "#CFDAD5"), 1.5))
-            p.setBrush(QColor("#087C58" if pressed else "#FFFFFF"))
+            p.setBrush(QColor("#04A878" if pressed else "#FFFFFF"))
             p.drawRoundedRect(r, 8, 8)
             p.setPen(QColor("white" if pressed else "#30483F"))
+            font.setPixelSize(24)
+            font.setBold(pressed)
+            p.setFont(font)
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, key)
+        font.setPixelSize(14)
+        font.setBold(False)
+        p.setFont(font)
         p.setPen(QColor("#087C58"))
-        p.drawText(QRectF(0, 129, 224, 28), Qt.AlignmentFlag.AlignCenter,
-                   "W 按住 · 左摇杆向上" if self.down else "默认映射 · WASD 控制左摇杆")
+        p.drawText(QRectF(0, 142, 280, 26), Qt.AlignmentFlag.AlignCenter, self.caption)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#D4E6DC"))
+        p.drawRoundedRect(QRectF(24, 179, 232, 6), 3, 3)
+        p.setBrush(QColor("#04A878"))
+        p.drawRoundedRect(QRectF(24, 179, 232 * self.progress, 6), 3, 3)
 
 
 class _LessonView(QGraphicsView):
@@ -97,16 +130,27 @@ class _LessonView(QGraphicsView):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         mask = QPainterPath()
         mask.setFillRule(Qt.FillRule.OddEvenFill)
-        mask.addRect(QRectF(self.lesson.panel.rect()))
+        mask.addRect(self.sceneRect())
         holes = d.highlight_rects()
         for r in holes:
             mask.addRoundedRect(r, 7, 7)
-        p.fillPath(mask, QColor(0, 0, 0, 125))
+        p.fillPath(mask, QColor(0, 0, 0, 150))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.setPen(QPen(QColor("#61D8AB"), 1.6))
         for r in holes:
             p.drawRoundedRect(r, 7, 7)
+        if d.input_focus_active():
+            p.setPen(QPen(QColor(97, 216, 171, int(130 + d.keyboard.pulse * 100)), 3))
+            for target in ("keyboard", "vpad"):
+                p.drawRoundedRect(d.rect_for(target), 7, 7)
+            start = QPointF(d.rect_for("keyboard").center().x(), d.rect_for("keyboard").bottom() + 10)
+            end = QPointF(start.x(), d.rect_for("vpad").top() - 10)
+            p.drawLine(start, end)
+            p.drawLine(end, end + QPointF(-7, -8))
+            p.drawLine(end, end + QPointF(7, -8))
         cursor, ripple = d.cursor_state()
+        if cursor is None:
+            return
         if ripple > 0:
             p.setPen(QPen(QColor(8, 124, 88, int(200 * (1 - ripple))), 2))
             radius = 7 + ripple * 16
@@ -131,9 +175,9 @@ class _Step:
 STEPS = (
     _Step(3500, "开启控制，显示虚拟手柄", "点击「控制」后，虚拟手柄出现；接下来可以开始录制。", "active"),
     _Step(3000, "点击「开始录制」", "按钮会变成「停止录制」，左侧状态显示「录制中」。", "record"),
-    _Step(3500, "按住 W，看命令实时出现", "按下 W 立即出现 LS UP；松开后回中，并补上 WAIT 保持时长和 LS RESET。", "record"),
-    _Step(3500, "停止录制，保留已生成的脚本", "命令已实时追加到编辑器。停止录制后可以编辑，内容不会重复插入。", "record"),
-    _Step(4800, "读懂刚刚录下的三行", "LS UP：左摇杆向上；WAIT 1800：保持 1.8 秒；LS RESET：松开并回中。", "code"),
+    _Step(12000, "看右侧：依次按下 W、A、S、D", "每个方向按住 1.5 秒，再松开观察摇杆回中。新生成的脚本行会随操作逐行亮起。", "keyboard"),
+    _Step(3500, "点击「停止录制」", "先结束本次录制。按钮会变回「开始录制」，已录下的命令会保留在脚本中。", "record"),
+    _Step(4800, "读懂刚刚录下的四个方向", "LS UP / LEFT / DOWN / RIGHT 对应上、左、下、右；WAIT 1500 是按住 1.5 秒，LS RESET 是回中，WAIT 1000 是动作间隔。", "code"),
     _Step(2800, "关闭键盘控制", "结束操作后切回「关闭」，虚拟手柄收起，可以继续编辑脚本。", "off"),
     _Step(3400, "最后保存脚本", "保存后再到自动流程选择它。左侧「暂停」暂停录制；顶部「暂停」暂停脚本执行。", "save"),
 )
@@ -168,27 +212,32 @@ class EasyConRecordDemoDialog(QDialog):
             action.setEnabled(False)
         self.panel.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.scene = QGraphicsScene(self)
-        self.scene.setSceneRect(0, 0, 1320, 650)
+        self.scene.setSceneRect(0, 0, 1410, 650)
         self.proxy = self.scene.addWidget(self.panel)
         self.keyboard = _Keyboard()
         self.keyboard_proxy = self.scene.addWidget(self.keyboard)
-        self.keyboard_proxy.setPos(1074, 50)
+        self.keyboard_proxy.setPos(1090, 54)
         self.vpad = ControllerStateOverlay(self.backend.get_report, connected_provider=lambda: True)
         self.vpad.setWindowFlags(Qt.WindowType.Widget)
         self.vpad.setWindowOpacity(1)
         self.vpad.set_active(True)
         self.vpad_proxy = self.scene.addWidget(self.vpad)
-        self.vpad_proxy.setPos(1090, 314)
-        self.vpad_proxy.setScale(2)
+        self.vpad_proxy.setPos(1105, 352)
+        self.vpad_proxy.setScale(2.5)
         self.pad_title = self.scene.addText("虚拟手柄")
         self.pad_title.setDefaultTextColor(QColor("#BDD7C9"))
-        self.pad_title.setPos(1080, 278)
+        self.pad_title.setPos(1100, 316)
         self.pad_caption = self.scene.addText("开启控制后显示虚拟手柄")
         self.pad_caption.setDefaultTextColor(QColor("#BDD7C9"))
-        self.pad_caption.setPos(1078, 546)
+        self.pad_caption.setPos(1100, 606)
         self.key_caption = self.scene.addText("键盘输入")
         self.key_caption.setDefaultTextColor(QColor("#BDD7C9"))
-        self.key_caption.setPos(1080, 16)
+        self.key_caption.setPos(1090, 16)
+        for label in (self.key_caption, self.pad_title, self.pad_caption):
+            font = label.font()
+            font.setPixelSize(16)
+            font.setBold(True)
+            label.setFont(font)
         self.view = _LessonView(self.scene, self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -223,12 +272,13 @@ class EasyConRecordDemoDialog(QDialog):
         layout.addLayout(actions)
         self.events = (
             (1900, lambda: self.panel.controller_mode_buttons["active"].click()),
-            (5000, self.panel.record_btn.click),
-            (7400, lambda: self.panel._handle_virtual_controller_key(Qt.Key.Key_W, True)),
-            (9200, lambda: self.panel._handle_virtual_controller_key(Qt.Key.Key_W, False)),
-            (11600, self.panel.record_btn.click),
-            (19700, lambda: self.panel.controller_mode_buttons["off"].click()),
-            (22700, self.panel.save_button.click),
+            (RECORD_START_MS, self.panel.record_btn.click),
+            *((at, lambda key=key, down=down: self.panel._handle_virtual_controller_key(key, down))
+              for start, key, *_ in INPUT_ACTIONS
+              for at, down in ((start, True), (start + HOLD_MS, False))),
+            (20100, self.panel.record_btn.click),
+            (28200, lambda: self.panel.controller_mode_buttons["off"].click()),
+            (31200, self.panel.save_button.click),
         )
         self.total = sum(s.duration for s in STEPS)
         self.timer = QTimer(self)
@@ -288,21 +338,48 @@ class EasyConRecordDemoDialog(QDialog):
         return len(STEPS) - 1, STEPS[-1].duration
 
     def rect_for(self, target: str) -> QRectF:
+        if target == "keyboard":
+            return self.keyboard_proxy.sceneBoundingRect().adjusted(-10, -40, 10, 6)
+        if target == "vpad":
+            return self.vpad_proxy.sceneBoundingRect().adjusted(-18, -40, 18, 34)
+        if target == "live_code":
+            editor = self.panel.editor
+            document = editor.document()
+            first = document.findBlockByNumber(document.blockCount() - len(self.panel._recorded_lines) - 1)
+            last = document.lastBlock().previous()
+            top = editor.blockBoundingGeometry(first).translated(editor.contentOffset()).top()
+            bottom = editor.blockBoundingGeometry(last).translated(editor.contentOffset()).bottom()
+            origin = editor.viewport().mapTo(self.panel, QPoint())
+            lines = QRectF(origin.x(), origin.y() + top, editor.viewport().width(), bottom - top).adjusted(0, -3, 0, 3)
+            viewport = QRectF(origin.x(), origin.y(), editor.viewport().width(), editor.viewport().height())
+            return lines.intersected(viewport)
         widget = {"active": self.panel.controller_mode_buttons["active"],
                   "off": self.panel.controller_mode_buttons["off"],
                   "record": self.panel.record_btn, "save": self.panel.save_button,
                   "code": self.panel.editor}[target]
         return QRectF(widget.mapTo(self.panel, QPoint()), widget.size()).adjusted(-4, -4, 4, 4)
 
+    def input_focus_active(self) -> bool:
+        i, _ = self.step_position()
+        return i == 2 or (i == 1 and self.panel._recording)
+
     def highlight_rects(self) -> list[QRectF]:
         i, _ = self.step_position()
+        if self.input_focus_active():
+            rects = [self.rect_for("keyboard"), self.rect_for("vpad")]
+            if i == 2 and self.panel._recorded_lines:
+                rects.append(self.rect_for("live_code"))
+            return rects
         rects = [self.rect_for(STEPS[i].target)]
-        if i in (2, 3):
-            rects.append(self.rect_for("code"))
+        if i == 0 and self.panel.virtual_controller_enabled:
+            rects.append(self.rect_for("vpad"))
         return rects
 
-    def cursor_state(self) -> tuple[QPointF, float]:
+    def cursor_state(self) -> tuple[QPointF | None, float]:
         i, t = self.step_position()
+        # A keyboard press has no mouse click. Let the key and stick own this phase.
+        if self.input_focus_active() and self.elapsed >= RECORD_START_MS + 500:
+            return None, 0.0
         start = self.rect_for(STEPS[i - 1].target).center() if i else QPointF(520, 420)
         end = self.rect_for(STEPS[i].target).center()
         p = min(1, t / 1000)
@@ -317,12 +394,33 @@ class EasyConRecordDemoDialog(QDialog):
         self.caption.setText(f"5.2 · 脚本录制演示　{i + 1} / {len(STEPS)}")
         self.title.setText(STEPS[i].title)
         self.copy.setText(STEPS[i].copy)
-        self.keyboard.down = Qt.Key.Key_W in self.panel.virtual_controller_keys
+        if i == 1 and self.panel._recording:
+            self.title.setText("录制已开始，看右侧键盘和手柄")
+            self.copy.setText("接下来依次按 W、A、S、D，每个按住 1.5 秒。观察键盘、摇杆和新增脚本如何一起变化。")
+        if i == 3 and not self.panel._recording:
+            self.title.setText("录制已停止")
+            self.copy.setText("按钮已变回「开始录制」。刚才的操作已经录好，接下来检查生成的脚本。")
+        action = next((action for action in INPUT_ACTIONS if action[1] in self.panel.virtual_controller_keys), None)
+        latest = next((action for action in reversed(INPUT_ACTIONS) if self.elapsed >= action[0]), None)
+        self.keyboard.pressed_key = action[2] if action else None
+        held_ms = max(0, min(HOLD_MS, self.elapsed - latest[0])) if latest else 0
+        self.keyboard.progress = held_ms / HOLD_MS
+        self.keyboard.pulse = (1 - cos(2 * pi * self.elapsed / 1400)) / 2
+        self.keyboard.caption = (f"按住 {action[2]} · {held_ms / 1000:.1f} / 1.5 秒" if action else
+                                 f"{latest[2]} 已松开 · 摇杆回中" if latest else "W / A / S / D · 各 1.5 秒")
+        if i == 2 and action:
+            self.title.setText(f"按住 {action[2]}，左摇杆{action[4]}")
+            self.copy.setText(f"{action[2]} 键亮起，左摇杆{action[4]}，保持 1.5 秒。脚本立即新增 LS {action[3]}，已有录制内容继续亮着。")
+        elif i == 2 and latest:
+            self.title.setText(f"松开 {latest[2]}，观察左摇杆回中")
+            self.copy.setText("按键恢复原色，左摇杆回到中央。新补上的 WAIT 1500 和 LS RESET 与前面的录制内容一起亮起。")
         self.keyboard.update()
         self.vpad.refresh_state()
         self.vpad_proxy.setVisible(self.panel.virtual_controller_enabled)
-        self.pad_caption.setPlainText("左摇杆 ↑" if self.keyboard.down else
+        self.pad_caption.setPlainText(f"左摇杆{action[4]} · 1.5 秒" if action else
                                       "左摇杆已回中" if self.panel.virtual_controller_enabled else "开启控制后显示虚拟手柄")
+        for label in (self.key_caption, self.pad_title, self.pad_caption):
+            label.setDefaultTextColor(QColor("#7AF0BD" if self.input_focus_active() else "#BDD7C9"))
         self.view.viewport().update()
 
     def toggle_playing(self) -> None:

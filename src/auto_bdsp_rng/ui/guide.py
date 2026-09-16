@@ -15,6 +15,7 @@ from auto_bdsp_rng.app_settings import GUIDE_STEPS, LEGACY_GUIDE_STEPS, advance_
 from auto_bdsp_rng.ui.guide_steps import GuideStep, connection_dialog_steps, dialog_steps, workspace_step
 from auto_bdsp_rng.ui.guide_tip import GuideTip
 from auto_bdsp_rng.ui.eye_guide import EyeGuide
+from auto_bdsp_rng.ui.script_guide import ScriptGuide
 from auto_bdsp_rng.ui.easycon_record_demo_dialog import EasyConRecordDemoDialog
 
 
@@ -34,6 +35,7 @@ class GuideSpotlight(QWidget):
         self.setObjectName("GuideSpotlight")
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.hole = QRectF()
+        self.holes: tuple[QRectF, ...] = ()
         self.arrow_start = QPointF()
         self.arrow_end = QPointF()
         self.tip = GuideTip(self)
@@ -135,24 +137,32 @@ class GuideSpotlight(QWidget):
             return
         target = self.focus_target
         ancestor = target.parentWidget()
+        ancestors = []
         while ancestor is not None:
+            ancestors.append(ancestor)
+            ancestor = ancestor.parentWidget()
+        for ancestor in reversed(ancestors):
             if ancestor.layout() is not None:
                 ancestor.layout().activate()
+        for ancestor in ancestors:
             if isinstance(ancestor, QScrollArea):
                 ancestor.ensureWidgetVisible(target, 12, 12)
-            ancestor = ancestor.parentWidget()
 
     def reposition(self) -> bool:
         self.setGeometry(self.parentWidget().rect())
         if self.suspended:
             self.hole = QRectF()
+            self.holes = ()
             self.setMask(QRegion(self.rect()))
             self.update()
             return True
         self._ensure_target_visible()
         margin = 20 if self.dialog is not None else 12
         bounds = self.rect().adjusted(margin, margin, -margin, -margin)
-        width = 300 if self.spec.target is self.main_window.preview_label else (400 if self.dialog is not None else 338)
+        script_running = (self.spec.key == "auto_script_config" and not self.waiting_for_page
+                          and self.spec.separate_highlights)
+        width = 250 if script_running else 300 if self.spec.target is self.main_window.preview_label else (400 if self.dialog is not None else 338)
+        side_gap = 10 if script_running else 44
         self.tip.setFixedWidth(min(width, bounds.width()))
         self.tip.fit_height(bounds.height())
         chosen = None
@@ -169,8 +179,8 @@ class GuideSpotlight(QWidget):
             x = max(bounds.left(), min(int(hole.center().x()) - width // 2, bounds.right() - width + 1))
             y = max(bounds.top(), min(int(hole.top()), bounds.bottom() - height + 1))
             candidates = (
-                QRect(int(hole.right()) + 44, y, width, height),
-                QRect(int(hole.left()) - width - 44, y, width, height),
+                QRect(int(hole.right()) + side_gap, y, width, height),
+                QRect(int(hole.left()) - width - side_gap, y, width, height),
                 QRect(x, int(hole.bottom()) + 24, width, height),
                 QRect(x, int(hole.top()) - height - 24, width, height),
             )
@@ -194,6 +204,7 @@ class GuideSpotlight(QWidget):
             # Do not draw an opening at an unclipped coordinate: it could expose
             # an unrelated control while the anchor is outside its viewport.
             self.hole = QRectF()
+            self.holes = ()
             self.tip.hide()
             self.setMask(QRegion(self.rect()))
             self.update()
@@ -215,8 +226,12 @@ class GuideSpotlight(QWidget):
             below = chosen.top() > self.hole.bottom()
             self.arrow_start = QPointF(x, chosen.top() if below else chosen.bottom())
             self.arrow_end = QPointF(target_center.x(), self.hole.bottom() + 7 if below else self.hole.top() - 7)
+        self.holes = tuple(self._target_rect(widget).intersected(QRectF(self.rect()))
+                           for widget in group if widget.isVisible()) if self.spec.separate_highlights and not self.waiting_for_page else (self.hole,)
         opening = QPainterPath()
-        opening.addRoundedRect(self.hole.adjusted(2, 2, -2, -2), 9, 9)
+        opening.setFillRule(Qt.FillRule.WindingFill)
+        for rect in self.holes:
+            opening.addRoundedRect(rect.adjusted(2, 2, -2, -2), 9, 9)
         self.setMask(QRegion(self.rect()).subtracted(QRegion(opening.toFillPolygon().toPolygon())))
         self.update()
         return True
@@ -225,15 +240,17 @@ class GuideSpotlight(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         shade = QPainterPath()
-        shade.setFillRule(Qt.FillRule.OddEvenFill)
         shade.addRect(QRectF(self.rect()))
-        if not self.hole.isEmpty():
-            shade.addRoundedRect(self.hole, 11, 11)
+        opening = QPainterPath()
+        opening.setFillRule(Qt.FillRule.WindingFill)
+        for rect in self.holes:
+            opening.addRoundedRect(rect, 11, 11)
+        shade = shade.subtracted(opening)
         painter.fillPath(shade, QColor(0, 0, 0, 168))
         if self.hole.isEmpty():
             return
         painter.setPen(QPen(QColor("#83E8BF"), 2))
-        painter.drawRoundedRect(self.hole, 11, 11)
+        painter.drawPath(opening)
         painter.setPen(QPen(QColor("#A2EBCD"), 2))
         painter.drawLine(self.arrow_start, self.arrow_end)
         delta = self.arrow_end - self.arrow_start
@@ -281,6 +298,7 @@ class GuideController(QObject):
         window.video_source_header_button.clicked.connect(lambda: self._connection_dialog_opened("video_source"))
         window.easycon_header_button.clicked.connect(lambda: self._connection_dialog_opened("easycon"))
         self.eye_guide = EyeGuide(self)
+        self.script_guide = ScriptGuide(self)
         self.easycon_demo_dialog: EasyConRecordDemoDialog | None = None
         self.refresh()
 
@@ -328,6 +346,16 @@ class GuideController(QObject):
         elif self.step == "capture_overview_done":
             try:
                 progress = advance_guide_progress("auto_flow_config")
+            except (OSError, ValueError):
+                QMessageBox.warning(self.window, "无法继续引导", "无法更新引导进度，请检查设置目录是否可写后重试。")
+                return
+            self.step = progress["step"]
+            self.detail = progress.get("detail", "")
+        elif self.step == "easycon_recording" and self.detail == "preview":
+            # This session already finished the introduction and recording.
+            # The preview now precedes them; resume at script configuration.
+            try:
+                progress = advance_guide_progress("auto_script_config")
             except (OSError, ValueError):
                 QMessageBox.warning(self.window, "无法继续引导", "无法更新引导进度，请检查设置目录是否可写后重试。")
                 return
@@ -389,12 +417,10 @@ class GuideController(QObject):
     def _show_workspace(self) -> None:
         if not self.active or self.window._is_closing:
             return
-        if self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save", "auto_flow_config"):
-            page = self.window.project_xs_tab
-        elif self.step == "easycon_recording" and self.detail == "preview":
+        if self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save", "auto_flow_config", "script_preview"):
             page = self.window.project_xs_tab
         elif self.step == "auto_script_config":
-            page = self.panel
+            page = self.script_guide.page()
         elif self.step in ("easycon_intro", "easycon_recording", "easycon_script_config"):
             page = self.window.easycon_tab
         else:
@@ -404,6 +430,8 @@ class GuideController(QObject):
             return
         waiting = self.window.tabs.currentWidget() is not page
         self.overlay.page_widget = page
+        if self.script_guide.prepare():
+            return
         if not waiting and self.eye_guide.prepare():
             return
         if not waiting and self.step == "easycon_recording" and self.detail == "demo":
@@ -421,11 +449,12 @@ class GuideController(QObject):
             self.detail = "video_source"
         spec = workspace_step(self.panel, self.step, self.detail)
         self.overlay.configure(spec, waiting_for_page=waiting)
-        if waiting and self.step == "easycon_recording" and self.detail == "preview":
-            self.overlay.title.setText("最后，打开独立预览")
+        if waiting and self.step == "script_preview":
+            self.overlay.title.setText("先打开独立预览")
             self.overlay.copy.setText("先点击亮起的「Seed 捕捉」标签，接着点击该页中的「独立预览」。")
         self.overlay.reveal()
         self._navigation()
+        self.script_guide.present()
         if self.step == "seed_capture_save":
             self.eye_guide.show_save_status()
         if self.step == "save_config" and self._config_saved:
@@ -459,26 +488,35 @@ class GuideController(QObject):
             else:
                 valid = self._connection_ready(self.detail or "video_source")
         tip.previous_button.setEnabled(not waiting and self.step != "target_selection")
+        tip.previous_button.setText("上一步")
+        tip.previous_button.show()
+        tip.skip_button.setText("跳过讲解")
+        tip.skip_button.show()
         tip.next_button.setEnabled(not waiting and valid and self.step not in ("preview_opened",) and (self.step != "save_config" or self._config_saved))
         tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured", "auto_flow_config", "easycon_script_config"))
         if self.step == "seed_capture_tools":
             tip.next_button.setText("观看演示" if not self.detail else "下一步")
             tip.next_button.setEnabled(not waiting and not self.detail)
-        elif self.step == "easycon_recording" and self.detail in ("demo", "preview"):
+        elif self.step == "script_preview":
             tip.next_button.setText("下一步")
             tip.next_button.setEnabled(False)
-            if self.detail == "preview":
-                tip.skip_button.setEnabled(False)
+            tip.skip_button.setEnabled(False)
+        elif self.step == "easycon_recording" and self.detail == "demo":
+            tip.next_button.setText("下一步")
+            tip.next_button.setEnabled(False)
         else:
             tip.next_button.setText("下一步")
         if self.step == "seed_capture_save":
             tip.next_button.setEnabled(not waiting and self.eye_guide.config_saved)
             tip.skip_button.setEnabled(False)
+        self.script_guide.navigation()
 
     def next(self) -> None:
         if not self.active or not self._current_overlay().tip.next_button.isEnabled():
             return
-        if self._dialog_key:
+        if self.step == "auto_script_config":
+            self.script_guide.next()
+        elif self._dialog_key:
             steps = connection_dialog_steps(self.panel, self._dialog_key) if self._dialog_key in ("video_source", "easycon") else dialog_steps(self.panel, self._dialog_key)
             index = next((i for i, spec in enumerate(steps) if spec.key == self.detail), 0)
             if index + 1 < len(steps):
@@ -500,13 +538,11 @@ class GuideController(QObject):
         elif self.step == "save_config":
             self._go("connect_devices", "video_source")
         elif self.step == "auto_flow_config":
-            self._go("easycon_intro")
+            self._go("script_preview")
         elif self.step == "easycon_intro":
             self._go("easycon_recording", "demo")
         elif self.step == "easycon_recording":
-            self._go("easycon_recording", "preview")
-        elif self.step == "auto_script_config":
-            self._go("easycon_script_config")
+            self._go("auto_script_config")
         elif self.step == "easycon_script_config":
             self.pause()
         elif self.step == "seed_capture_tools":
@@ -521,10 +557,8 @@ class GuideController(QObject):
             self.eye_guide.previous()
         elif self.step == "easycon_recording" and self.detail == "practice":
             self._go("easycon_intro")
-        elif self.step == "easycon_recording" and self.detail == "preview":
-            self._go("easycon_recording", "practice")
         elif self.step == "auto_script_config":
-            self._go("easycon_recording", "preview")
+            self.script_guide.previous()
         elif self.step == "easycon_script_config":
             self._go("auto_script_config")
         elif self._dialog_key:
@@ -550,12 +584,15 @@ class GuideController(QObject):
         if not self.active or not self._current_overlay().tip.skip_button.isEnabled():
             return
         self.eye_guide.cancel_selection()
+        if self.step == "auto_script_config":
+            self.script_guide.skip()
+            return
         if self.step == "target_selection":
             destination = "search_range"
         elif self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools"):
             destination = "seed_capture_save"
-        elif self.step in ("easycon_intro", "easycon_recording", "auto_script_config"):
-            destination = "easycon_script_config"
+        elif self.step in ("easycon_intro", "easycon_recording"):
+            destination = "auto_script_config"
         else:
             destination = "save_config"
         if self._dialog_key:
@@ -568,16 +605,17 @@ class GuideController(QObject):
             self._show_workspace()
 
     def _preview_opened(self) -> None:
-        if (self.active and self.step == "easycon_recording" and self.detail == "preview"
+        if (self.active and self.step == "script_preview"
                 and self.window.tabs.currentWidget() is self.window.project_xs_tab
                 and self.window._picture_in_picture is not None
                 and self.window._picture_in_picture.isVisible()):
-            self._go("auto_script_config")
+            self._go("easycon_intro")
 
     def pause(self) -> None:
         self.eye_guide.cancel_selection()
         self.active = False
         self.eye_guide.pause()
+        self.script_guide.pause()
         if self.easycon_demo_dialog is not None:
             self.easycon_demo_dialog.reject()
         self._connection_timer.stop()
@@ -761,6 +799,8 @@ class GuideController(QObject):
         return bool(self.panel.window()._video_source_connected)
 
     def _connection_status_changed(self, *args) -> None:
+        if self.active and self.step == "auto_script_config":
+            self.script_guide.poll()
         if self.active and self.step == "connect_devices":
             if self._dialog_key in ("video_source", "easycon"):
                 if self.detail == "connect" and self._connection_ready(self._dialog_key):
@@ -773,7 +813,9 @@ class GuideController(QObject):
     def _focusable(self, overlay: GuideSpotlight) -> list[QWidget]:
         target = overlay.focus_target
         # Preserve the original target → close order, then add navigation and choices.
-        candidates = [target, *target.findChildren(QWidget), overlay.close_button, *overlay.tip.findChildren(QWidget)]
+        targets = (target,) if overlay.waiting_for_page else overlay.spec.highlights
+        candidates = [widget for item in targets for widget in (item, *item.findChildren(QWidget))]
+        candidates.extend((overlay.close_button, *overlay.tip.findChildren(QWidget)))
         result = []
         for widget in candidates:
             if widget not in result and widget.isVisible() and widget.isEnabled() and widget.focusPolicy() != Qt.FocusPolicy.NoFocus:
@@ -814,7 +856,8 @@ class GuideController(QObject):
                     self.window.tabs.setCurrentWidget(overlay.page_widget)
                 return True
             target = overlay.focus_target
-            if obj is target or target.isAncestorOf(obj) or obj is overlay.tip or overlay.tip.isAncestorOf(obj):
+            allowed = (target,) if overlay.waiting_for_page else overlay.spec.highlights
+            if any(obj is item or item.isAncestorOf(obj) for item in (*allowed, overlay.tip)):
                 # Prevent QDialog's default button from accepting an unrelated row on Enter.
                 if self._dialog_key and event_type == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not isinstance(obj, QToolButton):
                     from PySide6.QtWidgets import QPushButton
