@@ -391,6 +391,8 @@ class GuideController(QObject):
             return
         if self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save", "auto_flow_config"):
             page = self.window.project_xs_tab
+        elif self.step == "easycon_recording" and self.detail == "preview":
+            page = self.window.project_xs_tab
         elif self.step == "auto_script_config":
             page = self.panel
         elif self.step in ("easycon_intro", "easycon_recording", "easycon_script_config"):
@@ -419,6 +421,9 @@ class GuideController(QObject):
             self.detail = "video_source"
         spec = workspace_step(self.panel, self.step, self.detail)
         self.overlay.configure(spec, waiting_for_page=waiting)
+        if waiting and self.step == "easycon_recording" and self.detail == "preview":
+            self.overlay.title.setText("最后，打开独立预览")
+            self.overlay.copy.setText("先点击亮起的「Seed 捕捉」标签，接着点击该页中的「独立预览」。")
         self.overlay.reveal()
         self._navigation()
         if self.step == "seed_capture_save":
@@ -459,8 +464,11 @@ class GuideController(QObject):
         if self.step == "seed_capture_tools":
             tip.next_button.setText("观看演示" if not self.detail else "下一步")
             tip.next_button.setEnabled(not waiting and not self.detail)
-        elif self.step == "easycon_recording" and self.detail == "demo":
+        elif self.step == "easycon_recording" and self.detail in ("demo", "preview"):
+            tip.next_button.setText("下一步")
             tip.next_button.setEnabled(False)
+            if self.detail == "preview":
+                tip.skip_button.setEnabled(False)
         else:
             tip.next_button.setText("下一步")
         if self.step == "seed_capture_save":
@@ -496,7 +504,7 @@ class GuideController(QObject):
         elif self.step == "easycon_intro":
             self._go("easycon_recording", "demo")
         elif self.step == "easycon_recording":
-            self._go("auto_script_config")
+            self._go("easycon_recording", "preview")
         elif self.step == "auto_script_config":
             self._go("easycon_script_config")
         elif self.step == "easycon_script_config":
@@ -513,8 +521,10 @@ class GuideController(QObject):
             self.eye_guide.previous()
         elif self.step == "easycon_recording" and self.detail == "practice":
             self._go("easycon_intro")
-        elif self.step == "auto_script_config":
+        elif self.step == "easycon_recording" and self.detail == "preview":
             self._go("easycon_recording", "practice")
+        elif self.step == "auto_script_config":
+            self._go("easycon_recording", "preview")
         elif self.step == "easycon_script_config":
             self._go("auto_script_config")
         elif self._dialog_key:
@@ -558,8 +568,11 @@ class GuideController(QObject):
             self._show_workspace()
 
     def _preview_opened(self) -> None:
-        if self.active and self.step == "independent_preview":
-            self._go("seed_capture_config")
+        if (self.active and self.step == "easycon_recording" and self.detail == "preview"
+                and self.window.tabs.currentWidget() is self.window.project_xs_tab
+                and self.window._picture_in_picture is not None
+                and self.window._picture_in_picture.isVisible()):
+            self._go("auto_script_config")
 
     def pause(self) -> None:
         self.eye_guide.cancel_selection()

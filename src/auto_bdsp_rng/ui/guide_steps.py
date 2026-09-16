@@ -37,10 +37,15 @@ def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
     if key == "easycon_recording":
         window = panel.window()
         easycon = window.easycon_tab
+        if detail == "preview":
+            return GuideStep(key, "5.2 · 脚本录制", "最后，打开独立预览",
+                             "点击亮起的「独立预览」，把游戏画面放到独立窗口中，方便接下来调整和测试脚本时观察画面。\n"
+                             "打开后，继续设置自动流程使用的脚本。",
+                             window.picture_in_picture_button, (window.picture_in_picture_button,))
         if detail == "practice":
             return GuideStep(key, "5.2 · 脚本录制", "现在由你录制一小段操作",
                              "先把键盘控制切到「控制」，点击「开始录制」，按映射键完成操作，再点「停止录制」。\n"
-                             "操作命令会实时追加到当前脚本末尾；松开按键时会补上保持时长和松开命令。停止录制后可以编辑，确认无误后点击下一步。",
+                             "操作命令会实时追加到当前脚本末尾；松开按键时会补上保持时长和松开命令。停止录制后可以编辑；确认无误后点击下一步，前往 Seed 捕捉页打开独立预览。",
                              easycon.record_btn, (easycon.controller_mode_buttons["active"], easycon.record_btn))
         return GuideStep(key, "5.2 · 脚本录制", "脚本录制动画准备中", "观看动画后，在真实伊机控页面完成一次录制。",
                          easycon.record_btn, (easycon.record_btn,))
