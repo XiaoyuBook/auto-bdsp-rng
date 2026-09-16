@@ -130,6 +130,63 @@ def test_external_run_shows_its_source_and_edit_invalidates_old_line(easycon_pan
     panel.shutdown()
 
 
+def test_recording_returns_to_draft_and_locks_file_switching_until_stopped(easycon_panel, tmp_path):
+    panel = easycon_panel
+    path = tmp_path / "main.ecs"
+    original = "# 当前草稿\nWAIT 10\n"
+    path.write_text(original, encoding="utf-8")
+    assert panel.load_script(path)
+    library = tmp_path / "helper.ecs"
+    library.write_text("WAIT 50\n", encoding="utf-8")
+    panel.execution.show_source(str(library))
+    assert panel.execution.viewing_snapshot
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    panel._start_recording()
+    assert not panel.execution.viewing_snapshot
+    assert panel.editor.isReadOnly()
+    assert not any(button.isEnabled() for button in (
+        panel.open_button, panel.new_button, panel.save_button, panel.script_sources,
+    ))
+    panel.new_script()
+    assert not panel.load_script(library)
+    assert panel.save_script() is None
+    panel.execution.show_source(str(library))
+    assert not panel.execution.viewing_snapshot
+    assert panel.current_script_path == path
+    panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
+    assert panel.editor.toPlainText() == original + "LS UP\n"
+    assert path.read_text(encoding="utf-8") == original
+    panel._stop_recording()
+    assert not panel.editor.isReadOnly()
+    assert all(button.isEnabled() for button in (
+        panel.open_button, panel.new_button, panel.save_button, panel.script_sources,
+    ))
+    panel.execution.show_source(str(library))
+    assert panel.execution.viewing_snapshot
+    assert panel.editor.toPlainText().startswith(original + "LS UP\n")
+    panel.shutdown()
+
+
+def test_live_recording_scrolls_to_new_commands(easycon_panel):
+    panel = easycon_panel
+    panel.resize(1000, 720)
+    panel.show()
+    panel.editor.setPlainText("# 已有脚本\n" * 120)
+    QTest.qWait(50)
+    panel.editor.verticalScrollBar().setValue(0)
+    assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    panel._start_recording()
+    panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
+    block = panel.editor.document().findBlockByNumber(120)
+    rect = panel.editor.blockBoundingGeometry(block).translated(panel.editor.contentOffset())
+    assert 0 <= rect.top() < rect.bottom() <= panel.editor.viewport().height()
+    assert block.text() == "LS UP"
+    panel._stop_recording()
+    panel.shutdown()
+
+
 def test_real_native_worker_wait_stop_restart_and_draft_guards(easycon_panel_factory, tmp_path):
     backend = NativeEasyConBackend(frame_client_factory=lambda: FakeFrameClient(np.zeros((8, 8, 3), dtype=np.uint8)))
     backend.connect("mock")

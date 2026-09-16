@@ -293,7 +293,7 @@ class ExecutionFollower(QObject):
 
     def _activate_source(self, item: QTreeWidgetItem, _column: int) -> None:
         source = item.data(0, SOURCE_ROLE)
-        if not source or self.panel._controller_script_running():
+        if not source or self.panel._controller_script_running() or self.panel._recording:
             return
         if source_key(source) == source_key(self.current_source()):
             self.show_current()
@@ -354,6 +354,8 @@ class ExecutionFollower(QObject):
             self.panel._refresh_script_action_buttons()
 
     def show_source(self, source: str) -> None:
+        if self.panel._recording:
+            return
         key = source_key(source)
         frozen = self.sources.get(key)
         if frozen is not None:
@@ -409,10 +411,12 @@ class ExecutionFollower(QObject):
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
-        self.panel.editor.setReadOnly(busy and not self.panel._native_script_paused())
-        self.panel.open_button.setEnabled(not busy)
-        self.panel.new_button.setEnabled(not busy)
-        self.panel.save_button.setEnabled(not busy and not self.viewing_snapshot)
+        recording = self.panel._recording
+        self.panel.editor.setReadOnly(recording or (busy and not self.panel._native_script_paused()))
+        self.panel.open_button.setEnabled(not busy and not recording)
+        self.panel.new_button.setEnabled(not busy and not recording)
+        self.panel.save_button.setEnabled(not busy and not recording and not self.viewing_snapshot)
+        self.panel.script_sources.setEnabled(not recording)
 
     @property
     def viewing_snapshot(self) -> bool:

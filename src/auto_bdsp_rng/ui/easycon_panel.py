@@ -753,6 +753,8 @@ class EasyConPanel(QWidget):
         frame_client_factory: Callable[[], object] | None = None,
         keyboard_hook_factory: Callable[..., WindowsKeyboardHook] | None = None,
         dev_mock_devices: bool = False,
+        isolated_demo: bool = False,
+        recording_clock: Callable[[], float] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setFont(ui_font())
@@ -761,13 +763,15 @@ class EasyConPanel(QWidget):
         self._video_source_connected = video_source_connected
         self._frame_client_factory = frame_client_factory
         self._dev_mock_devices = bool(dev_mock_devices)
+        self._isolated_demo = isolated_demo
+        self._recording_clock = recording_clock or (lambda: monotonic())
         self.native_run_thread: QThread | None = None
         self.native_run_worker: NativeScriptWorker | None = None
         self._native_run_reserved = False
         self.native_connecting = False
         self._native_connection_failed = False
         self._last_native_display_status: tuple[EasyConStatus, bool, bool] | None = None
-        loaded_config = load_config()
+        loaded_config = EasyConConfig() if isolated_demo else load_config()
         self.config = _migrate_script_config(loaded_config, SCRIPT_DIR)
         config_migration_save_error: OSError | None = None
         if self.config != loaded_config:
@@ -778,7 +782,8 @@ class EasyConPanel(QWidget):
         legacy_snapshot_count = 0
         legacy_snapshot_cleanup_error: OSError | None = None
         try:
-            legacy_snapshot_count = discard_legacy_generated_snapshots(SCRIPT_DIR)
+            if not isolated_demo:
+                legacy_snapshot_count = discard_legacy_generated_snapshots(SCRIPT_DIR)
         except OSError as exc:
             legacy_snapshot_cleanup_error = exc
         self._preferred_last_port = self.config.last_port
@@ -2057,13 +2062,16 @@ class EasyConPanel(QWidget):
         self._update_bridge_controls()
 
     def open_script_dialog(self) -> None:
-        if self._controller_script_running():
+        if self._controller_script_running() or self._recording:
             return
         path, _ = QFileDialog.getOpenFileName(self, "打开伊机控脚本", str(SCRIPT_DIR), "EasyCon scripts (*.txt *.ecs)")
         if path:
             self.load_script(Path(path))
 
     def load_script(self, path: Path) -> bool:
+        if self._recording:
+            self._append_log("warn", "请先停止录制，再打开其他脚本")
+            return False
         if self._controller_script_running():
             self._append_log("warn", "请先停止当前脚本，再打开其他脚本")
             return False
@@ -2107,7 +2115,7 @@ class EasyConPanel(QWidget):
             self.load_script(path)
 
     def new_script(self) -> None:
-        if self._controller_script_running():
+        if self._controller_script_running() or self._recording:
             return
         self.current_script_path = None
         self.current_script_name = "未命名文档.txt"
@@ -2119,6 +2127,9 @@ class EasyConPanel(QWidget):
         self.execution.clear()
 
     def save_script(self) -> Path | None:
+        if self._recording:
+            self._append_log("warn", "请先停止录制，再保存完整脚本")
+            return None
         if self._controller_script_running() or self.execution.viewing_snapshot:
             self._append_log("warn", "请停止运行并返回当前脚本后再保存")
             return None
@@ -2915,6 +2926,8 @@ class EasyConPanel(QWidget):
 
 
     def _save_config_from_ui(self) -> None:
+        if self._isolated_demo:
+            return
         if not hasattr(self, "ezcon_path"):
             return
         ezcon_text = self.ezcon_path.text().strip()
@@ -4071,7 +4084,7 @@ class EasyConPanel(QWidget):
         if not down and key not in self.virtual_controller_keys:
             return True
         kind, value, direction = action
-        recorded_at = monotonic() if self._recording and not self._recording_paused else None
+        recorded_at = self._recording_clock() if self._recording and not self._recording_paused else None
         backend = self._ensure_native_backend() if self._is_native_mode() else self._ensure_bridge_backend()
         try:
             if kind == "button":
@@ -4104,10 +4117,27 @@ class EasyConPanel(QWidget):
             if self._last_record_ts
             else 0
         )
-        if wait_ms > 0:
-            self._recorded_lines.append(f"WAIT {wait_ms}")
-        self._recorded_lines.extend(commands)
+        appended = ([f"WAIT {wait_ms}"] if wait_ms > 0 else []) + commands
+        self._recorded_lines.extend(appended)
         self._last_record_ts = observed_at
+        # Append only this event's finalized commands. Use a document cursor so
+        # an existing selection is never replaced, and separate an unterminated
+        # last line before inserting the first recorded command.
+        cursor = QTextCursor(self.editor.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        prefix = "\n" if cursor.block().text() else ""
+        cursor.beginEditBlock()
+        cursor.insertText(prefix + "\n".join(appended) + "\n")
+        cursor.endEditBlock()
+        self.editor.setTextCursor(cursor)
+        self.editor.ensureCursorVisible()
+        ancestor = self.editor.parentWidget()
+        while ancestor is not None:
+            if isinstance(ancestor, QScrollArea) and ancestor.widget() is not None and ancestor.isVisible():
+                point = self.editor.viewport().mapToGlobal(self.editor.cursorRect().center())
+                position = ancestor.widget().mapFromGlobal(point)
+                ancestor.ensureVisible(position.x(), position.y(), 16, 24)
+            ancestor = ancestor.parentWidget()
 
     @staticmethod
     def _combined_recorded_direction(directions: set[str]) -> str:
@@ -4193,10 +4223,12 @@ class EasyConPanel(QWidget):
         self._recorded_lines = []
         self._last_record_ts = 0.0
         self._recorded_hat_direction = "RESET"
+        self.execution.clear()
+        self._refresh_script_action_buttons()
         self.record_btn.setText("停止录制")
         self.pause_btn.setEnabled(True)
         self._update_keyboard_control_presentation()
-        self._append_log("info", "开始录制脚本，使用映射按键操作即可...")
+        self._append_log("info", "开始录制，操作命令将实时追加到当前脚本末尾")
 
     def _stop_recording(self) -> None:
         self._release_virtual_controller_keys()
@@ -4206,14 +4238,9 @@ class EasyConPanel(QWidget):
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("暂停")
         self._update_keyboard_control_presentation()
+        self._refresh_script_action_buttons()
         if self._recorded_lines:
-            script = "\n".join(self._recorded_lines) + "\n"
-            editor = self.editor
-            cursor = editor.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            editor.setTextCursor(cursor)
-            editor.insertPlainText(script)
-            self._append_log("info", f"录制完成，已插入 {len(self._recorded_lines)} 行脚本")
+            self._append_log("info", f"录制完成，已实时追加 {len(self._recorded_lines)} 行脚本")
             self._recorded_lines = []
         else:
             self._append_log("info", "录制已停止（无操作记录）")
@@ -4247,7 +4274,7 @@ class EasyConPanel(QWidget):
         backend = self.native_backend if self._is_native_mode() else self.bridge_backend
         actions = list(self.virtual_controller_keys.items())
         record_releases = self._recording and not self._recording_paused
-        observed_at = monotonic() if record_releases else 0.0
+        observed_at = self._recording_clock() if record_releases else 0.0
         for key, action in actions:
             kind, value, direction = action
             try:

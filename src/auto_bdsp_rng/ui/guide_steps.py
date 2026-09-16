@@ -27,6 +27,34 @@ def _row(form, field: QWidget) -> tuple[QWidget, ...]:
 
 
 def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
+    if key == "easycon_intro":
+        window = panel.window()
+        easycon = window.easycon_tab
+        return GuideStep(key, "5.1 · 伊机控简介", "用伊机控执行操作脚本",
+                         "伊机控脚本会按顺序执行按键、摇杆和等待等操作，是自动流程与游戏之间的动作桥梁。\n"
+                         "左侧可以浏览脚本和 lib，键盘控制用于录制或手动测试；接下来先看一遍脚本录制演示。",
+                         easycon.script_sources, (easycon.script_sources, easycon.keyboard_control_group))
+    if key == "easycon_recording":
+        window = panel.window()
+        easycon = window.easycon_tab
+        if detail == "practice":
+            return GuideStep(key, "5.2 · 脚本录制", "现在由你录制一小段操作",
+                             "先把键盘控制切到「控制」，点击「开始录制」，按映射键完成操作，再点「停止录制」。\n"
+                             "操作命令会实时追加到当前脚本末尾；松开按键时会补上保持时长和松开命令。停止录制后可以编辑，确认无误后点击下一步。",
+                             easycon.record_btn, (easycon.controller_mode_buttons["active"], easycon.record_btn))
+        return GuideStep(key, "5.2 · 脚本录制", "脚本录制动画准备中", "观看动画后，在真实伊机控页面完成一次录制。",
+                         easycon.record_btn, (easycon.record_btn,))
+    if key == "auto_script_config":
+        return GuideStep(key, "5.3 · 自动流程脚本配置", "为自动流程选择脚本",
+                         "自动流程中的每个脚本下拉框对应一个阶段：测种、过帧、撞闪、过场、反查和逃跑。\n"
+                         "先从下拉框选择脚本；带有铅笔按钮的项目可以直接打开并编辑。过场目标的配置请结合手动乱数教学视频确认。",
+                         panel.runtime_script_card, (panel.runtime_script_card,))
+    if key == "easycon_script_config":
+        easycon = panel.window().easycon_tab
+        return GuideStep(key, "5.4 · 脚本配置", "在编辑器中检查并保存脚本",
+                         "脚本会在中间编辑器中显示。可以直接修改命令，运行前请检查按键顺序与 WAIT 时间；保存后再回到自动流程选择它。\n"
+                         "需要暂停或定位执行位置时，可使用顶部的暂停、停止和执行跟随工具。",
+                         easycon.editor, (easycon.editor, easycon.save_button, easycon.run_button))
     if key == "seed_capture_tools" and detail in ("roi_button", "roi_drag", "eye_button", "eye_drag", "roi_adjust"):
         window = panel.window()
         actions = {

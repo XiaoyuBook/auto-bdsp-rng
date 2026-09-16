@@ -2191,6 +2191,47 @@ def test_easycon_panel_keyboard_virtual_controller_uses_key_down_up(monkeypatch,
     assert "键盘控制已启用" in easycon_panel.log_view.toPlainText()
 
 
+@pytest.mark.parametrize("connection_mode", ("native", "bridge"))
+def test_easycon_panel_streams_recording_without_replacing_selection_or_repeating_on_stop(
+    monkeypatch, easycon_panel, tmp_path, connection_mode,
+):
+    panel = easycon_panel
+    timestamps = iter((101.0, 102.0, 103.0, 105.0))
+    monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
+    if connection_mode == "bridge":
+        monkeypatch.setattr(panel_module, "BridgeEasyConBackend", FakeBridgeBackend)
+        select_bridge_mode(panel)
+        bridge = tmp_path / "EasyConBridge.exe"
+        bridge.write_text("", encoding="utf-8")
+        panel.bridge_path.setText(str(bridge))
+        panel.connect_bridge()
+        assert panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
+    else:
+        assert panel.connect_native()
+    assert panel._activate_virtual_controller()
+    # A selected, unterminated existing script must survive live appends.
+    original = "# 保留已有草稿\nWAIT 20"
+    panel.editor.setPlainText(original)
+    panel.editor.selectAll()
+    panel._start_recording()
+    panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
+    assert panel.editor.toPlainText() == original + "\nLS UP\n"
+    assert panel.script_save_state_label.text() == "未保存"
+    panel._handle_virtual_controller_key(Qt.Key.Key_W, False)
+    released = original + "\nLS UP\nWAIT 1000\nLS RESET\n"
+    assert panel.editor.toPlainText() == released
+    panel._handle_virtual_controller_key(Qt.Key.Key_L, True)
+    assert panel.editor.toPlainText() == released + "WAIT 1000\nA DOWN\n"
+    # Stopping with A held closes that action once, through the same live path.
+    panel._stop_recording()
+    finished = released + "WAIT 1000\nA DOWN\nWAIT 2000\nA UP\n"
+    assert panel.editor.toPlainText() == finished
+    assert not panel.virtual_controller_keys
+    panel._stop_recording()
+    assert panel.editor.toPlainText() == finished
+    assert panel.shutdown()
+
+
 def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monkeypatch, easycon_panel):
     timestamps = iter((101.0, 103.0, 104.0, 107.0, 109.0, 110.0))
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
@@ -2407,10 +2448,13 @@ def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypat
 
     easycon_panel._start_recording()
     easycon_panel._handle_virtual_controller_key(Qt.Key.Key_D, True)
+    assert easycon_panel.editor.toPlainText() == "LS RIGHT\n"
     easycon_panel._toggle_pause_recording()
+    assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 1000\nLS RESET\n"
     assert easycon_panel.recording_state_label.text() == "已暂停"
     assert easycon_panel.pause_btn.text() == "继续"
     easycon_panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
+    assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 1000\nLS RESET\n"
     easycon_panel._resume_recording()
     assert easycon_panel.recording_state_label.text() == "录制中"
     assert easycon_panel.pause_btn.text() == "暂停"
@@ -2419,7 +2463,9 @@ def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypat
 
     easycon_panel._handle_virtual_controller_key(Qt.Key.Key_Right, True)
     easycon_panel._handle_virtual_controller_key(Qt.Key.Key_Right, False)
+    streamed = easycon_panel.editor.toPlainText()
     easycon_panel._stop_recording()
+    assert easycon_panel.editor.toPlainText() == streamed
 
     assert easycon_panel.editor.toPlainText() == (
         "LS RIGHT\n"

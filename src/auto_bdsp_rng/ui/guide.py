@@ -15,6 +15,7 @@ from auto_bdsp_rng.app_settings import GUIDE_STEPS, LEGACY_GUIDE_STEPS, advance_
 from auto_bdsp_rng.ui.guide_steps import GuideStep, connection_dialog_steps, dialog_steps, workspace_step
 from auto_bdsp_rng.ui.guide_tip import GuideTip
 from auto_bdsp_rng.ui.eye_guide import EyeGuide
+from auto_bdsp_rng.ui.easycon_record_demo_dialog import EasyConRecordDemoDialog
 
 
 class GuideSpotlight(QWidget):
@@ -57,7 +58,7 @@ class GuideSpotlight(QWidget):
         self.suspended = False
         self.tip.show_step(spec, search=spec.key == "search_range" and not waiting_for_page)
         if waiting_for_page:
-            page_name = "Seed 捕捉" if self.page_widget is self.main_window.project_xs_tab else "自动定点乱数"
+            page_name = self.main_window.tabs.tabText(self.main_window.tabs.indexOf(self.page_widget))
             self.title.setText("先进入操作页面")
             self.copy.setText(f"点击亮起的「{page_name}」标签，进入这次乱数的操作页面。")
         for widget in self._watched:
@@ -280,6 +281,7 @@ class GuideController(QObject):
         window.video_source_header_button.clicked.connect(lambda: self._connection_dialog_opened("video_source"))
         window.easycon_header_button.clicked.connect(lambda: self._connection_dialog_opened("easycon"))
         self.eye_guide = EyeGuide(self)
+        self.easycon_demo_dialog: EasyConRecordDemoDialog | None = None
         self.refresh()
 
     def refresh(self) -> None:
@@ -340,6 +342,8 @@ class GuideController(QObject):
             self.step = progress["step"]
             self.detail = progress.get("detail", "")
         self.active = True
+        if self.step == "easycon_recording" and not self.detail:
+            self.detail = "demo"
         self._connection_timer.start()
         self.refresh()
         if self.overlay is None:
@@ -385,13 +389,28 @@ class GuideController(QObject):
     def _show_workspace(self) -> None:
         if not self.active or self.window._is_closing:
             return
-        page = self.window.project_xs_tab if self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save", "auto_flow_config") else self.panel
+        if self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save", "auto_flow_config"):
+            page = self.window.project_xs_tab
+        elif self.step == "auto_script_config":
+            page = self.panel
+        elif self.step in ("easycon_intro", "easycon_recording", "easycon_script_config"):
+            page = self.window.easycon_tab
+        else:
+            page = self.panel
         if self.step == "seed_capture_page" and self.window.tabs.currentWidget() is page:
             self._go("seed_capture_config")
             return
         waiting = self.window.tabs.currentWidget() is not page
         self.overlay.page_widget = page
         if not waiting and self.eye_guide.prepare():
+            return
+        if not waiting and self.step == "easycon_recording" and self.detail == "demo":
+            self.overlay.shade_all()
+            if self.easycon_demo_dialog is None:
+                self.easycon_demo_dialog = EasyConRecordDemoDialog(self.window)
+                self.easycon_demo_dialog.learnedRequested.connect(self._easycon_demo_learned)
+                self.easycon_demo_dialog.finished.connect(self._easycon_demo_closed)
+                self.easycon_demo_dialog.open()
             return
         if not waiting and self.step in ("shiny_threshold", "sync", "auto_reverse", "correction_strategy"):
             self.panel.more_strategy_button.setChecked(True)
@@ -436,10 +455,12 @@ class GuideController(QObject):
                 valid = self._connection_ready(self.detail or "video_source")
         tip.previous_button.setEnabled(not waiting and self.step != "target_selection")
         tip.next_button.setEnabled(not waiting and valid and self.step not in ("preview_opened",) and (self.step != "save_config" or self._config_saved))
-        tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured", "auto_flow_config"))
+        tip.skip_button.setEnabled(not waiting and valid and self.step not in ("connect_devices", "devices_connected", "save_config", "task_configured", "auto_flow_config", "easycon_script_config"))
         if self.step == "seed_capture_tools":
             tip.next_button.setText("观看演示" if not self.detail else "下一步")
             tip.next_button.setEnabled(not waiting and not self.detail)
+        elif self.step == "easycon_recording" and self.detail == "demo":
+            tip.next_button.setEnabled(False)
         else:
             tip.next_button.setText("下一步")
         if self.step == "seed_capture_save":
@@ -471,6 +492,14 @@ class GuideController(QObject):
         elif self.step == "save_config":
             self._go("connect_devices", "video_source")
         elif self.step == "auto_flow_config":
+            self._go("easycon_intro")
+        elif self.step == "easycon_intro":
+            self._go("easycon_recording", "demo")
+        elif self.step == "easycon_recording":
+            self._go("auto_script_config")
+        elif self.step == "auto_script_config":
+            self._go("easycon_script_config")
+        elif self.step == "easycon_script_config":
             self.pause()
         elif self.step == "seed_capture_tools":
             self.eye_guide.next()
@@ -482,6 +511,12 @@ class GuideController(QObject):
             return
         if self.step == "seed_capture_tools" and self.detail:
             self.eye_guide.previous()
+        elif self.step == "easycon_recording" and self.detail == "practice":
+            self._go("easycon_intro")
+        elif self.step == "auto_script_config":
+            self._go("easycon_recording", "practice")
+        elif self.step == "easycon_script_config":
+            self._go("auto_script_config")
         elif self._dialog_key:
             steps = connection_dialog_steps(self.panel, self._dialog_key) if self._dialog_key in ("video_source", "easycon") else dialog_steps(self.panel, self._dialog_key)
             index = next((i for i, spec in enumerate(steps) if spec.key == self.detail), 0)
@@ -509,6 +544,8 @@ class GuideController(QObject):
             destination = "search_range"
         elif self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools"):
             destination = "seed_capture_save"
+        elif self.step in ("easycon_intro", "easycon_recording", "auto_script_config"):
+            destination = "easycon_script_config"
         else:
             destination = "save_config"
         if self._dialog_key:
@@ -528,6 +565,8 @@ class GuideController(QObject):
         self.eye_guide.cancel_selection()
         self.active = False
         self.eye_guide.pause()
+        if self.easycon_demo_dialog is not None:
+            self.easycon_demo_dialog.reject()
         self._connection_timer.stop()
         QApplication.instance().removeEventFilter(self)
         self._resume_after_dialog = False
@@ -539,6 +578,24 @@ class GuideController(QObject):
             self._dialog().setFocus()
         else:
             self.button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _easycon_demo_learned(self) -> None:
+        if self._persist("easycon_recording", "practice"):
+            if self.easycon_demo_dialog is not None:
+                self.easycon_demo_dialog.finish_learning()
+        elif self.easycon_demo_dialog is not None:
+            self.easycon_demo_dialog.save_failed()
+
+    def _easycon_demo_closed(self, result: int) -> None:
+        dialog, self.easycon_demo_dialog = self.easycon_demo_dialog, None
+        if dialog is not None:
+            dialog.deleteLater()
+        if not self.active:
+            return
+        if result == QDialog.DialogCode.Accepted:
+            QTimer.singleShot(0, self._show_workspace)
+        else:
+            self.pause()
 
     def _run_state_changed(self, running: bool) -> None:
         if running:

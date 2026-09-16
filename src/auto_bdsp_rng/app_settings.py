@@ -119,6 +119,7 @@ GUIDE_STEPS = (
     "save_config", "task_configured", "connect_devices", "devices_connected",
     "seed_capture_page", "seed_capture_config", "seed_capture_actions",
     "seed_capture_tools", "seed_capture_save", "auto_flow_config",
+    "easycon_intro", "easycon_recording", "auto_script_config", "easycon_script_config",
 )
 
 LEGACY_GUIDE_STEPS = frozenset(("independent_preview", "preview_opened", "capture_overview_done"))

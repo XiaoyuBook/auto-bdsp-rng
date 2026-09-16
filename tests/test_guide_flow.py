@@ -325,11 +325,39 @@ def test_each_workspace_anchor_survives_resize_and_hidden_strategy_rows(guided):
             assert overlay.isVisible(), (width, key)
             assert overlay.rect().contains(overlay.tip.geometry()), (width, key)
             assert not overlay.hole.intersects(overlay.tip.geometry()), (width, key)
-            center = overlay.mapFromGlobal(overlay.focus_target.mapToGlobal(overlay.focus_target.rect().center()))
+            center = overlay._target_rect(overlay.focus_target).center().toPoint()
             assert overlay.hole.contains(center), (width, key)
             assert not overlay.mask().contains(center), (width, key)
             assert overlay.tip.rect().contains(overlay.tip.next_button.geometry())
             assert_body_text_is_readable(overlay.tip)
+
+
+def test_recording_demo_pause_resume_and_learning_handoff(guided):
+    window, panel, controller = guided
+    controller._go("easycon_intro")
+    assert controller.overlay.waiting_for_page
+    assert "伊机控" in controller.overlay.copy.text()
+    window.tabs.setCurrentWidget(window.easycon_tab)
+    original_script = window.easycon_tab.editor.toPlainText()
+    session = app_settings.get_guide_progress()["session_id"]
+    controller.next()
+    demo = controller.easycon_demo_dialog
+    assert demo is not None and demo.isVisible()
+    demo.timer.stop()
+    demo.advance_to(8000)
+    controller.pause()
+    assert demo.closed and not demo.backend.connected_port
+    assert app_settings.get_guide_progress()["detail"] == "demo"
+    controller.begin_or_resume()
+    resumed = controller.easycon_demo_dialog
+    assert resumed is not None and resumed is not demo
+    resumed.learned_button.click()
+    QTest.qWait(60)
+    assert controller.easycon_demo_dialog is None
+    assert controller.step == "easycon_recording" and controller.detail == "practice"
+    assert controller.overlay.tip.isVisible()
+    assert app_settings.get_guide_progress()["session_id"] == session
+    assert window.easycon_tab.editor.toPlainText() == original_script
 
 
 def test_guide_text_survives_scrollbars_width_changes_and_shorter_steps(guided):
