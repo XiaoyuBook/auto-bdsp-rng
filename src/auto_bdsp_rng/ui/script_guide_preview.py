@@ -21,6 +21,10 @@ class ScriptGuidePreview:
     def protected_rects(self):
         e = self.window.easycon_tab
         widgets = (self.c.overlay.tip, e.execution.bar, e.run_button, e.pause_button, e.stop_button)
+        if self.window.tabs.currentWidget() is self.window.project_xs_tab or self.c.overlay.spec.script_editing:
+            widgets += self.c.overlay.spec.highlights
+        if e._controller_overlay is not None:
+            widgets += (e._controller_overlay,)
         return [self.global_rect(w).adjusted(-8, -8, 8, 8) for w in widgets if w.isVisible()]
 
     def show(self, kind):

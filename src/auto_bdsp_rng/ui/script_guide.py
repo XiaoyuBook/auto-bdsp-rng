@@ -8,6 +8,14 @@ from PySide6.QtCore import QObject, QTimer
 from auto_bdsp_rng.ui.script_guide_steps import PRACTICE_KINDS, SCRIPT_KINDS, position, script_run_target
 from auto_bdsp_rng.ui.ocr_guide import OcrGuide
 from auto_bdsp_rng.ui.script_guide_preview import ScriptGuidePreview
+from auto_bdsp_rng.ui.script_capture_guide import ScriptCaptureGuide
+from auto_bdsp_rng.ui.script_capture_steps import CAPTURE_PHASES
+from auto_bdsp_rng.automation.easycon import parse_script_parameters
+
+
+EDIT_PHASES = {"edit", "edit_second", "advance_frames", "retry"}
+PREVIEW_PHASES = {"run", "review", "restore", "ball_check", "ball_restore", "capture_config", "capture_save", "capture_start", "capture_wait"} | EDIT_PHASES
+CONTROL_PHASES = {"restore", "ball_check", "ball_restore"}
 
 
 def same_path(first, second) -> bool:
@@ -26,6 +34,7 @@ class ScriptGuide(QObject):
         self._pending_skip = None
         self.ocr = OcrGuide(controller)
         self.preview = ScriptGuidePreview(controller)
+        self.capture = ScriptCaptureGuide(self)
         self.panel.scriptEditRequested.connect(self._opened)
         self.easycon.nativeScriptStarted.connect(self._started)
         self.easycon.save_button.clicked.connect(lambda: QTimer.singleShot(0, self.poll))
@@ -38,6 +47,11 @@ class ScriptGuide(QObject):
     def pos(self):
         return position(self.c.detail)
 
+    @property
+    def replay_target(self):
+        parts = self.c.detail.split(":")
+        return parts[2] if len(parts) > 2 and parts[2] in ("hit", "reverse") else ""
+
     def selected(self):
         kind, _ = self.pos
         combo = getattr(self.panel, f"{kind}_script_combo", None)
@@ -45,14 +59,19 @@ class ScriptGuide(QObject):
 
     def page(self):
         kind, phase = self.pos
+        if phase in CAPTURE_PHASES:
+            return self.window.project_xs_tab
         return self.easycon if kind in PRACTICE_KINDS and phase != "select" else self.panel
 
-    def go(self, kind, phase="select"):
+    def go(self, kind, phase="select", *, replay=None):
+        if self.pos[1] in EDIT_PHASES and phase not in EDIT_PHASES and not self.leave_control():
+            return
         self._positioned = None
-        self.c._go("auto_script_config", f"{kind}:{phase}")
+        target = self.replay_target if replay is None else replay
+        self.c._go("auto_script_config", f"{kind}:{phase}" + (":" + target if target else ""))
 
     def prepare(self):
-        if not self.active or self.pos[0] not in PRACTICE_KINDS or self.pos[1] not in ("run", "review", "retry"):
+        if not self.active or self.pos[0] not in PRACTICE_KINDS or self.pos[1] not in PREVIEW_PHASES:
             self.preview.restore()
         if not self.active:
             return False
@@ -61,7 +80,13 @@ class ScriptGuide(QObject):
             QTimer.singleShot(80, self._settled)
         if self.ocr.prepare():
             return True
+        if self.capture.prepare():
+            return True
         kind, phase = self.pos
+        if phase in CAPTURE_PHASES:
+            return False
+        if phase == "replay_open":
+            return False
         if kind not in PRACTICE_KINDS or phase == "select" or self._opening:
             return False
         # Do not trust a saved line/run marker when the editor or process changed.
@@ -71,7 +96,7 @@ class ScriptGuide(QObject):
         if phase == "review" and self.attempt is None:
             self.go(kind, "edit")
             return True
-        if phase == "retry":
+        if phase in ("retry", "advance_frames"):
             self.easycon.execution.follow.setChecked(False)
             self.easycon.execution.show_current()
         return False
@@ -82,7 +107,8 @@ class ScriptGuide(QObject):
         if same_path(self.selected(), self.easycon.current_script_path) and self.window.tabs.currentWidget() is self.easycon:
             self.easycon.execution.show_current()
             self.attempt = None
-            self.go(self.pos[0], "edit")
+            phase = ("advance_frames" if self.pos[0] == "advance" else "run") if self.replay_target else "ball_check" if self.pos[0] == "reverse" else "edit"
+            self.go(self.pos[0], phase)
 
     def _settled(self):
         if self.active and self.c.overlay.isVisible() and not self.c.overlay.suspended:
@@ -100,11 +126,37 @@ class ScriptGuide(QObject):
             self._opening = False
         self._opened(path)
 
+    def open_replay(self):
+        path = self.selected()
+        if path is None or not path.is_file():
+            self.go(self.pos[0], "select")
+            return
+        self._opening = True
+        try:
+            self.window._open_automation_script_editor(path)
+        finally:
+            self._opening = False
+        if same_path(path, self.easycon.current_script_path):
+            self.easycon.execution.follow.setChecked(False)
+            self.easycon.execution.show_current()
+            self.go(self.pos[0], "advance_frames" if self.pos[0] == "advance" else "run")
+
+    def next_replay(self):
+        kind, _ = self.pos
+        target = self.replay_target
+        if kind == target:
+            self._next_kind()
+            return
+        order = ("seed", "advance", "hit", "reverse")
+        self.attempt = None
+        self.go(order[order.index(kind) + 1], "replay_open")
+        self.open_replay()
+
     def present(self):
         if not self.active or self.c.overlay.waiting_for_page:
             return
         kind, phase = self.pos
-        if kind in PRACTICE_KINDS and phase in ("run", "review", "retry"):
+        if kind in PRACTICE_KINDS and phase in PREVIEW_PHASES:
             self.preview.show(kind)
         if phase in ("edit", "edit_second"):
             path = self.selected()
@@ -117,10 +169,27 @@ class ScriptGuide(QObject):
                             "reverse": ("捕捉反查脚本.txt", 4)}.get(kind)
                 if expected and path and path.name.casefold() == expected[0]:
                     self.easycon.editor.go_to_line(expected[1])
-        elif phase == "retry":
+        elif phase in ("retry", "advance_frames"):
             self.easycon.execution.follow.setChecked(False)
             self.easycon.execution.show_current()
+            if phase == "advance_frames":
+                parameter = next((p for p in parse_script_parameters(self.easycon.editor.toPlainText()) if p.name == "_目标帧数"), None)
+                if parameter is not None:
+                    self.easycon.editor.go_to_line(parameter.line_index + 1)
         self.navigation()
+
+    def frames_ready(self):
+        parameters = parse_script_parameters(self.easycon.editor.toPlainText())
+        field = next((p for p in parameters if p.name == "_目标帧数"), None)
+        return field is None or field.value.strip() == "1000"
+
+    @property
+    def controlling(self):
+        return self.active and (self.pos[1] in CONTROL_PHASES or
+                                (self.pos[1] in EDIT_PHASES and bool(self.easycon._vpad_input_source)))
+
+    def leave_control(self):
+        return self.easycon._deactivate_virtual_controller(hide_overlay=True, log=False)
 
     def snapshot(self):
         if self.attempt is None:
@@ -153,6 +222,8 @@ class ScriptGuide(QObject):
         tip = self.c.overlay.tip
         if self.c.overlay.waiting_for_page:
             return
+        if self.capture.navigation():
+            return
         kind, phase = self.pos
         tip.previous_button.show()
         tip.skip_button.show()
@@ -169,7 +240,12 @@ class ScriptGuide(QObject):
                 valid = valid and path is not None and path.is_file()
                 tip.next_button.setText("打开并检查")
             elif phase in ("edit", "edit_second"):
-                tip.next_button.setText("检查道具方向" if kind == "advance" and phase == "edit" else "准备运行")
+                tip.next_button.setText("检查道具方向" if kind == "advance" and phase == "edit" else "设置试跑帧数" if kind == "advance" else "准备运行")
+            elif phase == "advance_frames":
+                valid = not busy and self.frames_ready()
+                tip.next_button.setText("已确认 1000 帧")
+            elif phase in CONTROL_PHASES:
+                tip.next_button.setText("已确认大师球位置" if phase == "ball_check" else "已复原，检查脚本")
             elif phase == "run":
                 valid = False  # The real Run button is the only way to start.
             elif phase == "review":
@@ -185,18 +261,29 @@ class ScriptGuide(QObject):
                     status = "运行已结束，请核对画面并选择结果。" if valid else "本次已停止、失败或源码已变化，请修改并重新运行。"
                 tip.status.setText(status)
             elif phase == "retry":
-                valid = not busy and self.easycon.run_button.isEnabled()
-                tip.next_button.setText("重新运行")
+                valid = not busy and (bool(self.easycon.editor.toPlainText().strip()) if kind in ("hit", "reverse") else self.easycon.run_button.isEnabled())
+                tip.next_button.setText("修改完成" if kind in ("hit", "reverse") else "重新运行")
         elif kind == "ocr":
             tip.next_button.setText("观看 OCR 演示")
         elif kind == "save":
             valid = bool(self.panel.script_save_state_label.property("saved"))
             tip.next_button.setText("完成本步")
         tip.next_button.setEnabled(bool(valid))
+        if self.replay_target:
+            tip.skip_button.hide()
 
     def next(self):
         kind, phase = self.pos
-        if kind == "ocr":
+        if phase in CAPTURE_PHASES:
+            self.capture.next()
+        elif phase == "replay_open":
+            self.open_replay()
+        elif phase in CONTROL_PHASES:
+            if phase == "ball_check":
+                self.go(kind, "ball_restore")
+            elif self.leave_control():
+                self.go(kind, "edit" if phase == "ball_restore" else "retry")
+        elif kind == "ocr":
             self.go("ocr", "demo")
         elif kind == "save":
             self.c.pause()
@@ -206,34 +293,53 @@ class ScriptGuide(QObject):
             self._open()
         elif phase == "edit" and kind == "advance":
             self.go(kind, "edit_second")
-        elif phase in ("edit", "edit_second"):
+        elif kind == "advance" and phase == "edit_second":
+            self.go(kind, "advance_frames")
+        elif phase in ("edit", "edit_second", "advance_frames"):
             if self.easycon.has_unsaved_script_changes():
                 if self.easycon.save_script() is None:
                     return
             self.go(kind, "run")
         elif phase == "retry":
+            if kind == "advance" and not self.frames_ready():
+                self.go(kind, "advance_frames")
+                return
             if self.easycon.has_unsaved_script_changes() and self.easycon.save_script() is None:
                 return
-            self.easycon.run_button.click()
+            if kind in ("hit", "reverse"):
+                self.attempt = None
+                self.go("seed", "replay_open", replay=self.replay_target or kind)
+                self.open_replay()
+            else:
+                self.easycon.run_button.click()
         elif phase == "review" and self.completed():
             if self.easycon.has_unsaved_script_changes():
                 if self.easycon.save_script() is None:
                     return
-            self._next_kind()
+            if self.replay_target:
+                self.next_replay()
+            elif kind in ("seed", "advance"):
+                self.capture.enter("capture_config" if kind == "seed" else "capture_start")
+            else:
+                self._next_kind()
 
     def _next_kind(self):
         kind, _ = self.pos
         self.attempt = None
         self._pending_skip = None
         self.preview.restore()
-        self.go(SCRIPT_KINDS[SCRIPT_KINDS.index(kind) + 1])
-        self.window.tabs.setCurrentWidget(self.panel)
+        self.go(SCRIPT_KINDS[SCRIPT_KINDS.index(kind) + 1], replay="")
 
     def previous(self):
         kind, phase = self.pos
-        if kind in PRACTICE_KINDS and phase == "review":
+        if phase in CAPTURE_PHASES:
+            self.capture.previous()
+        elif phase in CONTROL_PHASES:
+            if self.leave_control():
+                self.go(kind, "ball_check" if phase == "ball_restore" else "edit")
+        elif kind in PRACTICE_KINDS and phase == "review":
             if self.finished():
-                self.go(kind, "retry")
+                self.go(kind, "restore" if kind == "advance" else "retry")
         elif kind in PRACTICE_KINDS and phase != "select":
             self.attempt = None
             self.go(kind, "edit" if phase not in ("edit", "edit_second") else "select")
@@ -243,6 +349,8 @@ class ScriptGuide(QObject):
             self.go(SCRIPT_KINDS[SCRIPT_KINDS.index(kind) - 1])
 
     def skip(self):
+        if self.controlling and not self.leave_control():
+            return
         if self.easycon._controller_script_running():
             self._pending_skip = self.pos[0]
             self.easycon.stop_button.click()
@@ -269,20 +377,25 @@ class ScriptGuide(QObject):
         if not self.active:
             return
         self.ocr.poll()
+        self.capture.poll()
         kind, phase = self.pos
         overlay = self.c.overlay
         if (phase in ("run", "retry") and kind in PRACTICE_KINDS and overlay is not None
+                and not (phase == "retry" and kind in ("hit", "reverse"))
                 and not overlay.waiting_for_page and not overlay.suspended
                 and script_run_target(self.panel) not in overlay.spec.highlights):
             self.c._show_workspace()
         if self._pending_skip == kind and not self.easycon._controller_script_running():
             self._next_kind()
             return
-        if kind in PRACTICE_KINDS and phase in ("run", "review", "retry") and overlay.isVisible() and not overlay.waiting_for_page and not overlay.suspended:
+        if kind in PRACTICE_KINDS and phase in PREVIEW_PHASES and overlay.isVisible() and not overlay.waiting_for_page and not overlay.suspended:
             self.preview.show(kind)
         self.navigation()
 
     def pause(self):
+        self.capture.pause()
+        if self.pos[1] in CONTROL_PHASES | EDIT_PHASES:
+            self.leave_control()
         self._pending_skip = None
         self.preview.restore()
         self.ocr.pause()

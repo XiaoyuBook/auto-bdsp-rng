@@ -21,6 +21,7 @@ class GuideStep:
     highlights: tuple[QWidget, ...]
     separate_highlights: bool = False
     script_confirmation: bool = False
+    script_editing: bool = False
 
 
 def _row(form, field: QWidget) -> tuple[QWidget, ...]:

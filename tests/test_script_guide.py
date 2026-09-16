@@ -24,6 +24,22 @@ def select(panel, kind, path):
     combo.setCurrentIndex(combo.count() - 1)
 
 
+def click_guided_tab(window, controller, page):
+    assert window.tabs.currentWidget() is not page
+    assert controller.overlay.waiting_for_page
+    assert controller.overlay.focus_target is window.tabs.tabBar()
+    assert not controller.overlay.tip.next_button.isEnabled()
+    assert not controller.overlay.tip.skip_button.isEnabled()
+    detail = controller.detail
+    controller.next()
+    assert controller.detail == detail
+    bar = window.tabs.tabBar()
+    QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(window.tabs.indexOf(page)).center())
+    assert window.tabs.currentWidget() is page
+    assert not controller.overlay.waiting_for_page
+    assert controller.detail == detail
+
+
 def open_for_guide(guided, tmp_path, kind="seed", text="WAIT 100\n"):
     window, panel, c = guided
     path = tmp_path / (kind + ".txt")
@@ -33,6 +49,11 @@ def open_for_guide(guided, tmp_path, kind="seed", text="WAIT 100\n"):
     c._go("auto_script_config", kind + ":select")
     assert c.overlay.focus_target is panel.script_picker_widgets[getattr(panel, kind + "_script_combo")]
     c.next()
+    if kind == "reverse":
+        assert c.detail == "reverse:ball_check"
+        c.next()
+        assert c.detail == "reverse:ball_restore"
+        c.next()
     assert c.detail == kind + ":edit"
     assert window.tabs.currentWidget() is window.easycon_tab
     assert window.easycon_tab.current_script_path == path
@@ -110,8 +131,10 @@ def test_seed_actual_run_and_manual_result_confirmation(guided, tmp_path):
         c.begin_or_resume()
         assert c.detail == "seed:review"
         c.next()
-        assert c.detail == "advance:select"
-        assert w.tabs.currentWidget() is p
+        assert c.detail == "seed:capture_config"
+        assert c.overlay.waiting_for_page
+        w.tabs.setCurrentWidget(w.project_xs_tab)
+        assert c.overlay.focus_target is w.config_combo
         assert path.read_text(encoding="utf-8") == "FOR 2\nWAIT 120\nNEXT\n"
     finally:
         e.stop_native_script()
@@ -119,13 +142,15 @@ def test_seed_actual_run_and_manual_result_confirmation(guided, tmp_path):
         backend.close()
 
 
-@pytest.mark.parametrize("kind,next_kind", [("advance", "hit"), ("hit", "exit"), ("reverse", "ocr")])
+@pytest.mark.parametrize("kind,next_kind", [("advance", "advance"), ("hit", "reverse"), ("reverse", "ocr")])
 def test_each_script_requires_run_and_confirmation_then_returns(guided, tmp_path, kind, next_kind):
     w, p, c = guided
     open_for_guide(guided, tmp_path, kind)
     c.next()
     if kind == "advance":
         assert c.detail == "advance:edit_second"
+        c.next()
+        assert c.detail == "advance:advance_frames"
         c.next()
     assert c.detail == kind + ":run"
     c.next()
@@ -134,8 +159,12 @@ def test_each_script_requires_run_and_confirmation_then_returns(guided, tmp_path
     assert c.detail == kind + ":review"
     assert c.overlay.tip.next_button.isEnabled()
     c.next()
-    assert c.detail == next_kind + ":select"
-    assert w.tabs.currentWidget() is p
+    assert c.detail == next_kind + (":capture_start" if kind == "advance" else ":select")
+    assert c.overlay.page_widget is (w.project_xs_tab if kind == "advance" else p)
+    assert w.tabs.currentWidget() is w.easycon_tab
+    c.pause()
+    c.begin_or_resume()
+    click_guided_tab(w, c, c.overlay.page_widget)
 
 
 @pytest.mark.parametrize("state", ["failed", "stopped"])
@@ -150,7 +179,7 @@ def test_failure_does_not_count_and_retry_is_explicit(guided, tmp_path, state):
     assert "修改并重新运行" in c.overlay.tip.status.text()
     c.previous()
     assert c.detail == "hit:retry"
-    assert c.overlay.tip.next_button.text() == "重新运行"
+    assert c.overlay.tip.next_button.text() == "修改完成"
 
 
 def test_resume_does_not_reuse_unrelated_or_previous_process_execution(guided, tmp_path):
@@ -177,6 +206,9 @@ def test_parameter_positions_and_red_copy(guided, tmp_path):
         w.tabs.setCurrentWidget(p)
         c._go("auto_script_config", kind + ":select")
         c.next()
+        if kind == "reverse":
+            c.next()
+            c.next()
         assert w.easycon_tab.editor.textCursor().blockNumber() + 1 == line
         assert "#C62828" in c.overlay.copy.text()
         if kind == "advance":
@@ -238,7 +270,11 @@ def test_ocr_handoff_real_selection_resume_and_completion(guided):
     o.tip.next_button.click()
     assert c.detail == "ocr:battle"
     o.tip.next_button.click()
+    assert c.detail == "exit:select" and w.tabs.currentWidget() is w.project_xs_tab
+    click_guided_tab(w, c, p)
+    c.next()
     assert c.detail == "escape:select" and w.tabs.currentWidget() is p
+    assert not c.overlay.waiting_for_page
     c.next()
     assert c.detail == "save:select"
     if p.save_scripts_button.isEnabled():
@@ -328,7 +364,7 @@ def test_problem_edit_save_cancel_and_rerun_new_script(guided, connected_guide, 
     assert c.script_guide.completed()
     assert path.read_text(encoding="utf-8") == "WAIT 160\nWAIT 80\n"
     c.next()
-    assert c.detail == "advance:select" and w.tabs.currentWidget() is p
+    assert c.detail == "seed:capture_config" and c.overlay.page_widget is w.project_xs_tab
 
 
 def test_running_result_buttons_disabled_and_skip_stops_worker_first(guided, connected_guide, tmp_path):
@@ -390,7 +426,7 @@ def test_legacy_running_progress_uses_single_confirmation(guided, tmp_path, lega
     assert c.script_guide.pos == ("seed", "review")
     assert c.overlay.tip.next_button.text() == "脚本没问题"
     c.next()
-    assert c.detail == "advance:select"
+    assert c.detail == "seed:capture_config"
 
 
 def test_ocr_demo_coordinates_stay_on_real_controls_after_switching(guided):

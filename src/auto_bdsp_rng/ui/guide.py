@@ -136,6 +136,9 @@ class GuideSpotlight(QWidget):
         if self.waiting_for_page:
             return
         target = self.focus_target
+        if self.spec.script_editing:
+            easycon = self.main_window.easycon_tab
+            easycon.sidebar_scroll.ensureWidgetVisible(easycon.record_btn, 12, 12)
         ancestor = target.parentWidget()
         ancestors = []
         while ancestor is not None:
@@ -147,6 +150,35 @@ class GuideSpotlight(QWidget):
         for ancestor in ancestors:
             if isinstance(ancestor, QScrollArea):
                 ancestor.ensureWidgetVisible(target, 12, 12)
+
+    def _editing_tip_rect(self, bounds, gap):
+        """Fit the card in a free column while keeping every editing tool open."""
+        holes = [self._target_rect(w) for w in self.spec.highlights if w.isVisible()]
+        width = self.tip.width()
+        xs = {bounds.left(), bounds.right() - width + 1}
+        for rect in holes:
+            xs.update((int(rect.right()) + gap, int(rect.left()) - width - gap))
+        spaces = []
+        for x in sorted(xs):
+            if x < bounds.left() or x + width > bounds.right() + 1:
+                continue
+            intervals = sorted((max(bounds.top(), int(r.top()) - gap),
+                                min(bounds.bottom() + 1, int(r.bottom()) + gap))
+                               for r in holes if r.right() > x and r.left() < x + width)
+            top = bounds.top()
+            for start, end in intervals + [(bounds.bottom() + 1, bounds.bottom() + 1)]:
+                if start > top:
+                    spaces.append((start - top, x, top))
+                top = max(top, end)
+        for available, x, y in sorted(spaces, key=lambda r: (-r[0], r[1])):
+            self.tip.fit_height(available)
+            if self.tip.height() <= available:
+                hole = QRectF()
+                for rect in holes:
+                    hole = hole.united(rect)
+                self.hole = hole
+                return QRect(x, y, width, self.tip.height())
+        return None
 
     def reposition(self) -> bool:
         self.setGeometry(self.parentWidget().rect())
@@ -167,6 +199,11 @@ class GuideSpotlight(QWidget):
         self.tip.fit_height(bounds.height())
         chosen = None
         target_groups = ((self.tab_bar,),) if self.waiting_for_page else (self.spec.highlights, (self.spec.target,))
+        if self.spec.script_editing and not self.waiting_for_page:
+            chosen = self._editing_tip_rect(bounds, side_gap)
+            if chosen is not None:
+                target_groups = ()
+                group = self.spec.highlights
         for group in target_groups:
             hole = QRectF()
             for target in group:
@@ -198,8 +235,6 @@ class GuideSpotlight(QWidget):
             if chosen is not None:
                 self.hole = hole
                 break
-        else:
-            chosen = None
         if chosen is None:
             # Do not draw an opening at an unclipped coordinate: it could expose
             # an unrelated control while the anchor is outside its viewport.
@@ -213,19 +248,20 @@ class GuideSpotlight(QWidget):
         if self.isVisible():
             self.tip.show()
         target_center = self._target_rect(self.focus_target).center()
-        if chosen.left() > self.hole.right():
+        arrow_rect = self._target_rect(self.focus_target) if self.spec.script_editing else self.hole
+        if chosen.left() > arrow_rect.right():
             y = max(chosen.top() + 20, min(target_center.y(), chosen.bottom() - 20))
             self.arrow_start = QPointF(min(chosen.left(), self.width() - 3), y)
-            self.arrow_end = QPointF(self.hole.right() + 7, target_center.y())
-        elif chosen.right() < self.hole.left():
+            self.arrow_end = QPointF(arrow_rect.right() + 7, target_center.y())
+        elif chosen.right() < arrow_rect.left():
             y = max(chosen.top() + 20, min(target_center.y(), chosen.bottom() - 20))
             self.arrow_start = QPointF(max(chosen.right(), 3), y)
-            self.arrow_end = QPointF(self.hole.left() - 7, target_center.y())
+            self.arrow_end = QPointF(arrow_rect.left() - 7, target_center.y())
         else:
             x = max(chosen.left() + 20, min(target_center.x(), chosen.right() - 20))
-            below = chosen.top() > self.hole.bottom()
+            below = chosen.top() > arrow_rect.bottom()
             self.arrow_start = QPointF(x, chosen.top() if below else chosen.bottom())
-            self.arrow_end = QPointF(target_center.x(), self.hole.bottom() + 7 if below else self.hole.top() - 7)
+            self.arrow_end = QPointF(target_center.x(), arrow_rect.bottom() + 7 if below else arrow_rect.top() - 7)
         self.holes = tuple(self._target_rect(widget).intersected(QRectF(self.rect()))
                            for widget in group if widget.isVisible()) if self.spec.separate_highlights and not self.waiting_for_page else (self.hole,)
         opening = QPainterPath()
@@ -828,6 +864,8 @@ class GuideController(QObject):
         overlay = self._current_overlay()
         if not overlay.isVisible() or overlay.suspended:
             return False
+        if self.script_guide.controlling and event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.ShortcutOverride):
+            return False  # Let the real virtual controller receive mapped keys and Esc.
         if event.type() == QEvent.Type.Shortcut:
             return True
         if not isinstance(obj, QWidget):

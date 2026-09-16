@@ -108,7 +108,7 @@ class OcrGuide(QObject):
             return
         phase = self.c.detail.partition(':')[2]
         title, copy = CHECKS.get(phase, CHECKS['notes'])
-        self.tip.show_step(GuideStep('ocr', '5.3.6 · OCR 设置', title, copy, self.dialog.table, (self.dialog.table,)))
+        self.tip.show_step(GuideStep('ocr', '5.3.5 · OCR 设置', title, copy, self.dialog.table, (self.dialog.table,)))
         self.tip.setFixedWidth(max(280, self.dialog.width() - 36))
         self.tip.fit_height(min(235, max(180, self.dialog.height() // 3)))
         self.tip.previous_button.setText('返回演示' if phase == 'notes' else '上一步')
@@ -124,8 +124,7 @@ class OcrGuide(QObject):
         phase = self.c.detail.partition(':')[2]
         if phase == 'battle':
             self._detach()
-            self.c.script_guide.go('escape')
-            self.window.tabs.setCurrentWidget(self.c.panel)
+            self.c.script_guide.go('exit')
         else:
             self.c._go('auto_script_config', 'ocr:' + ('stats' if phase == 'notes' else 'battle'))
 
@@ -148,7 +147,7 @@ class OcrGuide(QObject):
     def _show_selection(self):
         self.c.overlay.page_widget = self.window.project_xs_tab
         target = self.window.preview_label
-        self.c.overlay.configure(GuideStep('ocr', '5.3.6 · 框选 OCR 区域', '在对应文字周围框选',
+        self.c.overlay.configure(GuideStep('ocr', '5.3.5 · 框选 OCR 区域', '在对应文字周围框选',
                                           '在画面中按住鼠标右键拖动，完整框住当前项目的文字。松开并确认保存后，将返回 OCR 设置；取消会保留原区域。', target, (target,)))
         self.c.overlay.reveal()
         self.c.overlay.tip.next_button.setEnabled(False)

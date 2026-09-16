@@ -165,6 +165,7 @@ class GuideTip(QFrame):
         controls = QGridLayout()
         self.controls = controls
         self.script_confirmation = False
+        self._stacked_skip = False
         controls.setSpacing(8)
         self.previous_button = QPushButton("上一步")
         self.next_button = QPushButton("下一步")
@@ -194,10 +195,12 @@ class GuideTip(QFrame):
         self.ensurePolished()
         margins = self.layout().contentsMargins()
         width = self.contentsRect().width() - margins.left() - margins.right()
+        self._fit_controls(width)
         natural = self._measure_body(width)
         chrome = 34 + 28 + 36 + max(34, self.next_button.sizeHint().height()) + 18
-        if self.script_confirmation:
+        if self.script_confirmation or self._stacked_skip:
             chrome += self.skip_button.sizeHint().height() + self.controls.spacing()
+        if not self.status.isHidden():
             self.status.setFixedHeight(max(42, self.status.heightForWidth(width)))
             chrome += self.status.height() + self.layout().spacing()
         height = min(natural + chrome, max(chrome + 50, available))
@@ -208,6 +211,21 @@ class GuideTip(QFrame):
             natural = self._measure_body(width - scrollbar_width)
         self.body.setMinimumHeight(natural)
         self.setFixedHeight(height)
+
+    def _fit_controls(self, width: int) -> None:
+        if self.script_confirmation:
+            return
+        buttons = [button for button in (self.previous_button, self.next_button, self.skip_button)
+                   if not button.isHidden()]
+        required = sum(button.sizeHint().width() for button in buttons) + len(buttons) * self.controls.spacing()
+        stacked = not self.skip_button.isHidden() and required > width
+        if stacked != self._stacked_skip:
+            self._stacked_skip = stacked
+            self.controls.removeWidget(self.skip_button)
+            if stacked:
+                self.controls.addWidget(self.skip_button, 1, 0, 1, 4)
+            else:
+                self.controls.addWidget(self.skip_button, 0, 3)
 
     def _measure_body(self, width: int) -> int:
         # An AlignTop box layout can assign a wrapped QLabel its sizeHint height
@@ -224,6 +242,7 @@ class GuideTip(QFrame):
 
     def show_step(self, spec, *, search: bool = False) -> None:
         self.set_script_confirmation(getattr(spec, "script_confirmation", False))
+        self.status.setVisible(getattr(spec, "script_confirmation", False))
         self.step.setText(spec.caption)
         self.title.setText(spec.title)
         # GuideStep.copy may contain small, static emphasis spans for key
@@ -237,6 +256,7 @@ class GuideTip(QFrame):
         if self.script_confirmation == enabled:
             return
         self.script_confirmation = enabled
+        self._stacked_skip = False
         self.status.setVisible(enabled)
         for button in (self.previous_button, self.next_button, self.skip_button):
             self.controls.removeWidget(button)

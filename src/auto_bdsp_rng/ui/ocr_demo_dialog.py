@@ -57,7 +57,7 @@ class OcrDemoDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         from auto_bdsp_rng.ui.main_window import RoiPreviewLabel
-        self.setWindowTitle('5.3.6 · OCR 框选与识别演示')
+        self.setWindowTitle('5.3.5 · OCR 框选与识别演示')
         self.setModal(True)
         self.resize(min(1080, parent.screen().availableGeometry().width() - 40),
                     min(820, parent.screen().availableGeometry().height() - 60))

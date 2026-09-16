@@ -1507,6 +1507,8 @@ class MainWindow(QMainWindow):
     captureSelectionFinished = Signal(str, bool)
     captureConfigSaved = Signal()
     captureConfigSaveFailed = Signal(str)
+    manualCaptureStarted = Signal(str, object)
+    manualCaptureFinished = Signal(str, object, bool, str)
     autoCaptureFrameChanged = Signal(object)
     autoCaptureProgressChanged = Signal(int, int)
     captureKeepAwakeRequested = Signal(int, int)
@@ -1621,6 +1623,7 @@ class MainWindow(QMainWindow):
         self._capture_cancel = threading.Event()
         self._capture_lock = threading.Lock()
         self._capture_thread: threading.Thread | None = None
+        self._mock_capture_dialog = None
         self._capture_result: object | None = None
         self._capture_error: Exception | None = None
         self._capture_frame: object | None = None
@@ -6647,6 +6650,9 @@ class MainWindow(QMainWindow):
         self._latest_easycon_image_search_result = result
 
     def _update_preview_frame(self) -> None:
+        if self._dev_mock_devices and self._video_source_connected and self._mock_video_frame is not None:
+            self._refresh_preview_presentation()
+            return
         config_error: Exception | None = None
         try:
             config = self._config_from_form().capture
@@ -9073,6 +9079,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(self._text("capture_stopping"))
             self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
             return
+        from auto_bdsp_rng.ui.mock_capture import start_mock_capture
+        if start_mock_capture(self, "seed"):
+            return
         try:
             config = self._config_from_form()
         except ProjectXsIntegrationError as exc:
@@ -9139,6 +9148,7 @@ class MainWindow(QMainWindow):
 
         self._capture_thread = threading.Thread(target=run_capture, daemon=True)
         self._capture_thread.start()
+        self.manualCaptureStarted.emit("seed", self._capture_thread)
         self._capture_timer.start()
 
     def reidentify_seed(self) -> None:
@@ -9147,6 +9157,9 @@ class MainWindow(QMainWindow):
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
             self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
+            return
+        from auto_bdsp_rng.ui.mock_capture import start_mock_capture
+        if start_mock_capture(self, "reidentify"):
             return
         try:
             config = self._config_from_form()
@@ -9219,6 +9232,7 @@ class MainWindow(QMainWindow):
 
         self._capture_thread = threading.Thread(target=run_reidentify, daemon=True)
         self._capture_thread.start()
+        self.manualCaptureStarted.emit("reidentify", self._capture_thread)
         self._capture_timer.start()
 
     def capture_tidsid_seed(self) -> None:
@@ -9313,6 +9327,10 @@ class MainWindow(QMainWindow):
         self._capture_thread = None
         if thread is not None:
             thread.join(timeout=0)
+        mock_dialog, self._mock_capture_dialog = self._mock_capture_dialog, None
+        if mock_dialog is not None:
+            mock_dialog.hide()
+            mock_dialog.deleteLater()
         self.reidentify_button.setEnabled(True)
         self.tidsid_button.setEnabled(True)
         self.capture_button.setText(self._text("capture_seed"))
@@ -9321,6 +9339,9 @@ class MainWindow(QMainWindow):
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))
                 self._write_run_log("Seed 捕捉", f"{self._capture_mode_label()}已停止", level="WARNING")
+            elif mock_dialog is not None:
+                self.statusBar().showMessage(str(self._capture_error))
+                self._write_run_log("Seed 捕捉", str(self._capture_error), level="WARNING")
             else:
                 title = (
                     "校正失败"
@@ -9330,12 +9351,17 @@ class MainWindow(QMainWindow):
                     else "Blink capture failed"
                 )
                 self._show_error(title, self._capture_error, source="Seed 捕捉")
+            if thread is not None:
+                self.manualCaptureFinished.emit(self._capture_mode, thread, False,
+                                                "已停止捕捉" if self._capture_cancel.is_set() else str(self._capture_error))
             return
 
         result = self._capture_result
         if result is None:
             self.statusBar().showMessage(self._text("capture_stopped"))
             self._write_run_log("Seed 捕捉", f"{self._capture_mode_label()}未返回结果", level="WARNING")
+            if thread is not None:
+                self.manualCaptureFinished.emit(self._capture_mode, thread, False, "本次未返回结果，请调整后重试。")
             return
         # reidentify 不修改 seed，只更新 current_advances
         if self._capture_mode != "reidentify":
@@ -9379,6 +9405,12 @@ class MainWindow(QMainWindow):
                 "Seed 捕捉",
                 f"普通 Seed 捕捉完成；Seed {' '.join(result.state.format_words())}",
             )
+        if mock_dialog is not None:
+            self.statusBar().showMessage(f"Mock {self._capture_mode_label()}：已选择模拟成功")
+            self._write_run_log("Seed 捕捉", "Mock 模拟结果已回填，仅用于开发测试")
+        if thread is not None:
+            self.manualCaptureFinished.emit(self._capture_mode, thread, not self._capture_cancel.is_set(),
+                                            "已停止捕捉" if self._capture_cancel.is_set() else "")
 
     def generate_results(self) -> None:
         try:
