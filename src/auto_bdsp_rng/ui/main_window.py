@@ -1221,6 +1221,7 @@ class PictureInPicturePreview(QDialog):
         self.frame_label.setMinimumSize(300, 180)
         self.frame_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.frame_label.roiSelected.connect(self.roiSelected.emit)
+        self.frame_label.installEventFilter(self)
         layout.addWidget(self.frame_label, 1)
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
@@ -1312,6 +1313,11 @@ class PictureInPicturePreview(QDialog):
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
         self._refresh_frame()
+
+    def eventFilter(self, obj, event):
+        if obj is self.frame_label and event.type() == QEvent.Type.Resize:
+            QTimer.singleShot(0, self._refresh_frame)
+        return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         # Closing PiP only hides this display; the Broker remains connected.
@@ -6026,7 +6032,7 @@ class MainWindow(QMainWindow):
         self._selection_mode = None
         self._restore_preview_after_selection()
         self.statusBar().showMessage("已取消框选，继续使用之前的设置")
-        if mode in ("roi", "eye"):
+        if mode in ("roi", "eye", "ocr_region"):
             self.captureSelectionFinished.emit(mode, False)
 
     def _restore_preview_after_selection(self) -> None:

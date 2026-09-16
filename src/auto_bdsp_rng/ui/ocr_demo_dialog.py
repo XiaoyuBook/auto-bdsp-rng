@@ -1,14 +1,17 @@
-"""Looping OCR lesson using the real settings table and ROI preview widget."""
+"""Loop the two note-page ROI operations on the user's verified game image."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic
 
-from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
+from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion, OCR_REGION_LABELS
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog
 
 
@@ -27,13 +30,12 @@ class OcrDemoView(QGraphicsView):
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def drawForeground(self, painter, _bounds):
-        d = self.lesson
-        hole, cursor, click = d.visual_state()
+        hole, cursor, click = self.lesson.visual_state()
         mask = QPainterPath()
         mask.setFillRule(Qt.FillRule.OddEvenFill)
         mask.addRect(self.sceneRect())
         mask.addRoundedRect(hole, 7, 7)
-        painter.fillPath(mask, QColor(0, 0, 0, 165))
+        painter.fillPath(mask, QColor(0, 0, 0, 160))
         painter.setPen(QPen(QColor('#61D8AB'), 2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(hole, 7, 7)
@@ -41,85 +43,80 @@ class OcrDemoView(QGraphicsView):
             return
         if click:
             painter.setPen(QPen(QColor('#04A878'), 3))
-            painter.drawEllipse(cursor, 19, 19)
+            painter.drawEllipse(cursor, 18, 18)
         painter.save()
         painter.translate(cursor)
         painter.setPen(QPen(QColor('#243D31'), 1.5))
         painter.setBrush(QColor('white'))
-        painter.drawPolygon(QPolygonF([QPointF(0, 0), QPointF(3, 25), QPointF(10, 18),
-                                       QPointF(16, 29), QPointF(21, 26), QPointF(15, 16), QPointF(26, 15)]))
+        painter.drawPolygon(QPolygonF([QPointF(0, 0), QPointF(3, 25), QPointF(10, 18), QPointF(16, 29),
+                                       QPointF(21, 26), QPointF(15, 16), QPointF(26, 15)]))
         painter.restore()
 
 
 class OcrDemoDialog(QDialog):
     learnedRequested = Signal()
+    FIELD_DURATION = 21000
+    DURATION = 44500
 
     def __init__(self, parent):
         super().__init__(parent)
-        from auto_bdsp_rng.ui.main_window import RoiPreviewLabel
-        self.setWindowTitle('5.3.5 · OCR 框选与识别演示')
+        from auto_bdsp_rng.ui.main_window import PictureInPicturePreview
+        import cv2
+        import numpy as np
+
+        self.setWindowTitle('5.3.5 · 性格与个性框选教学')
         self.setModal(True)
-        self.resize(min(1080, parent.screen().availableGeometry().width() - 40),
-                    min(820, parent.screen().availableGeometry().height() - 60))
+        area = parent.screen().availableGeometry()
+        self.resize(min(1080, area.width() - 40), min(820, area.height() - 60))
         self.setMinimumSize(620, 490)
         self.setStyleSheet('QDialog {background:#F5F8F6;} QLabel {color:#34483D;} QPushButton {padding:7px 12px; background:white; border:1px solid #BDD5C7; border-radius:6px;}')
         self.temp = TemporaryDirectory(prefix='bdsp-ocr-lesson-')
         self.settings = QSettings(str(Path(self.temp.name) / 'demo.ini'), QSettings.Format.IniFormat)
+        self.examples = json.loads(resource_path('docs', 'assets', 'guide-ocr', 'recognition.json').read_text(encoding='utf-8'))['fields']
         self.panel = OcrSettingsDialog(settings=self.settings)
         self.panel.setWindowFlags(Qt.WindowType.Widget)
-        self.panel.setFixedSize(980, 570)
-        self.preview = RoiPreviewLabel()
-        self.preview.setFixedSize(980, 570)
-        pixmap = QPixmap(980, 570)
-        pixmap.fill(QColor('#EDF3F8'))
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor('white'))
-        painter.drawRoundedRect(QRectF(90, 75, 800, 420), 16, 16)
-        font = painter.font()
-        font.setPixelSize(23)
-        painter.setFont(font)
-        painter.setPen(QColor('#47596C'))
-        painter.drawText(QRect(130, 100, 700, 45), '精灵笔记页 · 示意文字画面')
-        font.setPixelSize(26)
-        painter.setFont(font)
-        painter.drawText(QRect(145, 201, 690, 43), '性格：固执')
-        painter.drawText(QRect(145, 345, 690, 43), '个性：喜欢胡闹')
-        painter.end()
-        self.preview.setPixmap(pixmap)
-        self.preview.set_image_geometry(980, 570, QRect(0, 0, 980, 570))
+        self.panel.setFixedSize(980, 600)
+        self.pip = PictureInPicturePreview()
+        self.pip.setWindowFlags(Qt.WindowType.Widget)
+        self.pip.setFixedSize(900, 575)
+        heading = QLabel('独立预览 · 在游戏画面中框选')
+        heading.setStyleSheet('font-size:16px; color:#087C58; padding:4px;')
+        self.pip.layout().insertWidget(0, heading)
+        self.preview = self.pip.frame_label
+        frame = cv2.imdecode(np.frombuffer(resource_path('docs', 'assets', 'guide-ocr', 'notes.jpg').read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+        self.pip.set_frames(frame)
         self.scene = QGraphicsScene(self)
-        self.scene.setSceneRect(0, 0, 980, 570)
+        self.scene.setSceneRect(0, 0, 980, 600)
         self.panel_proxy = self.scene.addWidget(self.panel)
-        self.preview_proxy = self.scene.addWidget(self.preview)
+        self.preview_proxy = self.scene.addWidget(self.pip)
+        self.preview_proxy.setPos(40, 10)
         self.confirmation = QFrame()
-        self.confirmation.setFixedSize(370, 150)
-        self.confirmation.setStyleSheet('QFrame {background:white; border:1px solid #CFE2D7; border-radius:10px;} QLabel {border:0; font-size:15px; color:#34483D;} QPushButton {background:#087C58; color:white; border:0; border-radius:6px; padding:8px; font-size:14px;}')
-        confirm_layout = QVBoxLayout(self.confirmation)
-        confirm_layout.addWidget(QLabel('确认 OCR 区域'))
-        confirm_layout.addWidget(QLabel('是否保存“性格”区域？'))
+        self.confirmation.setFixedSize(340, 145)
+        self.confirmation.setStyleSheet('QFrame {background:white; border:1px solid #CFE2D7; border-radius:10px;} QLabel {border:0; font-size:15px;} QPushButton {background:#087C58; color:white; border:0; border-radius:6px; padding:8px;}')
+        confirmation_layout = QVBoxLayout(self.confirmation)
+        confirmation_layout.addWidget(QLabel('确认 OCR 区域'))
+        self.confirm_copy = QLabel()
+        confirmation_layout.addWidget(self.confirm_copy)
         self.confirm_button = QPushButton('确认保存')
         self.confirm_button.clicked.connect(self._confirm)
-        confirm_layout.addWidget(self.confirm_button)
+        confirmation_layout.addWidget(self.confirm_button)
         self.confirm_proxy = self.scene.addWidget(self.confirmation)
-        self.confirm_proxy.setPos(305, 325)
+        self.confirm_proxy.setPos(600, 415)
         self.view = OcrDemoView(self.scene, self)
         self.preview.roiSelected.connect(self._selected)
         self.panel.regionSelectionRequested.connect(self._select)
         self.panel.regionDisplayRequested.connect(self._display)
-        self.panel.recognitionRequested.connect(lambda *_: None)  # Simulated result; never starts OCR.
-        self.title = QLabel()
+        self.panel.recognitionRequested.connect(lambda *_: None)
+        self.title, self.copy = QLabel(), QLabel()
         self.title.setStyleSheet('font-size:18px; font-weight:600; color:#087C58;')
-        self.copy = QLabel()
         self.copy.setWordWrap(True)
-        self.copy.setMinimumHeight(44)
+        self.copy.setMinimumHeight(46)
         layout = QVBoxLayout(self)
         layout.addWidget(self.view, 1)
         layout.addWidget(self.title)
         layout.addWidget(self.copy)
         actions = QHBoxLayout()
-        actions.addWidget(QLabel('循环演示 · 使用示意画面'), 1)
+        actions.addWidget(QLabel('循环演示 · 示例游戏画面'), 1)
         self.pause_button = QPushButton('暂停演示')
         self.pause_button.clicked.connect(self.toggle_playing)
         self.replay_button = QPushButton('重新播放')
@@ -134,77 +131,93 @@ class OcrDemoDialog(QDialog):
             actions.addWidget(button)
         layout.addLayout(actions)
         self.elapsed = self.applied = 0
-        self.playing = True
-        self.closed = False
-        self.events = (
-            (1900, self.panel.warmup_button.click),
-            (2900, lambda: self.panel.finish_warmup(True, '演示：OCR 已就绪')),
-            (5900, lambda: self.action(0).click()),
-            (7900, lambda: self.mouse(QEvent.Type.MouseButtonPress, QPointF(137, 193))),
-            (10100, lambda: self.mouse(QEvent.Type.MouseButtonRelease, QPointF(325, 250))),
-            (11600, self.confirm_button.click),
-            (14900, lambda: self.action(1).click()),
-            (17400, self._table),
-            (19900, lambda: self.action(2).click()),
-            (20900, lambda: self.panel.finish_recognition('nature', '固执（演示结果）')),
-            (23500, lambda: self.panel.table.scrollToItem(self.panel.table.item(7, 0))),
-            (27000, lambda: self.panel.table.scrollToItem(self.panel.table.item(9, 0))),
-        )
+        self.playing, self.closed = True, False
+        self.events = []
+        for i, field in enumerate(('nature', 'characteristic')):
+            base = i * self.FIELD_DURATION
+            self.events.extend((
+                (base, lambda f=field: self._start_field(f)),
+                (base + 2000, lambda: self.action(0).click()),
+                (base + 2600, self._show_preview),
+                (base + 4200, lambda: self.mouse(QEvent.Type.MouseButtonPress, self._drag_points()[0])),
+                (base + 6600, lambda: self.mouse(QEvent.Type.MouseButtonRelease, self._drag_points()[1])),
+                (base + 8400, self.confirm_button.click),
+                (base + 9000, self._table),
+                (base + 11000, lambda: self.action(1).click()),
+                (base + 11600, self._show_preview),
+                (base + 14300, self._table),
+                (base + 16500, lambda: self.action(2).click()),
+                (base + 17400, lambda: self.panel.finish_recognition(self.field, self.examples[self.field]['text'])),
+            ))
         self.timer = QTimer(self)
         self.timer.setInterval(16)
         self.timer.timeout.connect(self._tick)
         self.restart()
 
     def action(self, index):
-        return self.panel.table.cellWidget(0, 3).findChildren(QPushButton)[index]
+        row = 0 if self.field == 'nature' else 1
+        return self.panel.table.cellWidget(row, 3).findChildren(QPushButton)[index]
+
+    def _start_field(self, field):
+        self.field = field
+        self._table()
+        self.panel.table.scrollToItem(self.panel.table.item(0 if field == 'nature' else 1, 0))
+
+    def _region(self):
+        return OcrRegion(*self.examples[self.field]['region'])
+
+    def _drag_points(self):
+        rect = self.preview._image_rect_to_widget_rect(self._region())
+        return QPointF(rect.topLeft()), QPointF(rect.bottomRight())
 
     def mouse(self, event_type, point):
         button = Qt.MouseButton.NoButton if event_type == QEvent.Type.MouseMove else Qt.MouseButton.RightButton
         buttons = Qt.MouseButton.NoButton if event_type == QEvent.Type.MouseButtonRelease else Qt.MouseButton.RightButton
         QApplication.sendEvent(self.preview, QMouseEvent(event_type, point, point, button, buttons, Qt.KeyboardModifier.NoModifier))
 
-    def _select(self, _field):
-        self.panel.hide()
-        self.preview.show()
+    def _select(self, field):
+        self.preview.clear_ocr_overlay()
         self.preview.set_selection_enabled(True)
 
     def _selected(self, region):
         self.pending_region = region
         self.preview.set_selection_enabled(False)
-        self.preview.set_ocr_overlay('nature', region)
+        self.preview.set_ocr_overlay(self.field, region)
+        self.confirm_copy.setText(f'是否保存“{OCR_REGION_LABELS[self.field]}”区域？')
         self.confirmation.show()
 
     def _confirm(self):
-        self.panel.set_region('nature', self.pending_region)
-        self.confirmation.hide()
-        self._table()
+        self.panel.set_region(self.field, self.pending_region)
 
     def _table(self):
-        self.preview.hide()
+        self.confirmation.hide()
+        self.pip.hide()
         self.panel.show()
-        # QDialog may center itself when shown again, even as a scene widget.
         self.panel_proxy.setPos(0, 0)
 
-    def _display(self, field, region):
+    def _show_preview(self):
         self.panel.hide()
-        self.preview.show()
+        self.pip.show()
+        self.preview_proxy.setPos(40, 10)
+        self.pip._refresh_frame()
+
+    def _display(self, field, region):
         self.preview.set_ocr_overlay(field, region)
 
     def restart(self):
-        self.panel.finish_warmup(False, '未预热')
-        self.panel.finish_recognition('nature', '未测试')
-        self.panel.reset_region('nature')
+        self.panel.finish_warmup(True, 'OCR 已就绪')
+        for field in ('nature', 'characteristic'):
+            self.panel.finish_recognition(field, '未测试')
+            self.panel.reset_region(field)
         self.panel.table.scrollToTop()
         self.preview.clear_ocr_overlay()
         self.preview.set_selection_enabled(False)
-        self.confirmation.hide()
-        self._table()
         self.pending_region = None
         self.elapsed = self.applied = 0
         self.playing = True
         self.last_tick = monotonic()
         self.pause_button.setText('暂停演示')
-        self.present()
+        self.advance_to(0)
         self.timer.start()
 
     def advance_to(self, elapsed):
@@ -214,9 +227,10 @@ class OcrDemoDialog(QDialog):
         while self.applied < len(self.events) and self.events[self.applied][0] <= elapsed:
             self.events[self.applied][1]()
             self.applied += 1
-        if 7900 <= elapsed < 10100:
-            amount = (elapsed - 7900) / 2200
-            self.mouse(QEvent.Type.MouseMove, QPointF(137 + 188 * amount, 193 + 57 * amount))
+        t = elapsed % self.FIELD_DURATION
+        if 4200 <= t < 6600 and elapsed < 42000:
+            start, end = self._drag_points()
+            self.mouse(QEvent.Type.MouseMove, start + (end - start) * ((t - 4200) / 2400))
         self.present()
 
     def _tick(self):
@@ -224,75 +238,67 @@ class OcrDemoDialog(QDialog):
         delta = min(100, round((now - self.last_tick) * 1000))
         self.last_tick = now
         if self.playing:
-            if self.elapsed + delta >= 30000:
-                self.restart()
-            else:
-                self.advance_to(self.elapsed + delta)
+            self.restart() if self.elapsed + delta >= self.DURATION else self.advance_to(self.elapsed + delta)
 
     def toggle_playing(self):
         self.playing = not self.playing
         self.pause_button.setText('暂停演示' if self.playing else '继续演示')
 
     def present(self):
-        t = self.elapsed
-        if t < 4000:
-            title, copy = '1 · 预热 OCR', '先点击「预热OCR」，等待初始化完成。实际识别会读取你连接的视频画面。'
-        elif t < 6400:
-            title, copy = '2 · 选择要框选的项目', '以性格为例：游戏停留在笔记页，然后点击「性格」这一行的「框选」。'
-        elif t < 11600:
-            title, copy = '3 · 按住鼠标右键框选', '在 Seed 捕捉预览中，按住右键拖动，完整框住目标文字；松开后，在确认窗口中确认保存。'
-        elif t < 17400:
-            title, copy = '4 · 保存后，显示区域核对', '确认后区域会自动保存，不需要另找保存按钮。点击「显示」，检查识别框是否完整覆盖文字。'
-        elif t < 23500:
-            title, copy = '5 · 点击识别，核对文字', '回到 OCR 设置，点击该行「识别」。这里的“固执”是演示结果；实际请与游戏画面逐字核对，空白或错误时重新框选。'
-        elif t < 27000:
-            title, copy = '6 · 按画面逐组检查', '性格和个性在笔记页，六项能力值在能力页；判闪区域要切到战斗画面检查。「测试全部」会读取笔记页并控制翻页，运行前先准备好画面和伊机控。'
+        t = self.elapsed % self.FIELD_DURATION
+        name = OCR_REGION_LABELS[self.field]
+        prefix = '1' if self.field == 'nature' else '2'
+        if self.elapsed >= 42000:
+            title, copy = '接下来，在自己的画面上练习', '性格、个性完成后，向右切到能力页，逐项框选并识别六项数值；最后按 A（LEFT）回笔记页，再点击「测试全部」。'
+        elif t < 2600:
+            title, copy = f'{prefix}.1 · 点击{name}这一行的「框选」', f'游戏停留在笔记页，找到“{name}”这一行。接下来在独立预览小窗中右键框选。'
+        elif t < 9000:
+            title, copy = f'{prefix}.2 · 在独立预览中按住右键拖动', ('完整框住「固執的性格。」这一行，保留少量边缘。松开右键后确认保存。' if self.field == 'nature' else '完整框住「對聲音敏感。」这一行，不要包含下面的口味文字。松开右键后确认保存。')
+        elif t < 14300:
+            title, copy = f'{prefix}.3 · 点击「显示」，检查框的位置', '确认保存后区域自动生效。点击「显示」，独立预览中的绿色框应完整覆盖对应文字。'
         else:
-            title, copy = '7 · 核对判闪使用的区域', '将游戏切到对应战斗画面，检查判闪对话区域和御三家战斗区域。每个项目都可按刚才的方法显示、框选和识别。'
+            title, copy = f'{prefix}.4 · 点击「识别」，对照结果', ('这一整行会识别并清理为「固执」，不用只框红色的两个字。' if self.field == 'nature' else '这里应识别为「对声音敏感」。请对照游戏中的个性文字确认，不要误框成口味。')
         self.title.setText(title)
         self.copy.setText(copy)
         self.view.viewport().update()
 
+    def _scene_rect(self, widget, parent, proxy):
+        rect = QRectF(widget.rect())
+        rect.moveTopLeft(QPointF(widget.mapTo(parent, widget.rect().topLeft())))
+        return proxy.mapRectToScene(rect)
+
+    @staticmethod
+    def _move(start, end, amount):
+        amount = max(0, min(1, amount))
+        return start + (end - start) * (amount * amount * (3 - 2 * amount))
+
     def visual_state(self):
-        t = self.elapsed
+        t = self.elapsed % self.FIELD_DURATION
+        if self.elapsed >= 42000:
+            return self.panel_proxy.sceneBoundingRect(), None, False
+        start, end = self._drag_points()
+        origin = QPointF(self.preview.mapTo(self.pip, self.preview.rect().topLeft()))
+        start, end = self.preview_proxy.mapToScene(origin + start), self.preview_proxy.mapToScene(origin + end)
         if self.confirmation.isVisible():
-            hole = self.confirm_proxy.sceneBoundingRect()
-            rect = QRectF(self.confirm_button.rect())
-            rect.moveTopLeft(QPointF(self.confirm_button.mapTo(self.confirmation, self.confirm_button.rect().topLeft())))
-            end = self.confirm_proxy.mapToScene(rect.center())
-            amount = min(1, max(0, (t - 10100) / 1500))
-            start = QPointF(325, 250)
-            return hole, start + (end - start) * amount, False
-        if self.preview.isVisible():
-            hole = QRectF(112, 164, 735, 110)
-            if 6400 <= t < 7900:
-                amount = max(0, (t - 6400) / 1500)
-                return hole, QPointF(490 - 353 * amount, 420 - 227 * amount), False
-            if 7900 <= t < 10100:
-                amount = (t - 7900) / 2200
-                return hole, QPointF(137 + 188 * amount, 193 + 57 * amount), True
+            button = self._scene_rect(self.confirm_button, self.confirmation, self.confirm_proxy)
+            return self.confirm_proxy.sceneBoundingRect(), self._move(end, button.center(), (t - 6600) / 1800), 8400 <= t < 8900
+        if self.pip.isVisible():
+            region = self.preview._image_rect_to_widget_rect(self._region())
+            hole = self.preview_proxy.mapRectToScene(QRectF(region).translated(origin)).adjusted(-10, -10, 10, 10)
+            if t < 4200:
+                previous = self._scene_rect(self.action(0), self.panel, self.panel_proxy).center()
+                return hole, self._move(previous, start, (t - 2600) / 1600), False
+            if t < 6600:
+                return hole, start + (end - start) * ((t - 4200) / 2400), True
             return hole, None, False
-        if t >= 23500:
-            rows = (2, 7) if t < 27000 else (8, 9)
-            table = self.panel.table
-            rect = table.visualItemRect(table.item(rows[0], 0)).united(table.visualItemRect(table.item(rows[1], 4)))
-            rect = rect.intersected(table.viewport().rect())
-            origin = table.viewport().mapTo(self.panel, rect.topLeft())
-            return self.panel_proxy.mapRectToScene(QRectF(origin.x(), origin.y(), rect.width(), rect.height())), None, False
-        button = self.panel.warmup_button if t < 4000 else self.action(0 if t < 11600 else 1 if t < 17400 else 2)
-        rect = QRectF(button.rect())
-        rect.moveTopLeft(QPointF(button.mapTo(self.panel, button.rect().topLeft())))
-        rect = self.panel_proxy.mapRectToScene(rect)
-        event_at = 1900 if t < 4000 else 5900 if t < 11600 else 14900 if t < 17400 else 19900
-        amount = min(1, max(0, (t - (event_at - 1500)) / 1500))
-        start = QPointF(490, 410)
-        cursor = start + (rect.center() - start) * (amount * amount * (3 - 2 * amount))
-        hole = rect.adjusted(-8, -6, 8, 6)
-        if 20900 <= t:
-            row = self.panel.table.visualItemRect(self.panel.table.item(0, 4))
+        if t >= 17400:
+            row = self.panel.table.visualItemRect(self.panel.table.item(0 if self.field == 'nature' else 1, 4))
             origin = self.panel.table.viewport().mapTo(self.panel, row.topLeft())
-            hole = self.panel_proxy.mapRectToScene(QRectF(origin.x(), origin.y(), row.width(), row.height()))
-        return hole, cursor if t < event_at + 600 else None, event_at <= t < event_at + 500
+            return self.panel_proxy.mapRectToScene(QRectF(origin.x(), origin.y(), row.width(), row.height())), None, False
+        index, at = (0, 2000) if t < 2600 else (1, 11000) if t < 14300 else (2, 16500)
+        rect = self._scene_rect(self.action(index), self.panel, self.panel_proxy)
+        previous = QPointF(490, 520) if index == 0 else self._scene_rect(self.confirm_button, self.confirmation, self.confirm_proxy).center() if index == 1 else self.preview_proxy.sceneBoundingRect().center()
+        return rect.adjusted(-6, -5, 6, 5), self._move(previous, rect.center(), (t - at + 1500) / 1500), at <= t < at + 500
 
     def done(self, result):
         if not self.closed:

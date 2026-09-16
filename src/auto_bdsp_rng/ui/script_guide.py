@@ -59,11 +59,15 @@ class ScriptGuide(QObject):
 
     def page(self):
         kind, phase = self.pos
+        if self.ocr.needs_control:
+            return self.easycon
         if phase in CAPTURE_PHASES:
             return self.window.project_xs_tab
         return self.easycon if kind in PRACTICE_KINDS and phase != "select" else self.panel
 
     def go(self, kind, phase="select", *, replay=None):
+        if self.pos[0] == "ocr" and kind != "ocr" and not self.leave_control():
+            return
         if self.pos[1] in EDIT_PHASES and phase not in EDIT_PHASES and not self.leave_control():
             return
         self._positioned = None
@@ -186,6 +190,7 @@ class ScriptGuide(QObject):
     @property
     def controlling(self):
         return self.active and (self.pos[1] in CONTROL_PHASES or
+                                (self.ocr.active and bool(self.easycon._vpad_input_source)) or
                                 (self.pos[1] in EDIT_PHASES and bool(self.easycon._vpad_input_source)))
 
     def leave_control(self):
@@ -216,6 +221,8 @@ class ScriptGuide(QObject):
 
     def navigation(self):
         if not self.active or self.c.overlay is None:
+            return
+        if self.ocr.control_navigation():
             return
         if self.ocr.selecting or (self.pos[0] == "ocr" and self.pos[1] != "select"):
             return
@@ -264,7 +271,7 @@ class ScriptGuide(QObject):
                 valid = not busy and (bool(self.easycon.editor.toPlainText().strip()) if kind in ("hit", "reverse") else self.easycon.run_button.isEnabled())
                 tip.next_button.setText("修改完成" if kind in ("hit", "reverse") else "重新运行")
         elif kind == "ocr":
-            tip.next_button.setText("观看 OCR 演示")
+            tip.next_button.setText("打开 OCR 设置")
         elif kind == "save":
             valid = bool(self.panel.script_save_state_label.property("saved"))
             tip.next_button.setText("完成本步")
@@ -273,6 +280,8 @@ class ScriptGuide(QObject):
             tip.skip_button.hide()
 
     def next(self):
+        if self.ocr.needs_control:
+            return
         kind, phase = self.pos
         if phase in CAPTURE_PHASES:
             self.capture.next()
@@ -284,7 +293,7 @@ class ScriptGuide(QObject):
             elif self.leave_control():
                 self.go(kind, "edit" if phase == "ball_restore" else "retry")
         elif kind == "ocr":
-            self.go("ocr", "demo")
+            self.ocr.go("initial_test")
         elif kind == "save":
             self.c.pause()
         elif kind not in PRACTICE_KINDS:
@@ -394,7 +403,7 @@ class ScriptGuide(QObject):
 
     def pause(self):
         self.capture.pause()
-        if self.pos[1] in CONTROL_PHASES | EDIT_PHASES:
+        if self.pos[1] in CONTROL_PHASES | EDIT_PHASES or (self.c.step == "auto_script_config" and self.pos[0] == "ocr"):
             self.leave_control()
         self._pending_skip = None
         self.preview.restore()

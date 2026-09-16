@@ -62,9 +62,12 @@ def script_step(panel, detail: str) -> GuideStep:
                    "点「停止录制」，切回「关闭」后，可将新增命令移到需要修改的位置。")
 
     if kind == "ocr":
+        ocr = panel.window().guide_controller.script_guide.ocr
+        if ocr.needs_control:
+            return ocr.control_step()
         return spec("检查自动反查使用的 OCR 区域",
-                    "反查脚本结束后，先保持在精灵的笔记页。接下来演示如何框选、显示并测试 OCR 区域，再在自己的画面上逐项检查。<br>"
-                    "性格、个性使用笔记页；六项能力值使用能力页。战斗文本和御三家战斗按钮用于判闪，需要切到对应画面检查。",
+                    "反查脚本结束后，先保持在精灵的笔记页。打开 OCR 设置，点击「测试全部」，核对性格、个性和六项能力值。<br>"
+                    "全部正确即可完成；部分有问题只修改勾选项；全部有问题则逐项重新设置。有问题时先观看框选动画，再在独立预览中练习。",
                     panel.capture_info_button)
     if kind == "save":
         return spec("保存自动流程的脚本选择",

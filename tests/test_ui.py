@@ -2054,6 +2054,33 @@ def test_picture_in_picture_right_drag_emits_source_frame_roi(app):
     assert selected == [(0, 0, 200, 100)]
 
 
+def test_picture_in_picture_roi_tracks_inner_layout_changes(app):
+    preview = PictureInPicturePreview()
+    preview.resize(640, 440)
+    preview.show()
+    preview.set_frames(np.zeros((720, 1280, 3), dtype=np.uint8))
+    app.processEvents()
+    heading = QLabel("OCR 框选提示")
+    heading.setFixedHeight(75)
+    preview.layout().insertWidget(0, heading)
+    app.processEvents()
+    app.processEvents()
+    label = preview.frame_label
+    image_rect = label._pixmap_rect
+    assert abs(image_rect.center().y() - label.contentsRect().center().y()) <= 1
+    assert abs(image_rect.center().x() - label.contentsRect().center().x()) <= 1
+    assert image_rect.width() <= label.contentsRect().width()
+    assert image_rect.height() <= label.contentsRect().height()
+    selected = []
+    preview.roiSelected.connect(selected.append)
+    preview.set_selection_enabled(True)
+    QTest.mousePress(label, Qt.MouseButton.RightButton, pos=image_rect.topLeft())
+    QTest.mouseRelease(label, Qt.MouseButton.RightButton, pos=image_rect.bottomRight())
+    assert selected == [(0, 0, 1280, 720)]
+    preview.hide()
+    preview.deleteLater()
+
+
 def test_picture_in_picture_confirms_ocr_selection_and_restores_live_frame(app, monkeypatch):
     window = MainWindow()
     initial_frame = np.full((120, 160, 3), 20, dtype=np.uint8)

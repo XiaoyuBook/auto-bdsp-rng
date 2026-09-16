@@ -741,6 +741,7 @@ class EasyConPanel(QWidget):
     connectionPresentationChanged = Signal(str, str, str, bool)
     virtualControllerKeyEvent = Signal(int, bool, bool, int)
     virtualControllerHookStopped = Signal(object, int)
+    virtualControllerAction = Signal(object, bool)
     nativeScriptStarted = Signal()
     runLogRequested = Signal()
 
@@ -4102,6 +4103,7 @@ class EasyConPanel(QWidget):
                     self.virtual_controller_keys.pop(key, None)
             if recorded_at is not None:
                 self._append_recorded_action(action, down=down, observed_at=recorded_at)
+            self.virtualControllerAction.emit(action, down)
         except Exception as exc:
             if not self._is_native_mode():
                 self.bridge_status = EasyConStatus.FAILED

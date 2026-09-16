@@ -1,0 +1,23 @@
+{
+  "image_sha256": "47e5b685bb15ce13093616936e207f9184757ab065cf3ef10b62e5217a09cc47",
+  "fields": {
+    "nature": {
+      "region": [
+        65,
+        133,
+        334,
+        52
+      ],
+      "text": "\u56fa\u6267"
+    },
+    "characteristic": {
+      "region": [
+        65,
+        374,
+        475,
+        49
+      ],
+      "text": "\u5bf9\u58f0\u97f3\u654f\u611f"
+    }
+  }
+}

@@ -223,4 +223,8 @@ def test_modified_script_replays_prerequisites_before_target_confirmation(guided
                 c.next()
     assert c.detail == destination + ":select"
     assert w.tabs.currentWidget() is e
-    click_guided_tab(w, c, p)
+    if destination == "ocr":
+        assert c.overlay.focus_target is e.controller_active_button
+        assert not c.overlay.tip.next_button.isEnabled()
+    else:
+        click_guided_tab(w, c, p)

@@ -1,11 +1,12 @@
 from pathlib import Path
 from time import monotonic
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 from auto_bdsp_rng import app_settings
 from auto_bdsp_rng.automation.easycon.native.device import MemoryTransport, NintendoSwitchDevice
@@ -160,11 +161,15 @@ def test_each_script_requires_run_and_confirmation_then_returns(guided, tmp_path
     assert c.overlay.tip.next_button.isEnabled()
     c.next()
     assert c.detail == next_kind + (":capture_start" if kind == "advance" else ":select")
-    assert c.overlay.page_widget is (w.project_xs_tab if kind == "advance" else p)
+    assert c.overlay.page_widget is (w.project_xs_tab if kind == "advance" else w.easycon_tab if kind == "reverse" else p)
     assert w.tabs.currentWidget() is w.easycon_tab
     c.pause()
     c.begin_or_resume()
-    click_guided_tab(w, c, c.overlay.page_widget)
+    if kind == "reverse":
+        assert c.overlay.focus_target is w.easycon_header_button
+        assert not c.overlay.tip.next_button.isEnabled()
+    else:
+        click_guided_tab(w, c, c.overlay.page_widget)
 
 
 @pytest.mark.parametrize("state", ["failed", "stopped"])
@@ -225,14 +230,18 @@ def test_ocr_animation_uses_real_roi_and_isolated_settings(guided):
     d.show()
     try:
         d.timer.stop()
-        d.advance_to(8700)
+        d.advance_to(5200)
         assert d.preview.selection_enabled() and d.preview._drag_start is not None
-        d.advance_to(11600)
+        d.advance_to(9000)
         region = d.panel.region_config.get("nature")
-        assert region.x == 137 and region.y == 193
-        assert region.width == 189 and region.height == 58
-        d.advance_to(20900)
-        assert "固执" in d.panel.table.item(0, 4).text()
+        assert abs(region.x - 65) <= 2 and abs(region.y - 133) <= 2
+        assert abs(region.width - 334) <= 2 and abs(region.height - 52) <= 2
+        d.advance_to(17400)
+        assert d.panel.table.item(0, 4).text() == "固执"
+        d.advance_to(38400)
+        assert d.panel.table.item(1, 4).text() == "对声音敏感"
+        region = d.panel.region_config.get("characteristic")
+        assert abs(region.y - 374) <= 2 and abs(region.height - 49) <= 2
         assert w._ocr_settings_dialog.region_config.to_settings_dict() == before
         d.restart()
         assert d.panel.region_config.get("nature") is None
@@ -242,39 +251,52 @@ def test_ocr_animation_uses_real_roi_and_isolated_settings(guided):
         d.deleteLater()
 
 
-def test_ocr_handoff_real_selection_resume_and_completion(guided):
+def test_ocr_handoff_real_selection_resume_and_completion(guided, connected_guide, monkeypatch):
+    from tests.test_ocr_repair_guide import full_test
     w, p, c = guided
-    c._go("auto_script_config", "ocr:demo")
+    e = w.easycon_tab
+    monkeypatch.setattr(e, "_keyboard_hook_factory", SimpleNamespace(is_supported=lambda: False))
+    e.controller_active_button.click()
+    w.tabs.setCurrentWidget(p)
+    c._go("auto_script_config", "ocr:field_select:nature:0")
     o = c.script_guide.ocr
-    assert o.demo.isVisible()
-    o.demo.learned_button.click()
-    QTest.qWait(50)
-    assert c.detail == "ocr:notes" and o.dialog.isVisible()
-    assert o.tip is not None
-    assert o.dialog.layout().indexOf(o.tip) >= 0
-    # Real preview selection and actual save signal return to the same settings step.
+    o.dialog.fullTestRequested.disconnect(w._start_ocr_full_test)
+    o.dialog.recognitionRequested.disconnect(w._request_ocr_region_recognition)
     w._latest_preview_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-    o.dialog.table.cellWidget(0, 3).findChildren(QPushButton)[0].click()
+    o.action("nature", 0).click()
     assert o.selecting and not o.dialog.isVisible()
-    assert w.tabs.currentWidget() is w.project_xs_tab
+    assert w.tabs.currentWidget() is p
+    QApplication.instance().installEventFilter(c)
+    QTest.keyPress(w._picture_in_picture.frame_label, Qt.Key.Key_W)
+    assert connected_guide.get_report().ly == 1
+    QTest.keyRelease(w._picture_in_picture.frame_label, Qt.Key.Key_W)
+    assert connected_guide.get_report().ly == 128
     w.apply_selected_ocr_region((100, 100, 200, 40))
     QTest.qWait(50)
-    assert not o.selecting and o.dialog.isVisible()
-    assert o.dialog.region_config.get("nature").x == 100
-    o.tip.next_button.click()
-    assert c.detail == "ocr:stats"
+    assert o.phase == "field_recognize" and o.dialog.isVisible()
     c.pause()
-    assert o.tip is None
+    assert not e.virtual_controller_enabled
     c.begin_or_resume()
-    assert c.detail == "ocr:stats" and o.tip.isVisible()
+    assert o.needs_control and o.phase == "field_recognize"
+    click_guided_tab(w, c, e)
+    e.controller_active_button.click()
+    c.script_guide.poll()
+    assert o.dialog.isVisible()
+    o.action("nature", 2).click()
+    o.dialog.finish_recognition("nature", "固执")
     o.tip.next_button.click()
-    assert c.detail == "ocr:battle"
+    assert o.phase == "return_notes"
     o.tip.next_button.click()
-    assert c.detail == "exit:select" and w.tabs.currentWidget() is w.project_xs_tab
+    full_test(o)
+    with monkeypatch.context() as blocked:
+        blocked.setattr(e, "_deactivate_virtual_controller", lambda **_kwargs: False)
+        o.tip.next_button.click()
+        assert o.phase == "final_result" and o.dialog.isVisible()
+    o.tip.next_button.click()
+    assert c.detail == "exit:select" and w.tabs.currentWidget() is e
     click_guided_tab(w, c, p)
     c.next()
-    assert c.detail == "escape:select" and w.tabs.currentWidget() is p
-    assert not c.overlay.waiting_for_page
+    assert c.detail == "escape:select"
     c.next()
     assert c.detail == "save:select"
     if p.save_scripts_button.isEnabled():
@@ -436,17 +458,21 @@ def test_ocr_demo_coordinates_stay_on_real_controls_after_switching(guided):
     d.show()
     try:
         d.timer.stop()
-        for t in (1800, 5800, 8800, 11000, 12000, 15000, 19900, 22000, 24000, 27500):
+        for t in (1800, 5200, 8000, 11000, 12000, 16500, 18000, 22000, 26200, 38400):
             d.advance_to(t)
             QTest.qWait(30)
             hole, cursor, click = d.visual_state()
             assert d.scene.sceneRect().contains(hole), t
-            if t in (1800, 5800, 19900):
-                button = d.panel.warmup_button if t == 1800 else d.action(0 if t == 5800 else 2)
+            if t in (5200, 26200):
+                point = d.preview.mapTo(d.pip, d.preview._drag_current)
+                actual = d.preview_proxy.mapToScene(point)
+                assert (actual - cursor).manhattanLength() <= 2
+            if t in (1800, 11000, 16500):
+                button = d.action(0 if t == 1800 else 1 if t == 11000 else 2)
                 rect = button.rect()
                 center = d.panel_proxy.mapToScene(button.mapTo(d.panel, rect.center()))
                 assert hole.contains(center), t
-            if t == 22000:
+            if t == 18000:
                 row = d.panel.table.visualItemRect(d.panel.table.item(0, 4))
                 center = d.panel_proxy.mapToScene(d.panel.table.viewport().mapTo(d.panel, row.center()))
                 assert hole.contains(center)

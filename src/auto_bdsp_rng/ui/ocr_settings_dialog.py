@@ -67,6 +67,11 @@ class OcrSettingsDialog(QDialog):
     recognitionRequested = Signal(str, object)
     warmupRequested = Signal()
     fullTestRequested = Signal()
+    fullTestStarted = Signal()
+    fullTestFinished = Signal(bool, str)
+    recognitionStarted = Signal(str, object)
+    recognitionFinished = Signal(str, str)
+    regionChanged = Signal(str)
 
     def __init__(
         self,
@@ -133,7 +138,7 @@ class OcrSettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
-        hint = QLabel("点击“框选”后，在 Seed 捕捉预览图上按住右键拖拽选择区域。识别结果只在点击“识别/测试”时刷新。")
+        hint = QLabel("点击“框选”后，在主预览或独立预览中按住右键拖拽选择区域。识别结果只在点击“识别/测试”时刷新。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -277,6 +282,7 @@ class OcrSettingsDialog(QDialog):
         self.region_config.set(field, region)
         self._save_region(field)
         self._refresh_row(field)
+        self.regionChanged.emit(field)
 
     def reset_region(self, field: str) -> None:
         if self.interaction_busy:
@@ -285,6 +291,7 @@ class OcrSettingsDialog(QDialog):
         self._save_region(field)
         self._refresh_row(field)
         self.table.item(self._field_rows[field], 4).setText("未测试")
+        self.regionChanged.emit(field)
 
     def request_selection(self, field: str) -> None:
         if self.interaction_busy:
@@ -316,6 +323,7 @@ class OcrSettingsDialog(QDialog):
         self._recognition_active_field = field
         self.table.item(self._field_rows[field], 4).setText("识别中…")
         self._refresh_interaction_state()
+        self.recognitionStarted.emit(field, region)
         self.recognitionRequested.emit(field, region)
 
     def _run_legacy_recognition(self, field: str, region: object) -> None:
@@ -332,6 +340,7 @@ class OcrSettingsDialog(QDialog):
         if self._recognition_active_field == field:
             self._recognition_active_field = None
         self._refresh_interaction_state()
+        self.recognitionFinished.emit(field, text or "")
 
     def fail_recognition(self, field: str, message: str) -> None:
         self.finish_recognition(field, f"失败: {message}")
@@ -394,6 +403,7 @@ class OcrSettingsDialog(QDialog):
             if self.region_config.get(field) is not None:
                 self.table.item(self._field_rows[field], 4).setText("等待中")
         self._refresh_interaction_state()
+        self.fullTestStarted.emit()
         self.fullTestRequested.emit()
 
     def finish_full_test(self, success: bool, message: str) -> None:
@@ -404,6 +414,7 @@ class OcrSettingsDialog(QDialog):
                 if self.table.item(self._field_rows[field], 4).text() == "等待中":
                     self.table.item(self._field_rows[field], 4).setText(message)
         self._refresh_interaction_state()
+        self.fullTestFinished.emit(success, message)
 
     def cancel_background_activity(self, message: str) -> None:
         active_field = self._recognition_active_field
