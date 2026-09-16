@@ -1,5 +1,5 @@
 _闪帧 = 5
-
+# 御三家选择请查看第59行说明
 HOME DOWN
 WAIT 44
 HOME UP
@@ -56,9 +56,11 @@ A DOWN
 WAIT 113
 A UP
 WAIT 945
-LS RIGHT
-WAIT 521
-LS RESET
+# 下面三行(60-62)如果均在前面加上#则代表草苗龟，没有#的情况下FOR 后面的数字1则代表小火猴，2则代表波加曼
+FOR 1
+RIGHT
+NEXT
+WAIT 100
 A DOWN
 WAIT 109
 A UP
