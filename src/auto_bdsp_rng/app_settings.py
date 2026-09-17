@@ -120,6 +120,7 @@ GUIDE_STEPS = (
     "seed_capture_page", "seed_capture_config", "seed_capture_actions",
     "seed_capture_tools", "seed_capture_save", "auto_flow_config", "script_preview",
     "easycon_intro", "easycon_recording", "auto_script_config", "easycon_script_config",
+    "first_auto_run",
 )
 
 LEGACY_GUIDE_STEPS = frozenset(("independent_preview", "preview_opened", "capture_overview_done"))
@@ -162,6 +163,17 @@ def advance_guide_progress(step: str, detail: str = "", path: Path | None = None
         settings["guide_progress"] = progress
         save_settings(settings, path)
     return dict(progress)
+
+
+def complete_guide_progress(path: Path | None = None) -> None:
+    """Finish the current guide while retaining its session and other settings."""
+    with _SETTINGS_LOCK:
+        settings = load_settings(path)
+        previous = settings.get("guide_progress")
+        if not _unfinished_guide(previous):
+            raise ValueError("no unfinished guide")
+        settings["guide_progress"] = dict(previous, status="completed")
+        save_settings(settings, path)
 
 
 def is_run_log_enabled(path: Path | None = None) -> bool:

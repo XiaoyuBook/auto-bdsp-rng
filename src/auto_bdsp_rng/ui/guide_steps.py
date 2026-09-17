@@ -30,6 +30,18 @@ def _row(form, field: QWidget) -> tuple[QWidget, ...]:
 
 
 def workspace_step(panel, key: str, detail: str = "") -> GuideStep:
+    if key == "first_auto_run":
+        if detail == "mode":
+            return GuideStep(key, "第 6 步 · 第一次自动乱数", "第一次先选择单次运行",
+                             '将「运行模式」切换为 <span style="color:#087C58; font-weight:600">单次</span>。'
+                             "我们先完整运行一轮，结束后再查看本轮反查得到的实际 delay。",
+                             panel.mode_combo, (panel.mode_combo,))
+        return GuideStep(key, "第 6 步 · 第一次自动乱数", "开始你的第一次乱数吧！",
+                         "准备好了，点击亮起的「开始」，从测种开始完整运行一轮。运行时引导会收起，你可以观察游戏画面和流程状态。\n"
+                         "本轮结束且反查成功后，我们会带你查看实际 delay；完成一轮不一定代表出闪。" +
+                         ('\n<span style="color:#C2410C; font-weight:600">当前自动反查未开启，本轮不会自动生成 delay 样本。</span>'
+                          if panel.auto_reverse_combo.currentIndex() != 1 else ""),
+                         panel.start_button, (panel.start_button,))
     if key == "script_preview":
         window = panel.window()
         return GuideStep(key, "5.1 · 准备操作", "先打开独立预览",

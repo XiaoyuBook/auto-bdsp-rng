@@ -363,6 +363,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     stopRequested = Signal()
     autoProgressChanged = Signal(object)
     runStateChanged = Signal(bool)
+    runStarted = Signal(object)  # Frozen config, before the worker starts.
+    runFinished = Signal(object)  # Terminal progress; None on an exception.
     runLogRequested = Signal()
     roundRecordsRequested = Signal()
     targetDataRequested = Signal()
@@ -3199,6 +3201,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._worker_done = False
         self._run_state_active = True
         self._sync_run_controls()
+        self.runStarted.emit(getattr(runner, "config", None))
         self.runStateChanged.emit(True)
         thread.start()
 
@@ -3207,6 +3210,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if isinstance(progress, AutoRngProgress):
             self.set_phase_text("已停止" if progress.phase == AutoRngPhase.IDLE else "失败" if progress.phase == AutoRngPhase.FAILED else "已完成")
         self._runner_returned()
+        self.runFinished.emit(progress)
 
     def _runner_failed(self, message: str) -> None:
         self.set_phase_text("失败")
@@ -3214,6 +3218,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.add_log(message, level="ERROR")
         self._last_failed_progress_message = None
         self._runner_returned()
+        self.runFinished.emit(None)
 
 
     def _selected_path(self, combo: QComboBox) -> Path | None:

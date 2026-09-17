@@ -303,7 +303,8 @@ def test_ocr_handoff_real_selection_resume_and_completion(guided, connected_guid
         p.save_scripts_button.click()
     c.script_guide.poll()
     c.next()
-    assert not c.active
+    assert c.active and c.step == "first_auto_run"
+    assert c.overlay.focus_target is p.start_button
 
 
 @pytest.mark.parametrize("size", [(1150, 760), (860, 600)])

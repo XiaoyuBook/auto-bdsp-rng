@@ -295,7 +295,7 @@ class ScriptGuide(QObject):
         elif kind == "ocr":
             self.ocr.go("initial_test")
         elif kind == "save":
-            self.c.pause()
+            self.c._go("first_auto_run", "mode")
         elif kind not in PRACTICE_KINDS:
             self._next_kind()
         elif phase == "select":

@@ -17,6 +17,7 @@ from auto_bdsp_rng.ui.guide_tip import GuideTip
 from auto_bdsp_rng.ui.eye_guide import EyeGuide
 from auto_bdsp_rng.ui.script_guide import ScriptGuide
 from auto_bdsp_rng.ui.easycon_record_demo_dialog import EasyConRecordDemoDialog
+from auto_bdsp_rng.ui.first_run_guide import FirstRunGuide
 
 
 class GuideSpotlight(QWidget):
@@ -335,6 +336,7 @@ class GuideController(QObject):
         window.easycon_header_button.clicked.connect(lambda: self._connection_dialog_opened("easycon"))
         self.eye_guide = EyeGuide(self)
         self.script_guide = ScriptGuide(self)
+        self.first_run = FirstRunGuide(self)
         self.easycon_demo_dialog: EasyConRecordDemoDialog | None = None
         self.refresh()
 
@@ -406,6 +408,8 @@ class GuideController(QObject):
             self.step = progress["step"]
             self.detail = progress.get("detail", "")
         self.active = True
+        if new_session:
+            self.first_run.reset()
         if self.step == "easycon_recording" and not self.detail:
             self.detail = "demo"
         self._connection_timer.start()
@@ -452,6 +456,8 @@ class GuideController(QObject):
 
     def _show_workspace(self) -> None:
         if not self.active or self.window._is_closing:
+            return
+        if self.step == "first_auto_run" and self.first_run.prepare():
             return
         if self.step in ("seed_capture_page", "seed_capture_config", "seed_capture_actions", "seed_capture_tools", "seed_capture_save", "auto_flow_config", "script_preview"):
             page = self.window.project_xs_tab
@@ -546,11 +552,15 @@ class GuideController(QObject):
             tip.next_button.setEnabled(not waiting and self.eye_guide.config_saved)
             tip.skip_button.setEnabled(False)
         self.script_guide.navigation()
+        self.first_run.navigation()
 
     def next(self) -> None:
         if not self.active or not self._current_overlay().tip.next_button.isEnabled():
             return
-        if self.step == "auto_script_config":
+        if self.step == "first_auto_run":
+            if self.detail == "mode" and self.panel.mode_combo.currentData() == "single":
+                self._go("first_auto_run", "start")
+        elif self.step == "auto_script_config":
             self.script_guide.next()
         elif self._dialog_key:
             steps = connection_dialog_steps(self.panel, self._dialog_key) if self._dialog_key in ("video_source", "easycon") else dialog_steps(self.panel, self._dialog_key)
@@ -580,7 +590,7 @@ class GuideController(QObject):
         elif self.step == "easycon_recording":
             self._go("auto_script_config")
         elif self.step == "easycon_script_config":
-            self.pause()
+            self._go("first_auto_run", "mode")
         elif self.step == "seed_capture_tools":
             self.eye_guide.next()
         else:
@@ -589,7 +599,9 @@ class GuideController(QObject):
     def previous(self) -> None:
         if not self.active or not self._current_overlay().tip.previous_button.isEnabled():
             return
-        if self.step == "seed_capture_tools" and self.detail:
+        if self.step == "first_auto_run":
+            self._go("auto_script_config", "save:select")
+        elif self.step == "seed_capture_tools" and self.detail:
             self.eye_guide.previous()
         elif self.step == "easycon_recording" and self.detail == "practice":
             self._go("easycon_intro")
