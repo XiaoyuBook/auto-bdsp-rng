@@ -371,6 +371,7 @@ def test_run_configures_ui_scale_before_qapplication_and_passes_effective_scale(
             "run_log_manager": manager,
             "ui_scale": "auto",
             "ui_scale_environment": scale_environment,
+            "dev_mock_devices": False,
         }
     ]
 

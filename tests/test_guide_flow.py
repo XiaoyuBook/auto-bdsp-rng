@@ -320,8 +320,14 @@ def test_each_workspace_anchor_survives_resize_and_hidden_strategy_rows(guided):
         window.resize(width, height)
         for key in app_settings.GUIDE_STEPS:
             controller._go(key)
-            QTest.qWait(40)
             overlay = controller.overlay
+            # Opening the script card can queue another layout and scroll pass.
+            # Wait for the real anchor to settle instead of sampling after 40 ms.
+            for _ in range(40):
+                QTest.qWait(25)
+                center = overlay._target_rect(overlay.focus_target).center().toPoint()
+                if overlay.hole.contains(center) and not overlay.mask().contains(center):
+                    break
             assert overlay.isVisible(), (width, key)
             assert overlay.rect().contains(overlay.tip.geometry()), (width, key)
             assert not overlay.hole.intersects(overlay.tip.geometry()), (width, key)
