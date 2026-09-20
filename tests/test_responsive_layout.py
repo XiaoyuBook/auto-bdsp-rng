@@ -288,7 +288,8 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert "advance 321" in window.navigation_status.toolTip()
 
 
-def test_qq_notification_entry_opens_native_shared_tutorial(app, monkeypatch, tmp_path, isolated_ui_qsettings):
+def test_qq_notification_entry_opens_embedded_shared_tutorial(app, monkeypatch, tmp_path, isolated_ui_qsettings):
+    from PySide6.QtCore import QEvent
     from auto_bdsp_rng.notifications.qq_service import QQNotificationService, QQSettingsStore
 
     monkeypatch.setattr(main_window_module, "QQNotificationService", lambda parent: QQNotificationService(
@@ -302,10 +303,14 @@ def test_qq_notification_entry_opens_native_shared_tutorial(app, monkeypatch, tm
     assert dialog.service is window.qq_notifications
     dialog.open_guide()
     dialog._set_phase(1)
-    assert dialog.guide_form_layouts[0].indexOf(dialog.credentials) >= 0
-    assert dialog.app_id.isVisible()
-    assert dialog.bind_buttons["group"].isVisible()
+    assert dialog.snapshot()["view"]["guide"]
+    assert dialog.snapshot()["view"]["phase"] == "bind"
+    assert dialog.web.isVisible()
+    assert dialog.web.entry_url.isLocalFile()
     dialog.close()
+    dialog.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    window._qq_dialog = None
     window.close()
 
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor, QImage
@@ -327,18 +328,27 @@ class ClientTests(unittest.TestCase):
             service.update(user_openid="U")
             service.verified = True
             window = QQNotificationDialog(service)
+
+            def js(script):
+                results = []
+                window.page.runJavaScript(script, results.append)
+                wait_until(lambda: bool(results))
+                return results[0]
+
             try:
                 window.show()
+                wait_until(lambda: js("document.getElementById('bdsp-qq-design')?.dataset.ready === 'true'"), timeout=15000)
                 window.open_guide()
                 window._set_phase(2)
-                window.send_button.click()
+                wait_until(lambda: js("!document.getElementById('bd-guide-practice').hidden"))
+                js("document.getElementById('bd-test-send').click()")
                 self.assertTrue(self.wait_result()[0])
                 self.assertEqual([message[2]["msg_type"] for message in self.messages()], [0, 7])
                 self.assertEqual(len(service.records), 1)
                 self.assertTrue(service.records[0].success)
-                self.assertTrue(window.confirm_button.isVisible())
-                window.confirm_button.click()
-                self.assertIn("测试通过", window.test_result.text())
+                wait_until(lambda: js("!document.getElementById('bd-confirm-received').hidden"))
+                js("document.getElementById('bd-confirm-received').click()")
+                wait_until(lambda: js("document.getElementById('bd-test-result').textContent.includes('测试通过')"))
             finally:
                 window.close()
                 window.deleteLater()

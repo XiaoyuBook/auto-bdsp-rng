@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QEvent, QObject, Signal
+from PySide6.QtTest import QTest
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -17,6 +19,7 @@ from auto_bdsp_rng.ui.qq_notifications import QQNotificationDialog
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
     return QApplication.instance() or QApplication([])
 
 
@@ -141,54 +144,110 @@ def test_cached_bgr_frame_becomes_correct_jpeg(app):
     assert image.pixelColor(0, 0).blue() < 10
 
 
-def test_native_guide_uses_same_fields_and_binding_controls(service, app):
-    dialog = QQNotificationDialog(service)
-    dialog.resize(920, 750)
-    dialog.show()
-    try:
-        dialog.open_guide()
-        dialog._set_phase(1)
-        app.processEvents()
-        assert dialog.guide_form_layouts[0].indexOf(dialog.credentials) >= 0
-        assert dialog.app_id.isVisible() and dialog.secret.isVisible()
-        dialog.verify_button.click()
-        assert service.verified
-        dialog.bind_buttons["group"].click()
-        assert dialog.code.text() == "482 731"
-        assert dialog.countdown.text() == "剩余 60 秒"
-        service.setup.binding_changed.emit("group", "738291", 60, 2)
-        assert "第 2 组" in dialog.refresh_notice.text()
-        assert dialog.code.text() == "738 291"
-        service.setup.bound.emit("group", "NEW_GROUP")
-        service.setup.binding_changed.emit("", "", 0, 0)
-        service.setup.finish(True)
-        dialog.return_to_settings()
-        assert dialog.setup_form_layout.indexOf(dialog.credentials) >= 0
-        assert dialog.app_id.text() == "APP"
-        assert service.settings.group_openid == "NEW_GROUP"
-        dialog.open_guide()
-        dialog._set_phase(2)
-        assert dialog.guide_test_layout.indexOf(dialog.test_panel) >= 0
-        dialog.send_button.click()
-        assert not QImage.fromData(service.setup.calls[-1][2]).isNull()
-        service.setup.finish(False, "文字已提交；图片失败")
-        assert "未通过" in dialog.test_result.text()
-        assert not dialog.confirm_button.isVisible()
-    finally:
-        dialog.close()
-        dialog.deleteLater()
+def web_js(dialog, script):
+    values = []
+    dialog.page.runJavaScript(script, values.append)
+    deadline = time.monotonic() + 5
+    while not values:
+        assert time.monotonic() < deadline, "JavaScript callback timed out"
+        QTest.qWait(10)
+    return values[0]
 
 
-def test_closing_native_dialog_cancels_binding(service, app):
-    dialog = QQNotificationDialog(service)
-    dialog.show()
-    dialog.verify_button.click()
-    dialog.bind_buttons["user"].click()
-    assert service.setup.busy
+def web_wait(dialog, script):
+    deadline = time.monotonic() + 15
+    while not web_js(dialog, script):
+        assert time.monotonic() < deadline, script
+        QTest.qWait(10)
+
+
+@pytest.fixture
+def dialog(service):
+    result = QQNotificationDialog(service)
+    result.resize(880, 820)
+    result.show()
+    web_wait(result, "document.getElementById('bdsp-qq-design')?.dataset.ready === 'true'")
+    yield result
+    result.close()
+    result.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def click(dialog, name):
+    web_js(dialog, f"document.getElementById('bd-{name}').click()")
+
+
+def test_web_guide_shares_forms_and_real_binding_state(dialog, service):
+    click(dialog, "guide-open")
+    click(dialog, "phase-bind")
+    web_wait(dialog, "document.getElementById('bd-app-id').closest('#bd-guide-credentials') !== null")
+    click(dialog, "verify")
+    web_wait(dialog, "!document.getElementById('bd-bind-group').disabled")
+    assert service.verified
+    click(dialog, "bind-group")
+    web_wait(dialog, "document.getElementById('bd-countdown').textContent === '剩余 60 秒'")
+    service.setup.binding_changed.emit("group", "738291", 42, 2)
+    web_wait(dialog, "document.getElementById('bd-binding-code').textContent === '738 291'")
+    assert "第 2 组" in web_js(dialog, "document.getElementById('bd-refresh-notice').textContent")
+    assert web_js(dialog, "document.getElementById('bd-countdown').textContent") == "剩余 42 秒"
+    service.setup.bound.emit("group", "NEW_GROUP")
+    service.setup.binding_changed.emit("", "", 0, 0)
+    service.setup.finish(True)
+    click(dialog, "guide-back")
+    web_wait(dialog, "document.getElementById('bd-app-id').closest('#bd-setup-main') !== null")
+    assert web_js(dialog, "document.getElementById('bd-app-id').value") == "APP"
+    assert service.settings.group_openid == "NEW_GROUP"
+    click(dialog, "guide-open")
+    click(dialog, "phase-test")
+    web_wait(dialog, "document.getElementById('bd-test-send').closest('#bd-guide-test-slot') !== null")
+    click(dialog, "test-send")
+    assert not QImage.fromData(service.setup.calls[-1][2]).isNull()
+    service.setup.finish(False, "文字已提交；图片失败")
+    web_wait(dialog, "document.getElementById('bd-test-result').textContent.includes('未通过')")
+    assert web_js(dialog, "document.getElementById('bd-confirm-received').hidden")
+
+
+def test_web_credentials_flush_before_verify_and_close(dialog, service):
+    web_js(dialog, """const input = document.getElementById('bd-app-id');
+        input.value = 'NEW_APP'; input.dispatchEvent(new Event('input', {bubbles:true}));""")
+    click(dialog, "verify")
+    web_wait(dialog, "document.getElementById('bd-credential-state').textContent.includes('已验证')")
+    assert service.setup.credentials == ("NEW_APP", "SECRET")
+    assert not service.settings.user_openid
+    click(dialog, "bind-user")
+    web_wait(dialog, "!document.getElementById('bd-binding').hidden")
     dialog.close()
     assert not service.setup.busy
     assert "SECRET" not in service.store.path.read_text(encoding="utf-8")
-    dialog.deleteLater()
+    assert "secret" not in dialog.snapshot()["settings"]
+    assert dialog.profile.isOffTheRecord()
+
+
+def test_leaving_binding_page_cancels_and_records_are_literal_text(dialog, service):
+    click(dialog, "verify")
+    web_wait(dialog, "!document.getElementById('bd-bind-user').disabled")
+    click(dialog, "bind-user")
+    web_wait(dialog, "!document.getElementById('bd-binding').hidden")
+    click(dialog, "tab-records")
+    web_wait(dialog, "document.getElementById('bd-binding').hidden")
+    assert not service.setup.busy
+    service._record("图文测试", "user", False, "<img src=x onerror=alert(1)> 上传失败")
+    web_wait(dialog, "document.getElementById('bd-record-table').textContent.includes('上传失败')")
+    assert web_js(dialog, "document.querySelector('#bd-record-table img') === null")
+
+
+@pytest.mark.parametrize("size", [(880, 820), (680, 520)])
+def test_web_tutorial_original_images_and_visible_layout(dialog, size):
+    dialog.resize(*size)
+    click(dialog, "guide-open")
+    web_js(dialog, "document.querySelector('[data-step=\"11\"]').click()")
+    web_wait(dialog, "document.getElementById('bd-step-image').complete && document.getElementById('bd-step-image').naturalWidth > 0")
+    assert web_js(dialog, "document.querySelectorAll('[data-step]').length") == 12
+    assert not web_js(dialog, "document.documentElement.scrollWidth > innerWidth")
+    assert web_js(dialog, "document.getElementById('bd-next').getBoundingClientRect().bottom <= innerHeight")
+    web_js(dialog, "document.querySelector('.bd-screenshot-stage').click()")
+    web_wait(dialog, "document.getElementById('bd-zoom').open")
+    click(dialog, "zoom-close")
 
 
 @pytest.mark.parametrize("task", ["rng", "tid"])

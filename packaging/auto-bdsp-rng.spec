@@ -74,6 +74,9 @@ hiddenimports = [
     "win32gui",
     "win32process",
     "win32ui",
+    "PySide6.QtWebChannel",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
 ]
 
 for package in (
