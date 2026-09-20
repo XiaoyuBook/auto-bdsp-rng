@@ -4,6 +4,8 @@ from auto_bdsp_rng.ui.static_result_items import StatDisplayMode, StatResultItem
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
 from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.notifications.qq_service import QQNotificationService
+from auto_bdsp_rng.ui.qq_notifications import QQNotificationDialog, notification_icon
 
 import csv
 import sys
@@ -1655,6 +1657,10 @@ class MainWindow(QMainWindow):
             Qt.ConnectionType.QueuedConnection,
         )
         self._build_actions()
+        self.qq_notifications = QQNotificationService(self)
+        self._qq_dialog = None
+        self._qq_task_details = {}
+        self.qq_notifications.log.connect(lambda message: self._write_run_log("QQ 通知", message))
         self._build_ui()
         self._restore_profile_settings()
         self._connect_auto_rng_sync_signals()
@@ -1864,6 +1870,16 @@ class MainWindow(QMainWindow):
             badge.hide()
         header_layout.addWidget(self.video_source_header_button)
         header_layout.addWidget(self.easycon_header_button)
+        self.qq_notification_button = QPushButton("通知")
+        self.qq_notification_button.setObjectName("QQNotificationButton")
+        self.qq_notification_button.setIcon(notification_icon())
+        self.qq_notification_button.setIconSize(QSize(20, 20))
+        self.qq_notification_button.setFixedHeight(32)
+        self.qq_notification_button.setMinimumWidth(72)
+        self.qq_notification_button.setToolTip("QQ 通知设置与注册教程")
+        self.qq_notification_button.setAccessibleName("QQ 通知设置")
+        self.qq_notification_button.clicked.connect(self.show_qq_notifications)
+        header_layout.addWidget(self.qq_notification_button)
         header_layout.addWidget(self.guide_button)
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
@@ -1974,6 +1990,10 @@ class MainWindow(QMainWindow):
         self.view_status_logs_button.setToolTip("查看当前页面日志；自动任务会定位当前运行与轮次")
         self.view_status_logs_button.clicked.connect(self._show_current_page_logs)
         status_bar.addPermanentWidget(self.view_status_logs_button)
+        self.qq_notification_status = QLabel()
+        status_bar.addPermanentWidget(self.qq_notification_status)
+        self.qq_notifications.changed.connect(self._refresh_qq_notification_status)
+        self._refresh_qq_notification_status()
         self.setStatusBar(status_bar)
         self.update_controller = UpdateController(self)
         self.help_menu_controller = HelpMenuController(
@@ -2127,6 +2147,8 @@ class MainWindow(QMainWindow):
 
     def _write_run_log(self, source: str, message: object, *, level: str = "INFO") -> None:
         text = str(message)
+        if level == "ERROR" and source in ("自动定点", "自动 TID") and hasattr(self, "_qq_task_details"):
+            self._qq_task_details[source] = text
         run_id, round_id = self._run_log_context(str(source))
         try:
             self._run_log_buffer.publish(
@@ -4312,6 +4334,9 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+        if self._qq_dialog is not None:
+            self._qq_dialog.close()
+        self.qq_notifications.shutdown()
         self._save_profile_settings()
         self._save_window_geometry()
         self.guide_controller.pause()
@@ -4324,6 +4349,9 @@ class MainWindow(QMainWindow):
         self._keep_window_on_screen()
         if hasattr(self, "version_label"):
             compact = self.width() < 1050
+            self.qq_notification_button.setText("" if compact else "通知")
+            self.qq_notification_button.setMinimumWidth(32 if compact else 72)
+            self.qq_notification_button.setMaximumWidth(32 if compact else 16777215)
             self.version_label.setVisible(not compact)
             self.title_label.setMaximumWidth(175 if compact else 16777215)
             title = APP_TITLE if self.lang == "zh" else self._text("title")
@@ -4748,6 +4776,7 @@ class MainWindow(QMainWindow):
         label.setToolTip(full_text)
 
     def _apply_auto_rng_header_progress(self, progress: object) -> None:
+        self._qq_task_details["自动定点"] = getattr(progress, "log_message", "")
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         loop_index = getattr(progress, "loop_index", None)
         if self._active_auto_rng_run_id is not None and loop_index is not None and int(loop_index) > 0:
@@ -4784,6 +4813,7 @@ class MainWindow(QMainWindow):
             self._stop_advance_tracking()
 
     def _apply_auto_tid_header_progress(self, progress: object) -> None:
+        self._qq_task_details["自动 TID"] = getattr(progress, "log_message", "")
         phase_text = progress.phase.value if hasattr(progress.phase, "value") else str(progress.phase)
         loop_index = getattr(progress, "loop_index", None)
         if self._active_auto_tid_run_id is not None and loop_index is not None and int(loop_index) > 0:
@@ -7389,6 +7419,7 @@ class MainWindow(QMainWindow):
 
     def _handle_auto_rng_run_state_changed(self, running: bool) -> None:
         if running:
+            self._qq_task_details["自动定点"] = ""
             if self._active_auto_rng_run_id is not None:
                 self._update_auto_rng_header(
                     loop_index=0,
@@ -7412,12 +7443,15 @@ class MainWindow(QMainWindow):
                 round_id=self._active_auto_rng_round_id,
                 target_label=getattr(self.history_tab, "current_target_label", "自动定点"),
             )
+            self._notify_qq_task(self._active_auto_rng_run_id, "自动定点", outcome,
+                                 getattr(self.history_tab, "current_target_label", "自动定点"))
         self.run_records_tab.set_run_finished(f"运行{outcome}")
         self._active_auto_rng_run_id = None
         self._active_auto_rng_round_id = None
 
     def _handle_auto_tid_run_state_changed(self, running: bool) -> None:
         if running:
+            self._qq_task_details["自动 TID"] = ""
             if self._active_auto_tid_run_id is not None:
                 self._update_auto_rng_header(
                     loop_index=0,
@@ -7438,9 +7472,37 @@ class MainWindow(QMainWindow):
                 round_id=self._active_auto_tid_round_id,
                 target_label="自动 TID",
             )
+            progress = self.auto_tid_rng_tab._last_progress
+            tid = getattr(progress, "target_tid", None)
+            self._notify_qq_task(self._active_auto_tid_run_id, "自动 TID", outcome,
+                                 f"TID {tid}" if tid is not None else "自动 TID")
         self.run_records_tab.set_run_finished(f"运行{outcome}")
         self._active_auto_tid_run_id = None
         self._active_auto_tid_round_id = None
+
+    def show_qq_notifications(self) -> None:
+        if self._qq_dialog is None:
+            self._qq_dialog = QQNotificationDialog(self.qq_notifications, self)
+        self._qq_dialog.show()
+        self._qq_dialog.raise_()
+        self._qq_dialog.activateWindow()
+
+    def _refresh_qq_notification_status(self) -> None:
+        service = self.qq_notifications
+        text = "需检查" if service.last_error else "已启用" if service.settings.enabled else "未启用"
+        color = "#906423" if service.last_error else "#087C58" if service.settings.enabled else "#64707D"
+        self.qq_notification_button.setIcon(notification_icon(color))
+        self.qq_notification_button.setToolTip("QQ 通知：" + text)
+        self.qq_notification_status.setText("QQ 通知：" + text)
+        self.qq_notification_status.setToolTip(service.last_error or "点击顶部「通知」配置机器人")
+
+    def _notify_qq_task(self, run_id, task, outcome, target) -> None:
+        if self._is_closing:
+            return
+        self.qq_notifications.notify_task(
+            run_id, task + "乱数", outcome, target=target,
+            detail=self._qq_task_details.get(task, ""), frame=self._latest_preview_frame,
+        )
 
     def _build_auto_tid_rng_services(self, config: AutoTidRngConfig) -> AutoTidRngServices:
         seed_config_path = self._selected_auto_seed_config_path()

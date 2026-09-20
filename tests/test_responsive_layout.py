@@ -288,6 +288,27 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert "advance 321" in window.navigation_status.toolTip()
 
 
+def test_qq_notification_entry_opens_native_shared_tutorial(app, monkeypatch, tmp_path, isolated_ui_qsettings):
+    from auto_bdsp_rng.notifications.qq_service import QQNotificationService, QQSettingsStore
+
+    monkeypatch.setattr(main_window_module, "QQNotificationService", lambda parent: QQNotificationService(
+        parent, store=QQSettingsStore(tmp_path / "qq.json")))
+    window = MainWindow(profile_settings=isolated_ui_qsettings["MainWindowProfile"])
+    window.show()
+    window.qq_notification_button.click()
+    app.processEvents()
+    dialog = window._qq_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert dialog.service is window.qq_notifications
+    dialog.open_guide()
+    dialog._set_phase(1)
+    assert dialog.guide_form_layouts[0].indexOf(dialog.credentials) >= 0
+    assert dialog.app_id.isVisible()
+    assert dialog.bind_buttons["group"].isVisible()
+    dialog.close()
+    window.close()
+
+
 def test_confirmed_navigation_and_seed_preview_use_content_geometry(
     app,
     monkeypatch,

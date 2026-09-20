@@ -89,6 +89,7 @@
 | 脚本、录制与虚拟手柄快捷键 | [伊机控与脚本](docs/USAGE.md#伊机控与脚本) |
 | 轮次结果、错误与运行日志 | [日志中心](docs/USAGE.md#日志中心) |
 | 源码环境、CLI 与测试 | [开发指南](docs/DEVELOPMENT.md) |
+| QQ 通知（顶部「通知」入口，含软件内注册与绑定教程） | [配置与使用](docs/QQ_BOT_SETUP.md) · [独立测试工具](tools/qq_notify_test/README.md) |
 | Windows 打包与发布 | [构建说明](BUILD.md) · [发布流程](RELEASE.md) |
 | 各版本的改动 | [更新日志](CHANGELOG.md) |
 

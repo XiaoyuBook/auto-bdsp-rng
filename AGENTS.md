@@ -1,14 +1,9 @@
 # Agent 维护规则
 
-## 项目上下文文档
+## 开发上下文
 
-- 修改代码前，优先阅读 `AGENT_PROJECT_CONTEXT.md` 中与当前任务相关的说明。
-- 如果 `AGENT_PROJECT_CONTEXT.md` 与代码不一致，以代码为准，并在本次修改中同步修正文档。
-- 每次 agent 修改代码后，必须及时更新 `AGENT_PROJECT_CONTEXT.md` 中与本次修改相关的部分。
-- 更新范围只限于本次代码修改相关内容，不要为了维护文档而重写无关章节。
-- 不要把 `AGENT_PROJECT_CONTEXT.md` 从 `.gitignore` 中移除。
-- 不要把 `AGENT_PROJECT_CONTEXT.md` 提交到版本库。
-- 修改完成后的最终回复中，需要说明是否更新了 `AGENT_PROJECT_CONTEXT.md`。
+- 不再使用、创建或维护 `AGENT_PROJECT_CONTEXT.md` 交接笔记，无需在回复中汇报该文件状态。
+- 项目实现以实际代码和现有项目文档为准。
 
 ## 本地约束
 

@@ -70,6 +70,7 @@ hiddenimports = [
     "serial",
     "win32api",
     "win32con",
+    "win32crypt",
     "win32gui",
     "win32process",
     "win32ui",
