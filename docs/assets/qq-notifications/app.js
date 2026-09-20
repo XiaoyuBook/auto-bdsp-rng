@@ -52,7 +52,22 @@
       wrap.style.aspectRatio = rect[2] + '/' + rect[3];
       img.style.width = (step.size[0]/rect[2]*100)+'%';
       img.style.left = (-rect[0]/rect[2]*100)+'%'; img.style.top = (-rect[1]/rect[3]*100)+'%';
-      text('step-action',step.actions.join(' ')); text('step-detail',step.detail);
+      const action = get('step-action'); action.replaceChildren();
+      const actionText = step.actions.join(' ');
+      if (step.link && actionText.includes(step.link.text)) {
+        const parts = actionText.split(step.link.text);
+        parts.forEach((part,index) => {
+          if (part) action.append(document.createTextNode(part));
+          if (index < parts.length - 1) {
+            const link = document.createElement('a');
+            link.className = 'bd-inline-link'; link.href = step.link.href; link.textContent = step.link.text;
+            link.title = step.link.href;
+            link.addEventListener('click', event => { event.preventDefault(); send('platform'); });
+            action.append(link);
+          }
+        });
+      } else action.textContent = actionText;
+      text('step-detail',step.detail);
       text('guide-result',step.result);
       text('full-image',full ? '返回重点区域' : '查看完整截图');
       text('image-label',full ? '原始截图 · 完整画面' : '原始截图 · 重点区域');

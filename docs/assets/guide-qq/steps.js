@@ -3,6 +3,7 @@ const QQ_STEPS = [
     "title": "注册 QQ 开放平台账号", "phase": "注册与准备",
     "image": "images/step-00.jpg", "size": [2560, 1271], "crop": [880, 285, 800, 700],
     "actions": ["登录 QQ 开放平台。首次登录出现「你尚未注册」时，阅读服务协议，勾选同意后点击「同意」。"],
+    "link": {"text": "QQ 开放平台", "href": "https://q.qq.com/#/apps"},
     "detail": "已有开发者账号时，可以直接进入控制台并跳过本步。",
     "result": "完成注册，进入开放平台首页。",
     "focus": [[1278, 832, 190, 55]]

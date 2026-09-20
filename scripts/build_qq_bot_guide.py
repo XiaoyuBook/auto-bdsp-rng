@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from posixpath import normpath
 
 
 def main():
@@ -13,9 +14,9 @@ def main():
     lines = [
         "# QQ 机器人注册与通知配置", "",
         "[返回项目首页](../README.md) · [打开分步截图教程](assets/guide-qq/index.html) · [测试工具说明](../tools/qq_notify_test/README.md)", "",
-        "主程序顶部点击「通知」即可打开 QQ 通知设置；「注册与绑定教程」使用原生 Qt 窗口，在软件内展示原图、点击提示和放大视图。教程的「连接与绑定」页面可以直接填写 AppID、AppSecret 并绑定私聊或群聊，与接入设置共用配置。", "",
+        "主程序顶部点击「通知」即可打开 QQ 通知设置；「注册与绑定教程」在软件内展示原图、点击提示和放大视图，无需打开外部浏览器。教程的「连接与绑定」页面可以直接填写 AppID、AppSecret 并绑定私聊或群聊，与接入设置共用配置。", "",
         "跟随下面 12 步创建自己的 QQ 机器人，取得 AppID 和 AppSecret。截图依据 2026 年 9 月的平台界面，实际页面文案可能调整。", "",
-        "开始前准备好用于登录的 QQ 账号，打开 [QQ 开放平台](https://q.qq.com/)。已有机器人时，可直接进入管理页并从第 9 步的「开发设置」继续；已有可用 AppSecret 时无需重置。", "",
+        "开始前准备好用于登录的 QQ 账号，打开 [QQ 开放平台](https://q.qq.com/#/apps)。这是机器人管理入口；已有机器人时，可直接进入管理页并从第 9 步的「开发设置」继续；已有可用 AppSecret 时无需重置。", "",
         "## 步骤导航", "",
     ]
     lines.extend(f"{i + 1}. [步骤 {i + 1}：{step['title']}](#step-{i + 1})" for i, step in enumerate(steps))
@@ -24,10 +25,21 @@ def main():
         if not image.is_file():
             raise FileNotFoundError(image)
         lines.extend(["", f'<a id="step-{i + 1}"></a>', "", f"## {i + 1}. {step['title']}", ""])
-        lines.extend(f"{j + 1}. {action}" for j, action in enumerate(step["actions"]))
+        link = step.get("link")
+        inline_link = bool(link and any(link["text"] in action for action in step["actions"]))
+        markdown_link = ""
+        if link:
+            href = link["href"]
+            if not href.startswith(("https://", "http://")):
+                href = normpath("assets/guide-qq/" + href)
+            markdown_link = f"[{link['text']}]({href})"
+        for j, action in enumerate(step["actions"]):
+            if inline_link:
+                action = action.replace(link["text"], markdown_link)
+            lines.append(f"{j + 1}. {action}")
         lines.extend(["", ("> " if step.get("caution") else "") + step["detail"], ""])
-        if step.get("link"):
-            lines.extend([f"[{step['link']['text']}](assets/app-icon.png)", ""])
+        if link and not inline_link:
+            lines.extend([markdown_link, ""])
         lines.extend([
             f"![第 {i + 1} 步：{step['title']}](assets/guide-qq/{step['image']})", "",
             f"**完成后：** {step['result']}",

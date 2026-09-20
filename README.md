@@ -26,7 +26,7 @@
 
 ![自动定点乱数工作区](docs/assets/screenshots/workspace.png)
 
-<p align="center"><sub>v3.3.0 源码的实际界面，展示未连接设备时的初始状态；新版安装包正在准备发布。</sub></p>
+<p align="center"><sub>v3.3.0 源码的实际界面，展示未连接设备时的初始状态。</sub></p>
 
 ## 主要功能
 
@@ -44,9 +44,9 @@
 
 **[下载最新 Windows x64 绿色版](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/latest)**
 
-当前正式版为 **[v3.2.0](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.2.0)**。
+当前正式版为 **[v3.3.0](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.0)**。
 
-1. 在 Release 页的 **Assets** 中下载 `auto-bdsp-rng-v3.2.0-windows-x64.zip`。
+1. 在 Release 页的 **Assets** 中下载 `auto-bdsp-rng-v3.3.0-windows-x64.zip`。
 2. 完整解压，进入 `auto-bdsp-rng` 文件夹。
 3. 双击 **`珍钻复刻自动乱数.exe`** 启动。
 
@@ -77,9 +77,9 @@
 
 脚本和 delay 需要结合设备响应、游戏站位与队伍配置校准。建议先确认单次流程能够正常完成，再开启循环。自动 TID 的准备步骤见[自动 TID 使用说明](docs/USAGE.md#自动-tid-乱数)。
 
-> **v3.3.0 新增：QQ 通知与软件内绑定教程（待发布）**
+> **v3.3.0 新增：QQ 通知与软件内绑定教程**
 >
-> 当前源码已加入 QQ 开放平台机器人通知。先打开 [QQ 开放平台机器人管理](https://q.qq.com/#/apps)，再在软件教程内填写 AppID、AppSecret，绑定私聊或群聊，等待动态更新的 60 秒绑定码，并发送带软件 Logo 的图文测试；自动乱数任务完成或异常时可接收通知。此功能将随 v3.3.0 发布。[了解 QQ 通知 →](docs/QQ_BOT_SETUP.md)
+> 当前源码已加入 QQ 开放平台机器人通知。先打开 [QQ 开放平台机器人管理](https://q.qq.com/#/apps)，再在软件教程内填写 AppID、AppSecret，绑定私聊或群聊，等待动态更新的 60 秒绑定码，并发送带软件 Logo 的图文测试；自动乱数任务完成或异常时可接收通知。此功能已随 v3.3.0 发布。[了解 QQ 通知 →](docs/QQ_BOT_SETUP.md)
 
 v3.2.0 的首次乱数引导、脚本执行跟随和暂停修改等功能已包含在当前正式版中。[了解首次乱数引导 →](docs/USAGE.md#首次乱数引导)
 

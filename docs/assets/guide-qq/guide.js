@@ -69,13 +69,29 @@
     byId("counter").textContent = `${String(current + 1).padStart(2, "0")} / ${QQ_STEPS.length}`;
     byId("progress-fill").style.width = `${(current + 1) / QQ_STEPS.length * 100}%`;
     byId("actions").replaceChildren(...step.actions.map(action => {
-      const li = document.createElement("li"); li.textContent = action; return li;
+      const li = document.createElement("li");
+      if (step.link && action.includes(step.link.text)) {
+        const parts = action.split(step.link.text);
+        parts.forEach((part, index) => {
+          if (part) li.append(document.createTextNode(part));
+          if (index < parts.length - 1) {
+            const link = document.createElement("a");
+            link.className = "inline-platform-link";
+            link.href = step.link.href;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = step.link.text;
+            li.append(link);
+          }
+        });
+      } else li.textContent = action;
+      return li;
     }));
     byId("detail").textContent = step.detail;
     byId("instructions").classList.toggle("caution", !!step.caution);
     byId("expected-result").textContent = step.result;
     const link = byId("step-link");
-    link.hidden = !step.link;
+    link.hidden = !step.link || step.actions.some(action => action.includes(step.link.text));
     if (step.link) { link.textContent = step.link.text + " ↗"; link.href = step.link.href; }
     image.src = step.image;
     image.alt = `第 ${current + 1} 步：${step.title}的平台截图`;
