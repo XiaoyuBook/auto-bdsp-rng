@@ -74,3 +74,11 @@ git push --atomic origin main vX.Y.Z
 ## GitHub Release
 
 Pushing `vX.Y.Z` triggers GitHub Actions. The workflow generates the Release body from the matching `CHANGELOG.md` entry and always uploads the complete zip plus its manifest. When the previous Release also has a manifest, it uploads a direct incremental `.update.zip`; otherwise this version is the bootstrap for later incremental updates. Do not manually duplicate or replace the generated update notes.
+
+## Gitee mirror
+
+Set the GitHub repository Actions secret `GITEE_ACCESS_TOKEN` to a Gitee token with repository (`projects`) access for `shekongsk/auto-bdsp-rng`. After GitHub publication, the workflow mirrors the exact tag and release assets to Gitee. It verifies every anonymous attachment download against the GitHub SHA-256 before publishing the machine-readable update metadata in the release body. Do not edit that metadata manually.
+
+If mirroring fails, GitHub remains available. Run **Sync Gitee Release** manually with the existing tag to retry without rebuilding or replacing the GitHub release. Existing Gitee attachments must match; conflicting attachments stop the sync rather than being overwritten. Attachment size limits and anonymous downloads must be verified by the first successful sync.
+
+Starting with v3.3.1, the updater checks Gitee first and falls back to GitHub if discovery fails; failed Gitee patch downloads retry the identical GitHub assets with the same hashes. Older clients must first obtain v3.3.1 through GitHub or manually install its complete archive. Historical incremental chains require mirroring their releases too.

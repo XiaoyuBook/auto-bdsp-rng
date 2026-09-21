@@ -1,0 +1,65 @@
+name: Sync Gitee Release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      GITEE_ACCESS_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to mirror
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitee-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install publishing dependencies
+        run: python -m pip install 'requests>=2.32,<3'
+      - name: Mirror release tag
+        shell: python
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
+        run: |
+          import base64, os, re, subprocess
+          tag = os.environ['RELEASE_TAG']
+          if re.fullmatch(r'v\d+\.\d+\.\d+', tag) is None:
+              raise SystemExit('Invalid release tag')
+          token = os.environ['GITEE_ACCESS_TOKEN']
+          if not token:
+              raise SystemExit('GITEE_ACCESS_TOKEN is missing')
+          auth = base64.b64encode(('shekongsk:' + token).encode()).decode()
+          print('::add-mask::' + auth, flush=True)
+          env = dict(os.environ, GIT_CONFIG_COUNT='1',
+              GIT_CONFIG_KEY_0='http.https://gitee.com/.extraheader',
+              GIT_CONFIG_VALUE_0='Authorization: Basic ' + auth)
+          subprocess.run(['git', 'push', 'https://gitee.com/shekongsk/auto-bdsp-rng.git',
+              f'refs/tags/{tag}:refs/tags/{tag}'], env=env, check=True)
+      - name: Download and sync published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo XiaoyuBook/auto-bdsp-rng --dir release --pattern '*.zip' --pattern '*.manifest.json'
+          python scripts/sync_gitee_release.py --tag "$RELEASE_TAG" --directory release

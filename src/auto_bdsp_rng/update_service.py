@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO
 from urllib.error import HTTPError, URLError
@@ -26,6 +26,10 @@ from auto_bdsp_rng.update_core import UpdatePackageError, load_patch_manifest, p
 REPOSITORY = "XiaoyuBook/auto-bdsp-rng"
 RELEASES_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=100"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
+GITEE_REPOSITORY = "shekongsk/auto-bdsp-rng"
+GITEE_RELEASES_URL = f"https://gitee.com/{GITEE_REPOSITORY}/releases"
+GITEE_API_URL = f"https://gitee.com/api/v5/repos/{GITEE_REPOSITORY}/releases?per_page=100"
+GITEE_METADATA_PATTERN = re.compile(r"<!-- auto-bdsp-update:(.*?) -->", re.DOTALL)
 UPDATER_EXE_NAME = "auto-bdsp-rng-updater.exe"
 MAX_UPDATE_DOWNLOAD_SIZE = 2 * 1024 * 1024 * 1024
 _ASSET_PATTERN = re.compile(
@@ -118,11 +122,39 @@ class LaunchedUpdateInstaller:
 def check_for_updates(
     current_version: str,
     *,
-    api_url: str = RELEASES_API_URL,
+    api_url: str | None = None,
     opener: Callable[..., BinaryIO] = urlopen,
     timeout: float = 10.0,
 ) -> UpdatePlan:
+    if api_url is not None:
+        return _check_source(current_version, api_url=api_url, opener=opener, timeout=timeout)
+    errors = []
+    domestic_plan = None
+    for source in (GITEE_API_URL, RELEASES_API_URL):
+        try:
+            plan = _check_source(current_version, api_url=source, opener=opener, timeout=timeout)
+            if source == GITEE_API_URL and not plan.update_available:
+                domestic_plan = plan  # Check for a newer release if the mirror is behind.
+                continue
+            if domestic_plan is not None and parse_version(plan.latest_version) < parse_version(domestic_plan.latest_version):
+                return domestic_plan
+            return plan
+        except UpdateServiceError as exc:
+            errors.append(str(exc))
+    if domestic_plan is not None:
+        return domestic_plan
+    raise UpdateServiceError("国内源和 GitHub 更新检查均失败：" + "；".join(errors))
+
+
+def _check_source(
+    current_version: str,
+    *,
+    api_url: str,
+    opener: Callable[..., BinaryIO],
+    timeout: float,
+) -> UpdatePlan:
     parse_version(current_version)
+    source_name = "Gitee" if api_url == GITEE_API_URL else "GitHub"
     request = Request(
         api_url,
         headers={
@@ -136,23 +168,53 @@ def check_for_updates(
             payload = response.read(8 * 1024 * 1024 + 1)
     except HTTPError as exc:
         if exc.code == 403:
-            raise UpdateServiceError("GitHub 暂时限制了更新检查，请稍后重试") from exc
-        raise UpdateServiceError(f"检查更新失败：GitHub 返回 HTTP {exc.code}") from exc
+            raise UpdateServiceError(f"{source_name} 暂时限制了更新检查，请稍后重试") from exc
+        raise UpdateServiceError(f"检查更新失败：{source_name} 返回 HTTP {exc.code}") from exc
     except (URLError, TimeoutError, OSError) as exc:
         raise UpdateServiceError(f"检查更新失败：{_network_error_text(exc)}") from exc
     if len(payload) > 8 * 1024 * 1024:
-        raise UpdateServiceError("GitHub 更新信息超过安全限制")
+        raise UpdateServiceError(f"{source_name} 更新信息超过安全限制")
     try:
         releases = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise UpdateServiceError("GitHub 返回了无法解析的更新信息") from exc
+        raise UpdateServiceError(f"{source_name} 返回了无法解析的更新信息") from exc
+    if api_url == GITEE_API_URL:
+        releases = _normalize_gitee_releases(releases)
     return build_update_plan(current_version, releases)
+
+
+def _normalize_gitee_releases(releases: object) -> list[dict[str, Any]]:
+    if not isinstance(releases, list):
+        raise UpdateServiceError("Gitee 更新信息格式无效")
+    result = []
+    for release in releases:
+        if not isinstance(release, dict):
+            continue
+        body = release.get("body")
+        match = GITEE_METADATA_PATTERN.search(body) if isinstance(body, str) else None
+        if match is None:
+            continue  # Uploads are not ready until the publisher writes the metadata.
+        try:
+            metadata = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(metadata, dict) or metadata.get("schema_version") != 1:
+            continue
+        if metadata.get("tag_name") != release.get("tag_name"):
+            continue
+        assets = metadata.get("assets")
+        if not isinstance(assets, list):
+            continue
+        normalized = dict(release, assets=assets)
+        normalized["html_url"] = f"{GITEE_RELEASES_URL}/tag/{release['tag_name']}"
+        result.append(normalized)
+    return result
 
 
 def build_update_plan(current_version: str, releases: object) -> UpdatePlan:
     current_key = parse_version(current_version)
     if not isinstance(releases, list):
-        raise UpdateServiceError("GitHub 更新信息格式无效")
+        raise UpdateServiceError("更新源信息格式无效")
 
     valid_releases: dict[str, dict[str, Any]] = {}
     for raw_release in releases:
@@ -226,6 +288,30 @@ def _extract_release_notes_section(body: str) -> str:
 
 
 def download_update_assets(
+    plan: UpdatePlan,
+    progress_callback: Callable[[int, int], object] | None = None,
+    cancel_event: threading.Event | None = None,
+    *,
+    download_dir: Path | None = None,
+    opener: Callable[..., BinaryIO] = urlopen,
+    timeout: float = 10.0,
+) -> tuple[Path, ...]:
+    options = dict(download_dir=download_dir, opener=opener, timeout=timeout)
+    try:
+        return _download_update_assets(plan, progress_callback, cancel_event, **options)
+    except UpdateDownloadCancelled:
+        raise
+    except UpdateServiceError:
+        if not any(urlparse(asset.url).netloc == "gitee.com" for asset in plan.assets):
+            raise
+        fallback = replace(plan, assets=tuple(
+            replace(asset, url=f"{RELEASES_URL}/download/v{asset.to_version}/{asset.name}")
+            for asset in plan.assets
+        ))
+        return _download_update_assets(fallback, progress_callback, cancel_event, **options)
+
+
+def _download_update_assets(
     plan: UpdatePlan,
     progress_callback: Callable[[int, int], object] | None = None,
     cancel_event: threading.Event | None = None,
@@ -524,13 +610,18 @@ def _is_official_asset_url(url: object, version: str, name: str) -> bool:
         return False
     parsed = urlparse(url)
     expected_path = f"/{REPOSITORY}/releases/download/v{version}/{name}"
-    return parsed.scheme == "https" and parsed.netloc == "github.com" and parsed.path == expected_path
+    gitee_path = f"/{GITEE_REPOSITORY}/releases/download/v{version}/{name}"
+    return parsed.scheme == "https" and not parsed.query and not parsed.fragment and (
+        (parsed.netloc == "github.com" and parsed.path == expected_path)
+        or (parsed.netloc == "gitee.com" and parsed.path == gitee_path)
+    )
 
 
 def _release_url(release: dict[str, Any], version: str) -> str:
     value = release.get("html_url")
     expected = f"https://github.com/{REPOSITORY}/releases/tag/v{version}"
-    return value if value == expected else expected
+    domestic = f"{GITEE_RELEASES_URL}/tag/v{version}"
+    return value if value in (expected, domestic) else expected
 
 
 def _raise_if_cancelled(cancel_event: threading.Event) -> None:

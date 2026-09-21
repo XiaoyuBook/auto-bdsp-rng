@@ -152,3 +152,12 @@ jobs:
           files: |
             release/*.zip
             release/*.manifest.json
+
+  sync-gitee:
+    needs: build
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/sync-gitee-release.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
