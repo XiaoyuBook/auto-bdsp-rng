@@ -14,4 +14,4 @@
 .\.venv\Scripts\python.exe scripts\build_qq_bot_guide.py
 ```
 
-主程序使用 `ui/qq_guide.py` 原生 Qt 教程读取同一份 `steps.js` 与原图，不加载网页。教程内的「连接与绑定」与接入设置共用凭据／接收方表单，「图文验证」共用图文测试面板。HTML 版本保留为可选离线阅读入口；图文版入口为 `docs/QQ_BOT_SETUP.md`。
+主程序通过 `ui/qq_guide.py` 读取同一份 `steps.js` 与原图，由软件内的 WebView 展示，无需外部浏览器。第一步可点击进入 QQ 开放平台，第六步可点击打开软件头像图片。教程内的「连接与绑定」与接入设置共用凭据／接收方表单，「图文验证」共用图文测试面板。独立 HTML 版本保留为可选离线阅读入口；图文版入口为 `docs/QQ_BOT_SETUP.md`。

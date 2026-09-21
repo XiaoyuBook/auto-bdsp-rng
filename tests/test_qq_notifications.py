@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QEvent, QObject, Signal
 from PySide6.QtTest import QTest
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QImage
 from PySide6.QtWidgets import QApplication
 
 from auto_bdsp_rng.notifications.qq_service import (
@@ -144,6 +144,34 @@ def test_cached_bgr_frame_becomes_correct_jpeg(app):
     assert image.pixelColor(0, 0).blue() < 10
 
 
+def test_task_notification_sends_video_frame_and_freezes_queued_snapshot(service, app):
+    import numpy as np
+    from auto_bdsp_rng.ui.main_window import MainWindow
+
+    service.update(enabled=True)
+    frame = np.zeros((16, 24, 3), dtype=np.uint8)
+    frame[:, :, 2] = 255
+    window = SimpleNamespace(
+        _is_closing=False, qq_notifications=service,
+        _qq_task_details={"自动定点": "目标已命中"}, _latest_preview_frame=frame,
+    )
+    MainWindow._notify_qq_task(window, "R1", "自动定点", "已完成", "草苗龟")
+    first_image = QImage.fromData(service.sender.calls[0][2])
+    assert (first_image.width(), first_image.height()) == (24, 16)
+    assert first_image.pixelColor(0, 0).red() > 240
+
+    frame[:, :, :] = (255, 0, 0)
+    MainWindow._notify_qq_task(window, "R2", "自动定点", "已完成", "草苗龟")
+    # A later video frame must not replace the screenshot taken at task completion.
+    frame[:, :, :] = (0, 255, 0)
+    service.sender.finish(True)
+    app.processEvents()
+    queued_image = QImage.fromData(service.sender.calls[1][2])
+    assert (queued_image.width(), queued_image.height()) == (24, 16)
+    assert queued_image.pixelColor(0, 0).blue() > 240
+    assert queued_image.pixelColor(0, 0).green() < 10
+
+
 def web_js(dialog, script):
     values = []
     dialog.page.runJavaScript(script, values.append)
@@ -221,6 +249,111 @@ def test_web_credentials_flush_before_verify_and_close(dialog, service):
     assert "SECRET" not in service.store.path.read_text(encoding="utf-8")
     assert "secret" not in dialog.snapshot()["settings"]
     assert dialog.profile.isOffTheRecord()
+
+
+@pytest.mark.parametrize("kind", ["user", "group"])
+def test_binding_save_failure_keeps_saved_recipient_and_reports_failure(dialog, service, monkeypatch, kind):
+    service.update(group_openid="OLD_GROUP", group_enabled=True, enabled=True)
+    old_openid = getattr(service.settings, kind + "_openid")
+    results = []
+    service.operation_finished.connect(lambda *args: results.append(args))
+    dialog.command("navigate", {"guide": True, "phase": "bind"})
+    service.verify()
+    service.bind(kind)
+
+    def fail_save(_):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as scope:
+        scope.setattr(service.store, "save", fail_save)
+        service.setup.bound.emit(kind, "NEW_RECIPIENT")
+    # The client reports network success after the service tried to persist binding.
+    service.setup.status.emit("绑定成功。")
+    service.setup.finish(True, "绑定成功。")
+    web_wait(dialog, "document.getElementById('bd-guide-result').textContent.includes('绑定结果未能保存')")
+    assert web_js(dialog, "document.getElementById('bd-guide-result').classList.contains('bd-warn')")
+    assert results[-1][:2] == ("bind", False)
+    assert getattr(service.settings, kind + "_openid") == old_openid
+    assert getattr(service.store.load(), kind + "_openid") == old_openid
+
+    service.bind(kind)
+    service.setup.bound.emit(kind, "NEW_RECIPIENT")
+    service.setup.finish(True, "绑定成功。")
+    assert results[-1][:2] == ("bind", True)
+    assert not service.last_error
+    assert not dialog.snapshot()["feedback_error"]
+    assert getattr(service.settings, kind + "_openid") == "NEW_RECIPIENT"
+    assert getattr(service.store.load(), kind + "_openid") == "NEW_RECIPIENT"
+
+
+@pytest.mark.parametrize("close_method", ["close", "reject", "accept"])
+def test_save_failure_blocks_dialog_close_and_allows_retry(dialog, service, monkeypatch, close_method):
+    dialog.command("credentials", {"app_id": "NEW_APP", "secret": "SECRET", "remember_secret": False})
+
+    def fail_save(_):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as scope:
+        scope.setattr(service.store, "save", fail_save)
+        getattr(dialog, close_method)()
+        assert dialog.isVisible()
+        assert dialog._dirty
+        assert service.store.load().app_id == "APP"
+        web_wait(dialog, "document.getElementById('bd-footer-status').textContent.includes('配置未能保存')")
+    getattr(dialog, close_method)()
+    assert not dialog.isVisible()
+    assert not dialog._dirty
+    assert not dialog.snapshot()["feedback_error"]
+    assert service.store.load().app_id == "NEW_APP"
+
+
+def test_main_window_close_respects_unsaved_qq_credentials(dialog, service, monkeypatch):
+    from auto_bdsp_rng.ui.main_window import MainWindow
+
+    dialog.command("credentials", {"app_id": "NEW_APP", "secret": "SECRET", "remember_secret": False})
+
+    def fail_save(_):
+        raise OSError("disk full")
+
+    window = SimpleNamespace(
+        easycon_tab=SimpleNamespace(prepare_for_close_confirmation=lambda: None),
+        _confirm_unsaved_easycon_script=lambda: True,
+        _qq_dialog=dialog, show_qq_notifications=dialog.show, _is_closing=False,
+    )
+    with monkeypatch.context() as scope:
+        scope.setattr(service.store, "save", fail_save)
+        event = QCloseEvent()
+        MainWindow.closeEvent(window, event)
+        assert not event.isAccepted()
+        assert not window._is_closing
+        assert not service._closed
+        assert dialog.isVisible() and dialog._dirty
+    dialog.close()
+    assert service.store.load().app_id == "NEW_APP"
+
+
+def test_tutorial_platform_and_avatar_links_open_correct_targets(dialog, monkeypatch):
+    from auto_bdsp_rng.resources import app_icon_path
+
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    entry_url = dialog.page.url()
+    dialog.command("navigate", {"guide": True, "step": 0})
+    web_wait(dialog, "document.querySelector('#bd-step-action a') !== null")
+    web_js(dialog, "document.querySelector('#bd-step-action a').click()")
+    web_wait(dialog, "document.querySelector('#bd-step-action a') !== null")
+    assert opened[-1].toString() == "https://q.qq.com/#/apps"
+
+    dialog.command("navigate", {"step": 5})
+    web_wait(dialog, "document.querySelector('#bd-step-detail a')?.textContent === '打开软件头像图片'")
+    web_js(dialog, "document.querySelector('#bd-step-detail a').click()")
+    web_wait(dialog, "document.querySelector('#bd-step-detail a') !== null")
+    assert opened[-1].isLocalFile()
+    assert opened[-1].toLocalFile() == str(app_icon_path()).replace('\\', '/')
+    assert len(opened) == 2
+    assert dialog.page.url() == entry_url
+    dialog.command("navigate", {"step": 6})
+    web_wait(dialog, "document.querySelector('#bd-step-detail a') === null")
 
 
 def test_leaving_binding_page_cancels_and_records_are_literal_text(dialog, service):

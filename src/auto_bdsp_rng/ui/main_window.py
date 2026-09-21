@@ -4248,6 +4248,10 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_easycon_script():
             event.ignore()
             return
+        if self._qq_dialog is not None and not self._qq_dialog.close():
+            self.show_qq_notifications()
+            event.ignore()
+            return
         self._is_closing = True
         if not self.update_controller.shutdown():
             self._is_closing = False
@@ -4335,8 +4339,6 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
-        if self._qq_dialog is not None:
-            self._qq_dialog.close()
         self.qq_notifications.shutdown()
         self._save_profile_settings()
         self._save_window_geometry()

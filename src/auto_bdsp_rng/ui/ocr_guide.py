@@ -39,6 +39,7 @@ class OcrGuide(QObject):
         self.choices = {}
         self._connected_dialog = None
         self._test_started = self._test_done = self._test_ok = False
+        self._test_message = ''
         self._test_signature = self._recognizing = self._recognized = None
         self._test_values = None
         self._direction_seen = False
@@ -222,7 +223,8 @@ class OcrGuide(QObject):
             target = self.dialog.test_all_button
         elif phase in RESULT_PHASES:
             title, copy = '核对本次测试结果', ('对照游戏中的性格、个性和六项能力值。<b>测试完成不代表每项识别都正确。</b><br>'
-                    '全部正确即可完成；部分有问题只重框勾选项；全部有问题则逐项重新设置。测试全部通常结束在能力页。')
+                    '八项都有有效结果后，才能点击「全部正确，完成」。部分有问题只重框勾选项；全部有问题则逐项重新设置。'
+                    '<br>需要重试时，请先用虚拟手柄回到<b>笔记页</b>，再点击「测试全部」。')
         elif phase == 'choose_fields':
             title, copy = '选择需要重新框选的项目', '勾选识别为空或与游戏不一致的项目。先观看性格、个性的示范，然后只修改这些项目。'
         elif phase in DIRECTION_PHASES:
@@ -245,9 +247,9 @@ class OcrGuide(QObject):
             title, copy = f'{name}识别正确吗？', '对照本次识别结果与游戏画面。正确后进入下一项；有问题就重新框选本项。'
         self.tip.show_step(GuideStep('ocr', '5.3.5 · OCR 设置', title, copy, target, (target,)))
         self.tip.setFixedWidth(max(280, self.dialog.width() - 36))
+        self.navigation()
         self.tip.fit_height(min(270, max(215, self.dialog.height() // 3)))
         self.tip.show()
-        self.navigation()
         self._clear_highlights()
         if phase.startswith('field_'):
             row = self.dialog._field_rows[field]
@@ -258,6 +260,8 @@ class OcrGuide(QObject):
                 self.dialog.table.item(row, col).setBackground(QColor('#EAF8F1'))
             actions = (self.action(field, 0),) if phase == 'field_select' else (self.action(field, 1), self.action(field, 2))
             self.shade.focus(*actions, self.dialog.table.verticalScrollBar(), self.dialog.table.horizontalScrollBar(), extra_rects=self._row_rects)
+        elif phase in RESULT_PHASES:
+            self.shade.focus(self.dialog.table, self.dialog.test_all_button)
         else:
             self.shade.focus(target)
         preview_copy = '对照实际游戏画面核对本次 OCR 结果'
@@ -280,6 +284,9 @@ class OcrGuide(QObject):
             return
         t, phase = self.tip, self.phase
         busy = self.dialog.interaction_busy or self.selecting
+        t.status.setVisible(phase in TEST_PHASES + RESULT_PHASES + DIRECTION_PHASES or phase == 'field_result')
+        t.status.setStyleSheet('')
+        t.next_button.setToolTip('')
         for button in (t.next_button, t.previous_button, t.skip_button):
             button.setEnabled(not busy)
         t.previous_button.setVisible(phase in RESULT_PHASES or phase.startswith('field_'))
@@ -289,10 +296,15 @@ class OcrGuide(QObject):
         if phase in TEST_PHASES:
             t.next_button.setText('等待测试完成')
             t.next_button.setEnabled(False)
+            t.status.setText('正在测试，请等待识别完成。' if busy else '请从笔记页开始，点击上方亮起的「测试全部」。')
         elif phase in RESULT_PHASES:
+            reason = self._completion_block_reason()
             t.next_button.setText('全部正确，完成')
-            t.next_button.setEnabled(not busy and self._all_correct())
-            t.status.setText('本次测试完成，请对照画面。' if self._test_ok else '本次测试未成功；请检查视频源、游戏页面及识别区域后重试。')
+            t.next_button.setEnabled(not busy and not reason)
+            t.next_button.setToolTip(reason)
+            t.status.setText(reason or '八项均已识别。请对照游戏画面，全部正确后点击完成。')
+            if reason and not busy:
+                t.status.setStyleSheet('color: #B64032;')
         elif phase == 'choose_fields':
             t.next_button.setText('观看框选教学')
             t.next_button.setEnabled(not busy and any(b.isChecked() for b in self.choices.values()))
@@ -375,20 +387,37 @@ class OcrGuide(QObject):
                 and self._test_values == tuple(self._text(f) for f in FIELDS))
 
     def _all_correct(self):
-        return (self._test_current() and self._test_ok and
-                all(self.dialog.region_config.get(f) is not None and valid_result(f, self._text(f)) for f in FIELDS))
+        return not self._completion_block_reason()
+
+    def _completion_block_reason(self):
+        if self.dialog is None:
+            return '请先打开 OCR 设置并完成一次「测试全部」。'
+        if self.dialog.interaction_busy or self.selecting:
+            return '正在测试或识别，请等待完成后再核对结果。'
+        if not self._test_current():
+            return '尚无本次完整测试结果，或配置、视频源、识别结果已改变。请回到笔记页，重新点击「测试全部」。'
+        if not self._test_ok:
+            return (self._test_message or '本次测试失败。') + '\n请检查视频源与游戏页面，回到笔记页后重试「测试全部」。'
+        invalid = [OCR_REGION_LABELS[f] for f in FIELDS
+                   if self.dialog.region_config.get(f) is None or not valid_result(f, self._text(f))]
+        if invalid:
+            return ('暂不能完成：' + '、'.join(invalid) + '缺少有效识别结果。\n'
+                    '可选择「部分有问题」修复这些项目，或回到笔记页后重新「测试全部」。')
+        return ''
 
     def _test_start(self):
         if not self.active:
             return
         self._test_started, self._test_done, self._test_ok = True, False, False
+        self._test_message = ''
         self._test_signature = self._signature()
         self.navigation()
 
-    def _test_finish(self, success, _message):
+    def _test_finish(self, success, message):
         if not self.active or not self._test_started:
             return
         self._test_started, self._test_done, self._test_ok = False, True, success
+        self._test_message = message
         self._test_values = tuple(self._text(f) for f in FIELDS)
         self.go('final_result' if self.phase in ('final_test', 'final_result') else 'initial_result')
 

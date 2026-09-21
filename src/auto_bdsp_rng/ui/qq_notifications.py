@@ -146,10 +146,10 @@ class QQNotificationDialog(QDialog):
         try:
             self.service.update(**self._draft)
         except Exception as exc:
-            self._error(str(exc))
+            self._error(f"配置未能保存，请检查后重试：{exc}")
             return False
         self._dirty = False
-        self.refresh()
+        self._status("配置已保存 · 自动通知" + ("已启用" if self.service.settings.enabled else "未启用"))
         return True
 
     def command(self, action, args):
@@ -186,6 +186,20 @@ class QQNotificationDialog(QDialog):
             self._status("已复制当前绑定码")
         elif action == "platform":
             QDesktopServices.openUrl(QUrl("https://q.qq.com/#/apps"))
+        elif action == "guide-link":
+            steps = load_qq_steps()
+            index = int(args["step"])
+            if not 0 <= index < len(steps):
+                raise ValueError("无效教程步骤")
+            href = steps[index].get("link", {}).get("href")
+            if href == "https://q.qq.com/#/apps":
+                url = QUrl(href)
+            elif href == "../app-icon.png":
+                url = QUrl.fromLocalFile(str(app_icon_path()))
+            else:
+                raise ValueError("此步骤没有可打开的链接")
+            if not QDesktopServices.openUrl(url):
+                raise ValueError("链接未能打开，请重试。")
         elif action == "confirm":
             if self._test == "sent":
                 self._test = "confirmed"
@@ -254,13 +268,16 @@ class QQNotificationDialog(QDialog):
         self.refresh()
 
     def done(self, result):
-        self._save_draft()
+        if not self._save_draft():
+            return
         if self.service.setup.busy:
             self.service.setup.cancel()
         super().done(result)
 
     def closeEvent(self, event):
-        self._save_draft()
+        if not self._save_draft():
+            event.ignore()
+            return
         if self.service.setup.busy:
             self.service.setup.cancel()
         super().closeEvent(event)

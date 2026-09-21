@@ -147,6 +147,7 @@ class QQNotificationService(QObject):
         self.verified = False
         self.last_error = self.store.warning
         self.operation = ""
+        self._binding_save_error = ""
         self._queue: deque[PendingNotification] = deque()
         self._seen: deque[str] = deque(maxlen=200)
         self._active = None
@@ -188,6 +189,8 @@ class QQNotificationService(QObject):
             raise QQError("通知服务已关闭。")
         self.setup.configure(self.settings.app_id, self.settings.secret)
         self.operation = operation
+        if operation == "bind":
+            self._binding_save_error = ""
 
     def verify(self):
         self._prepare("verify")
@@ -209,15 +212,16 @@ class QQNotificationService(QObject):
         try:
             self.update(**{kind + "_openid": openid, kind + "_enabled": True})
         except Exception as exc:
-            self.last_error = f"绑定结果未能保存：{exc}"
+            self._binding_save_error = f"绑定结果未能保存，接收方仍保持原配置，请重试绑定：{exc}"
+            self.last_error = self._binding_save_error
             self.error.emit(self.last_error)
-            # Preserve the result for this session, while reporting the save failure.
-            setattr(self.settings, kind + "_openid", openid)
-            setattr(self.settings, kind + "_enabled", True)
             self.changed.emit()
 
     def _setup_finished(self, ok, message):
         operation, self.operation = self.operation, ""
+        if operation == "bind" and self._binding_save_error:
+            ok, message = False, self._binding_save_error
+            self.log.emit(message)
         if operation == "test" and not ok:
             for kind, _ in self._test_targets:
                 if kind not in self._test_delivered:
@@ -227,7 +231,7 @@ class QQNotificationService(QObject):
             self.verified = ok
         if not ok and not message.startswith("操作已取消"):
             self.last_error = message
-        elif operation in ("verify", "test"):
+        elif operation in ("verify", "test") or (operation == "bind" and ok):
             self.last_error = ""
         self.changed.emit()
         self.operation_finished.emit(operation, ok, message)
