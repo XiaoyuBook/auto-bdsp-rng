@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ from scripts import sync_gitee_release as sync
 
 
 def setup_release(tmp_path, monkeypatch, *, existing=False, upload_ok=True, public_ok=True):
+    monkeypatch.setattr(sync.time, "sleep", lambda seconds: None)
     package = tmp_path / "auto-bdsp-rng-v3.3.1-windows-x64.zip"
     package.write_bytes(b"release bytes")
     metadata = sync.metadata_for("v3.3.1", [package])
@@ -25,13 +27,12 @@ def setup_release(tmp_path, monkeypatch, *, existing=False, upload_ok=True, publ
             return [{"name": package.name}] if existing else []
         return {}
     monkeypatch.setattr(sync, "request", request)
-    def post(url, data, **kwargs):
-        content = data.read()
-        assert b"release bytes" in content
-        assert b'name="access_token"' in content
-        calls.append(("UPLOAD", url, {}))
-        return SimpleNamespace(ok=upload_ok, status_code=413 if not upload_ok else 201)
-    monkeypatch.setattr(sync.requests, "post", post)
+    def upload(path, release_id, token):
+        assert path.read_bytes() == b"release bytes"
+        calls.append(("UPLOAD", str(path), {}))
+        if not upload_ok:
+            raise RuntimeError("Transfer failed: curl exit 22, HTTP 413")
+    monkeypatch.setattr(sync, "upload_file", upload)
     monkeypatch.setattr(sync, "verify_public", lambda asset: public_ok)
     return calls, source
 
@@ -78,15 +79,78 @@ def test_github_digest_mismatch_stops_before_writing_gitee(tmp_path, monkeypatch
 
 @pytest.mark.parametrize("content,status,valid", [(b"package", 200, True), (b"corrupt", 200, False), (b"login", 403, False)])
 def test_public_download_requires_matching_bytes(monkeypatch, content, status, valid):
-    class Response:
-        status_code = status
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-        def iter_content(self, chunk_size):
-            yield content
-    monkeypatch.setattr(sync.requests, "get", lambda *a, **k: Response())
-    asset = {"browser_download_url": "https://gitee.com/example", "size": 7,
+    def transfer(url, output, **kwargs):
+        assert kwargs["max_size"] == 7
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}")
+        output.write_bytes(content)
+    monkeypatch.setattr(sync, "transfer", transfer)
+    asset = {"name": "package.zip", "browser_download_url": "https://gitee.com/example", "size": 7,
              "digest": "sha256:" + hashlib.sha256(b"package").hexdigest()}
     assert sync.verify_public(asset) is valid
+
+
+def test_upload_timeout_rechecks_remote_before_retrying(tmp_path, monkeypatch):
+    calls, _ = setup_release(tmp_path, monkeypatch)
+    original = sync.request
+    uploaded = False
+    def request(method, endpoint, token, **kwargs):
+        if endpoint.endswith("attach_files") and uploaded:
+            return [{"name": "auto-bdsp-rng-v3.3.1-windows-x64.zip"}]
+        return original(method, endpoint, token, **kwargs)
+    def upload(*args):
+        nonlocal uploaded
+        assert not uploaded, "Must not upload twice after an ambiguous timeout"
+        uploaded = True
+        raise RuntimeError("Transfer timed out after server accepted upload")
+    monkeypatch.setattr(sync, "request", request)
+    monkeypatch.setattr(sync, "upload_file", upload)
+    sync.sync("v3.3.1", tmp_path, "test-token")
+    assert calls[-1][0] == "PATCH"
+
+
+def test_network_upload_retry_is_bounded(tmp_path, monkeypatch):
+    calls, _ = setup_release(tmp_path, monkeypatch, upload_ok=False)
+    with pytest.raises(RuntimeError):
+        sync.sync("v3.3.1", tmp_path, "test-token")
+    assert sum(c[0] == "UPLOAD" for c in calls) == sync.ATTEMPTS
+    assert not any(c[0] == "PATCH" for c in calls)
+
+
+def test_curl_upload_uses_stdin_credentials_and_hard_deadline(tmp_path, monkeypatch):
+    monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
+    path = tmp_path / "package.zip"
+    path.write_bytes(b"data")
+    def run(command, **kwargs):
+        assert "secret-token" not in " ".join(command)
+        assert "secret-token" in kwargs["input"]
+        assert "form-string" in kwargs["input"]
+        assert "--max-time" in command and "--speed-time" in command
+        assert kwargs["timeout"] == sync.TRANSFER_TIMEOUT + 30
+        return SimpleNamespace(returncode=0, stdout="201", stderr="")
+    monkeypatch.setattr(sync.subprocess, "run", run)
+    sync.upload_file(path, 123, "secret-token")
+
+
+def test_curl_deadline_and_error_do_not_expose_credentials(tmp_path, monkeypatch):
+    monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
+    def run(command, **kwargs):
+        raise subprocess.TimeoutExpired(command + ["sensitive"], 10, output="sensitive")
+    monkeypatch.setattr(sync.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="wall-clock") as error:
+        sync.transfer("https://gitee.com/example", tmp_path / "out", form="sensitive")
+    assert "sensitive" not in str(error.value)
+
+
+def test_api_retries_transient_errors_without_logging_token(monkeypatch, capsys):
+    monkeypatch.setattr(sync.time, "sleep", lambda seconds: None)
+    calls = []
+    def request(*args, **kwargs):
+        calls.append(1)
+        if len(calls) < 3:
+            raise sync.requests.ConnectionError("sensitive-token")
+        return SimpleNamespace(ok=True, json=lambda: [])
+    monkeypatch.setattr(sync.requests, "request", request)
+    assert sync.request("GET", "/releases", "sensitive-token") == []
+    assert len(calls) == 3
+    assert "sensitive-token" not in capsys.readouterr().out

@@ -26,6 +26,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,11 +56,19 @@ jobs:
               GIT_CONFIG_VALUE_0='Authorization: Basic ' + auth)
           subprocess.run(['git', 'push', 'https://gitee.com/shekongsk/auto-bdsp-rng.git',
               f'refs/tags/{tag}:refs/tags/{tag}'], env=env, check=True)
-      - name: Download and sync published assets
+      - name: Download published assets
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release download "$RELEASE_TAG" --repo XiaoyuBook/auto-bdsp-rng --dir release --pattern '*.zip' --pattern '*.manifest.json'
+      - name: Sync and verify Gitee assets
+        timeout-minutes: 45
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
+          PYTHONUNBUFFERED: '1'
         run: |
-          gh release download "$RELEASE_TAG" --repo XiaoyuBook/auto-bdsp-rng --dir release --pattern '*.zip' --pattern '*.manifest.json'
+          curl --version
           python scripts/sync_gitee_release.py --tag "$RELEASE_TAG" --directory release

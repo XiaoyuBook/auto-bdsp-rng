@@ -83,4 +83,6 @@ Set the GitHub repository Actions secret `GITEE_ACCESS_TOKEN` to a Gitee token w
 
 If mirroring fails, GitHub remains available. Run **Sync Gitee Release** manually with the existing tag to retry without rebuilding or replacing the GitHub release. Existing Gitee attachments must match; conflicting attachments stop the sync rather than being overwritten. Attachment size limits and anonymous downloads must be verified by the first successful sync.
 
+The publisher requires `curl`. Each upload or verification download has a 15-minute total limit and stops after a minute below 32 KiB/s. Each attachment gets at most three attempts, checking the remote attachment list before every attempt to recover from an upload whose response was lost. Logs identify the active file and phase immediately. The sync step has a 45-minute limit; retry the standalone workflow from `main` to use the latest publishing fixes while keeping the original release assets and tag unchanged.
+
 Starting with v3.3.1, the updater checks Gitee first and falls back to GitHub if discovery fails; failed Gitee patch downloads retry the identical GitHub assets with the same hashes. Older clients must first obtain v3.3.1 through GitHub or manually install its complete archive. Historical incremental chains require mirroring their releases too.
