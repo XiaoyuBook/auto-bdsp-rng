@@ -19,6 +19,8 @@ API = f"https://gitee.com/api/v5/repos/{REPOSITORY}"
 MARKER = re.compile(r"\n*## 更新校验信息\n.*", re.DOTALL)
 TRANSFER_TIMEOUT = 900
 ATTEMPTS = 3
+# Operational mirror policy, not a claim about Gitee's account-specific quota.
+MAX_MIRROR_ASSET_SIZE = 90 * 1024 * 1024
 
 
 def log(message: str) -> None:
@@ -139,7 +141,7 @@ def sync_asset(path: Path, asset: dict, release_id: int, token: str) -> None:
             time.sleep(5 * attempt)
 
 
-def sync(tag: str, directory: Path, token: str) -> None:
+def load_release(tag: str) -> dict:
     if re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None:
         raise ValueError("Expected a stable version tag")
     raw = subprocess.check_output(["gh", "api",
@@ -147,10 +149,36 @@ def sync(tag: str, directory: Path, token: str) -> None:
     source = json.loads(raw)
     if source["draft"] or source["prerelease"]:
         raise ValueError("Only published stable releases can be mirrored")
-    paths = sorted(directory.glob("*.zip")) + sorted(directory.glob("*.manifest.json"))
-    expected = {asset["name"]: asset for asset in source["assets"]
-                if asset["name"].endswith((".zip", ".manifest.json"))}
-    if not paths or {path.name for path in paths} != set(expected):
+    return source
+
+
+def mirror_assets(source: dict) -> dict[str, dict]:
+    selected = {}
+    for asset in source["assets"]:
+        name = asset["name"]
+        if not re.fullmatch(r"auto-bdsp-rng-v\d+\.\d+\.\d+(?:-to-v\d+\.\d+\.\d+)?-windows-x64\.(?:update\.zip|manifest\.json)", name):
+            continue
+        if not 0 < asset["size"] <= MAX_MIRROR_ASSET_SIZE:
+            log(f"Kept on GitHub (outside mirror size policy): {name}")
+            continue
+        selected[name] = asset
+    return selected
+
+
+def download_assets(tag: str, directory: Path) -> None:
+    selected = mirror_assets(load_release(tag))
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in sorted(selected):
+        log(f"Downloading mirror asset: {name}")
+        subprocess.run(["gh", "release", "download", tag, "--repo", "XiaoyuBook/auto-bdsp-rng",
+                        "--dir", str(directory), "--pattern", name, "--clobber"], check=True, timeout=300)
+
+
+def sync(tag: str, directory: Path, token: str) -> None:
+    source = load_release(tag)
+    expected = mirror_assets(source)
+    paths = [directory / name for name in sorted(expected)]
+    if any(not path.is_file() for path in paths):
         raise ValueError("Downloaded release assets are incomplete")
     metadata = metadata_for(tag, paths)
     for asset in metadata["assets"]:
@@ -166,7 +194,15 @@ def sync(tag: str, directory: Path, token: str) -> None:
     release_id = release["id"]
     for path, asset in zip(paths, metadata["assets"], strict=True):
         sync_asset(path, asset, release_id, token)
-    body = MARKER.sub("", source["body"]).rstrip()
+    github_release = f"https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/{tag}"
+    body = (
+        "## 下载说明\n\n"
+        "Gitee 提供适合镜像的增量更新包，供软件内「帮助 → 检查更新」使用。"
+        "增量包不能作为完整软件直接解压运行。\n\n"
+        f"首次安装、修复安装或没有可用增量升级链时，请到 [GitHub 下载完整包]({github_release})。"
+        "完整包和超出镜像大小策略的增量包保留在 GitHub，不在 Gitee 提供。\n\n"
+        + MARKER.sub("", source["body"]).rstrip()
+    )
     body += "\n\n## 更新校验信息\n\n<!-- auto-bdsp-update:" + json.dumps(metadata, ensure_ascii=False, separators=(",", ":")) + " -->"
     request("PATCH", f"/releases/{release_id}", token, json={"body": body, "name": source["name"]})
     log(f"Gitee release ready: {tag}")
@@ -176,8 +212,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True)
     parser.add_argument("--directory", type=Path, default=Path("release"))
+    parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args()
     try:
-        sync(args.tag, args.directory, os.environ["GITEE_ACCESS_TOKEN"])
+        if args.download_only:
+            download_assets(args.tag, args.directory)
+        else:
+            sync(args.tag, args.directory, os.environ["GITEE_ACCESS_TOKEN"])
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from None

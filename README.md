@@ -44,9 +44,9 @@
 
 **[下载最新 Windows x64 绿色版](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/latest)**
 
-当前正式版为 **[v3.3.0](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.0)**。
+当前正式版为 **[v3.3.1](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.1)**。
 
-1. 在 Release 页的 **Assets** 中下载 `auto-bdsp-rng-v3.3.0-windows-x64.zip`。
+1. 在 Release 页的 **Assets** 中下载 `auto-bdsp-rng-v3.3.1-windows-x64.zip`。
 2. 完整解压，进入 `auto-bdsp-rng` 文件夹。
 3. 双击 **`珍钻复刻自动乱数.exe`** 启动。
 
@@ -56,7 +56,7 @@
 
 **已有旧版？** 在软件中选择「帮助 → 检查更新…」。v3.0.0 及之后的版本支持增量升级；v2.1.7 及更早版本，或提示没有升级链时，请下载完整包。[查看更新与文件保留规则 →](docs/USAGE.md#自动更新)
 
-待发布的 v3.3.1 支持 Gitee 更新源：优先从国内源检查和下载更新，失败时回退 GitHub，并保持相同的 SHA-256 校验。旧版本需要先通过 GitHub 更新或手动安装完整包，才能使用国内源。
+v3.3.1 支持 Gitee 增量更新源：优先从国内源检查和下载增量更新，网络或下载校验失败时回退 GitHub，并保持相同的 SHA-256 校验。国内源仅镜像大小合适的增量包及清单；完整包和较大的增量包保留在 GitHub。没有可用升级链时请从 GitHub 下载完整包。旧版本需要先通过 GitHub 更新或手动安装完整包，才能使用国内源。
 
 ## 快速开始
 

@@ -10,7 +10,7 @@ from scripts import sync_gitee_release as sync
 
 def setup_release(tmp_path, monkeypatch, *, existing=False, upload_ok=True, public_ok=True):
     monkeypatch.setattr(sync.time, "sleep", lambda seconds: None)
-    package = tmp_path / "auto-bdsp-rng-v3.3.1-windows-x64.zip"
+    package = tmp_path / "auto-bdsp-rng-v3.3.0-to-v3.3.1-windows-x64.update.zip"
     package.write_bytes(b"release bytes")
     metadata = sync.metadata_for("v3.3.1", [package])
     source = dict(name="v3.3.1", body="## 本次更新\n\n- 支持 Gitee 更新源。", draft=False,
@@ -96,7 +96,7 @@ def test_upload_timeout_rechecks_remote_before_retrying(tmp_path, monkeypatch):
     uploaded = False
     def request(method, endpoint, token, **kwargs):
         if endpoint.endswith("attach_files") and uploaded:
-            return [{"name": "auto-bdsp-rng-v3.3.1-windows-x64.zip"}]
+            return [{"name": "auto-bdsp-rng-v3.3.0-to-v3.3.1-windows-x64.update.zip"}]
         return original(method, endpoint, token, **kwargs)
     def upload(*args):
         nonlocal uploaded
@@ -154,3 +154,40 @@ def test_api_retries_transient_errors_without_logging_token(monkeypatch, capsys)
     assert sync.request("GET", "/releases", "sensitive-token") == []
     assert len(calls) == 3
     assert "sensitive-token" not in capsys.readouterr().out
+
+
+def test_full_archive_is_not_required_or_advertised_as_a_domestic_asset(tmp_path, monkeypatch):
+    calls, source = setup_release(tmp_path, monkeypatch)
+    source['assets'].append({'name': 'auto-bdsp-rng-v3.3.1-windows-x64.zip', 'size': 695_000_000})
+    sync.sync('v3.3.1', tmp_path, 'test-token')
+    body = calls[-1][2]['json']['body']
+    assert '[GitHub 下载完整包](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.1)' in body
+    metadata = json.loads(body.split('<!-- auto-bdsp-update:')[1].split(' -->')[0])
+    assert len(metadata['assets']) == 1
+    assert metadata['assets'][0]['name'].endswith('.update.zip')
+    from auto_bdsp_rng.update_service import _normalize_gitee_releases, build_update_plan
+    releases = _normalize_gitee_releases([{'tag_name': 'v3.3.1', 'body': body}])
+    assert build_update_plan('3.3.0', releases).incremental_available
+
+
+def test_oversized_patch_is_excluded_and_downloads_only_mirror_assets(tmp_path, monkeypatch):
+    calls, source = setup_release(tmp_path, monkeypatch)
+    patch = source['assets'][0]['name']
+    source['assets'] += [
+        {'name': 'auto-bdsp-rng-v3.3.1-windows-x64.zip', 'size': 695_000_000},
+        {'name': 'auto-bdsp-rng-v3.2.0-to-v3.3.1-windows-x64.update.zip', 'size': sync.MAX_MIRROR_ASSET_SIZE + 1},
+        {'name': 'auto-bdsp-rng-v3.3.1-windows-x64.manifest.json', 'size': 100},
+    ]
+    commands = []
+    monkeypatch.setattr(sync.subprocess, 'run', lambda command, **kwargs: commands.append(command))
+    sync.download_assets('v3.3.1', tmp_path)
+    names = {command[command.index('--pattern') + 1] for command in commands}
+    assert names == {patch, 'auto-bdsp-rng-v3.3.1-windows-x64.manifest.json'}
+
+
+def test_missing_selected_patch_still_prevents_publication(tmp_path, monkeypatch):
+    calls, source = setup_release(tmp_path, monkeypatch)
+    (tmp_path / source['assets'][0]['name']).unlink()
+    with pytest.raises(ValueError, match='incomplete'):
+        sync.sync('v3.3.1', tmp_path, 'test-token')
+    assert not calls

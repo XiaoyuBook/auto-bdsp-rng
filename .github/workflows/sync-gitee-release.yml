@@ -46,7 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release download "$RELEASE_TAG" --repo XiaoyuBook/auto-bdsp-rng --dir release --pattern '*.zip' --pattern '*.manifest.json'
+        run: python -u scripts/sync_gitee_release.py --tag "$RELEASE_TAG" --directory release --download-only
       - name: Sync and verify Gitee assets
         timeout-minutes: 45
         env:
