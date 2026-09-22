@@ -1,0 +1,45 @@
+name: Sync Gitee Code
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitee-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Push main to Gitee
+        shell: python
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
+        run: |
+          import base64, os, subprocess
+          token = os.environ['GITEE_ACCESS_TOKEN']
+          if not token:
+              raise SystemExit('GITEE_ACCESS_TOKEN is missing')
+          auth = base64.b64encode(('shekongsk:' + token).encode()).decode()
+          print('::add-mask::' + auth, flush=True)
+          env = dict(os.environ, GIT_CONFIG_COUNT='1',
+              GIT_CONFIG_KEY_0='http.https://gitee.com/.extraheader',
+              GIT_CONFIG_VALUE_0='Authorization: Basic ' + auth)
+          subprocess.run(['git', 'push',
+              'https://gitee.com/shekongsk/auto-bdsp-rng.git',
+              'HEAD:refs/heads/main'], env=env, check=True)
