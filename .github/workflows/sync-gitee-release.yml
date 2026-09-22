@@ -37,25 +37,10 @@ jobs:
       - name: Install publishing dependencies
         run: python -m pip install 'requests>=2.32,<3'
       - name: Mirror release tag
-        shell: python
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
-        run: |
-          import base64, os, re, subprocess
-          tag = os.environ['RELEASE_TAG']
-          if re.fullmatch(r'v\d+\.\d+\.\d+', tag) is None:
-              raise SystemExit('Invalid release tag')
-          token = os.environ['GITEE_ACCESS_TOKEN']
-          if not token:
-              raise SystemExit('GITEE_ACCESS_TOKEN is missing')
-          auth = base64.b64encode(('shekongsk:' + token).encode()).decode()
-          print('::add-mask::' + auth, flush=True)
-          env = dict(os.environ, GIT_CONFIG_COUNT='1',
-              GIT_CONFIG_KEY_0='http.https://gitee.com/.extraheader',
-              GIT_CONFIG_VALUE_0='Authorization: Basic ' + auth)
-          subprocess.run(['git', 'push', 'https://gitee.com/shekongsk/auto-bdsp-rng.git',
-              f'refs/tags/{tag}:refs/tags/{tag}'], env=env, check=True)
+        run: python scripts/sync_gitee_tag.py --tag "$RELEASE_TAG"
       - name: Download published assets
         timeout-minutes: 10
         env:
