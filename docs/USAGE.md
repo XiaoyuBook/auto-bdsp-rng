@@ -2,7 +2,7 @@
 
 [返回项目首页](../README.md) · [开发指南](DEVELOPMENT.md) · [更新日志](../CHANGELOG.md)
 
-本指南说明 v3.3.2 源码中各工作区的使用方式和参数行为。当前正式版为 [v3.3.1](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.1)；过场校正搜索 100 万帧、QQ 通知保存反馈和 OCR 设置引导改进待 v3.3.2 发布。
+本指南说明 v3.3.2 中各工作区的使用方式和参数行为。当前正式版为 [v3.3.2](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.2)，已包含过场校正搜索 100 万帧、QQ 通知保存反馈和 OCR 设置引导改进。
 
 ## 目录
 
