@@ -46,6 +46,8 @@
 
 当前正式版为 **[v3.3.1](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.1)**。
 
+`main` 分支已包含待发布的 v3.3.2 修复：过场校正搜索 100 万帧、QQ 通知保存反馈和 OCR 设置引导。安装包仍请下载当前正式版。
+
 1. 在 Release 页的 **Assets** 中下载 `auto-bdsp-rng-v3.3.1-windows-x64.zip`。
 2. 完整解压，进入 `auto-bdsp-rng` 文件夹。
 3. 双击 **`珍钻复刻自动乱数.exe`** 启动。

@@ -2,7 +2,7 @@
 
 [返回项目首页](../README.md) · [开发指南](DEVELOPMENT.md) · [更新日志](../CHANGELOG.md)
 
-本指南说明 v3.3.0 源码中各工作区的使用方式和参数行为。当前正式版为 [v3.3.0](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.0)；QQ 通知、私聊/群聊绑定和软件内图文验证教程已随 v3.3.0 发布。
+本指南说明 v3.3.2 源码中各工作区的使用方式和参数行为。当前正式版为 [v3.3.1](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.1)；过场校正搜索 100 万帧、QQ 通知保存反馈和 OCR 设置引导改进待 v3.3.2 发布。
 
 ## 目录
 
@@ -153,6 +153,8 @@ remaining_to_trigger = trigger_advances - current_advances
 ## OCR
 
 Windows 绿色包已内置 PaddleOCR/PaddlePaddle 和项目固定的模型，普通用户无需另行安装。OCR 模型按第一次识别、测试或自动流程的实际需要预热，不会在每次启动时无条件占用资源。
+
+建议将软件完整解压到纯英文路径（例如 `D:\BDSP`）。如果在中文路径下出现 `Cannot initialize PaddleOCR`，可先将整个软件目录移到纯英文路径，再重新启动并预热。
 
 OCR 区域设置包含十项内置默认区域：性格、个性、六项能力值、判闪对话区域和御三家战斗区域。每项都可以单独框选、显示、识别和重置；“测试全部”会自动翻页测试前八项精灵信息，两个判闪计时区域需单独识别或使用闪光判定校准。默认区域按 1920x1080 画面校准；自定义区域无效时，判闪对话区域会回退到画面下半部，御三家战斗区域会按当前分辨率定位右侧战斗按钮。
 
