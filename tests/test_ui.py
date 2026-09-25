@@ -5697,11 +5697,18 @@ def test_main_window_auto_rng_reidentify_uses_hint_limited_noisy_search_window(a
     assert search_ranges == [(40_000, 30_000)]
 
 
-def test_main_window_auto_rng_exit_reidentify_caps_noisy_search_without_hint(app, tmp_path, monkeypatch):
+def test_main_window_auto_rng_exit_reidentify_searches_million_frames(app, tmp_path, monkeypatch):
     window = MainWindow()
-    seed_state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
-    observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=0.0)
+    seed_state = SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222)
+    # Twenty player blinks with one Pokemon NPC, starting at advance 900,000.
+    # Project_Xs identifies the final blink at advance 900,234.
+    observation = BlinkObservation.from_sequences(
+        [0] * 20,
+        [0, 13, 1, 2, 6, 11, 6, 8, 4, 5, 6, 6, 27, 5, 26, 19, 17, 12, 4, 2],
+        offset_time=0.0,
+    )
     search_ranges: list[tuple[int, int]] = []
+    reidentify_noisy = main_window_module.reidentify_seed_from_observation_noisy
 
     def fake_load_config(path, blink_count):
         return ProjectXsTrackingConfig(
@@ -5715,15 +5722,16 @@ def test_main_window_auto_rng_exit_reidentify_caps_noisy_search_without_hint(app
         )
 
     def fake_capture(config, *_args, **_kwargs):
+        assert config.blink_count == 20
         return observation
 
-    def fake_noisy(current_state, _observation, **kwargs):
+    def record_noisy(current_state, actual_observation, **kwargs):
         search_ranges.append((kwargs["search_min"], kwargs["search_max"]))
-        return ProjectXsReidentifyResult(state=seed_state, observation=observation, advances=42)
+        return reidentify_noisy(current_state, actual_observation, **kwargs)
 
     monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
     monkeypatch.setattr(main_window_module, "capture_player_blinks", fake_capture)
-    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation_noisy", fake_noisy)
+    monkeypatch.setattr(main_window_module, "reidentify_seed_from_observation_noisy", record_noisy)
 
     services = window._build_auto_rng_services(
         AutoRngConfig(
@@ -5734,9 +5742,14 @@ def test_main_window_auto_rng_exit_reidentify_caps_noisy_search_without_hint(app
         )
     )
 
-    services.reidentify_exit(AutoRngSeedResult(seed=SeedPair64(0x1111111122222222, 0x3333333344444444)))
+    result = services.reidentify_exit(AutoRngSeedResult(seed=seed_state, current_advances=900_000))
 
-    assert search_ranges == [(0, 100_000)]
+    assert search_ranges == [(0, 1_000_000)]
+    assert result.current_advances == 900_234
+    assert result.seed == seed_state
+    assert result.timing_seed == main_window_module.advance_seed_state(seed_state, 900_234).state
+    assert result.pokemon_npc == 1
+    assert result.advance_mode == "timeline"
 
 
 def test_main_window_auto_rng_reidentify_after_exit_uses_reidentify_config(app, tmp_path, monkeypatch):

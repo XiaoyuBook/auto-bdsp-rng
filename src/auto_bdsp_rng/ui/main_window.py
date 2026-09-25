@@ -215,6 +215,7 @@ AUTO_CAPTURE_WARMUP_DISCARD_SECONDS = 1.0
 REIDENTIFY_HINT_BEFORE_FRAMES = 10_000
 REIDENTIFY_HINT_AFTER_FRAMES = 20_000
 NOISY_REIDENTIFY_MAX_SEARCH_FRAMES = 100_000
+EXIT_REIDENTIFY_SEARCH_FRAMES = 1_000_000
 PREVIEW_REFRESH_FPS = 30
 PREVIEW_REFRESH_INTERVAL_MS = round(1000 / PREVIEW_REFRESH_FPS)
 STARTUP_UPDATE_CHECK_DELAY_MS = 1000
@@ -8280,7 +8281,9 @@ class MainWindow(QMainWindow):
                 show_window=False,
                 discard_first_blink_within_seconds=AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
             )
-            search_min, search_max = reidentify_search_args(exit_tracking_config, None)
+            # Match the Project_Xs GUI's default range after an exit script.
+            # Noisy search_max is a window length, so this searches 0..1,000,000.
+            search_min, search_max = 0, EXIT_REIDENTIFY_SEARCH_FRAMES
             reidentify_started_at = time.perf_counter()
             result = reidentify_seed_from_observation_noisy(
                 state32_from_result(seed_result),
