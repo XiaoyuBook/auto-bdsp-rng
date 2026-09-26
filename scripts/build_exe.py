@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     report_private_sponsor_assets()
     stage("Run PyInstaller")
     build_pyinstaller(python)
+    stage("Verify packaged sponsor assets")
+    verify_packaged_sponsor_assets()
     stage("Build updater")
     build_updater(python)
     stage("Verify packaged OCR")
@@ -132,13 +134,27 @@ def verify_ocr_dependencies(python: Path) -> None:
 
 def report_private_sponsor_assets() -> None:
     expected = [PRIVATE_SPONSOR_ASSETS / "alipay.jpg", PRIVATE_SPONSOR_ASSETS / "wechat.jpg"]
-    existing = [path for path in expected if path.exists()]
-    if len(existing) == len(expected):
-        print(f"Private sponsor QR assets will be bundled inside _internal: {PRIVATE_SPONSOR_ASSETS}")
-        return
-    print("Private sponsor QR assets are incomplete; support dialog will show the no-QR fallback.")
-    for path in expected:
-        print(f"  {'found' if path.exists() else 'missing'}: {path}")
+    missing = [path for path in expected if not path.is_file() or path.stat().st_size == 0]
+    if missing:
+        details = "\n".join(f"  missing or empty: {path}" for path in missing)
+        raise SystemExit(
+            "Build cancelled: sponsor QR assets are required for a complete release.\n"
+            f"Restore the files under {PRIVATE_SPONSOR_ASSETS}:\n{details}"
+        )
+    print(f"Private sponsor QR assets will be bundled inside _internal: {PRIVATE_SPONSOR_ASSETS}")
+
+
+def verify_packaged_sponsor_assets() -> None:
+    packaged_dir = DIST_DIR / "_internal" / "private_assets" / "sponsor"
+    expected = [packaged_dir / "alipay.jpg", packaged_dir / "wechat.jpg"]
+    missing = [path for path in expected if not path.is_file() or path.stat().st_size == 0]
+    if missing:
+        details = "\n".join(f"  missing or empty: {path}" for path in missing)
+        raise SystemExit(
+            "Build cancelled: PyInstaller did not package all sponsor QR assets.\n"
+            f"{details}"
+        )
+    print(f"Verified sponsor QR assets in packaged output: {packaged_dir}")
 
 
 def remove_stale_native_extensions() -> None:

@@ -39,6 +39,34 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Restore sponsor QR assets from repository secrets
+        shell: pwsh
+        env:
+          SPONSOR_ALIPAY_JPG_BASE64: ${{ secrets.SPONSOR_ALIPAY_JPG_BASE64 }}
+          SPONSOR_WECHAT_JPG_BASE64: ${{ secrets.SPONSOR_WECHAT_JPG_BASE64 }}
+        run: |
+          $assets = @(
+            @{ Name = 'SPONSOR_ALIPAY_JPG_BASE64'; Value = $env:SPONSOR_ALIPAY_JPG_BASE64; File = 'alipay.jpg' },
+            @{ Name = 'SPONSOR_WECHAT_JPG_BASE64'; Value = $env:SPONSOR_WECHAT_JPG_BASE64; File = 'wechat.jpg' }
+          )
+          $assetDir = Join-Path $env:GITHUB_WORKSPACE 'private_assets\sponsor'
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+          foreach ($asset in $assets) {
+            if ([string]::IsNullOrWhiteSpace($asset.Value)) {
+              throw "Missing GitHub Actions secret $($asset.Name). Add it in Settings > Secrets and variables > Actions."
+            }
+            try {
+              $bytes = [Convert]::FromBase64String($asset.Value)
+            } catch {
+              throw "GitHub Actions secret $($asset.Name) is not valid Base64."
+            }
+            if ($bytes.Length -lt 4 -or $bytes[0] -ne 0xFF -or $bytes[1] -ne 0xD8 -or $bytes[-2] -ne 0xFF -or $bytes[-1] -ne 0xD9) {
+              throw "GitHub Actions secret $($asset.Name) does not contain a complete JPEG image."
+            }
+            [IO.File]::WriteAllBytes((Join-Path $assetDir $asset.File), $bytes)
+          }
+          Write-Host 'Restored both sponsor QR images from repository secrets.'
+
       - name: Build package
         shell: cmd
         env:
