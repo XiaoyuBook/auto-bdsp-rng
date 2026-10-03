@@ -95,6 +95,22 @@ PyInstaller Qt WebEngine hooks collect the Chromium helper process and runtime
 resources; the `docs/assets` release-copy step includes the HTML page. Keep these
 files with the executable. The page uses system fonts and does not fetch web assets.
 
+## UI And Sponsor Assets
+
+The main application installs its shared light Fusion-based style and vector
+chevrons before building the workspaces. Fusion is built into Qt Widgets; the
+UI does not rely on a Windows 11 or Windows Vista style plugin for its metrics.
+Keep the packaged MiSans faces under `docs/assets/fonts` with the application.
+Verify both the source and frozen UI at 100%, 125%, and 150% scaling.
+
+Complete releases require `private_assets/sponsor/alipay.jpg` and
+`private_assets/sponsor/wechat.jpg`. The GitHub workflow restores them from
+`SPONSOR_ALIPAY_JPG_BASE64` and `SPONSOR_WECHAT_JPG_BASE64` repository secrets
+and validates the JPEG data. Local builds must provide those files before
+running the build. The build checks that both files are non-empty before
+PyInstaller and again inside `_internal/private_assets/sponsor` afterward;
+missing assets stop the release build. Keep private images out of Git.
+
 ## OCR
 
 The Windows release package includes `paddlepaddle` and `paddleocr` so OCR shiny checks, stats-page OCR, and notes-page OCR are available from the green zip. This makes the zip larger and can make the first OCR use slower while Paddle initializes its models.

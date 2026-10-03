@@ -44,11 +44,11 @@
 
 **[下载最新 Windows x64 绿色版](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/latest)**
 
-当前正式版为 **[v3.3.2](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/v3.3.2)**。
+下载入口始终指向最新已发布的正式版；请以 Release 页的版本号和 **Assets** 为准。
 
-v3.3.2 已包含过场校正搜索 100 万帧、QQ 通知保存反馈和 OCR 设置引导改进。
+v3.3.3 的源码改进包括自动 TID 取名时机、退出参数保存、开始按钮状态和跨电脑界面一致性修复。在该版本安装包发布前，这些改进仅在源码版可用。[查看本次更新 →](CHANGELOG.md#333)
 
-1. 在 Release 页的 **Assets** 中下载 `auto-bdsp-rng-v3.3.2-windows-x64.zip`。
+1. 在最新正式版 Release 页的 **Assets** 中下载 `auto-bdsp-rng-v<版本号>-windows-x64.zip`。
 2. 完整解压，进入 `auto-bdsp-rng` 文件夹。
 3. 双击 **`珍钻复刻自动乱数.exe`** 启动。
 

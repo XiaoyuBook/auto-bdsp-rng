@@ -19,7 +19,9 @@ For a target version `X.Y.Z`, update these files in the same release commit:
 
 `CHANGELOG.md` must start with a non-empty top-level heading exactly matching `# X.Y.Z`. Write its entries as user-facing release notes; GitHub Actions places that section under **本次更新** in the GitHub Release body. Keep previous release entries intact; a new section may also summarize earlier changes when cumulative notes are needed.
 
-Before the new package is published, identify features documented from `main` as pending release and keep the README download section pointing to the latest published package. Update the download/version references when the new package is published.
+Before the new package is published, identify features documented from `main` as pending release and keep the README download section pointing to the latest published package. Prefer `/releases/latest` and the version displayed in its Assets to avoid advertising an archive before it exists. Update any fixed download/version references when the new package is published.
+
+Review every commit from the latest published tag through the release commit. Summarize the final user-visible behavior in the new changelog section, including fixes already committed to `main` but absent from the last package; omit abandoned approaches and unrelated local drafts.
 
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
 
@@ -52,6 +54,8 @@ Confirm:
 - `release/auto-bdsp-rng-vX.Y.Z-windows-x64.manifest.json` exists and lists the complete `dist/auto-bdsp-rng/` tree,
 - `release/release-notes.md` shows the intended **本次更新** content.
 - “帮助 -> 检查更新…” performs a manual check without any startup network request; source mode only offers the Release page.
+- the shared light UI style and bounded chevrons render consistently at 100%, 125%, and 150% scaling; the log view buttons and session status stay aligned at 860×600 and 1150×900, and view switching, unread counts, and split-button menus remain functional,
+- both sponsor QR images were restored and verified by the build; private images remain excluded from Git.
 
 To test an incremental artifact locally, download the previous Release manifest and run:
 
