@@ -6,9 +6,11 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QTabWidget,
     QVBoxLayout,
@@ -103,6 +105,8 @@ class RunRecordsPanel(QWidget):
         self.view_tabs.setObjectName("RunRecordsTabs")
         self.view_tabs.setDocumentMode(True)
         self.view_tabs.setUsesScrollButtons(False)
+        self.view_tabs.tabBar().setDrawBase(False)
+        self.view_tabs.tabBar().hide()
         self.log_panel = RunLogPanel(
             log_buffer,
             save_enabled=save_enabled,
@@ -112,7 +116,29 @@ class RunRecordsPanel(QWidget):
         )
         self.view_tabs.addTab(self.history_panel, "轮次记录")
         self.view_tabs.addTab(self.log_panel, "详细日志")
-        session_corner = QWidget(self.view_tabs)
+        # One layout owns the view buttons and status. A native tab bar and
+        # corner widget can draw separate, misaligned baselines on Windows.
+        self.view_header = QWidget(self)
+        self.view_header.setObjectName("RunRecordsViewHeader")
+        view_layout = QHBoxLayout(self.view_header)
+        view_layout.setContentsMargins(0, 0, 0, 0)
+        view_layout.setSpacing(8)
+        self.view_button_group = QButtonGroup(self)
+        self.view_button_group.setExclusive(True)
+        self.view_buttons = []
+        for index, text in enumerate(("轮次记录", "详细日志")):
+            button = QPushButton(text, self.view_header)
+            button.setObjectName("RunRecordsViewButton")
+            button.setCheckable(True)
+            button.setFixedHeight(34)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.view_button_group.addButton(button, index)
+            self.view_buttons.append(button)
+            view_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.view_buttons[self.ROUND_TAB].setChecked(True)
+        self.view_button_group.idClicked.connect(self.view_tabs.setCurrentIndex)
+        view_layout.addStretch(1)
+        session_corner = QWidget(self.view_header)
         session_corner.setObjectName("RunRecordsSessionCorner")
         session_layout = QHBoxLayout(session_corner)
         session_layout.setContentsMargins(0, 0, 6, 0)
@@ -122,12 +148,12 @@ class RunRecordsPanel(QWidget):
         session_layout.addWidget(self.subtitle_label)
         session_layout.addWidget(self.live_status_label)
         self.session_corner = session_corner
-        self.view_tabs.setCornerWidget(session_corner, Qt.Corner.TopRightCorner)
+        view_layout.addWidget(session_corner, 0, Qt.AlignmentFlag.AlignVCenter)
         self.view_tabs.currentChanged.connect(self._on_view_changed)
+        root.addWidget(self.view_header)
         root.addWidget(self.view_tabs, 1)
 
-        # The application-wide tab rules target every QTabWidget. Keep this
-        # nested switch visually lighter so it reads as a view selector.
+        # Keep view navigation separate from native tab frames and metrics.
         self.setStyleSheet(
             ui_styles("""
             QWidget#RunRecordsPanel, QTabWidget#RunRecordsTabs {
@@ -164,14 +190,12 @@ class RunRecordsPanel(QWidget):
                 background: transparent;
                 top: 0;
             }
-            QTabWidget#RunRecordsTabs > QTabBar {
+            QWidget#RunRecordsViewHeader {
                 border: 0;
                 background: transparent;
             }
-            QTabWidget#RunRecordsTabs > QTabBar::tab {
+            QPushButton#RunRecordsViewButton {
                 min-width: 76px;
-                min-height: 32px;
-                margin: 0 8px 0 0;
                 padding: 0 10px;
                 border: 1px solid #E3E8ED;
                 border-radius: 6px;
@@ -180,13 +204,13 @@ class RunRecordsPanel(QWidget):
                 font-size: 13px;
                 font-weight: 400;
             }
-            QTabWidget#RunRecordsTabs > QTabBar::tab:selected {
+            QPushButton#RunRecordsViewButton:checked {
                 color: #087C58;
                 border-color: #EAF7F1;
                 background: #EAF7F1;
                 font-weight: 500;
             }
-            QTabWidget#RunRecordsTabs > QTabBar::tab:hover:!selected {
+            QPushButton#RunRecordsViewButton:hover:!checked {
                 color: #087C58;
                 background: transparent;
             }
@@ -233,6 +257,8 @@ class RunRecordsPanel(QWidget):
 
     @Slot(int)
     def _on_view_changed(self, index: int) -> None:
+        if 0 <= index < len(self.view_buttons):
+            self.view_buttons[index].setChecked(True)
         if index == self.LOG_TAB:
             self._mark_logs_read_if_visible()
 
@@ -261,3 +287,4 @@ class RunRecordsPanel(QWidget):
         if self._unread_problem_count:
             text += f" ({self._unread_problem_count})"
         self.view_tabs.setTabText(self.LOG_TAB, text)
+        self.view_buttons[self.LOG_TAB].setText(text)

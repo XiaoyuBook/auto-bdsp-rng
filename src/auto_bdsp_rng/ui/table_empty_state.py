@@ -81,5 +81,5 @@ class TableEmptyState(QWidget):
     def eventFilter(self, watched, event) -> bool:
         if event.type() == QEvent.Type.Resize:
             self.setGeometry(watched.rect())
-            QTimer.singleShot(0, self._sync_action_geometry)
+            QTimer.singleShot(0, self, self._sync_action_geometry)
         return False

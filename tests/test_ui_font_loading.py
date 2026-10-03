@@ -39,7 +39,9 @@ def test_fonts_load_without_a_system_installation(location, tmp_path):
             assert ids == ()
             font = theme.ui_font()
             assert QRawFont.fromFont(font).isValid()
-            assert QFontDatabase.families() == original_families
+            # Qt 6.11 can expose an empty family after a failed registration;
+            # the actual named system fonts must remain unchanged.
+            assert set(QFontDatabase.families()) - {''} == set(original_families) - {''}
             assert font.weight() == QFont.Weight.Normal
             assert theme.ui_styles('font-weight: 400;') == 'font-weight: 400;'
         else:

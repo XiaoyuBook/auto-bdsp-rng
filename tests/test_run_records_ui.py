@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QWidget
 from PySide6.QtTest import QTest
 
@@ -93,7 +93,7 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     records_panel.view_tabs.setCurrentWidget(records_panel.log_panel)
     app.processEvents()
     footer = records_panel.log_panel.footer_frame
-    assert footer.height() == 50
+    assert footer.height() == 42
     for button in (
         records_panel.log_panel.clear_button,
         records_panel.log_panel.copy_button,
@@ -102,8 +102,8 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     ):
         assert button.height() == 34
         assert footer.rect().contains(button.geometry())
-        assert button.geometry().top() == 8
-        assert footer.rect().bottom() - button.geometry().bottom() == 8
+        assert button.geometry().top() == 4
+        assert footer.rect().bottom() - button.geometry().bottom() == 4
 
 
 def test_run_records_header_and_history_empty_state_switch_cleanly(app):
@@ -150,6 +150,41 @@ def test_run_records_header_and_history_empty_state_switch_cleanly(app):
     assert not history.round_splitter.isVisible()
     assert not history.clear_button.isEnabled()
     assert not history.export_button.isEnabled()
+
+
+@pytest.mark.parametrize("width", [860, 1150])
+def test_log_view_buttons_and_session_status_share_one_aligned_row(app, width):
+    buffer = RunLogBuffer()
+    records = RunRecordsPanel(HistoryPanel(), buffer)
+    records.resize(width, 600)
+    records.set_session_context("自动 TID")
+    records.set_active_round(1)
+    records.show()
+    app.processEvents()
+
+    header = records.view_header
+    status = records.session_corner
+    assert records.view_tabs.tabBar().isHidden()
+    assert records.view_tabs.cornerWidget() is None
+    for button in records.view_buttons:
+        assert header.rect().contains(button.geometry())
+        assert button.geometry().center().y() == status.geometry().center().y()
+    assert records.view_buttons[1].geometry().right() < status.geometry().left()
+
+    # Mouse navigation, programmatic navigation and unread indicators all
+    # update the same view; replacing the native header must not fork state.
+    buffer.publish("自动 TID", "捕捉失败", level="WARNING")
+    app.processEvents()
+    assert records.view_buttons[records.LOG_TAB].text() == "详细日志 (1)"
+    QTest.mouseClick(records.view_buttons[records.LOG_TAB], Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert records.view_tabs.currentWidget() is records.log_panel
+    assert records.view_buttons[records.LOG_TAB].isChecked()
+    assert not records.view_buttons[records.ROUND_TAB].isChecked()
+    assert records.view_buttons[records.LOG_TAB].text() == "详细日志"
+    records.show_rounds()
+    assert records.view_tabs.currentWidget() is records.history_panel
+    assert records.view_buttons[records.ROUND_TAB].isChecked()
 
 
 def test_run_log_buffer_hard_cap_and_panel_small_capacity_receive_live_entries(app):

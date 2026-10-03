@@ -176,6 +176,7 @@ from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer
 from auto_bdsp_rng.ui.run_records_panel import RunRecordsPanel
+from auto_bdsp_rng.ui.workspace_style import configure_workspace_style
 from auto_bdsp_rng.ui.spin_box import ChevronDoubleSpinBox as QDoubleSpinBox
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
@@ -1545,6 +1546,7 @@ class MainWindow(QMainWindow):
         dev_mock_devices: bool = False,
     ) -> None:
         super().__init__()
+        configure_workspace_style(QApplication.instance())
         self.setFont(ui_font())
         self.setWindowTitle(APP_DISPLAY_TITLE)
         if app_icon_path().exists():
@@ -1888,6 +1890,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setObjectName("WorkspaceTabs")
         self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().setDrawBase(False)
         self.navigation_status = QLabel("● 定点 · 空闲")
         self.navigation_status.setObjectName("NavigationStatus")
         self.navigation_status.setAlignment(
@@ -3309,11 +3312,11 @@ class MainWindow(QMainWindow):
             QTabWidget#WorkspaceTabs::tab-bar {
                 left: 18px;
             }
-            QTabWidget#WorkspaceTabs, QTabWidget#WorkspaceTabs QTabBar {
+            QTabWidget#WorkspaceTabs, QTabWidget#WorkspaceTabs > QTabBar {
                 background: #FFFFFF;
                 border-bottom: 1px solid #F0F2F5;
             }
-            QTabWidget#WorkspaceTabs QTabBar::tab {
+            QTabWidget#WorkspaceTabs > QTabBar::tab {
                 background: #FFFFFF;
                 border: 0;
                 border-bottom: 1px solid #F0F2F5;
@@ -3325,14 +3328,14 @@ class MainWindow(QMainWindow):
                 font-size: 13px;
                 font-weight: 400;
             }
-            QTabWidget#WorkspaceTabs QTabBar::tab:selected {
+            QTabWidget#WorkspaceTabs > QTabBar::tab:selected {
                 background: #FFFFFF;
                 color: #087C58;
                 border-bottom: 2px solid #087C58;
                 padding-bottom: 0;
                 font-weight: 500;
             }
-            QTabWidget#WorkspaceTabs QTabBar::tab:hover:!selected {
+            QTabWidget#WorkspaceTabs > QTabBar::tab:hover:!selected {
                 background: #F7F8FA;
                 color: #202A33;
             }
@@ -10232,6 +10235,7 @@ def run(*, dev_mock_devices: bool = False) -> int:
     ui_scale = get_ui_scale()
     ui_scale_environment = configure_ui_scale_environment(ui_scale)
     app = QApplication.instance() or QApplication([])
+    configure_workspace_style(app)
     app.setFont(ui_font())
     configure_application_identity(app)
     run_log_manager = RunLogManager()
