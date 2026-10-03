@@ -1106,19 +1106,26 @@ class AutoTidRngRunner:
         )
         if self._stop_requested:
             return
+        # Catch up even when run_until had no ticks to consume (trigger ==
+        # the captured advance). Search, callbacks or a delayed wake-up can
+        # otherwise leave a stale counter and run every missed trigger now.
+        now = self._read_monotonic()
+        self._advance_counter.advance_to(now)
         updates = self._wait_progress_updates(
-            now=self._read_monotonic(),
+            now=now,
             current_advances=int(self._advance_counter.current_advances),
             target_advances=int(trigger),
         )
         actual_current = int(updates.get("current_advances", self._advance_counter.current_advances))
-        if actual_current != int(trigger):
-            prefix = (
-                f"到达取名脚本触发帧 {trigger} 时实际Adv={actual_current}"
-                f"（超出{max(0, actual_current - int(trigger))}）"
+        if actual_current > int(trigger):
+            self._loop_or_complete(
+                self._format_wait_timing_message(
+                    f"已超过取名脚本触发帧 {trigger}，实际Adv={actual_current}，重新测种",
+                    updates,
+                )
             )
-        else:
-            prefix = f"到达取名脚本触发帧 {trigger}"
+            return
+        prefix = f"到达取名脚本触发帧 {trigger}"
         self._set_progress(
             AutoTidRngPhase.RUN_NAME_SCRIPT,
             self._format_wait_timing_message(

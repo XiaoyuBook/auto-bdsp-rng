@@ -4340,6 +4340,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.qq_notifications.shutdown()
+        # Closing the parent window does not send closeEvent to this panel.
+        self.auto_tid_rng_tab._save_panel_state()
         self._save_profile_settings()
         self._save_window_geometry()
         self.guide_controller.pause()

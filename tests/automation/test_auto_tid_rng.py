@@ -362,6 +362,51 @@ def test_auto_tid_runner_can_start_from_capture_seed(tmp_path: Path) -> None:
     assert runner.progress.loop_index == 1
 
 
+@pytest.mark.parametrize("delay,late_search", [(2, True), (5, True), (10, True), (2, False), (5, False)])
+def test_auto_tid_runner_reseeds_instead_of_running_name_script_after_missed_trigger(tmp_path, delay, late_search):
+    seed_script = tmp_path / "seed.txt"
+    name_script = tmp_path / "name.txt"
+    for path in (seed_script, name_script):
+        path.write_text("A 100\n", encoding="utf-8")
+    clock = [100.0]
+    scripts = []
+    emitted = []
+
+    def search(*_args):
+        if late_search:
+            clock[0] += 100.0
+        return [IDState8(advances=10, tid=1, sid=100, tsv=0, display_tid=123456)]
+
+    def sleep(seconds):
+        # A delayed wake-up must not execute a script at a later RNG advance.
+        clock[0] += seconds + 100.0
+
+    runner = AutoTidRngRunner(
+        AutoTidRngConfig(
+            script_dir=tmp_path, seed_script_path=seed_script, name_script_path=name_script,
+            start_phase=AutoTidRngPhase.CAPTURE_TIDSID, target_display_tids=(123456,), delay=delay,
+        ),
+        services=AutoTidRngServices(
+            capture_seed=lambda: AutoTidSeedResult(
+                SeedPair64(0x1111111122222222, 0x3333333344444444), measured_at=100.0,
+            ),
+            search_id_states=search, run_script_text=lambda _text, name: scripts.append(name),
+            monotonic=lambda: clock[0], sleep=sleep,
+        ),
+        progress_callback=emitted.append,
+    )
+
+    result = runner.run(max_steps=3)
+
+    assert scripts == []
+    assert result.phase == AutoTidRngPhase.RUN_SEED_SCRIPT
+    assert result.loop_index == 2
+    assert not any(p.phase == AutoTidRngPhase.RUN_NAME_SCRIPT for p in emitted)
+    assert f"已超过取名脚本触发帧 {10 - delay}" in result.log_message
+    runner.run(max_steps=1)
+    assert scripts == ["seed.txt"]
+
+
 def test_auto_tid_runner_waits_with_project_xs_munchlax_timing(tmp_path: Path) -> None:
     seed_script = tmp_path / "BDSP测种.txt"
     name_script = tmp_path / "取名.txt"

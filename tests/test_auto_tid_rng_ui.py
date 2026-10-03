@@ -822,6 +822,68 @@ def test_main_window_starts_auto_tid_runner_from_panel_signal(app, tmp_path: Pat
     assert started[0].config == config
 
 
+@pytest.mark.parametrize("from_capture", [False, True])
+def test_tid_delay_edit_after_stop_reaches_new_runner_and_changes_script_time(app, tmp_path, monkeypatch, from_capture):
+    from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngServices, AutoTidSeedResult, predict_tid_elapsed_seconds
+
+    window = MainWindow()
+    panel = window.auto_tid_rng_tab
+    panel._settings = _settings(tmp_path)
+    panel.script_dir = tmp_path
+    for name in ("BDSP测种.txt", "取名.txt"):
+        (tmp_path / name).write_text("A 100\n", encoding="utf-8")
+    panel.refresh_scripts()
+    panel._select_script(panel.seed_script_combo, tmp_path / "BDSP测种.txt")
+    panel._select_script(panel.name_script_combo, tmp_path / "取名.txt")
+    panel._clear_targets()
+    panel.add_target_display_tid(123456)
+    panel.delay.setValue(2)
+    seed = SeedPair64(0x1111111122222222, 0x3333333344444444)
+    clock = [100.0]
+    script_times = []
+    started = []
+
+    services = AutoTidRngServices(
+        capture_seed=lambda: AutoTidSeedResult(seed, measured_at=100.0),
+        search_id_states=lambda *_: [IDState8(advances=10, tid=1, sid=100, tsv=0, display_tid=123456)],
+        run_script_text=lambda _text, name: script_times.append((name, clock[0])),
+        monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    monkeypatch.setattr(window, "_ensure_preview_for_auto_rng", lambda: True)
+    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(window, "_build_auto_tid_rng_services", lambda config: services)
+    monkeypatch.setattr(panel, "run_with_runner", started.append)
+    start = panel._start_from_capture_clicked if from_capture else panel._start_clicked
+
+    start()
+    first = started[-1]
+    # Stop a real runner during its wait, before the name script can execute.
+    first.services = replace(services, sleep=lambda seconds: first.stop())
+    first.run()
+    assert first.should_stop()
+    assert first.progress.trigger_advances == 8
+    assert not any(name == "取名.txt" for name, _ in script_times)
+
+    # Use keyboard input so the test also checks committing the spin box edit.
+    panel.delay.setFocus()
+    panel.delay.selectAll()
+    QTest.keyClicks(panel.delay, "5")
+    QTest.keyClick(panel.delay, Qt.Key.Key_Return)
+    start()
+    second = started[-1]
+    assert second is not first
+    assert second.config.delay == panel._active_config.delay == 5
+    second.run()
+
+    assert second.progress.phase == AutoTidRngPhase.COMPLETED
+    assert second.progress.trigger_advances == 5
+    expected_seconds = predict_tid_elapsed_seconds(seed, [5])[0]
+    assert script_times[-1] == ("取名.txt", pytest.approx(100.0 + expected_seconds))
+    restored = AutoTidRngPanel(script_dir=tmp_path, settings=panel._settings)
+    assert restored.delay.value() == 5
+
+
 def test_main_window_styles_keep_auto_tid_target_pool_multiline(app) -> None:
     window = MainWindow()
     panel = window.auto_tid_rng_tab
@@ -834,6 +896,28 @@ def test_main_window_styles_keep_auto_tid_target_pool_multiline(app) -> None:
 
     assert panel.target_list.minimumHeight() >= panel.target_list.gridSize().height() * 2
     assert panel.target_list.verticalScrollBar().isVisible() is False
+
+
+@pytest.mark.parametrize("save_before_close", [False, True])
+def test_tid_delay_survives_main_window_close(app, tmp_path, monkeypatch, save_before_close):
+    window = MainWindow()
+    panel = window.auto_tid_rng_tab
+    panel._settings = _settings(tmp_path)
+    panel.delay.setValue(2)
+    panel._save_config_state()
+    panel.delay.selectAll()
+    QTest.keyClicks(panel.delay, "5")
+    if save_before_close:
+        panel.save_button.click()
+    monkeypatch.setattr(window, "_confirm_unsaved_easycon_script", lambda: True)
+
+    assert window.close()
+
+    restored = AutoTidRngPanel(
+        script_dir=tmp_path,
+        settings=QSettings(panel._settings.fileName(), QSettings.Format.IniFormat),
+    )
+    assert restored.delay.value() == 5
 
 
 def test_main_window_auto_tid_capture_uses_64_munchlax_blinks(app, tmp_path: Path, monkeypatch) -> None:
