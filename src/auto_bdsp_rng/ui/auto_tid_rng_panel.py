@@ -243,6 +243,7 @@ class AutoTidRngWorker(QObject):
 class AutoTidRngPanel(AutomationLifecycle, QWidget):
     startRequested = Signal(object)
     stopRequested = Signal()
+    targetsChanged = Signal()
     progressChanged = Signal(object)
     ocrSettingsRequested = Signal()
     runLogRequested = Signal()
@@ -444,6 +445,38 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.start_button.setEnabled(False)
             for action in self.start_menu.actions():
                 action.setEnabled(False)
+        if not hasattr(self, "target_list") or self._restoring_state:
+            return
+        reason = ""
+        if not self.start_button.isEnabled():
+            if not self.target_list.count():
+                reason = "请至少添加一个目标 Display TID；输入后点击 + 或按回车"
+            elif self._runner_thread is not None:
+                reason = ("自动 TID 正在停止，等待线程退出" if self._stop_pending else
+                          "自动 TID 已返回结果，等待线程退出" if self._worker_done else
+                          "自动 TID 正在运行")
+            elif self._preparing:
+                reason = "自动 TID 正在准备"
+            elif not self._start_available:
+                reason = "其他自动任务或伊机控脚本仍占用资源"
+            else:
+                reason = "自动 TID 页面当前不可用"
+        self.start_button.setToolTip(reason)
+        for action in self.start_menu.actions():
+            action.setToolTip(reason)
+        snapshot = (
+            self.target_list.count(), self._start_available, self._preparing,
+            self._runner_thread is not None, self._stop_pending, self._worker_done,
+            self.isEnabled(), self.start_button.isEnabled(), self.stop_button.isEnabled(),
+        )
+        if snapshot != getattr(self, "_run_controls_snapshot", None):
+            self._run_controls_snapshot = snapshot
+            self.add_log(
+                f"TID 按钮状态：开始={snapshot[7]}；停止={snapshot[8]}；"
+                f"目标数={snapshot[0]}；共享启动可用={snapshot[1]}；准备中={snapshot[2]}；"
+                f"运行线程={snapshot[3]}；停止待退出={snapshot[4]}；结果已返回={snapshot[5]}；"
+                f"页面可用={snapshot[6]}；禁用原因={reason or '无'}"
+            )
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._countdown_timer.stop()
@@ -655,6 +688,12 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
         self.target_list.targetRemoved.connect(self._refresh_target_count)
+        # Synchronize after the model has changed, including direct insertions
+        # and removals that do not pass through the target-edit helpers.
+        for signal in (self.target_list.model().rowsInserted,
+                       self.target_list.model().rowsRemoved,
+                       self.target_list.model().modelReset):
+            signal.connect(self._sync_run_controls)
         layout.addWidget(self.target_list)
         action_panel = QWidget()
         action_panel.setObjectName("TargetPoolActions")
@@ -1720,6 +1759,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.target_hint_label.setText("按最早匹配帧数选择" if count else "添加目标后即可开始")
         self.clear_targets_button.setEnabled(count > 0)
         self._sync_run_controls()
+        self.targetsChanged.emit()
         self._mark_config_dirty()
         if hasattr(self, "id_table"):
             self._apply_id_filter()
@@ -1811,6 +1851,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         s.sync()
         self._saved_config_values = self._config_values()
         self._mark_config_dirty()
+        self._sync_run_controls()
+        self.targetsChanged.emit()
 
     def _save_script_state(self) -> None:
         s = self._settings

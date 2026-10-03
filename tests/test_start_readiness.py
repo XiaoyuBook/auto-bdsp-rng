@@ -1,13 +1,15 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QSettings, QTimer, Qt
+from PySide6.QtCore import QPoint, QSettings, QTimer, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngPhase
-from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase
+from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngServices
+from auto_bdsp_rng.rng_core import SeedState32
 from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConStatus
 from auto_bdsp_rng.ui import main_window as mw, auto_rng_panel, auto_tid_rng_panel, easycon_panel
 from tests.test_easycon_panel import FakeNativeBackend, UnsupportedKeyboardHookFactory
@@ -115,6 +117,108 @@ def test_tid_checks_follow_start_mode_even_without_targets(window, tmp_path):
     assert checks(window)["targets"].state == "ok"
     window.readiness.dialog.mode_combo.setCurrentIndex(0)
     assert checks(window)["scripts"].state == "blocked"
+
+
+@pytest.mark.parametrize("replace_method", ["delete", "close", "clear"])
+def test_tid_manual_capture_replace_target_and_save_can_start(window, tmp_path, monkeypatch, replace_method):
+    w, panel = window, window.auto_tid_rng_tab
+    seed = SeedState32(0x39AAEC0A, 0x68541BB0, 0x96CF56BB, 0xA710731C)
+    panel.frame_threshold.setValue(10)
+    panel._clear_targets()
+    panel.add_target_display_tid(777777)
+    script(panel.seed_script_combo, tmp_path, "seed.txt")
+    script(panel.name_script_combo, tmp_path, "name.txt")
+    monkeypatch.setattr(mw, "capture_pokemon_blinks", lambda *a, **kw: SimpleNamespace(intervals=[]))
+    monkeypatch.setattr(mw, "recover_tidsid_seed_from_observation", lambda observation: SimpleNamespace(state=seed))
+    w._latest_preview_frame = object()
+    w.capture_tidsid_seed()
+    w._capture_thread.join(timeout=2)
+    assert not w._capture_thread.is_alive()
+    w._poll_capture_thread()
+    w.tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    panel.id_table.setCurrentCell(1, 4)
+    selected_tid = panel.id_table.item(1, 4).text()
+    panel.target_list.setCurrentRow(0)
+    if replace_method == "delete":
+        QTest.keyClick(panel.target_list, Qt.Key.Key_Delete)
+    elif replace_method == "close":
+        rect = panel.target_list.visualItemRect(panel.target_list.item(0))
+        QTest.mouseClick(panel.target_list.viewport(), Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.NoModifier, rect.topRight() + QPoint(-8, rect.height() // 2))
+    else:
+        panel.clear_targets_button.click()
+    assert not panel.start_button.isEnabled()
+    panel.target_input.setFocus()
+    QTest.keyClicks(panel.target_input, selected_tid)
+    if replace_method == "close":
+        panel.add_target_button.click()
+    else:
+        QTest.keyClick(panel.target_input, Qt.Key.Key_Return)
+    panel.save_button.click()
+
+    assert panel.target_display_tids() == (int(selected_tid),)
+    assert panel.save_state_label.text() == "已保存"
+    assert panel.start_button.isEnabled()
+    assert all(action.isEnabled() for action in panel.start_menu.actions())
+    assert not panel.stop_button.isEnabled()
+    assert w.auto_rng_tab.start_button.isEnabled()
+    started = []
+    monkeypatch.setattr(w, "_ensure_preview_for_auto_rng", lambda: True)
+    monkeypatch.setattr(w, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(w, "_build_auto_tid_rng_services", lambda config: AutoTidRngServices())
+    monkeypatch.setattr(panel, "run_with_runner", started.append)
+    QTest.mouseClick(panel.start_button, Qt.MouseButton.LeftButton,
+                     Qt.KeyboardModifier.NoModifier, QPoint(15, 15))
+    assert len(started) == 1
+    assert started[0].config.target_display_tids == (int(selected_tid),)
+
+
+@pytest.mark.parametrize("save_only", [False, True])
+def test_tid_target_changes_refresh_released_script_state_without_polling(window, save_only):
+    w, panel = window, window.auto_tid_rng_tab
+    panel.add_target_display_tid(1)
+    w.easycon_tab._native_run_reserved = True
+    w._refresh_automation_start_state()
+    assert not panel.start_button.isEnabled()
+    assert "占用资源" in panel.start_button.toolTip()
+    # A release can happen between status polls. Target edits and Save should
+    # recompute actual ownership rather than retaining cached unavailability.
+    w.easycon_tab._native_run_reserved = False
+    w.auto_rng_tab.set_start_available(True)
+    assert w.auto_rng_tab.start_button.isEnabled()
+    assert not panel.start_button.isEnabled()
+    if save_only:
+        panel.save_button.click()
+    else:
+        panel._clear_targets()
+        panel.target_input.setText("123456")
+        panel.add_target_button.click()
+    assert panel.start_button.isEnabled()
+    assert w.auto_rng_tab.start_button.isEnabled()
+    assert all(action.isEnabled() for action in panel.start_menu.actions())
+    assert not panel.start_button.toolTip()
+
+
+def test_tid_target_changes_keep_active_script_locked_and_log_only_transitions(window):
+    w, panel = window, window.auto_tid_rng_tab
+    w.easycon_tab._native_run_reserved = True
+    try:
+        panel.add_target_display_tid(1)
+        panel.save_button.click()
+        assert not panel.start_button.isEnabled()
+        assert not panel.stop_button.isEnabled()
+        assert not w.auto_rng_tab.start_button.isEnabled()
+        assert "占用资源" in panel.start_button.toolTip()
+        before = panel.log_view.toPlainText()
+        for _ in range(3):
+            w._refresh_automation_start_state()
+        assert panel.log_view.toPlainText() == before
+        assert "目标数=1" in before
+        assert "共享启动可用=False" in before
+    finally:
+        w.easycon_tab._native_run_reserved = False
+        w._refresh_automation_start_state()
 
 
 def test_script_content_and_config_changes_invalidate_check_cache(window, tmp_path):

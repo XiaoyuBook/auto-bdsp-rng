@@ -1934,6 +1934,7 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.stopRequested.connect(self._cancel_auto_rng_preparation)
         self.auto_rng_tab.runStateChanged.connect(self._refresh_automation_start_state)
         self.auto_tid_rng_tab.runStateChanged.connect(self._refresh_automation_start_state)
+        self.auto_tid_rng_tab.targetsChanged.connect(self._refresh_automation_start_state)
         self.easycon_tab.connectionPresentationChanged.connect(self._refresh_automation_start_state)
         self.easycon_tab._native_status_timer.timeout.connect(self._refresh_automation_start_state)
         self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)

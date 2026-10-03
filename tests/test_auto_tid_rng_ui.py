@@ -483,7 +483,7 @@ def test_auto_tid_log_sink_receives_failure_once_and_cannot_break_ui(app, tmp_pa
     panel.apply_progress(progress)
     panel._runner_finished(progress)
 
-    assert events == [
+    assert [event for event in events if not event[1].startswith("TID 按钮状态：")] == [
         ("INFO", "普通事件"),
         ("ERROR", "TID 流程失败"),
     ]
@@ -556,8 +556,9 @@ def test_preview_failure_logs_broker_diagnostics_and_tid_stop_reason(app, monkey
     window._update_preview_frame()
 
     assert reasons and reasons[0].startswith("视频源读帧失败")
-    assert len(logs) == 1
-    source, message, level = logs[0]
+    preview_logs = [entry for entry in logs if entry[0] == "视频源"]
+    assert len(preview_logs) == 1
+    source, message, level = preview_logs[0]
     assert source == "视频源"
     assert level == "ERROR"
     assert "异常链=RuntimeError: read wrapper <- ValueError: no new frame" in message
@@ -837,6 +838,7 @@ def test_tid_delay_edit_after_stop_reaches_new_runner_and_changes_script_time(ap
     panel._select_script(panel.name_script_combo, tmp_path / "取名.txt")
     panel._clear_targets()
     panel.add_target_display_tid(123456)
+    panel.frame_threshold.setValue(10)
     panel.delay.setValue(2)
     seed = SeedPair64(0x1111111122222222, 0x3333333344444444)
     clock = [100.0]
