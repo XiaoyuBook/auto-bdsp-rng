@@ -41,3 +41,6 @@ include = ["auto_bdsp_rng*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+"auto_bdsp_rng.automation.auto_rng" = ["starter_assets/*.ecs"]

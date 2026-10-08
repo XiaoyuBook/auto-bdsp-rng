@@ -68,6 +68,7 @@ class AutoRngConfig:
     seed_config_path: str = ""
     reidentify_config_path: str = ""
     auto_reverse: bool = False
+    starter_automation: bool = False
     escape_continue: bool = False
     reverse_lookup_window: int = 500
     sync_mode: int = 0  # 0=关闭, 1=首位普通精灵, 2=首位同步精灵
@@ -153,3 +154,5 @@ class AutoRngProgress:
     final_flash_frames: int | None = None
     last_script_path: Path | None = None
     log_message: str = ""
+    starter_stage: str | None = None
+    result_kind: str | None = None

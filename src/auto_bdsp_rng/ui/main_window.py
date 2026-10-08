@@ -7952,6 +7952,10 @@ class MainWindow(QMainWindow):
         self.nature_combo.setCurrentIndex(max(0, self.nature_combo.findData(nature_index)))
 
     def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
+        from auto_bdsp_rng.automation.auto_rng.starter_flow import (
+            DialogObserver, STARTER_SLOTS, STARTER_TIMING, StarterFlow,
+            crop_starter_dialog,
+        )
         seed_config_path = config.seed_config_path or self._selected_auto_seed_config_path()
         reidentify_config_path = config.reidentify_config_path or self._selected_auto_reidentify_config_path()
         tracking_config = load_project_xs_config(seed_config_path, blink_count=DEFAULT_BLINK_COUNT)
@@ -7960,6 +7964,15 @@ class MainWindow(QMainWindow):
             tracking_config,
             capture=self._shared_capture_config(tracking_config.capture),
         )
+        if config.starter_automation:
+            tracking_config = replace(
+                tracking_config, white_delay=STARTER_TIMING["timeDelay"],
+                advance_delay=STARTER_TIMING["advanceDelay"],
+                advance_delay_2=STARTER_TIMING["advanceDelay2"],
+                npc=STARTER_TIMING["npc"], timeline_npc=STARTER_TIMING["timelineNpc"],
+                pokemon_npc=STARTER_TIMING["pokemonNpc"], reidentify_1_pk_npc=False,
+                capture=replace(tracking_config.capture, threshold=STARTER_TIMING["threshold"]),
+            )
         exit_tracking_config = replace(
             exit_tracking_config,
             capture=self._shared_capture_config(exit_tracking_config.capture),
@@ -8119,7 +8132,7 @@ class MainWindow(QMainWindow):
                 result = replace(result, state=advance_seed_state(result.state, elapsed_advances).state)
             seed_result = AutoRngSeedResult(
                 seed=result.state,
-                current_advances=0,
+                current_advances=1 if config.starter_automation else 0,
                 npc=tracking_config.npc,
                 seed_text=" ".join(result.state.format_seed64_pair()),
                 measured_at=time.monotonic(),
@@ -8934,6 +8947,72 @@ class MainWindow(QMainWindow):
                 run_script_text_service,
             )
 
+        def run_starter_flow_service(seed: AutoRngSeedResult, target: AutoRngTarget, delay: int) -> ShinyCheckResult:
+            species = config.target_species
+            if species not in STARTER_SLOTS:
+                raise ValueError("御三家全自动目标无效")
+
+            def should_stop() -> bool:
+                worker = self.auto_rng_tab._runner_worker
+                return self._capture_cancel.is_set() or (worker is not None and worker.runner.should_stop())
+
+            if should_stop():
+                raise RuntimeError("御三家自动接管已停止")
+            recover_zoom_mode_service()
+
+            def read_dialog() -> str:
+                frame = self._capture_preview_frame_for_config(tracking_config.capture)
+                if frame is None:
+                    return ""
+                cropped = crop_starter_dialog(frame)
+                return "" if cropped is None else read_ocr_text(cropped)
+
+            observer = DialogObserver(read_dialog, should_stop)
+            last_stage = None
+
+            def progress(stage: str, label: str, current: int) -> None:
+                nonlocal last_stage
+                worker = self.auto_rng_tab._runner_worker
+                if worker is not None:
+                    worker.runner._set_progress(
+                        AutoRngPhase.RUN_HIT_SCRIPT, label if stage != last_stage else "",
+                        starter_stage=stage, current_advances=current,
+                        remaining_to_trigger=target.raw_target_advances - delay - current,
+                    )
+                last_stage = stage
+
+            def position_cursor() -> None:
+                script = "RIGHT 100\nWAIT 120\n" * STARTER_SLOTS[species]
+                if script:
+                    run_script_text_service(script, "御三家·提前定位精灵球")
+
+            def log_press(event: dict) -> None:
+                self.auto_rng_tab.captureLog.emit(
+                    f"[御三家按键] {event['name']}：间隔 {event['since_previous_press_ms']}ms，"
+                    f"迟到 {event['late_ms']}ms，控制请求 {event['controller_request_ms']}ms"
+                )
+
+            # Pause preview while this observer owns the capture source, as for
+            # seed capture and the existing shiny detector.
+            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
+            observer.start()
+            try:
+                script = StarterFlow(
+                    seed, target, delay, species, STARTER_TIMING,
+                    latest_text=observer.latest, run_script=run_script_text_service,
+                    position_cursor=position_cursor, progress=progress,
+                    should_stop=should_stop, on_balls=observer.close,
+                    observe_dialog=observer.set_enabled, on_press=log_press,
+                ).run()
+                if should_stop():
+                    raise RuntimeError("御三家自动接管已停止")
+                return run_hit_script_with_shiny_check(
+                    script, "御三家·选择确认", float(config.shiny_threshold_seconds or 0),
+                )
+            finally:
+                observer.close()
+                self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+
         return AutoRngServices(
             current_seed=current_seed_service,
             capture_seed=capture_seed_service,
@@ -8943,6 +9022,7 @@ class MainWindow(QMainWindow):
             search_sync=search_sync_service,
             run_script_text=run_script_text_service,
             run_hit_script_with_shiny_check=run_hit_script_with_shiny_check,
+            run_starter_flow=run_starter_flow_service,
             run_reverse_lookup=reverse_lookup_service,
             resolve_round_delay=resolve_round_delay_service,
             record_delay_observation=record_delay_observation_service,

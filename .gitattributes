@@ -14,3 +14,6 @@
 *.ui text eol=lf
 .gitattributes text eol=lf
 .gitmodules text eol=lf
+
+src/auto_bdsp_rng/automation/auto_rng/starter_assets/*.ecs -text
+script/御三家反查.txt -text

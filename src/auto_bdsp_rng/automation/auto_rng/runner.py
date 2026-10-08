@@ -497,6 +497,7 @@ class AutoRngServices:
     search_sync: Callable[[AutoRngSeedResult, int, int | None], list[object]] | None = None
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
     run_hit_script_with_shiny_check: Callable[[str, str, float], ShinyCheckResult] | None = None
+    run_starter_flow: Callable[[AutoRngSeedResult, AutoRngTarget, int], ShinyCheckResult] | None = None
     run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], Sequence[int] | None] | None = None
     resolve_round_delay: Callable[[], int] | None = None
     record_delay_observation: Callable[[Sequence[int]], None] | None = None
@@ -755,6 +756,12 @@ class AutoRngRunner:
             raw_advances = int(getattr(state, "advances", 0))
             if raw_advances < min_reachable:
                 return False
+            if self.config.starter_automation:
+                from .starter_flow import TIMELINE_BUFFER
+                elapsed = max(0.0, self.services.monotonic() - self._seed_measured_at(seed))
+                current = seed.current_advances + int(elapsed / 1.018) * (seed.npc + 1)
+                anchor = raw_advances - TIMELINE_BUFFER
+                return anchor > current and (anchor - seed.current_advances) % (seed.npc + 1) == 0
             # The timeline counter has event-dependent jumps, so its reachable
             # values cannot be inferred from a single modulus.
             return seed.advance_mode != "linear" or is_linear_trigger_reachable(
@@ -832,6 +839,16 @@ class AutoRngRunner:
             self._history("candidates_refiltered", reachable, locked_idx, reachable_flags)
         else:
             self._history("candidates_found", reachable, locked_idx, reachable_flags)
+        if self.config.starter_automation:
+            self._set_progress(
+                AutoRngPhase.RUN_HIT_SCRIPT, "目标已锁定，开始御三家自动接管",
+                locked_target=self._locked_target,
+                raw_target_advances=decision.raw_target_advances,
+                fixed_delay=round_delay,
+                trigger_advances=decision.raw_target_advances - round_delay,
+                current_advances=seed.current_advances, starter_stage="start",
+            )
+            return
         flash = self._fixed_flash_frames()
         trigger = decision.raw_target_advances - round_delay - (flash or 0)
         next_attempt_label = self._next_attempt_label()
@@ -1310,6 +1327,25 @@ class AutoRngRunner:
         )
 
     def _run_hit_script(self) -> None:
+        if self.config.starter_automation:
+            from .starter_flow import StarterTargetMissed
+            if self.services.run_starter_flow is None:
+                raise RuntimeError("御三家自动接管服务未配置")
+            seed, target = self._require_seed(), self._require_target()
+            self._attempt_index += 1
+            try:
+                result = self.services.run_starter_flow(seed, target, self._target_delay(target))
+            except StarterTargetMissed as error:
+                self._history("target_missed", target.raw_target_advances, self.progress.current_advances)
+                self._history("starter_missed", str(error), self._target_delay(target))
+                self._cycle_started = False
+                self._locked_target = None
+                self._set_progress(AutoRngPhase.LOOP_CHECK, str(error),
+                                   result_kind="missed", starter_stage=None)
+                return
+            if not self.should_stop():
+                self._handle_shiny_check_result(result, "御三家全自动")
+            return
         path = self.config.hit_script_path
         if path is None:
             raise RuntimeError("撞闪脚本未配置")
@@ -1616,7 +1652,8 @@ class AutoRngRunner:
             self._locked_target = None
             self._set_progress(AutoRngPhase.RUN_SEED_SCRIPT, "进入下一轮循环，运行测种脚本", loop_index=self._completed_loops)
             return
-        self._set_progress(AutoRngPhase.COMPLETED, "自动流程完成", loop_index=self._completed_loops)
+        message = self.progress.log_message if self.progress.result_kind == "missed" else "自动流程完成"
+        self._set_progress(AutoRngPhase.COMPLETED, message, loop_index=self._completed_loops)
 
     def _attempt_label(self) -> str:
         return f"[第 {self._completed_loops} 轮 / 第 {self._attempt_index} 次]"
@@ -1630,6 +1667,9 @@ class AutoRngRunner:
                 raise RuntimeError(f"读取 delay 策略失败: {exc}") from exc
         if value < 0:
             raise RuntimeError(f"delay 不能为负数: {value}")
+        if self.config.starter_automation:
+            from .starter_flow import validate_starter_delay
+            validate_starter_delay(value)
         self._active_delay = value
 
     def _target_delay(self, target: AutoRngTarget | None = None) -> int:
@@ -1689,6 +1729,8 @@ class AutoRngRunner:
             "final_flash_frames": updates.get("final_flash_frames", self.progress.final_flash_frames),
             "last_script_path": updates.get("last_script_path", self.progress.last_script_path),
             "seed_text": updates.get("seed_text", self.progress.seed_text),
+            "starter_stage": updates.get("starter_stage", self.progress.starter_stage if phase == self.progress.phase else None),
+            "result_kind": updates.get("result_kind", None if phase == AutoRngPhase.RUN_SEED_SCRIPT else self.progress.result_kind),
         }
         self.progress = replace(self.progress, **values)
         self._emit(self.progress)
@@ -1839,6 +1881,8 @@ class AutoRngRunner:
         return self._locked_target
 
     def _fixed_flash_frames(self) -> int | None:
+        if self.config.starter_automation:
+            return None
         path = self.config.hit_script_path
         if path is None:
             return self.config.fixed_flash_frames

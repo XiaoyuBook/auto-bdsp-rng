@@ -1,0 +1,205 @@
+{
+  "source": "11.mp4",
+  "sha256": "86d7a49b8fd303549b99becc09a6d35a0fdc873bbcf8c83a30554dcd5a8963a4",
+  "size": [
+    916,
+    954
+  ],
+  "frames": 1646,
+  "container_average_fps": 30.018237082066868,
+  "median_frame_period_ms": 33.333,
+  "uncertainty": "Each edge is localized to one recorded frame; this does not measure serial or capture latency.",
+  "button_regions": {
+    "A": [
+      510,
+      824,
+      16,
+      15
+    ],
+    "B": [
+      498,
+      836,
+      16,
+      15
+    ],
+    "X": [
+      498,
+      811,
+      16,
+      15
+    ],
+    "Y": [
+      486,
+      824,
+      16,
+      15
+    ],
+    "HOME": [
+      490,
+      902,
+      13,
+      13
+    ]
+  },
+  "events": [
+    {
+      "key": "HOME",
+      "down_frame": 21,
+      "down_ms": 700.0,
+      "up_frame": 23,
+      "up_ms": 766.667,
+      "hold_ms": 66.667
+    },
+    {
+      "key": "HOME",
+      "down_frame": 25,
+      "down_ms": 833.333,
+      "up_frame": 27,
+      "up_ms": 900.0,
+      "hold_ms": 66.667
+    },
+    {
+      "key": "A",
+      "down_frame": 61,
+      "down_ms": 2033.333,
+      "up_frame": 65,
+      "up_ms": 2166.667,
+      "hold_ms": 133.334,
+      "dialogue_before": "怎么回事？刚才那两人……",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 167,
+      "down_ms": 5566.667,
+      "up_frame": 172,
+      "up_ms": 5733.333,
+      "hold_ms": 166.666,
+      "since_previous_A_down_ms": 3533.334,
+      "since_previous_A_up_ms": 3400.0,
+      "dialogue_before": "咦？test！我们去看看吧！",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 223,
+      "down_ms": 7433.333,
+      "up_frame": 228,
+      "up_ms": 7600.0,
+      "hold_ms": 166.667,
+      "since_previous_A_down_ms": 1866.666,
+      "since_previous_A_up_ms": 1700.0,
+      "dialogue_before": "………………",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 250,
+      "down_ms": 8333.333,
+      "up_frame": 256,
+      "up_ms": 8533.333,
+      "hold_ms": 200.0,
+      "since_previous_A_down_ms": 900.0,
+      "since_previous_A_up_ms": 733.333,
+      "dialogue_before": "怎么了？你说不要到草丛里去？",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 276,
+      "down_ms": 9200.0,
+      "up_frame": 281,
+      "up_ms": 9366.667,
+      "hold_ms": 166.667,
+      "since_previous_A_down_ms": 866.667,
+      "since_previous_A_up_ms": 666.667,
+      "dialogue_before": "没事没事！",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 296,
+      "down_ms": 9866.667,
+      "up_frame": 301,
+      "up_ms": 10033.333,
+      "hold_ms": 166.666,
+      "since_previous_A_down_ms": 666.667,
+      "since_previous_A_up_ms": 500.0,
+      "dialogue_before": "就进去一下而已，宝可梦不会出来啦。",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 446,
+      "down_ms": 14866.667,
+      "up_frame": 451,
+      "up_ms": 15033.333,
+      "hold_ms": 166.666,
+      "since_previous_A_down_ms": 5000.0,
+      "since_previous_A_up_ms": 4833.334,
+      "dialogue_before": "是个手提箱……",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 480,
+      "down_ms": 16000.0,
+      "up_frame": 484,
+      "up_ms": 16133.333,
+      "hold_ms": 133.333,
+      "since_previous_A_down_ms": 1133.333,
+      "since_previous_A_up_ms": 966.667,
+      "dialogue_before": "一定是刚才那人掉的，怎么办？",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 514,
+      "down_ms": 17133.333,
+      "up_frame": 519,
+      "up_ms": 17300.0,
+      "hold_ms": 166.667,
+      "since_previous_A_down_ms": 1133.333,
+      "since_previous_A_up_ms": 1000.0,
+      "dialogue_before": "就是想还也不知道对方是谁啊，虽然有听到叫博士……",
+      "role": "timer_gate"
+    },
+    {
+      "key": "A",
+      "down_frame": 618,
+      "down_ms": 20600.0,
+      "up_frame": 624,
+      "up_ms": 20800.0,
+      "hold_ms": 200.0,
+      "since_previous_A_down_ms": 3466.667,
+      "since_previous_A_up_ms": 3300.0,
+      "dialogue_before": "哇啊！宝、宝可梦！？",
+      "role": "ordinary_dialogue"
+    },
+    {
+      "key": "A",
+      "down_frame": 673,
+      "down_ms": 22433.333,
+      "up_frame": 678,
+      "up_ms": 22600.0,
+      "hold_ms": 166.667,
+      "since_previous_A_down_ms": 1833.333,
+      "since_previous_A_up_ms": 1633.333,
+      "dialogue_before": "搞什么啊！",
+      "role": "timer_gate"
+    },
+    {
+      "key": "A",
+      "down_frame": 818,
+      "down_ms": 27266.667,
+      "up_frame": 823,
+      "up_ms": 27433.333,
+      "hold_ms": 166.666,
+      "since_previous_A_down_ms": 4833.334,
+      "since_previous_A_up_ms": 4666.667,
+      "dialogue_before": "是精灵球！！用它来应战吧！",
+      "role": "ordinary_dialogue"
+    }
+  ],
+  "annotation_method": "Dialogue labels were visually checked on the game image immediately before each recorded input. Timer-gate input timestamps are demonstration values, not the automated clock schedule."
+}

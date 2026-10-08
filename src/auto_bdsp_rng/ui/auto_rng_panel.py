@@ -50,6 +50,8 @@ from auto_bdsp_rng.automation.auto_rng.delay_profiles import (
     encode_delay_profiles,
 )
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngPhase, AutoRngProgress
+from auto_bdsp_rng.automation.auto_rng.starter_flow import STARTER_SLOTS
+from auto_bdsp_rng.automation.auto_rng.starter_scripts import bind_starter_config, validate_starter_config
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     DEFAULT_ADVANCE_SCRIPT_NAME,
     DEFAULT_RECORD_SCRIPT_NAME,
@@ -419,11 +421,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_loop_index = 0
         self._runtime_candidate_total = 0
         self._runtime_script_editor_expanded = False
+        self._starter_manual_strategy_values: tuple[int, int, str] | None = None
         self._config_state_tracking_ready = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
+        self._configured_delay_species = set(decode_delay_profiles(self._settings.value("delay_profiles_json", "")))
         self._build_ui()
         self.refresh_scripts()
         self._restore_panel_state()
+        if self._settings.contains("fixed_delay") and self._delay_species_id is not None:
+            self._configured_delay_species.add(self._delay_species_id)
         self._sync_run_controls()
         self._saved_script_values = self._script_values()
         self._connect_config_state_tracking()
@@ -469,6 +475,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         """Keep the toolbar status hint in step with lifecycle controls."""
 
         super()._sync_run_controls()
+        self._update_starter_mode()
         self._update_toolbar_status()
 
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -1024,6 +1031,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._delay_strategy_config = config
         if self._delay_species_id is not None:
             self._profile_for_species(self._delay_species_id).config = config
+            self._configured_delay_species.add(self._delay_species_id)
         self._updating_fixed_delay = True
         try:
             self.fixed_delay.setValue(config.baseline_delay)
@@ -1152,7 +1160,17 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         )
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         self.runtime_script_header.layout().insertWidget(1, self.script_status_label)
-        layout.addWidget(self.refresh_scripts_button, 0, 0, 1, 2, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.refresh_scripts_button, 0, 1, Qt.AlignmentFlag.AlignRight)
+        self.starter_automation_check = QCheckBox("御三家全自动")
+        self.starter_automation_check.setToolTip(
+            "选择御三家后启用：内置测种 → 自动对话与 Timeline → 判闪 → 内置反查。\n"
+            "从“怎么回事？刚才那两人……”接管；自动反查始终开启，本轮 delay 必须小于 78 帧。"
+        )
+        layout.addWidget(self.starter_automation_check, 0, 0)
+        self.starter_script_description = QLabel("内置御三家测种 → 自动撞帧 → 判闪 → 御三家反查（脚本库 0.0.5）")
+        self.starter_script_description.setWordWrap(True)
+        self.starter_script_description.hide()
+        layout.addWidget(self.starter_script_description, 11, 0, 1, 2)
 
         def combo_factory() -> _RefreshingScriptComboBox:
             return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
@@ -1243,8 +1261,59 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
         self.escape_continue_check.toggled.connect(self._update_script_status)
+        self.starter_automation_check.toggled.connect(self._update_starter_mode)
+        self.starter_automation_check.toggled.connect(self._update_script_status)
         self._update_script_status()
         return group
+
+    def _starter_targets_valid(self) -> bool:
+        try:
+            species = {int(record.template.species) for record, _filter, _mode in self.targets()}
+        except (ValueError, AttributeError):
+            return False
+        return len(species) == 1 and species.issubset(STARTER_SLOTS)
+
+    def _update_starter_mode(self, *_args: object) -> None:
+        if not hasattr(self, "starter_automation_check") or not hasattr(self, "script_labels"):
+            return
+        valid = self._starter_targets_valid()
+        busy = self._preparing or self._runner_thread is not None
+        self.starter_automation_check.setEnabled(valid and not busy)
+        if not valid and self.starter_automation_check.isChecked():
+            self.starter_automation_check.setChecked(False)
+        active = self.starter_automation_check.isChecked()
+        if active and self._starter_manual_strategy_values is None:
+            self._starter_manual_strategy_values = (
+                self.auto_reverse_combo.currentIndex(), self.sync_combo.currentIndex(),
+                self.sync_nature_input.text(),
+            )
+            self.auto_reverse_combo.setCurrentIndex(1)
+            self.sync_combo.setCurrentIndex(0)
+        elif not active and self._starter_manual_strategy_values is not None:
+            reverse, sync, nature = self._starter_manual_strategy_values
+            self._starter_manual_strategy_values = None
+            self.auto_reverse_combo.setCurrentIndex(reverse)
+            self.sync_combo.setCurrentIndex(sync)
+            self.sync_nature_input.setText(nature)
+        species_id = self._current_delay_species()
+        if active and species_id is not None and species_id not in self._configured_delay_species:
+            profile = self._profile_for_species(species_id)
+            if profile.config == DelayStrategyConfig() and not profile.samples:
+                profile.config = replace(profile.config, baseline_delay=66)
+                self._activate_delay_profile(species_id)
+                self._save_delay_profiles()
+            self._configured_delay_species.add(species_id)
+        for combo, label in self.script_labels.items():
+            label.setVisible(not active)
+            self.script_picker_widgets[combo].setVisible(not active)
+        self.escape_continue_check.setVisible(not active)
+        self.starter_script_description.setVisible(active)
+        self.auto_reverse_combo.setEnabled(not active)
+        self.sync_combo.setEnabled(not active)
+        self.sync_nature_input.setEnabled(not active and self.sync_combo.currentIndex() > 0)
+        if hasattr(self, "start_from_reidentify_action"):
+            self.start_from_reidentify_action.setEnabled(self.start_button.isEnabled() and not active)
+        self._refresh_runtime_script_summary()
 
     def _build_runtime_panel(self) -> QScrollArea:
         scroll = QScrollArea()
@@ -1480,6 +1549,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def _refresh_runtime_script_summary(self) -> None:
         if not hasattr(self, "runtime_script_summary_detail"):
+            return
+        if self.starter_automation_check.isChecked():
+            self.runtime_script_summary_title.setText("御三家全自动")
+            self.runtime_script_summary_detail.setText("内置测种 · 自动撞帧 · 判闪 · 内置反查")
+            self.runtime_script_summary_detail.setToolTip("自动绑定御三家专用脚本，无需手动选择；未出闪后自动反查。")
             return
         script_specs = (
             ("测种", self.seed_script_combo),
@@ -2006,12 +2080,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.sync_nature_input.textEdited.connect(self._mark_config_dirty)
         self.escape_continue_check.toggled.connect(self._mark_scripts_dirty)
         self.debug_output_check.toggled.connect(self._mark_config_dirty)
+        self.starter_automation_check.toggled.connect(self._mark_scripts_dirty)
         for combo in self._script_combos():
             combo.currentIndexChanged.connect(self._mark_scripts_dirty)
 
     def _script_values(self) -> tuple[object, ...]:
         return tuple(self._selected_path(combo) for combo in self._script_combos()) + (
             self.escape_continue_check.isChecked(),
+            self.starter_automation_check.isChecked(),
         )
 
     def _mark_scripts_dirty(self, *_args: object) -> None:
@@ -2047,6 +2123,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._update_toolbar_status()
 
     def _missing_script_fields(self) -> list[tuple[QComboBox, str]]:
+        if self.starter_automation_check.isChecked():
+            return []
         required = [
             (self.advance_script_combo, "过帧"),
             (self.hit_script_combo, "撞闪"),
@@ -2088,7 +2166,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.script_status_label.setToolTip("还需要选择：" + "、".join(missing))
             state = "warning"
         else:
-            self.script_status_label.setText("脚本已就绪")
+            self.script_status_label.setText("御三家全自动" if self.starter_automation_check.isChecked() else "脚本已就绪")
             self.script_status_label.setToolTip("必需脚本已选择；开始前仍需确认视频源与伊机控连接。")
             state = "ready"
         self.script_status_label.setProperty("state", state)
@@ -3034,6 +3112,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         return "; ".join(label.text() for label in getattr(self, "target_summary_labels", []))
 
     def _refresh_target_summary(self) -> None:
+        self._update_starter_mode()
         if not hasattr(self, "target_summary_layout"):
             return
         while self.target_summary_layout.count():
@@ -3113,15 +3192,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._save_panel_state()
         try:
             config = self.build_config(start_phase=start_phase)
-            validate_auto_scripts(
-                config.seed_script_path,
-                config.advance_script_path,
-                config.hit_script_path,
-                escape_continue=config.escape_continue,
-                escape_script_path=config.escape_script_path,
-                shiny_threshold_seconds=config.shiny_threshold_seconds,
-                target_species=config.target_species,
-            )
+            if config.starter_automation:
+                validate_starter_config(config)
+            else:
+                self._validate_manual_scripts(config)
         except (AutoScriptError, ValueError) as exc:
             self.set_phase_text("配置错误")
             self.runtime_description_label.setText(str(exc))
@@ -3129,12 +3203,24 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             return
         self.startRequested.emit(config)
 
+    @staticmethod
+    def _validate_manual_scripts(config: AutoRngConfig) -> None:
+        validate_auto_scripts(
+            config.seed_script_path,
+            config.advance_script_path,
+            config.hit_script_path,
+            escape_continue=config.escape_continue,
+            escape_script_path=config.escape_script_path,
+            shiny_threshold_seconds=config.shiny_threshold_seconds,
+            target_species=config.target_species,
+        )
+
     def _stop_clicked(self) -> None:
         self.request_stop("用户点击停止按钮")
 
     def build_config(self, *, start_phase: AutoRngPhase = AutoRngPhase.RUN_SEED_SCRIPT) -> AutoRngConfig:
         targets = self.targets()
-        return AutoRngConfig(
+        config = AutoRngConfig(
             script_dir=self.script_dir,
             seed_script_path=self._selected_path(self.seed_script_combo),
             advance_script_path=self._selected_path(self.advance_script_combo),
@@ -3174,6 +3260,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 for _record, sf, _mode in targets
             ),
         )
+        if self.starter_automation_check.isChecked():
+            if not self._starter_targets_valid():
+                raise ValueError("御三家全自动的目标条件须属于同一种御三家")
+            return bind_starter_config(config)
+        return config
 
     def run_with_runner(self, runner: object) -> None:
         if self._runner_thread is not None:
@@ -3337,9 +3428,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         s.setValue("max_wait_frames", self.max_wait_frames.value())
         self._save_strategy_settings()
         s.setValue("shiny_threshold", self.shiny_threshold_seconds.value())
-        s.setValue("sync_state", self.sync_combo.currentIndex())
-        s.setValue("sync_nature", self.sync_nature_input.text())
-        s.setValue("auto_reverse", self.auto_reverse_combo.currentIndex())
+        reverse, sync, nature = self._starter_manual_strategy_values or (
+            self.auto_reverse_combo.currentIndex(), self.sync_combo.currentIndex(),
+            self.sync_nature_input.text(),
+        )
+        s.setValue("sync_state", sync)
+        s.setValue("sync_nature", nature)
+        s.setValue("auto_reverse", reverse)
+        s.setValue("starter_automation", self.starter_automation_check.isChecked())
         s.setValue("reverse_lookup_window", self.reverse_lookup_window.value())
         s.setValue("target_list_json", self._serialize_targets())
         # 目标精灵设置
@@ -3374,6 +3470,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             # An explicit empty choice must override first-launch defaults.
             s.setValue(key, str(path) if path is not None else "")
         s.setValue("escape_continue", self.escape_continue_check.isChecked())
+        s.setValue("starter_automation", self.starter_automation_check.isChecked())
         s.sync()
         self._saved_script_values = self._script_values()
         self._mark_scripts_dirty()
@@ -3549,6 +3646,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             if 0 <= idx < self.auto_reverse_combo.count():
                 self.auto_reverse_combo.setCurrentIndex(idx)
         self.escape_continue_check.setChecked(s.value("escape_continue", False, type=bool))
+        self.starter_automation_check.setChecked(s.value("starter_automation", False, type=bool) and self._starter_targets_valid())
         if s.contains("reverse_lookup_window"):
             self.reverse_lookup_window.setValue(int(s.value("reverse_lookup_window", 500)))
         self._refresh_target_summary()

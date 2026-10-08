@@ -299,17 +299,22 @@ class StartReadinessController(QObject):
                 required = [(config.advance_script_path, "过帧"), (config.hit_script_path, "撞闪")]
                 if config.escape_continue:
                     required.append((config.escape_script_path, "逃跑"))
-                validator = lambda: validate_auto_scripts(
-                    config.seed_script_path, config.advance_script_path, config.hit_script_path,
-                    escape_continue=config.escape_continue, escape_script_path=config.escape_script_path,
-                    shiny_threshold_seconds=config.shiny_threshold_seconds, target_species=config.target_species,
-                )
+                if config.starter_automation:
+                    from auto_bdsp_rng.automation.auto_rng.starter_scripts import validate_starter_config
+                    required = [(config.seed_script_path, "御三家测种"), (config.reverse_script_path, "御三家反查")]
+                    validator = lambda: validate_starter_config(config)
+                else:
+                    validator = lambda: validate_auto_scripts(
+                        config.seed_script_path, config.advance_script_path, config.hit_script_path,
+                        escape_continue=config.escape_continue, escape_script_path=config.escape_script_path,
+                        shiny_threshold_seconds=config.shiny_threshold_seconds, target_species=config.target_species,
+                    )
             missing = [name for path, name in required if path is None]
             script_paths = [value for key, value in vars(config).items() if key.endswith("_script_path")]
             error = self._validate_files("scripts", script_paths, repr(config), validator)
             script_text = "缺少：" + "、".join(missing) if missing else error or "所选启动方式的必需脚本检查通过。"
-        except ValueError:
-            error, script_text = "targets", "请先完善目标条件，再检查此启动方式的脚本。"
+        except ValueError as exc:
+            error, script_text = "config", str(exc)
         items.append(ReadinessItem("scripts", "脚本", "blocked" if error else "ok", script_text, "scripts", "查看脚本"))
         if not tid:
             ocr_busy = (w._ocr_task_thread is not None and w._ocr_task_thread.isRunning()) or w._ocr_full_test_running or w._shiny_calibration_worker is not None
