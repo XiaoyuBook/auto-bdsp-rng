@@ -14,6 +14,7 @@ from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.workspace_layout import LocalViews, ToolbarReflow, scroll_surface
+from auto_bdsp_rng.ui.task_settings import ScriptAssignmentRow, parameter_field, section_header, task_settings_styles
 
 from PySide6.QtCore import QObject, QRect, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QGuiApplication
@@ -179,6 +180,25 @@ class _IdResultTable(QTableWidget):
 class _TargetListWidget(QListWidget):
     targetRemoved = Signal()
 
+    def fit_contents(self):
+        # Reserve a second row only when needed. Larger sets scroll locally.
+        columns = max(1, (self.width() - 12) // self.gridSize().width())
+        rows = min(2, max(1, math.ceil(self.count() / columns)))
+        if self.count() >= 4:
+            rows = 2
+        height = rows * self.gridSize().height() + 10
+        if self.height() != height:
+            self.setFixedHeight(height)
+        self.updateGeometry()
+        parent = self.parentWidget()
+        if parent is not None and parent.layout() is not None:
+            parent.layout().invalidate()
+            parent.layout().activate()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit_contents()
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.currentRow() >= 0:
             self.takeItem(self.currentRow())
@@ -199,6 +219,57 @@ class _TargetListWidget(QListWidget):
                     event.accept()
                     return
         super().mouseReleaseEvent(event)
+
+
+class _ResponsiveTidControls(QWidget):
+    """Place the two numeric task controls side by side when space allows."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AutoTidTopControls")
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(16)
+        self._fields = []
+        self._compact = None
+
+    def add_field(self, title, field, hint):
+        label = QLabel(title, self)
+        label.setObjectName("TaskFieldTitle")
+        label.setBuddy(field)
+        note = QLabel(hint, self)
+        note.setObjectName("TaskFieldHint")
+        note.setWordWrap(True)
+        self._fields.append((label, field, note))
+        self._reflow(force=True)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._reflow()
+
+    def _reflow(self, force=False):
+        # Two 300px-ish fields read comfortably side by side only once the
+        # sidebar has enough room for both labels, values, and hints.
+        compact = self.width() < 680
+        if not force and compact == self._compact:
+            return
+        self._compact = compact
+        for label, field, note in self._fields:
+            self._grid.removeWidget(label)
+            self._grid.removeWidget(field)
+            self._grid.removeWidget(note)
+        if compact:
+            for row, (label, field, note) in enumerate(self._fields):
+                self._grid.addWidget(label, row * 3, 0)
+                self._grid.addWidget(field, row * 3 + 1, 0)
+                self._grid.addWidget(note, row * 3 + 2, 0)
+                self._grid.setRowStretch(row * 3 + 1, 0)
+        else:
+            for column, (label, field, note) in enumerate(self._fields):
+                self._grid.addWidget(label, 0, column)
+                self._grid.addWidget(field, 1, column)
+                self._grid.addWidget(note, 2, column)
+                self._grid.setColumnStretch(column, 1)
 
 
 class AutoTidRngWorker(QObject):
@@ -347,7 +418,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.script_group = self._build_script_group()
         self.id_table_group = self._build_id_table_group()
         runtime_layout.addWidget(self.id_table_group, 1)
-        self.config_panel.layout().insertWidget(self.config_panel.layout().count() - 2, self.script_group)
+        self.config_panel.layout().insertWidget(self.config_panel.layout().count() - 1, self.script_group)
         self.script_toggle.setChecked(True)
         self.runtime_scroll.setWidget(self.runtime_content)
         self.local_views.addTab(self.runtime_scroll, "运行数据")
@@ -407,13 +478,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QFrame#AutoTidRuntimeCard[state="failed"] QLabel#AutoTidStateDot { color: #ac4b42; }
             QFrame#AutoTidRuntimeCard[state="idle"] QLabel#AutoTidStateDot { color: #8da299; }
             QFrame#AutoTidDivider { border: 0; background: $separator; max-height: 1px; }
-            QWidget#AutoTidTargets, QWidget#AutoTidTopControls {
-                background: $surface; border: 1px solid $card_border; border-radius: 9px;
-                padding: 11px 12px 12px 12px;
-            }
-            QWidget#AutoTidTargets > QLabel, QWidget#AutoTidTopControls > QLabel {
-                color: $text; font-weight: 500;
-            }
+            QWidget#AutoTidTargets, QWidget#AutoTidTopControls { background: transparent; border: 0; padding: 0; }
             QWidget#AutoTidTargets QLineEdit:hover,
             QWidget#AutoTidTopControls QSpinBox:hover {
                 border-color: #B8C4CE; background: #FCFDFC;
@@ -448,7 +513,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QTableWidget#TidResultsTable::item { padding: 5px 8px; }
             QTableWidget#TidResultsTable QHeaderView::section { background: #F7F8FA; color: #626D79;
                 border: 0; border-bottom: 1px solid $separator; padding: 8px; font-size: 12px; font-weight: 500; }
-        """) + primary_button_styles("QPushButton#PrimaryButton", "QToolButton#PrimaryButton"))
+        """) + primary_button_styles("QPushButton#PrimaryButton", "QToolButton#PrimaryButton") + task_settings_styles())
 
     def _section_title(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -624,50 +689,46 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(10)
-        header = QHBoxLayout()
-        header.addWidget(self._section_title("任务配置"))
-        header.addStretch(1)
+        self.task_config_card = QFrame()
+        self.task_config_card.setProperty("taskCard", True)
+        card = QVBoxLayout(self.task_config_card)
+        card.setContentsMargins(16, 14, 16, 12)
+        card.setSpacing(14)
         self.save_state_label = QLabel("已保存")
         self.save_state_label.setObjectName("AutoTidSaveState")
-        header.addWidget(self.save_state_label)
-        layout.addLayout(header)
-        self.target_group = self._build_target_group()
-        layout.addWidget(self.target_group)
-        self.top_controls_group = self._build_top_controls_group()
-        layout.addWidget(self.top_controls_group)
-        layout.addWidget(self._divider())
-        footer = QVBoxLayout()
-        footer.addWidget(self._muted_label("配置下次启动生效"))
-        self.save_button = QPushButton("保存配置")
-        self.save_button.setObjectName("AutoTidSave")
-        self.save_button.setIcon(workspace_icon("save", "#64707D"))
-        self.save_button.setFixedHeight(32)
+        self.save_button = QPushButton("保存参数")
+        self.save_button.setObjectName("TaskSaveButton")
         self.save_button.setAccessibleName("保存任务配置")
-        self.save_button.setToolTip("保存左侧任务配置；右侧脚本选择单独保存。点击开始时会自动保存全部配置。")
+        self.save_button.setToolTip("保存目标与搜索参数；下方脚本选择单独保存。点击开始时会自动保存全部配置。")
         self.save_button.clicked.connect(self._save_config_state)
-        footer.addWidget(self.save_button, 0, Qt.AlignmentFlag.AlignRight)
-        layout.addLayout(footer)
+        card.addWidget(section_header("任务配置", self.save_state_label, self.save_button))
+        self.target_group = self._build_target_group()
+        card.addWidget(self.target_group)
+        card.addWidget(self._divider())
+        self.top_controls_group = self._build_top_controls_group()
+        card.addWidget(self.top_controls_group)
+        note = QLabel("参数下次启动生效 · 点击开始时自动保存")
+        note.setObjectName("TaskSectionNote")
+        note.setWordWrap(True)
+        card.addWidget(note)
+        layout.addWidget(self.task_config_card)
         layout.addStretch(1)
         return panel
 
     def _build_top_controls_group(self) -> QWidget:
-        group = QWidget()
-        group.setObjectName("AutoTidTopControls")
-        layout = QFormLayout(group)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(12)
-        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        group = _ResponsiveTidControls()
         self.frame_threshold = self._spin(0, 1_000_000_000, 300)
         self.delay = self._spin(0, 1_000_000_000, 0)
         self.frame_threshold.setSuffix(" 帧")
         self.delay.setSuffix(" 帧")
         self.frame_threshold.setToolTip("生成从 0 到此帧数的 ID 数据，选择最早匹配的目标 Display TID。")
         self.delay.setToolTip("取名脚本启动帧 = 目标帧数 − delay。修改后下次启动生效。")
-        for title, field in (("搜索范围", self.frame_threshold), ("取名 delay", self.delay)):
-            label = QLabel(title)
-            label.setBuddy(field)
-            layout.addRow(label, field)
+        for title, field, hint in (("搜索范围", self.frame_threshold, "优先匹配最早的目标帧"),
+                                   ("取名 delay", self.delay, "提前多少帧启动取名")):
+            field.setMinimumWidth(0)
+            field.setFixedHeight(36)
+            field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            group.add_field(title, field, hint)
         self.reverse_lookup_window = self._spin(0, 10_000, 50)
         self.reverse_lookup_window.setParent(group)
         self.reverse_lookup_window.hide()
@@ -715,7 +776,11 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         self.target_title_label = QLabel("目标 Display TID")
-        layout.addWidget(self.target_title_label)
+        self.target_title_label.setObjectName("TaskFieldTitle")
+        target_heading = QHBoxLayout()
+        target_heading.addWidget(self.target_title_label)
+        target_heading.addStretch(1)
+        layout.addLayout(target_heading)
         self.target_list = _TargetListWidget()
         self.target_list.setObjectName("TargetPool")
         self.target_list.setAccessibleName("目标 Display TID 列表；点击标签右侧 × 或按 Delete 删除")
@@ -729,7 +794,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.target_list.setGridSize(QSize(116, 34))
         self.target_list.setUniformItemSizes(True)
         self.target_list.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.target_list.setFixedHeight(78)
+        self.target_list.setFixedHeight(44)
         self.target_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.target_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.target_list.itemChanged.connect(self._normalize_edited_target_item)
@@ -753,20 +818,13 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.target_input.setAccessibleName("添加目标 Display TID")
         self.target_input.setFixedHeight(34)
         self.target_input.returnPressed.connect(self._add_target_from_input)
-        self.add_target_button = QPushButton("+")
-        self.add_target_button.setFixedSize(34, 34)
+        self.add_target_button = QPushButton("添加")
+        self.add_target_button.setObjectName("TaskSaveButton")
+        self.add_target_button.setFixedSize(54, 34)
         self.add_target_button.setAccessibleName("添加目标 Display TID")
         self.add_target_button.clicked.connect(self._add_target_from_input)
         actions.addWidget(self.target_input, 0, 0)
         actions.addWidget(self.add_target_button, 0, 1)
-        self.target_count_label = self._muted_label("0 个目标")
-        self.target_count_label.setObjectName("AutoTidTargetCount")
-        self.clear_targets_button = self._link_button("清空", self._clear_targets)
-        count_row = QHBoxLayout()
-        count_row.addWidget(self.target_count_label)
-        count_row.addStretch(1)
-        count_row.addWidget(self.clear_targets_button)
-        layout.addLayout(count_row)
         self.update_target_button = QPushButton("更新", action_panel)
         self.update_target_button.clicked.connect(self._update_selected_target)
         self.update_target_button.hide()
@@ -774,7 +832,20 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.delete_target_button.clicked.connect(self._delete_selected_target)
         self.delete_target_button.hide()
         layout.insertWidget(1, action_panel)
+        count_panel = QWidget(group)
+        count_row = QHBoxLayout(count_panel)
+        count_row.setContentsMargins(0, 0, 0, 0)
+        count_row.setSpacing(6)
+        self.target_count_label = self._muted_label("0 个目标")
+        self.target_count_label.setObjectName("AutoTidTargetCount")
+        count_row.addWidget(self.target_count_label)
+        count_row.addStretch(1)
+        self.clear_targets_button = self._link_button("清空", self._clear_targets)
+        count_row.addWidget(self.clear_targets_button)
+        layout.addWidget(count_panel)
         self.target_hint_label = self._muted_label("添加目标后即可开始")
+        self.target_hint_label.setObjectName("TaskFieldHint")
+        self.target_hint_label.setWordWrap(True)
         layout.addWidget(self.target_hint_label)
         return group
 
@@ -891,24 +962,18 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _build_script_group(self) -> QWidget:
         group = QFrame()
         group.setObjectName("AutoTidScripts")
+        group.setProperty("taskCard", True)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 10, 12, 12)
-        layout.setSpacing(6)
-        header = QHBoxLayout()
-        header.addWidget(self._section_title("任务脚本"))
-        header.addStretch(1)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(8)
         group.setToolTip("脚本选择下次启动生效；点击开始时自动保存全部配置。")
         self.script_save_state_label = QLabel("已保存")
         self.script_save_state_label.setObjectName("AutoTidScriptSaveState")
-        header.addWidget(self.script_save_state_label)
-        self.save_scripts_button = QPushButton("保存")
-        self.save_scripts_button.setObjectName("AutoTidSave")
-        self.save_scripts_button.setFixedHeight(32)
+        self.save_scripts_button = QPushButton("保存脚本")
+        self.save_scripts_button.setObjectName("TaskSaveButton")
         self.save_scripts_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_scripts_button.setToolTip("保存本区域的脚本选择，下次启动生效；脚本内容请通过编辑按钮修改。")
         self.save_scripts_button.clicked.connect(self._save_script_state)
-        header.addWidget(self.save_scripts_button)
-        layout.addLayout(header)
         card = QFrame()
         card.setObjectName("AutoTidScriptBody")
         card_layout = QVBoxLayout(card)
@@ -917,6 +982,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         labels = QVBoxLayout()
         labels.setSpacing(2)
         self.script_summary_label = self._muted_label("测种 / 取名 · 0 个脚本")
+        self.script_summary_label.setWordWrap(True)
         labels.addWidget(self.script_summary_label)
         summary.addLayout(labels, 1)
         self.script_toggle = QToolButton()
@@ -925,33 +991,59 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.script_toggle.setCheckable(True)
         configure_disclosure_button(self.script_toggle)
         self.script_toggle.setAccessibleName("展开任务脚本编辑")
-        header.addWidget(self.script_toggle)
+        self.script_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.script_toggle.setFixedSize(32, 30)
+        self.script_toggle.setToolTip("展开或收起脚本编辑")
+        layout.addWidget(section_header("任务脚本", self.script_save_state_label, self.save_scripts_button, self.script_toggle))
         card_layout.addLayout(summary)
         self.script_fields = QWidget()
         self.script_fields.setObjectName("AutoTidScriptFields")
-        fields = QGridLayout(self.script_fields)
-        fields.setContentsMargins(0, 10, 0, 0)
-        fields.setHorizontalSpacing(12)
-        fields.setVerticalSpacing(8)
+        fields = QVBoxLayout(self.script_fields)
+        fields.setContentsMargins(0, 0, 0, 0)
+        fields.setSpacing(0)
         self.seed_script_combo = QComboBox()
         self.name_script_combo = QComboBox()
         self.reverse_id_script_combo = QComboBox(self.script_fields)
         self.reverse_id_script_combo.hide()
         self.script_edit_buttons = {}
         self.script_picker_widgets = {}
+        self.script_rows = {}
         for row, (title, combo) in enumerate((("测种脚本", self.seed_script_combo), ("取名脚本", self.name_script_combo))):
             combo.setMinimumWidth(0)
             combo.setFixedHeight(32)
             combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            combo.setAccessibleName(title)
             picker = self._build_script_picker(self.script_fields, combo, title)
-            fields.addWidget(self._muted_label(title), row * 2, 0)
-            fields.addWidget(picker, row * 2 + 1, 0)
-            fields.setColumnStretch(0, 1)
+            heading = QWidget(self.script_fields)
+            heading_layout = QHBoxLayout(heading)
+            heading_layout.setContentsMargins(0, 8, 0, 4)
+            heading_layout.setSpacing(6)
+            number = QLabel(f"{row + 1:02}")
+            number.setObjectName("ScriptStepNumber")
+            number.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            number.setFixedSize(26, 26)
+            title_label = QLabel(title)
+            title_label.setObjectName("TaskFieldTitle")
+            title_label.setBuddy(combo)
+            requirement = QLabel()
+            requirement.setObjectName("ScriptRequirement")
+            heading_layout.addWidget(number)
+            heading_layout.addWidget(title_label)
+            heading_layout.addWidget(requirement)
+            heading_layout.addStretch(1)
+            detail = QLabel("进入测种位置并获取 Seed" if row == 0 else "在目标帧确认取名", self.script_fields)
+            detail.setObjectName("TaskFieldHint")
+            detail.setContentsMargins(32, 0, 0, 3)
+            self.script_rows[combo] = (heading, requirement, number)
+            fields.addWidget(heading)
+            fields.addWidget(detail)
+            fields.addWidget(picker)
             combo.currentIndexChanged.connect(self._refresh_script_summary)
         self.seed_script_picker = self.script_picker_widgets[self.seed_script_combo]
         self.name_script_picker = self.script_picker_widgets[self.name_script_combo]
         self.refresh_scripts_button = self._link_button("刷新脚本列表", self.refresh_scripts)
-        fields.addWidget(self.refresh_scripts_button, 4, 0, Qt.AlignmentFlag.AlignRight)
+        self.refresh_scripts_button.setIcon(workspace_icon("refresh", "#087C58"))
+        fields.addWidget(self.refresh_scripts_button, 0, Qt.AlignmentFlag.AlignRight)
         card_layout.addWidget(self.script_fields)
         self.script_fields.hide()
         self.script_toggle.toggled.connect(self._set_scripts_expanded)
@@ -966,6 +1058,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def _set_scripts_expanded(self, expanded: bool) -> None:
         self.script_fields.setVisible(expanded)
+        self.script_summary_label.setVisible(not expanded)
         self.script_toggle.setText("收起编辑" if expanded else "展开编辑")
         set_disclosure_state(self.script_toggle, expanded)
         self.script_toggle.setAccessibleName("收起任务脚本编辑" if expanded else "展开任务脚本编辑")
@@ -973,8 +1066,25 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _refresh_script_summary(self) -> None:
         combos = (self.seed_script_combo, self.name_script_combo)
         paths = [self._selected_path(combo) for combo in combos]
-        self.script_summary_label.setText(f"测种 / 取名 · {sum(path is not None for path in paths)} 个脚本")
+        self.script_summary_label.setText("\n".join(
+            f"{title} · {path.name if path else '未选择'}"
+            for title, path in zip(("测种", "取名"), paths)
+        ))
         self.script_summary_label.setToolTip(" / ".join(path.name if path else "未选择" for path in paths))
+        for combo, path in zip(combos, paths):
+            missing = path is None and combo is self.name_script_combo
+            heading, requirement, number = self.script_rows[combo]
+            missing_text = "待选择" if missing else "必需" if combo is self.name_script_combo else "测种启动时使用"
+            requirement.setText(missing_text)
+            requirement.setProperty("missing", missing)
+            number.setProperty("missing", missing)
+            for widget in (requirement, number):
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+            if combo.property("missing") != missing:
+                combo.setProperty("missing", missing)
+                combo.style().unpolish(combo)
+                combo.style().polish(combo)
 
     def _build_log_group(self) -> QGroupBox:
         group = QGroupBox("日志")
@@ -1831,6 +1941,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         count = self.target_list.count()
         self.target_count_label.setText(f"{count} 个目标")
         self.target_list.setVisible(count > 0)
+        self.target_list.fit_contents()
         self.target_hint_label.setText("按最早匹配帧数选择" if count else "添加目标后即可开始")
         self.clear_targets_button.setEnabled(count > 0)
         self._sync_run_controls()

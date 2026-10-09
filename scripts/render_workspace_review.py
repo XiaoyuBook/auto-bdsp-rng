@@ -19,6 +19,7 @@ parser.add_argument("--output", type=Path, default=Path("logs/ui-review/redesign
 parser.add_argument("--tid-columns-only", action="store_true", help="Review TID numeric columns and arrival times at 860/1150 widths")
 parser.add_argument("--seed-only", action="store_true", help="Review Seed configuration, timing and video threshold at all window sizes")
 parser.add_argument("--auto-only", action="store_true", help="Review the static target/status overview, configuration and details")
+parser.add_argument("--task-settings-only", action="store_true", help="Review both task parameter/script forms and their expanded states")
 args = parser.parse_args()
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["QT_SCALE_FACTOR"] = str(args.dpi / 100)
@@ -137,6 +138,23 @@ def capture(w, name, page, state, width, height, out):
         target = w.auto_rng_tab.more_strategy_button if name == "auto-strategies" else w.auto_rng_tab.runtime_script_card
         w.auto_rng_tab.config_panel.ensureWidgetVisible(target, 0, 8)
         settle(w)
+    if args.task_settings_only:
+        if page is w.auto_rng_tab:
+            page.more_strategy_button.setChecked(name == "auto-config-expanded")
+            page.extra_scripts_toggle.setChecked(name == "auto-config-expanded")
+            if not page._runtime_script_editor_expanded:
+                page.runtime_script_summary_toggle.click()
+            area, contents, scripts = page.config_panel, page.config_contents, page.runtime_script_card
+        else:
+            page.local_views.setCurrentIndex(0)
+            page.script_toggle.setChecked(True)
+            area, contents, scripts = page.config_scroll, page.config_panel, page.script_group
+        settle(w)
+        area.verticalScrollBar().setValue(page.task_config_card.y())
+        settle(w)
+        top = page.task_config_card.y()
+        contents.grab(QRect(0, top, contents.width(), scripts.geometry().bottom() - top + 12)).save(
+            str(out / f"{state}-{name}-{width}x{height}-{args.dpi}-form.png"))
     if args.tid_columns_only:
         table = w.auto_tid_rng_tab.id_table
         column = 6 if name == "tid-runtime-time" else 0
@@ -242,6 +260,9 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
         elif args.auto_only:
             pages = [(name, w.auto_rng_tab) for name in (
                 "auto-overview", "auto-strategies", "auto-scripts", "auto-details")]
+        elif args.task_settings_only:
+            pages = [("auto-config", w.auto_rng_tab), ("auto-config-expanded", w.auto_rng_tab),
+                     ("tid-settings", w.auto_tid_rng_tab)]
         for width, height in sizes:
             w.resize(width, height)
             for name, page in pages:

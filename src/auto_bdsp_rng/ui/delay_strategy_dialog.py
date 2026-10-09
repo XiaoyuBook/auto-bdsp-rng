@@ -167,7 +167,7 @@ class DelaySummaryButton(QPushButton):
             if not separator:
                 strategy, estimate = text, ""
         icon_left = self.width() - 26
-        estimate_width = min(48, self.fontMetrics().horizontalAdvance(estimate) + 4)
+        estimate_width = self.fontMetrics().horizontalAdvance(estimate) + 4
         estimate_rect = QRect(
             icon_left - estimate_width - 7,
             0,

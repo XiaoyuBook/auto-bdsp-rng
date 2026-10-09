@@ -11,6 +11,14 @@ from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.workspace_layout import ToolbarReflow
 from auto_bdsp_rng.ui.auto_rng_overview import OverviewCards, StaticFlowMap, TargetConditions
+from auto_bdsp_rng.ui.task_settings import (
+    ScriptAssignmentRow,
+    TaskScriptLayout,
+    TaskStrategyLayout,
+    parameter_field,
+    section_header,
+    task_settings_styles,
+)
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont
@@ -443,6 +451,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._mark_scripts_dirty()
         self._update_script_status()
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self._resize_task_parameters)
+
+    def _resize_task_parameters(self) -> None:
+        if not hasattr(self, "strategy_group") or self.strategy_group.width() <= 0:
+            return
+        width = max(156, min(320, (self.strategy_group.width() - 42) // 2))
+        for field in (self.max_advances, self.max_wait_frames):
+            field.setFixedWidth(width)
+        self.delay_settings_button.setFixedWidth(max(156, self.strategy_group.width() - 32))
+
     def _build_ui(self) -> None:
         self.setObjectName("AutoRngPanel")
         layout = QVBoxLayout(self)
@@ -466,7 +486,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_content.layout().removeWidget(self.runtime_script_card)
         self.config_contents.layout().insertWidget(self.config_contents.layout().count() - 2, self.runtime_script_card)
         self.runtime_script_header.show()
-        self._set_runtime_script_summary_visible(False)
+        self._runtime_script_editor_expanded = True
+        self._set_runtime_script_summary_visible(True)
         self.runtime_dialog = QDialog(self)
         self.runtime_dialog.setWindowTitle("自动定点运行详情")
         self.runtime_dialog.setModal(False)
@@ -630,42 +651,57 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(10)
 
-        header = QHBoxLayout()
-        header.setSpacing(8)
-        title = QLabel("任务配置")
-        title.setObjectName("SectionTitle")
+        layout.addWidget(self._build_target_summary_group())
+        self.task_config_card = QFrame()
+        self.task_config_card.setProperty("taskCard", True)
+        card = QVBoxLayout(self.task_config_card)
+        card.setContentsMargins(16, 14, 16, 12)
+        card.setSpacing(14)
         self.config_saved_label = QLabel("已保存")
         self.config_saved_label.setObjectName("ConfigSavedLabel")
-        header.addWidget(title)
-        header.addStretch(1)
-        header.addWidget(self.config_saved_label)
-        layout.addLayout(header)
-
-        layout.addWidget(self._build_target_summary_group())
-        self.strategy_group = self._build_strategy_group()
-        layout.addWidget(self.strategy_group)
-
-        footer = QFrame()
-        footer.setObjectName("ConfigFooter")
-        footer_layout = QVBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 10, 0, 0)
-        footer_layout.setSpacing(8)
-        note = QLabel("常规配置下次启动生效\ndelay 策略下轮生效")
-        note.setObjectName("MutedLabel")
+        note = QLabel("参数下次启动生效 · delay 策略下轮生效")
+        note.setObjectName("TaskSectionNote")
+        note.setWordWrap(True)
         note.setToolTip(
             "保存会记住当前配置；正在运行的任务继续使用启动时的常规参数。\n"
             "delay 策略在每轮开始时重新计算，本轮冻结值不变。"
         )
-        self.save_config_button = QPushButton("保存配置")
-        self.save_config_button.setIcon(workspace_icon("save", "#64707D"))
-        self.save_config_button.setObjectName("ConfigSaveButton")
+        self.save_config_button = QPushButton("保存参数")
+        self.save_config_button.setObjectName("TaskSaveButton")
         self.save_config_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_config_button.setAccessibleName("保存任务配置")
         self.save_config_button.setToolTip("保存任务参数；脚本选择可在下方单独保存。点击开始时会自动保存全部配置。")
         self.save_config_button.clicked.connect(self._save_config_state)
-        footer_layout.addWidget(note)
+        self.config_header_save_button = QPushButton("保存参数")
+        self.config_header_save_button.setObjectName("TaskSaveButton")
+        self.config_header_save_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.config_header_save_button.setAccessibleName("保存任务配置")
+        self.config_header_save_button.setToolTip(self.save_config_button.toolTip())
+        self.config_header_save_button.clicked.connect(self._save_config_state)
+        card.addWidget(section_header("任务配置", self.config_saved_label, self.config_header_save_button))
+        self.strategy_group = self._build_strategy_group()
+        card.addWidget(self.strategy_group)
+        card.addWidget(note)
+        layout.addWidget(self.task_config_card)
+        # Keep the footer as a distinct, predictable stop in the scroll flow:
+        # the task card can grow when advanced strategy rows are opened, while
+        # the save action remains the final control users can reach.
+        layout.addSpacing(0)
+        self.config_footer = QFrame()
+        self.config_footer.setObjectName("ConfigFooter")
+        footer_layout = QHBoxLayout(self.config_footer)
+        footer_layout.setContentsMargins(0, 10, 0, 0)
+        footer_layout.setSpacing(8)
+        footer_note = QLabel("保存后下次启动生效")
+        footer_note.setObjectName("TaskSectionNote")
+        footer_note.setWordWrap(True)
+        footer_note.setToolTip(note.toolTip())
+        footer_layout.addWidget(footer_note)
+        footer_layout.addStretch(1)
+        # Keep a second action at the end of the scroll flow so the save
+        # affordance remains reachable after advanced strategy rows expand.
         footer_layout.addWidget(self.save_config_button, 0, Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(footer)
+        layout.addWidget(self.config_footer)
         layout.addStretch(1)
 
         panel.setWidget(contents)
@@ -676,13 +712,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         group = QGroupBox()
         group.setObjectName("AutoRngStrategyGroup")
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        form = QFormLayout(group)
+        form = TaskStrategyLayout(group)
         form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(8)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.advanced_strategies = QWidget()
         self.strategy_form = form
         self.max_advances = self._spin(0, 1_000_000_000, 100_000)
         self.max_advances.setSuffix(" 帧")
@@ -694,7 +726,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.delay_strategy_dialog = DelayStrategyDialog(self)
         self.delay_settings_button = DelaySummaryButton()
         self.delay_settings_button.setObjectName("SecondaryButton")
-        self.delay_settings_button.setFixedSize(156, 32)
+        self.delay_settings_button.setFixedWidth(156)
+        self.delay_settings_button.setFixedHeight(32)
+        self.delay_settings_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delay_settings_button.setIcon(
             delay_lucide_icon("settings-2", "#626D79", 16)
         )
@@ -703,12 +737,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.delay_active_label.setObjectName("DelayActiveLabel")
         self.delay_settings_field = QWidget()
         self.delay_settings_field.setObjectName("DelaySettingsField")
-        self.delay_settings_field.setFixedSize(156, 52)
         delay_field_layout = QVBoxLayout(self.delay_settings_field)
         delay_field_layout.setContentsMargins(0, 0, 0, 0)
         delay_field_layout.setSpacing(3)
         delay_field_layout.addWidget(self.delay_settings_button)
-        delay_field_layout.addWidget(self.delay_active_label)
+        self.delay_active_label.setParent(self.delay_settings_field)
+        self.delay_active_label.hide()  # The button already displays the next-round estimate.
         self.delay_settings_button.clicked.connect(self.open_delay_strategy_dialog)
         self.delay_strategy_dialog.settingsEdited.connect(self._refresh_delay_dialog_preview)
         self.delay_strategy_dialog.settingsSaveRequested.connect(
@@ -740,8 +774,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.shiny_threshold_seconds.setSuffix(" 秒")
         set_c_locale(self.shiny_threshold_seconds)
         self.shiny_threshold_seconds.setFont(_ui_numeric_font(14))
-        for spin in (self.max_advances, self.fixed_delay, self.max_wait_frames):
+        for spin in (self.max_advances, self.max_wait_frames):
             spin.setFixedWidth(156)
+            spin.setFixedHeight(36)
+            spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.shiny_threshold_seconds.setFixedSize(180, 32)
         explained_rows = (
             (
@@ -775,14 +811,25 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 "设为 0 时关闭自动 OCR 判闪。",
             ),
         )
-        for label_text, field, tooltip in explained_rows[:3]:
-            form.addRow(label_text, field)
+        core = QHBoxLayout()
+        core.setSpacing(16)
+        max_field = parameter_field("搜索范围", self.max_advances, "当前 Seed 的搜索上限")
+        wait_field = parameter_field("最大等待", self.max_wait_frames, "进入活帧等待的距离")
+        core.addWidget(max_field, 1)
+        core.addWidget(wait_field, 1)
+        form.addLayout(core)
+        form.register(self.max_advances, max_field.findChild(QLabel, "TaskFieldTitle"), 0)
+        form.register(self.max_wait_frames, wait_field.findChild(QLabel, "TaskFieldTitle"), 1)
+        self.delay_settings_label = QLabel("delay 策略")
+        self.delay_settings_label.setObjectName("TaskFieldTitle")
+        self.delay_settings_label.setBuddy(self.delay_settings_button)
+        delay_field_layout.insertWidget(0, self.delay_settings_label)
+        delay_field_layout.setSpacing(6)
+        form.addWidget(self.delay_settings_field)
+        form.register(self.delay_settings_field, self.delay_settings_label, 2)
+        for _label_text, field, tooltip in explained_rows[:3]:
             field.setToolTip(tooltip)
-            label = form.labelForField(field)
-            if label is not None:
-                label.setToolTip(tooltip)
             if field is self.delay_settings_field:
-                self.delay_settings_label = label
                 self.fixed_delay.setToolTip(tooltip)
                 self.delay_settings_button.setToolTip(tooltip)
 
@@ -795,14 +842,21 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.more_strategy_button.setAccessibleName("展开更多策略")
         self.more_strategy_button.setFixedHeight(30)
         self.more_strategy_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        form.addRow(self.more_strategy_button)
+        form.addWidget(self.more_strategy_button)
 
         shiny_tooltip = explained_rows[3][2]
-        form.addRow(explained_rows[3][0], self.shiny_threshold_seconds)
+        advanced_form = QFormLayout(self.advanced_strategies)
+        advanced_form.setContentsMargins(0, 0, 0, 0)
+        advanced_form.setHorizontalSpacing(8)
+        advanced_form.setVerticalSpacing(8)
+        advanced_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        advanced_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        advanced_form.addRow(explained_rows[3][0], self.shiny_threshold_seconds)
         self.shiny_threshold_seconds.setToolTip(shiny_tooltip)
-        shiny_label = form.labelForField(self.shiny_threshold_seconds)
+        shiny_label = advanced_form.labelForField(self.shiny_threshold_seconds)
         if shiny_label is not None:
             shiny_label.setToolTip(shiny_tooltip)
+        form.register(self.shiny_threshold_seconds, shiny_label, 3)
 
         strategy_choice_width, strategy_detail_width, strategy_spacing = 128, 86, 6
         strategy_field_width = strategy_choice_width + strategy_spacing + strategy_detail_width
@@ -824,7 +878,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.sync_nature_input.setEnabled(False)
         sync_row.addWidget(self.sync_combo)
         sync_row.addWidget(self.sync_nature_input)
-        form.addRow("同步", self.sync_field)
+        advanced_form.addRow("同步", self.sync_field)
+        form.register(self.sync_field, advanced_form.labelForField(self.sync_field), 4)
 
         self.reverse_field = QWidget()
         self.reverse_field.setObjectName("CompactStrategyField")
@@ -851,8 +906,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.reverse_lookup_window.setFont(_ui_numeric_font(14))
         reverse_row.addWidget(self.auto_reverse_combo)
         reverse_row.addWidget(self.reverse_lookup_window)
-        form.addRow("自动反查", self.reverse_field)
-        form.addRow("校正策略", self.strategy_settings_button)
+        advanced_form.addRow("自动反查", self.reverse_field)
+        advanced_form.addRow("校正策略", self.strategy_settings_button)
+        form.register(self.reverse_field, advanced_form.labelForField(self.reverse_field), 5)
+        form.register(self.strategy_settings_button, advanced_form.labelForField(self.strategy_settings_button), 6)
+        form.addWidget(self.advanced_strategies)
 
         self._advanced_strategy_fields = (
             self.shiny_threshold_seconds,
@@ -1148,10 +1206,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         group = QGroupBox()
         group.setObjectName("AutoRngScriptGroup")
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        layout = QGridLayout(group)
+        layout = TaskScriptLayout(group)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(16)
-        layout.setVerticalSpacing(4)
+        layout.setSpacing(4)
 
         self.script_group_title = QLabel("任务脚本")
         self.script_group_title.setObjectName("SectionTitle")
@@ -1175,18 +1232,41 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             "QPushButton:disabled {color: #9AA8A1;}" + focus_styles("QPushButton")
         )
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
-        self.runtime_script_header.layout().insertWidget(1, self.script_status_label)
-        layout.addWidget(self.refresh_scripts_button, 0, 1, Qt.AlignmentFlag.AlignRight)
+        tools = QHBoxLayout()
+        tools.addWidget(self.script_status_label)
+        tools.addStretch(1)
+        tools.addWidget(self.refresh_scripts_button)
+        layout.addLayout(tools)
         self.starter_automation_check = QCheckBox("御三家全自动")
         self.starter_automation_check.setToolTip(
             "选择御三家后启用：内置测种 → 自动对话与 Timeline → 判闪 → 内置反查。\n"
             "从“怎么回事？刚才那两人……”接管；自动反查始终开启，本轮 delay 必须小于 78 帧。"
         )
-        layout.addWidget(self.starter_automation_check, 0, 0)
+        layout.addWidget(self.starter_automation_check)
         self.starter_script_description = QLabel("内置御三家测种 → 自动撞帧 → 判闪 → 御三家反查（脚本库 0.0.5）")
         self.starter_script_description.setWordWrap(True)
         self.starter_script_description.hide()
-        layout.addWidget(self.starter_script_description, 13, 0, 1, 2)
+        self.starter_script_description.setObjectName("TaskFieldHint")
+        layout.addWidget(self.starter_script_description)
+        self.manual_script_fields = QWidget()
+        main_fields = QVBoxLayout(self.manual_script_fields)
+        main_fields.setContentsMargins(0, 0, 0, 0)
+        main_fields.setSpacing(0)
+        layout.addWidget(self.manual_script_fields)
+        self.extra_scripts_toggle = QToolButton()
+        self.extra_scripts_toggle.setCheckable(True)
+        self.extra_scripts_toggle.setText("扩展脚本 · 过场 / 反查 / 逃跑")
+        configure_disclosure_button(self.extra_scripts_toggle)
+        self.extra_scripts_toggle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.extra_scripts_toggle.setAccessibleName("展开扩展脚本")
+        layout.addWidget(self.extra_scripts_toggle)
+        self.extra_script_fields = QWidget()
+        extra_fields = QVBoxLayout(self.extra_script_fields)
+        extra_fields.setContentsMargins(0, 0, 0, 0)
+        extra_fields.setSpacing(0)
+        layout.addWidget(self.extra_script_fields)
+        self.extra_script_fields.hide()
+        self.extra_scripts_toggle.toggled.connect(self.extra_script_fields.setVisible)
 
         def combo_factory() -> _RefreshingScriptComboBox:
             return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
@@ -1220,21 +1300,17 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.escape_continue_check.toggled.connect(self.escape_script_combo.setEnabled)
         self.escape_continue_check.toggled.connect(lambda: self._update_script_edit_button(self.escape_script_combo))
         script_fields = (
-            ("测种脚本", self.seed_script_combo, 0, 0),
-            ("过帧脚本", self.advance_script_combo, 0, 1),
-            ("撞闪脚本", self.hit_script_combo, 3, 0),
-            ("过场脚本", self.exit_script_combo, 3, 1),
-            ("反查脚本", self.reverse_script_combo, 6, 0),
-            ("逃跑脚本", self.escape_script_combo, 6, 1),
+            ("测种脚本", self.seed_script_combo, "01", "获取初始 Seed"),
+            ("过帧脚本", self.advance_script_combo, "02", "快速接近目标帧"),
+            ("撞闪脚本", self.hit_script_combo, "03", "到达时机后触发遭遇"),
+            ("过场脚本", self.exit_script_combo, "↗", "切换场景后重新校正"),
+            ("反查脚本", self.reverse_script_combo, "↺", "读取个体以反查 delay"),
+            ("逃跑脚本", self.escape_script_combo, "↻", "未出闪时离开战斗"),
         )
         self.script_labels: dict[QComboBox, QLabel] = {}
-        for index, (label_text, combo, _row, _column) in enumerate(script_fields):
-            row, column = index * 2, 0
-            label = QLabel(label_text)
-            label.setObjectName("ScriptFieldLabel")
+        self.script_rows: dict[QComboBox, ScriptAssignmentRow] = {}
+        for index, (label_text, combo, number, description) in enumerate(script_fields):
             combo.setAccessibleName(label_text)
-            label.setBuddy(combo)
-            self.script_labels[combo] = label
             picker = QWidget(group)
             picker.setObjectName("ScriptPicker")
             picker_layout = QHBoxLayout(picker)
@@ -1263,18 +1339,27 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             picker_layout.addWidget(edit_button)
             self.script_edit_buttons[combo] = edit_button
             self.script_picker_widgets[combo] = picker
-            layout.addWidget(label, row + 1, column)
-            layout.addWidget(picker, row + 2, column)
-        layout.addWidget(
-            self.escape_continue_check,
+            row = ScriptAssignmentRow(number, label_text, description, picker)
+            row.title.setBuddy(combo)
+            self.script_labels[combo] = row.title
+            self.script_rows[combo] = row
+            if combo is self.escape_script_combo:
+                extra_fields.addWidget(self.escape_continue_check)
+            (main_fields if index < 3 else extra_fields).addWidget(row)
+            legacy_row = 1 + index * 2
+            layout.register_legacy_position(
+                legacy_row,
+                0,
+                row.title,
+                text=f"{label_text} · {description}",
+            )
+            layout.register_legacy_position(legacy_row + 1, 0, picker)
+        layout.register_legacy_position(
             14,
             0,
-            1,
-            2,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self.escape_continue_check,
+            alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 0)
         self.escape_continue_check.toggled.connect(self._update_script_status)
         self.starter_automation_check.toggled.connect(self._update_starter_mode)
         self.starter_automation_check.toggled.connect(self._update_script_status)
@@ -1321,6 +1406,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         for combo, label in self.script_labels.items():
             label.setVisible(not active)
             self.script_picker_widgets[combo].setVisible(not active)
+        self.manual_script_fields.setVisible(not active)
+        self.extra_scripts_toggle.setVisible(not active)
+        self.extra_script_fields.setVisible(not active and self.extra_scripts_toggle.isChecked())
         self.escape_continue_check.setVisible(not active)
         self.starter_script_description.setVisible(active)
         self.auto_reverse_combo.setEnabled(not active)
@@ -1497,9 +1585,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
         self.runtime_script_card = QFrame()
         self.runtime_script_card.setObjectName("RuntimeScriptCard")
+        self.runtime_script_card.setProperty("taskCard", True)
         script_layout = QVBoxLayout(self.runtime_script_card)
-        script_layout.setContentsMargins(12, 10, 12, 12)
-        script_layout.setSpacing(6)
+        script_layout.setContentsMargins(16, 14, 16, 12)
+        script_layout.setSpacing(8)
         self.runtime_script_header = self._build_runtime_script_header()
         script_layout.addWidget(self.runtime_script_header)
         self.runtime_script_summary = self._build_runtime_script_summary()
@@ -1549,7 +1638,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         title = QLabel("任务脚本")
-        title.setObjectName("SectionTitle")
+        title.setObjectName("TaskSectionTitle")
         row.addWidget(title)
         row.addStretch(1)
         state = QLabel("下次启动生效")
@@ -1560,8 +1649,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.script_save_state_label = QLabel("已保存")
         self.script_save_state_label.setObjectName("ScriptSaveStateLabel")
         row.addWidget(self.script_save_state_label)
-        self.save_scripts_button = QPushButton("保存")
-        self.save_scripts_button.setObjectName("ScriptSaveButton")
+        self.save_scripts_button = QPushButton("保存脚本")
+        self.save_scripts_button.setObjectName("TaskSaveButton")
         self.save_scripts_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_scripts_button.setToolTip("保存本区域的脚本选择及逃跑续搜开关，下次启动生效；脚本内容请通过编辑按钮修改。")
         self.save_scripts_button.clicked.connect(self._save_script_state)
@@ -1593,7 +1682,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         configure_disclosure_button(self.runtime_script_summary_toggle)
         self.runtime_script_summary_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.runtime_script_summary_toggle.setAccessibleName("展开任务脚本编辑")
-        self.runtime_script_summary_toggle.setMinimumSize(88, 32)
+        self.runtime_script_summary_toggle.setMinimumSize(32, 30)
+        self.runtime_script_summary_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.runtime_script_summary_toggle.setToolTip("展开或收起脚本编辑")
         self.runtime_script_summary_toggle.clicked.connect(self._toggle_runtime_script_editor)
         self.runtime_script_header.layout().addWidget(self.runtime_script_summary_toggle)
         card.hide()
@@ -1615,11 +1706,13 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             ("过场", self.exit_script_combo),
             ("逃跑", self.escape_script_combo),
         )
-        selected = [label for label, combo in script_specs if self._selected_path(combo) is not None]
-        if selected:
-            detail = f"已选择 {len(selected)} 个脚本 · " + " / ".join(selected)
-        else:
-            detail = "尚未选择脚本"
+        detail = "\n".join(
+            f"{label}  ·  {path.name if (path := self._selected_path(combo)) else '未选择'}"
+            for label, combo in script_specs[:3]
+        )
+        extra_count = sum(self._selected_path(combo) is not None for _label, combo in script_specs[3:])
+        detail += f"\n扩展脚本  ·  已选 {extra_count} 项"
+        self.extra_scripts_toggle.setText(f"扩展脚本 · 已选 {extra_count} 项")
         self.runtime_script_summary_detail.setText(detail)
         self.runtime_script_summary_detail.setToolTip("\n".join(
             f"{label}：{self._selected_path(combo) or '未选择'}"
@@ -2130,6 +2223,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def _set_advanced_strategies_visible(self, visible: bool) -> None:
         set_disclosure_state(self.more_strategy_button, visible)
+        self.advanced_strategies.setVisible(visible)
         for field in self._advanced_strategy_fields:
             self.strategy_form.setRowVisible(field, visible)
         self.more_strategy_button.setText("收起更多策略" if visible else "更多策略 · 4 项")
@@ -2186,9 +2280,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.config_saved_label.style().unpolish(self.config_saved_label)
         self.config_saved_label.style().polish(self.config_saved_label)
         if hasattr(self, "save_config_button"):
-            self.save_config_button.setProperty("state", "saved" if saved else "dirty")
-            self.save_config_button.style().unpolish(self.save_config_button)
-            self.save_config_button.style().polish(self.save_config_button)
+            for button in (
+                self.save_config_button,
+                getattr(self, "config_header_save_button", None),
+            ):
+                if button is None:
+                    continue
+                button.setProperty("state", "saved" if saved else "dirty")
+                button.style().unpolish(button)
+                button.style().polish(button)
         self._update_toolbar_status()
 
     def _missing_script_fields(self) -> list[tuple[QComboBox, str]]:
@@ -2209,6 +2309,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_script_editor_expanded = True
         self._set_runtime_script_summary_visible(True)
         combo = missing[0][0]
+        if combo is self.escape_script_combo:
+            self.extra_scripts_toggle.setChecked(True)
         self.config_contents.layout().activate()
         self.config_panel.ensureWidgetVisible(combo)
         combo.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -2225,7 +2327,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 combo is self.escape_script_combo and self.escape_continue_check.isChecked()
             )
             absent = any(combo is field for field, _name in missing_fields)
-            label.setText(f"{combo.accessibleName()} · {'待选择' if absent else '必需' if required else '可选'}")
+            label.setText(combo.accessibleName())
+            self.script_rows[combo].set_requirement('待选择' if absent else '必需' if required else '可选', absent)
             for widget in (label, combo):
                 widget.setProperty("missing", absent)
                 widget.style().unpolish(widget)
@@ -2500,11 +2603,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border-color: #EBCF9E;
             }
             QGroupBox#AutoRngStrategyGroup {
-                background: $surface;
-                border: 1px solid $card_border;
-                border-radius: 9px;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
                 margin: 0;
-                padding: 10px 12px 12px 12px;
+                padding: 0;
                 font-weight: 400;
             }
             QGroupBox#TargetSummaryGroup {
@@ -3008,7 +3111,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 "QGroupBox#AutoRngStrategyGroup QLineEdit",
                 "QFrame#AutoRngToolbar QComboBox", "QFrame#AutoRngToolbar QSpinBox",
                 "QTableWidget#RuntimeCandidateTable",
-            )
+            ) + task_settings_styles()
         )
 
     def refresh_scripts(self) -> None:
