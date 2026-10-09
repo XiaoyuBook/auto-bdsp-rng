@@ -38,7 +38,11 @@ from PySide6.QtWidgets import (
 
 from auto_bdsp_rng.ui.workspace_theme import ui_styles
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
-from auto_bdsp_rng.ui.workspace_controls import EmptyIllustration
+from auto_bdsp_rng.ui.workspace_controls import (
+    EmptyIllustration,
+    MenuToolButton,
+    configure_disclosure_button,
+)
 
 # ── 配色 ──────────────────────────────────────────────────
 CLR_SEP     = "#F0F2F5"   # 分隔线
@@ -403,7 +407,7 @@ class HistoryPanel(QWidget):
         self.round_picker_button.setCheckable(True)
         self.round_picker_button.toggled.connect(self._show_round_picker)
         toolbar.addWidget(self.round_picker_button)
-        more = QToolButton()
+        more = MenuToolButton()
         more.setText("更多")
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(more)
@@ -663,12 +667,11 @@ class HistoryPanel(QWidget):
         # Selected-round summary and candidate data own the narrow surface;
         # full metadata and the event feed remain available on demand.
         self.meta_toggle = QToolButton()
+        self.meta_toggle.setObjectName("HistoryDisclosure")
         self.meta_toggle.setText("Seed / 轮次详情")
         self.meta_toggle.setCheckable(True)
-        self.meta_toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self.meta_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.meta_toggle)
         self.meta_toggle.toggled.connect(self.meta_frame.setVisible)
-        self.meta_toggle.toggled.connect(lambda checked: self.meta_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
         self.meta_frame.hide()
         detail_layout.insertWidget(1, self.meta_toggle)
         self.round_summary = QLabel("目标 — · 候选 — · 锁定帧 —")
@@ -682,12 +685,11 @@ class HistoryPanel(QWidget):
         detail_layout.removeWidget(self.history_scroll)
         detail_layout.addWidget(self.round_candidate_table, 1)
         self.feed_toggle = QToolButton()
+        self.feed_toggle.setObjectName("HistoryDisclosure")
         self.feed_toggle.setText("处理详情")
         self.feed_toggle.setCheckable(True)
-        self.feed_toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self.feed_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.feed_toggle)
         self.feed_toggle.toggled.connect(self.history_scroll.setVisible)
-        self.feed_toggle.toggled.connect(lambda checked: self.feed_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
         detail_layout.addWidget(self.feed_toggle)
         self.history_scroll.setMaximumHeight(180)
         self.history_scroll.hide()

@@ -3,6 +3,8 @@ import json
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import QBoxLayout, QFrame, QHBoxLayout, QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTabBar, QTabWidget, QWidget
 
+from auto_bdsp_rng.ui.workspace_theme import ui_styles
+
 
 class _LayoutMemory:
     def __init__(self):
@@ -76,18 +78,47 @@ class LocalViews(QTabWidget):
         self.setObjectName("LocalWorkspaceViews")
         self.setDocumentMode(True)
         self.setUsesScrollButtons(False)
+        self.tabBar().setObjectName("LocalWorkspaceTabBar")
         self.tabBar().setExpanding(False)
+        self.tabBar().setDrawBase(False)
+        self.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.setStyleSheet("""
-            QTabWidget#LocalWorkspaceViews::pane { border: 0; }
-            QTabWidget#LocalWorkspaceViews > QTabBar::tab {
-                background: transparent; color: #687480; padding: 8px 14px;
-                border: 0; border-bottom: 2px solid transparent; font-size: 13px;
+        self.setStyleSheet(ui_styles("""
+            QTabWidget#LocalWorkspaceViews {
+                background: transparent;
             }
-            QTabWidget#LocalWorkspaceViews > QTabBar::tab:selected {
-                color: #087C58; border-bottom-color: #087C58; background: #EAF7F1;
+            QTabWidget#LocalWorkspaceViews::pane {
+                border: 0;
+                top: 0;
             }
-        """)
+            QTabBar#LocalWorkspaceTabBar {
+                background: #FFFFFF;
+                qproperty-drawBase: 0;
+            }
+            QTabBar#LocalWorkspaceTabBar::tab {
+                background: transparent;
+                color: #687480;
+                height: 28px;
+                padding: 0 14px;
+                margin: 3px 2px 3px 8px;
+                border: 1px solid transparent;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QTabBar#LocalWorkspaceTabBar::tab:selected {
+                color: #087C58;
+                background: #EAF7F1;
+                font-weight: 500;
+            }
+            QTabBar#LocalWorkspaceTabBar::tab:hover:!selected {
+                color: #202A33;
+                background: #F5F8F6;
+            }
+            QTabBar#LocalWorkspaceTabBar::tab:disabled {
+                color: #A7B0AB;
+            }
+        """))
 
     def minimumSizeHint(self):
         return QSize(0, 0)

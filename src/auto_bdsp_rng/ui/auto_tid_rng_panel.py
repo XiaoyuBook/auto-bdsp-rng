@@ -60,7 +60,13 @@ from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
-from auto_bdsp_rng.ui.workspace_controls import PrimaryToolButton, workspace_icon
+from auto_bdsp_rng.ui.workspace_controls import (
+    PrimaryToolButton,
+    MenuToolButton,
+    configure_disclosure_button,
+    set_disclosure_state,
+    workspace_icon,
+)
 from auto_bdsp_rng.ui.table_delegate import RowSeparatorDelegate
 from auto_bdsp_rng.ui.workspace_theme import add_card_shadow, primary_button_styles, ui_font, workspace_styles
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
@@ -388,6 +394,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QFrame#AutoTidMetricFocus { background: $accent_soft; border: 0; border-radius: 8px; }
             QFrame#AutoTidMetric, QWidget#AutoTidMetrics, QWidget#AutoTidDetails { background: transparent; border: 0; }
             QFrame#AutoTidRuntimeFooter { background: transparent; border: 0; border-top: 1px solid $separator; }
+            QFrame#AutoTidRuntimeCard QPushButton#AutoTidLink {
+                min-height: 22px; max-height: 22px; padding: 0 4px;
+            }
             QLabel#AutoTidStateDot { color: #087c58; }
             QFrame#AutoTidRuntimeCard[state="failed"] QLabel#AutoTidStateDot { color: #ac4b42; }
             QFrame#AutoTidRuntimeCard[state="idle"] QLabel#AutoTidStateDot { color: #8da299; }
@@ -810,11 +819,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         footer.addWidget(self.runtime_delay_value)
         footer.addStretch(1)
         self.runtime_details_toggle = QToolButton()
-        self.runtime_details_toggle.setObjectName("AutoTidLink")
+        self.runtime_details_toggle.setObjectName("AutoTidDisclosure")
         self.runtime_details_toggle.setText("阶段记录")
         self.runtime_details_toggle.setCheckable(True)
-        self.runtime_details_toggle.setArrowType(Qt.ArrowType.DownArrow)
-        self.runtime_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.runtime_details_toggle, compact=True)
         footer.addWidget(self.runtime_details_toggle)
         self.target_data_button = QPushButton("定位目标", self.runtime_card)
         self.target_data_button.setObjectName("AutoTidLocate")
@@ -855,6 +863,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.runtime_compact_values.setWordWrap(True)
         layout.insertWidget(1, self.runtime_compact_values)
         layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
         self.runtime_card.setStyleSheet("QLabel#AutoTidRuntimePhase { font-size: 15px; }")
         return self.runtime_card
 
@@ -890,11 +899,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         labels.addWidget(self.script_summary_label)
         summary.addLayout(labels, 1)
         self.script_toggle = QToolButton()
-        self.script_toggle.setObjectName("AutoTidLink")
+        self.script_toggle.setObjectName("AutoTidDisclosure")
         self.script_toggle.setText("展开编辑")
         self.script_toggle.setCheckable(True)
-        self.script_toggle.setArrowType(Qt.ArrowType.DownArrow)
-        self.script_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.script_toggle)
         self.script_toggle.setAccessibleName("展开任务脚本编辑")
         header.addWidget(self.script_toggle)
         card_layout.addLayout(summary)
@@ -933,12 +941,12 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def _set_runtime_details_visible(self, visible: bool) -> None:
         self.runtime_details.setVisible(visible)
-        self.runtime_details_toggle.setArrowType(Qt.ArrowType.UpArrow if visible else Qt.ArrowType.DownArrow)
+        set_disclosure_state(self.runtime_details_toggle, visible)
 
     def _set_scripts_expanded(self, expanded: bool) -> None:
         self.script_fields.setVisible(expanded)
         self.script_toggle.setText("收起编辑" if expanded else "展开编辑")
-        self.script_toggle.setArrowType(Qt.ArrowType.UpArrow if expanded else Qt.ArrowType.DownArrow)
+        set_disclosure_state(self.script_toggle, expanded)
         self.script_toggle.setAccessibleName("收起任务脚本编辑" if expanded else "展开任务脚本编辑")
 
     def _refresh_script_summary(self) -> None:
@@ -1013,11 +1021,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.export_button = self._link_button("导出全部 CSV", self.export_results)
         layout.addLayout(toolbar)
         self.seed_toggle = QToolButton()
-        self.seed_toggle.setObjectName("AutoTidLink")
+        self.seed_toggle.setObjectName("AutoTidDisclosure")
         self.seed_toggle.setText("Seed 信息")
         self.seed_toggle.setCheckable(True)
-        self.seed_toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self.seed_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.seed_toggle, compact=True)
         toolbar.insertWidget(1, self.seed_toggle)
         self.seed_fields = QWidget()
         self.seed_fields.setObjectName("AutoTidSeedFields")
@@ -1069,7 +1076,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         actions.removeWidget(self.id_table_tools.copy_button)
         self.id_table_tools.copy_button.setParent(group)
         self.id_table_tools.copy_button.hide()
-        self.result_more_button = QToolButton()
+        self.result_more_button = MenuToolButton()
         self.result_more_button.setText("更多")
         self.result_more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         result_menu = QMenu(self.result_more_button)
@@ -1091,7 +1098,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def _set_seed_expanded(self, expanded: bool) -> None:
         self.seed_fields.setVisible(expanded)
-        self.seed_toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        set_disclosure_state(self.seed_toggle, expanded)
 
     def _show_id_search_status(self, message: str) -> None:
         summary = message if len(message) <= 20 else message[:20] + "…"

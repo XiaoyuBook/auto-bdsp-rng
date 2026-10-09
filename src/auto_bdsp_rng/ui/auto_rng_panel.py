@@ -79,7 +79,13 @@ from auto_bdsp_rng.ui.delay_strategy_dialog import (
 )
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
-from auto_bdsp_rng.ui.workspace_controls import PrimaryToolButton, SpeciesAvatar, workspace_icon
+from auto_bdsp_rng.ui.workspace_controls import (
+    PrimaryToolButton,
+    SpeciesAvatar,
+    configure_disclosure_button,
+    set_disclosure_state,
+    workspace_icon,
+)
 from auto_bdsp_rng.ui.table_delegate import RowSeparatorDelegate
 from auto_bdsp_rng.ui.workspace_theme import add_card_shadow, focus_styles, primary_button_styles, ui_font, workspace_styles
 from auto_bdsp_rng.ui.spin_box import (
@@ -769,8 +775,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.more_strategy_button.setObjectName("MoreStrategyButton")
         self.more_strategy_button.setText("更多策略 · 4 项")
         self.more_strategy_button.setCheckable(True)
-        self.more_strategy_button.setArrowType(Qt.ArrowType.RightArrow)
-        self.more_strategy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.more_strategy_button)
         self.more_strategy_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.more_strategy_button.setAccessibleName("展开更多策略")
         self.more_strategy_button.setFixedHeight(30)
@@ -1435,8 +1440,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_details_toggle.setObjectName("RuntimeScriptSummaryToggle")
         self.runtime_details_toggle.setText("阶段记录")
         self.runtime_details_toggle.setCheckable(True)
-        self.runtime_details_toggle.setArrowType(Qt.ArrowType.DownArrow)
-        self.runtime_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.runtime_details_toggle, compact=True)
         runtime_footer_layout.addWidget(self.runtime_details_toggle)
         self.target_data_button = QPushButton("查看目标数据")
         self.target_data_button.setIcon(workspace_icon("external", "#687480"))
@@ -1557,8 +1561,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_script_summary_toggle = QToolButton()
         self.runtime_script_summary_toggle.setObjectName("RuntimeScriptSummaryToggle")
         self.runtime_script_summary_toggle.setText("展开编辑")
-        self.runtime_script_summary_toggle.setArrowType(Qt.ArrowType.DownArrow)
-        self.runtime_script_summary_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(self.runtime_script_summary_toggle)
         self.runtime_script_summary_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.runtime_script_summary_toggle.setAccessibleName("展开任务脚本编辑")
         self.runtime_script_summary_toggle.setMinimumSize(88, 32)
@@ -1631,9 +1634,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_script_summary_toggle.setAccessibleName(
             "收起任务脚本编辑" if self._runtime_script_editor_expanded else "展开任务脚本编辑"
         )
-        self.runtime_script_summary_toggle.setArrowType(
-            Qt.ArrowType.UpArrow if self._runtime_script_editor_expanded else Qt.ArrowType.DownArrow
-        )
+        set_disclosure_state(self.runtime_script_summary_toggle, self._runtime_script_editor_expanded)
 
     def _build_runtime_steps(self) -> QWidget:
         container = QWidget()
@@ -2083,9 +2084,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.loop_count.setVisible(visible)
 
     def _set_advanced_strategies_visible(self, visible: bool) -> None:
-        self.more_strategy_button.setArrowType(
-            Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow
-        )
+        set_disclosure_state(self.more_strategy_button, visible)
         for field in self._advanced_strategy_fields:
             self.strategy_form.setRowVisible(field, visible)
         self.more_strategy_button.setText("收起更多策略" if visible else "更多策略 · 4 项")
@@ -2294,7 +2293,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def _set_runtime_details_visible(self, visible: bool) -> None:
         self.runtime_details.setVisible(visible)
-        self.runtime_details_toggle.setArrowType(Qt.ArrowType.UpArrow if visible else Qt.ArrowType.DownArrow)
+        set_disclosure_state(self.runtime_details_toggle, visible)
 
     @staticmethod
     def _runtime_value(value: object, *, suffix: str = "") -> str:
@@ -2568,20 +2567,6 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QLabel#DelayActiveLabel {
                 padding-left: 1px;
             }
-            QToolButton#MoreStrategyButton {
-                background: transparent;
-                border: 0;
-                border-top: 1px solid $separator;
-                border-radius: 0;
-                color: #687480;
-                padding: 7px 0 0 0;
-                text-align: left;
-                font-size: 12px;
-                font-weight: 400;
-            }
-            QToolButton#MoreStrategyButton:hover {
-                color: $accent;
-            }
             QFrame#ConfigFooter {
                 background: transparent;
                 border: 0;
@@ -2719,16 +2704,6 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QLabel#RuntimeScriptHeaderState {
                 color: $text_secondary;
                 font-size: 12px;
-            }
-            QToolButton#RuntimeScriptSummaryToggle {
-                background: transparent;
-                border: 0;
-                color: $text_secondary;
-                padding: 2px 0;
-                font-size: 13px;
-            }
-            QToolButton#RuntimeScriptSummaryToggle:hover {
-                color: #066A4B;
             }
             QLabel#CandidateCountLabel {
                 color: $text_secondary;

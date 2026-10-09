@@ -188,7 +188,13 @@ from auto_bdsp_rng.ui.start_readiness import StartReadinessController
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 from auto_bdsp_rng.ui.workspace_controls import (
     PrimaryButton,
-    ConnectionDialog, DeviceStatusButton, set_disconnect_action, workspace_icon,
+    MenuToolButton,
+    ConnectionDialog,
+    DeviceStatusButton,
+    configure_disclosure_button,
+    set_disconnect_action,
+    set_disclosure_state,
+    workspace_icon,
 )
 from auto_bdsp_rng.update_core import (
     UpdatePackageError,
@@ -2393,12 +2399,21 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.capture_recognition_group)
         config_layout.addWidget(self.capture_timing_group)
         self.auto_capture_config_toggle = QToolButton()
+        self.auto_capture_config_toggle.setObjectName("SeedSectionToggle")
         self.auto_capture_config_toggle.setText("自动流程配置")
         self.auto_capture_config_toggle.setCheckable(True)
-        self.auto_capture_config_toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self.auto_capture_config_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.auto_capture_config_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.auto_capture_config_toggle.setAccessibleName("展开自动流程配置")
+        self.auto_capture_config_toggle.setToolTip("展开自动定点与自动 TID 流程使用的 Seed 配置")
+        self.auto_capture_config_toggle.setMinimumHeight(34)
+        self.auto_capture_config_toggle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        configure_disclosure_button(self.auto_capture_config_toggle)
         self.auto_capture_config_toggle.toggled.connect(self.status_group.setVisible)
-        self.auto_capture_config_toggle.toggled.connect(lambda checked: self.auto_capture_config_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
+        self.auto_capture_config_toggle.toggled.connect(
+            lambda checked: self.auto_capture_config_toggle.setAccessibleName(
+                "收起自动流程配置" if checked else "展开自动流程配置"
+            )
+        )
         self.status_group.hide()
         config_layout.addWidget(self.auto_capture_config_toggle)
         config_layout.addWidget(self.status_group)
@@ -2446,11 +2461,14 @@ class MainWindow(QMainWindow):
         # 第 3 行 + 第 4 行：结果表格（工具栏 + 表格）
         self.results_panel = self._build_results()
         self.query_toggle = QToolButton()
+        self.query_toggle.setObjectName("QuerySectionToggle")
         self.query_toggle.setText("查询条件")
         self.query_toggle.setCheckable(True)
         self.query_toggle.setChecked(True)
-        self.query_toggle.setArrowType(Qt.ArrowType.DownArrow)
-        self.query_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.query_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.query_toggle.setAccessibleName("收起查询条件")
+        self.query_toggle.setMinimumHeight(32)
+        configure_disclosure_button(self.query_toggle)
         self.query_toggle.toggled.connect(self._set_query_visible)
         self.query_summary = QLabel("编辑乱数、遭遇与筛选条件")
         self.query_summary.setObjectName("WorkspaceHint")
@@ -2470,7 +2488,8 @@ class MainWindow(QMainWindow):
 
     def _set_query_visible(self, visible: bool) -> None:
         self.bdsp_config_scroll.setVisible(visible)
-        self.query_toggle.setArrowType(Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow)
+        set_disclosure_state(self.query_toggle, visible)
+        self.query_toggle.setAccessibleName("收起查询条件" if visible else "展开查询条件")
 
     def _sync_query_group_height(self, *_args) -> None:
         if self.query_groups.currentWidget() is not None:
@@ -2591,6 +2610,7 @@ class MainWindow(QMainWindow):
         self.threshold = self._double_spin(0.0, 1.0, 0.9, 2)
         self.white_delay = self._double_spin(0.0, 999.0, 0.0, 1)
         self.white_delay.setSuffix(" 秒")
+        self.white_delay.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.advance_delay = self._spin(0, 9999, 0)
         self.advance_delay_2 = self._spin(0, 9999, 0)
         self.npc_count = self._spin(0, 999, 0)
@@ -2634,6 +2654,9 @@ class MainWindow(QMainWindow):
         compact_field_style = (
             "QLineEdit, QComboBox, QDoubleSpinBox {"
             " min-height: 30px; max-height: 30px; padding: 0 8px; border-radius: 7px;"
+            "}"
+            "QComboBox QLineEdit, QDoubleSpinBox QLineEdit {"
+            " border: 0; background: transparent; min-height: 0; max-height: 16777215px; padding: 0;"
             "}"
         )
         for widget in compact_fields:
@@ -3368,7 +3391,7 @@ class MainWindow(QMainWindow):
             toolbar.removeWidget(control)
             control.setParent(panel)
             control.hide()
-        self.results_more_button = QToolButton()
+        self.results_more_button = MenuToolButton()
         self.results_more_button.setText("更多")
         self.results_more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.results_more_menu = QMenu(self.results_more_button)
@@ -3525,6 +3548,11 @@ class MainWindow(QMainWindow):
             QCheckBox::indicator:focus {
                 border-color: #087C58;
             }
+            QCheckBox:disabled { color: #97A1AB; }
+            QCheckBox::indicator:unchecked:disabled {
+                border-color: #D4DCD7;
+                background: #F7F8FA;
+            }
             QLineEdit,
             QSpinBox,
             QDoubleSpinBox,
@@ -3538,6 +3566,7 @@ class MainWindow(QMainWindow):
                 color: #202A33;
                 font-size: 13px;
                 selection-background-color: #DCEFE7;
+                selection-color: #202A33;
             }
             QListWidget {
                 background: #FFFFFF;
@@ -3546,9 +3575,11 @@ class MainWindow(QMainWindow):
                 padding: 6px;
                 color: #202A33;
                 selection-background-color: #DCEFE7;
+                selection-color: #202A33;
             }
             QSpinBox QLineEdit,
-            QDoubleSpinBox QLineEdit {
+            QDoubleSpinBox QLineEdit,
+            QComboBox QLineEdit {
                 background: transparent;
                 border: 0;
                 min-height: 0;
@@ -3560,6 +3591,10 @@ class MainWindow(QMainWindow):
             QDoubleSpinBox:focus,
             QComboBox:focus {
                 border-color: #087C58;
+            }
+            QLineEdit:disabled, QSpinBox:disabled,
+            QDoubleSpinBox:disabled, QComboBox:disabled {
+                background: #F7F8FA; color: #97A1AB; border-color: #E9EDF2;
             }
             QLineEdit[readOnly="true"] {
                 background: #F0F3F6;
@@ -3577,6 +3612,13 @@ class MainWindow(QMainWindow):
             QComboBox::down-arrow {
                 image: none;
             }
+            QComboBox QAbstractItemView {
+                background: #FFFFFF; color: #202A33;
+                border: 1px solid #E0E5EB; padding: 4px;
+                selection-background-color: #EAF7F1;
+                selection-color: #087C58; outline: 0;
+            }
+            QComboBox QAbstractItemView::item { min-height: 28px; padding: 0 6px; }
             QSpinBox::up-button,
             QDoubleSpinBox::up-button {
                 subcontrol-origin: border;
@@ -3599,6 +3641,7 @@ class MainWindow(QMainWindow):
                 width: 0;
                 height: 0;
             }
+            QMenu,
             QMenu#VideoSourceComboMenu,
             QMenu#LeadComboMenu {
                 background: #FFFFFF;
@@ -3606,17 +3649,21 @@ class MainWindow(QMainWindow):
                 border: 1px solid #E0E5EB;
                 padding: 4px;
             }
+            QMenu::item,
             QMenu#VideoSourceComboMenu::item,
             QMenu#LeadComboMenu::item {
                 min-height: 28px;
                 padding: 4px 28px 4px 10px;
                 border-radius: 4px;
             }
+            QMenu::item:selected,
             QMenu#VideoSourceComboMenu::item:selected,
             QMenu#LeadComboMenu::item:selected {
-                background: #F7F8FA;
-                color: #202A33;
+                background: #EAF7F1;
+                color: #087C58;
             }
+            QMenu::item:disabled { color: #97A1AB; }
+            QMenu::separator { height: 1px; background: #EFF2F5; margin: 4px 8px; }
             QMenu#VideoSourceComboMenu::item:checked,
             QMenu#LeadComboMenu::item:checked {
                 background: #EAF7F1;
@@ -3733,7 +3780,7 @@ class MainWindow(QMainWindow):
                 color: #FFFFFF;
                 border: 1px solid #087C58;
                 border-radius: 7px;
-                padding: 4px 18px 4px 12px;
+                padding: 0 20px 0 12px;
                 font-size: 13px;
                 font-weight: 500;
             }
@@ -3801,6 +3848,7 @@ class MainWindow(QMainWindow):
                 font-size: 13px;
                 padding: 10px;
                 selection-background-color: #DCEFE7;
+                selection-color: #202A33;
             }
             QTextEdit#EasyConLog {
                 background: #FFFFFF;
@@ -3826,26 +3874,6 @@ class MainWindow(QMainWindow):
                 color: #626D79;
                 font-size: 12px;
             }
-            QToolButton#CaptureAdvancedToggle {
-                background: transparent;
-                color: #52606D;
-                border: 0;
-                border-top: 1px solid #F0F2F5;
-                text-align: left;
-                padding: 0 4px;
-                font-size: 13px;
-            }
-            QToolButton#CaptureAdvancedToggle:hover {
-                color: #087C58;
-                background: #EAF7F1;
-            }
-            QWidget#CaptureAdvancedFields {
-                background: transparent;
-            }
-
-            QWidget#ProjectXsConfigPanel {
-                background: #F8F9FB;
-            }
             QFrame#MonitorSidebar {
                 background: #F8F9FB;
                 border: 0;
@@ -3867,6 +3895,7 @@ class MainWindow(QMainWindow):
                 padding: 6px;
                 font-size: 12px;
                 selection-background-color: #C8E5D9;
+                selection-color: #202A33;
             }
             QLabel#MonitorSourceStatus {
                 color: #626D79;
@@ -3886,19 +3915,15 @@ class MainWindow(QMainWindow):
                 font-weight: 500;
             }
             QGroupBox#ProjectXsStatusGroup {
-                background: #FFFFFF;
-                border: 1px solid #E3E8ED;
-                border-radius: 9px;
+                background: #F8FAF9;
+                border: 0;
+                border-radius: 7px;
                 margin-top: 0;
-                padding: 26px 0 0 0;
-                font-size: 15px;
-                font-weight: 500;
+                padding: 0;
             }
             QGroupBox#ProjectXsStatusGroup::title {
-                subcontrol-origin: padding;
-                subcontrol-position: top left;
-                left: 14px;
-                top: 12px;
+                color: transparent;
+                padding: 0;
             }
             QGroupBox#CapturePreviewGroup {
                 margin-top: 0;
@@ -4067,6 +4092,9 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 min-width: 30px;
             }
+            QScrollBar::handle:hover { background: #AABEB3; }
+            QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+            QAbstractScrollArea::corner { background: transparent; border: 0; }
             QScrollBar::add-line:horizontal,
             QScrollBar::sub-line:horizontal {
                 width: 0;

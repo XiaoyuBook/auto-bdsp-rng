@@ -30,6 +30,7 @@ _PANEL_STYLE = """
         min-height: 0; max-height: 16px;
         color: #A6D8B8; font-family: "Consolas"; font-size: 11px; font-weight: 400;
         selection-background-color: #38694C;
+        selection-color: #FFFFFF;
     }
     QLabel#VideoMatchScore[blinking="true"] { color: #F4D083; }
     QDoubleSpinBox {

@@ -73,7 +73,13 @@ from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.easycon_execution import ExecutionFollower, ScriptSourceTree
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
-from auto_bdsp_rng.ui.workspace_controls import ConnectionDialog, PrimaryButton, set_disconnect_action, workspace_icon
+from auto_bdsp_rng.ui.workspace_controls import (
+    ConnectionDialog,
+    PrimaryButton,
+    configure_disclosure_button,
+    set_disconnect_action,
+    workspace_icon,
+)
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 
 
@@ -1311,12 +1317,11 @@ class EasyConPanel(QWidget):
         output_layout.setContentsMargins(0, 0, 0, 0)
         output_title = QToolButton()
         self.output_toggle = output_title
+        output_title.setObjectName("EasyConDisclosure")
         output_title.setText("运行输出")
         output_title.setCheckable(True)
-        output_title.setArrowType(Qt.ArrowType.RightArrow)
-        output_title.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        configure_disclosure_button(output_title)
         output_title.toggled.connect(self.log_panel.setVisible)
-        output_title.toggled.connect(lambda checked: output_title.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
         output_layout.addWidget(output_title)
         output_layout.addStretch(1)
         complete_log_button = QPushButton("日志中心")

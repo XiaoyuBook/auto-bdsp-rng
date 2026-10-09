@@ -102,10 +102,19 @@ def capture(w, name, page, state, width, height, out):
         w.project_xs_config_scroll.verticalScrollBar().setValue(0)
     w.history_tab.meta_toggle.setChecked(name == "records-meta")
     w.history_tab.feed_toggle.setChecked(name == "records-feed")
+    w.auto_rng_tab.more_strategy_button.setChecked(name == "auto-strategies")
+    w.auto_rng_tab.runtime_details_toggle.setChecked(name == "auto-details")
+    w.auto_tid_rng_tab.runtime_details_toggle.setChecked(name == "tid-details")
+    w.auto_tid_rng_tab.seed_toggle.setChecked(name == "tid-seed")
+    if w.auto_rng_tab._runtime_script_editor_expanded != (name == "auto-scripts"):
+        w.auto_rng_tab.runtime_script_summary_toggle.click()
     if name.startswith("auto-"):
-        page.local_views.setCurrentIndex(int(name == "auto-runtime"))
+        page.local_views.setCurrentIndex(int(name in ("auto-runtime", "auto-details")))
+        page.config_panel.verticalScrollBar().setValue(0)
+        page.runtime_panel.verticalScrollBar().setValue(0)
     elif name.startswith("tid-"):
-        page.local_views.setCurrentIndex(int(name.startswith("tid-runtime")))
+        page.local_views.setCurrentIndex(int(name.startswith("tid-runtime") or name in ("tid-details", "tid-seed")))
+        page.runtime_scroll.verticalScrollBar().setValue(0)
     elif name.startswith("data"):
         w.query_toggle.setChecked(name != "data-results")
         if name != "data-results":
@@ -123,6 +132,10 @@ def capture(w, name, page, state, width, height, out):
     if name in ("seed-advanced", "seed-auto"):
         target = w.reidentify_1_pk_npc if name == "seed-advanced" else w.status_group
         w.project_xs_config_scroll.ensureWidgetVisible(target, 0, 8)
+        settle(w)
+    if name in ("auto-strategies", "auto-scripts"):
+        target = w.auto_rng_tab.more_strategy_button if name == "auto-strategies" else w.auto_rng_tab.runtime_script_card
+        w.auto_rng_tab.config_panel.ensureWidgetVisible(target, 0, 8)
         settle(w)
     if args.tid_columns_only:
         table = w.auto_tid_rng_tab.id_table
@@ -206,7 +219,9 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
             ("records", w.run_records_tab), ("details", w.run_records_tab),
             ("script-control", w.easycon_tab), ("script-library", w.easycon_tab), ("script-output", w.easycon_tab),
             ("records-list", w.run_records_tab), ("records-meta", w.run_records_tab), ("records-feed", w.run_records_tab),
-            ("seed-auto", w.project_xs_tab), ("seed-advanced", w.project_xs_tab)]
+            ("seed-auto", w.project_xs_tab), ("seed-advanced", w.project_xs_tab),
+            ("auto-strategies", w.auto_rng_tab), ("auto-scripts", w.auto_rng_tab), ("auto-details", w.auto_rng_tab),
+            ("tid-details", w.auto_tid_rng_tab), ("tid-seed", w.auto_tid_rng_tab)]
         if args.tid_columns_only:
             tid = w.auto_tid_rng_tab
             tid.apply_progress(AutoTidRngProgress(

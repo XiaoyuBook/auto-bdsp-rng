@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
+from auto_bdsp_rng.ui.workspace_controls import MenuToolButton
 
 from auto_bdsp_rng.ui.workspace_theme import ui_font_weight, ui_styles
 
@@ -455,7 +456,7 @@ class RunLogPanel(QWidget):
         for button in (self.copy_button, self.export_button):
             button.setFixedHeight(34)
             footer.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.more_button = QToolButton()
+        self.more_button = MenuToolButton()
         self.more_button.setText("更多")
         self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         more_menu = QMenu(self.more_button)

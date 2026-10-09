@@ -96,6 +96,88 @@ def workspace_icon(name: str, color: str = "#687480") -> QIcon:
     return QIcon(_LineIconEngine(name, color))
 
 
+def set_disclosure_state(
+    button: QToolButton,
+    expanded: bool,
+) -> None:
+    """Render a disclosure control with the shared, platform independent chevron."""
+    button.setArrowType(Qt.ArrowType.NoArrow)
+    button.setIcon(workspace_icon("chevron-down" if expanded else "chevron-right",
+                                  "#087C58" if expanded else "#687480"))
+    button.setIconSize(QSize(14, 14))
+    if button.property("expanded") != expanded:
+        button.setProperty("expanded", expanded)
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
+
+
+def configure_disclosure_button(button: QToolButton, *, compact: bool = False) -> None:
+    """Keep all disclosure surfaces and interaction states consistent."""
+    button.setProperty("disclosure", True)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    button.setStyleSheet(ui_styles("""
+        QToolButton[disclosure="true"] {
+            background: transparent; color: #64707D;
+            border: 1px solid transparent; border-radius: 6px;
+            min-height: 26px; padding: 0 6px;
+            font-size: 12px; font-weight: 400;
+        }
+        QToolButton[disclosure="true"]:hover {
+            background: #F0F6F3; color: #087C58;
+        }
+        QToolButton[disclosure="true"][expanded="true"] {
+            background: #EAF7F1; color: #087C58;
+        }
+        QToolButton[disclosure="true"]:pressed {
+            background: #DCEFE5;
+        }
+        QToolButton[disclosure="true"]:focus { border-color: #087C58; }
+        QToolButton[disclosure="true"]:disabled {
+            background: transparent; color: #97A1AB; border-color: transparent;
+        }
+    """ + ('QToolButton[disclosure="true"] { min-height: 22px; }' if compact else "")))
+    button.toggled.connect(lambda checked: set_disclosure_state(button, checked))
+    set_disclosure_state(button, button.isChecked())
+
+
+class MenuToolButton(QToolButton):
+    """A compact menu trigger with a reserved, centered chevron area."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("WorkspaceMenuButton")
+        self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedHeight(32)
+        self.setStyleSheet(ui_styles("""
+            QToolButton#WorkspaceMenuButton {
+                background: #FFFFFF; color: #52606D;
+                border: 1px solid #E0E5EB; border-radius: 7px;
+                min-height: 30px; max-height: 30px; padding: 0 26px 0 10px;
+                font-size: 12px; font-weight: 400;
+            }
+            QToolButton#WorkspaceMenuButton::menu-indicator { image: none; width: 0; }
+            QToolButton#WorkspaceMenuButton:hover { background: #F7F8FA; border-color: #B8C4CE; }
+            QToolButton#WorkspaceMenuButton:pressed { background: #EDF3F0; }
+            QToolButton#WorkspaceMenuButton:focus { border-color: #087C58; }
+            QToolButton#WorkspaceMenuButton:disabled {
+                background: #FAFBFA; color: #97A1AB; border-color: #EEF1EF;
+            }
+        """))
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QPainter(self)
+        mode = QIcon.Mode.Normal if self.isEnabled() else QIcon.Mode.Disabled
+        workspace_icon("chevron-down").paint(
+            painter, QRect(self.width() - 22, (self.height() - 14) // 2, 14, 14), mode=mode,
+        )
+
+
 class EmptyIllustration(QWidget):
     """Decorative vector artwork; never intercepts the underlying UI's input."""
 

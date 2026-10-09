@@ -7,8 +7,9 @@ from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QMenu, QPushButton, QTableView, QTableWidgetItem, QToolButton
 
+from auto_bdsp_rng.ui.workspace_controls import MenuToolButton
+
 IDENTITY_ROLE = Qt.ItemDataRole.UserRole + 42
-TABLE_TOOL_STYLE = "QToolButton { border: 1px solid #E0E5EB; border-radius: 7px; padding: 4px 10px; background: white; color: #52606D; } QToolButton:hover { background: #F2F4F7; }"
 
 
 class ResultItem(QTableWidgetItem):
@@ -38,10 +39,9 @@ class TableWorkbench(QObject):
         self.copy_button.clicked.connect(self.copy_selected)
         self.copy_button.setEnabled(False)
         self.copy_button.setFixedHeight(32)
-        self.tools_button = QToolButton(table)
+        self.tools_button = MenuToolButton(table)
         self.tools_button.setText("表格设置")
         self.tools_button.setFixedHeight(32)
-        self.tools_button.setStyleSheet(TABLE_TOOL_STYLE)
         self.tools_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.menu = QMenu(self.tools_button)
         self.tools_button.setMenu(self.menu)

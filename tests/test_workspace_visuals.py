@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, Qt
+from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, QTimer, Qt
 from PySide6.QtGui import QEnterEvent, QIcon
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QPushButton, QToolButton, QWidget
 
 from auto_bdsp_rng.data import get_static_encounters
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.workspace_controls import (
-    ConnectionDialog, PrimaryButton, PrimaryToolButton, SpeciesAvatar,
-    set_disconnect_action, workspace_icon,
+    ConnectionDialog, MenuToolButton, PrimaryButton, PrimaryToolButton, SpeciesAvatar,
+    configure_disclosure_button, set_disconnect_action, workspace_icon,
 )
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles
 
@@ -59,6 +59,54 @@ def test_animated_split_button_retains_real_menu_actions(app):
     app.processEvents()
     QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.actionGeometry(action).center())
     assert selected.count() == 1
+    button.close()
+    button.deleteLater()
+
+
+def test_disclosures_keep_native_keyboard_toggle_and_stable_geometry(app):
+    button = QToolButton()
+    button.setText("自动流程配置")
+    button.setCheckable(True)
+    configure_disclosure_button(button)
+    button.resize(button.sizeHint())
+    button.show()
+    app.processEvents()
+    original_size = button.size()
+    changes = QSignalSpy(button.toggled)
+    QTest.keyClick(button, Qt.Key.Key_Space)
+    assert button.isChecked() and changes.count() == 1
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+    assert not button.isChecked() and changes.count() == 2
+    assert button.size() == original_size
+    button.setEnabled(False)
+    QTest.keyClick(button, Qt.Key.Key_Space)
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+    assert changes.count() == 2
+    button.close()
+    button.deleteLater()
+
+
+@pytest.mark.parametrize("keyboard", [False, True])
+def test_compact_menu_button_opens_and_invokes_native_actions(app, keyboard):
+    button = MenuToolButton()
+    button.setText("更多")
+    menu = QMenu(button)
+    action = menu.addAction("复制全部结果")
+    button.setMenu(menu)
+    selected = QSignalSpy(action.triggered)
+    button.show()
+    app.processEvents()
+
+    def select_action():
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.actionGeometry(action).center())
+
+    QTimer.singleShot(0, select_action)
+    if keyboard:
+        QTest.keyClick(button, Qt.Key.Key_Space)
+    else:
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+    assert selected.count() == 1
+    assert button.height() == 32
     button.close()
     button.deleteLater()
 

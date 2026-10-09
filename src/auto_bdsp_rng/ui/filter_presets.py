@@ -2,17 +2,16 @@
 import json
 
 from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox, QToolButton
-from auto_bdsp_rng.ui.table_workbench import TABLE_TOOL_STYLE
+from auto_bdsp_rng.ui.workspace_controls import MenuToolButton
 
 
-class FilterPresetButton(QToolButton):
+class FilterPresetButton(MenuToolButton):
     def __init__(self, window):
         super().__init__(window)
         self.window = window
         self.settings = window._profile_settings
         self.setText("筛选方案")
         self.setFixedHeight(32)
-        self.setStyleSheet(TABLE_TOOL_STYLE)
         self.setToolTip("保存或恢复当前筛选条件；应用后点击生成。Seed、训练家及目标精灵保持当前选择。")
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.menu = QMenu(self)
