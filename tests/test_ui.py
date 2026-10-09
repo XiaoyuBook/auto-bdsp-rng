@@ -705,7 +705,8 @@ def test_project_xs_configuration_uses_shared_video_sidebar(
     assert not window.camera.isVisible()
     assert not window.display_percent.isVisible()
     assert all(not box.isVisible() for box in window.seed32_inputs)
-    assert [label.text() for label in window.seed_group.findChildren(QLabel)] == ["Seed0", "Seed1"]
+    assert [label.text() for label in window.seed_group.findChildren(QLabel)][:2] == ["Seed0", "Seed1"]
+    assert window.seed_group.parentWidget() is window.preview_label
     assert window.threshold.height() <= 32
     assert window.capture_button.height() <= 34
     assert isinstance(window.threshold, ChevronDoubleSpinBox)
@@ -785,9 +786,10 @@ def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
     assert layout.itemAtPosition(0, 1).widget() is window.seed_config_combo
     assert layout.itemAtPosition(1, 0).widget().text() == "校正配置"
     assert layout.itemAtPosition(1, 1).widget() is window.reidentify_config_combo
-    for status in (window.progress_label, window.progress_value,
-                   window.advances_label, window.advances_value):
-        assert status.parentWidget() is window.capture_status_strip
+    assert window.video_overlay.status_panel.isAncestorOf(window.progress_value)
+    assert window.video_overlay.status_panel.isAncestorOf(window.progress_label)
+    assert window.advances_value.parentWidget() is window.seed_group
+    assert window.advances_label.parentWidget() is window.seed_group
     assert window.reidentify_button.text() == "校正"
     assert window.reidentify_1_pk_npc.text() == "1 PK NPC 校正"
     assert window.status_group.maximumHeight() >= 148

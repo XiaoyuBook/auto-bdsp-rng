@@ -4,6 +4,7 @@ from auto_bdsp_rng.ui.static_result_items import StatDisplayMode, StatResultItem
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
 from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.video_info_overlay import VideoInfoOverlay
 from auto_bdsp_rng.notifications.qq_service import QQNotificationService
 from auto_bdsp_rng.ui.qq_notifications import QQNotificationDialog, notification_icon
 
@@ -101,6 +102,7 @@ from auto_bdsp_rng.blink_detection import (
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngPhase, AutoRngProgress, AutoRngSeedResult
 from auto_bdsp_rng.automation.auto_tid_rng import (
     AutoTidRngConfig,
+    AutoTidRngPhase,
     AutoTidRngRunner,
     AutoTidRngServices,
     AutoTidSeedResult,
@@ -1041,6 +1043,14 @@ class RoiPreviewLabel(QLabel):
         self._pixmap_rect = QRect()
         self._ocr_overlay_field: str | None = None
         self._ocr_overlay_region: OcrRegion | None = None
+        self.info_overlay: VideoInfoOverlay | None = None
+
+    def clear(self) -> None:
+        super().clear()
+        self._pixmap_rect = QRect()
+        if self.info_overlay is not None:
+            self.info_overlay.set_frame_rect(QRect())
+            self.info_overlay.set_match_score(None)
 
     def set_overlay_enabled(self, enabled: bool) -> None:
         """Toggle recognition overlays without changing the underlying frame."""
@@ -1055,12 +1065,16 @@ class RoiPreviewLabel(QLabel):
         self._image_width = image_width
         self._image_height = image_height
         self._pixmap_rect = QRect(pixmap_rect)
+        if self.info_overlay is not None:
+            self.info_overlay.set_frame_rect(pixmap_rect)
 
     def set_selection_enabled(self, enabled: bool) -> None:
         self._selection_enabled = enabled
         self._drag_start = None
         self._drag_current = None
         self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+        if self.info_overlay is not None:
+            self.info_overlay.set_selecting(enabled)
         self.update()
 
     def selection_enabled(self) -> bool:
@@ -1159,6 +1173,8 @@ class RoiPreviewLabel(QLabel):
 class _AspectRatioContainer(QWidget):
     """Keep the main capture preview at a stable display aspect ratio."""
 
+    geometryChanged = Signal()
+
     def __init__(self, ratio_width: int, ratio_height: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._ratio_width = max(1, int(ratio_width))
@@ -1189,6 +1205,7 @@ class _AspectRatioContainer(QWidget):
         target_height = self.heightForWidth(self.width())
         if self.height() != target_height:
             self.setFixedHeight(target_height)
+        self.geometryChanged.emit()
 
 
 class PictureInPicturePreview(QDialog):
@@ -2434,7 +2451,7 @@ class MainWindow(QMainWindow):
         self.progress_value = QLabel("0/0")
         self.progress_value.setObjectName("CaptureStatusValue")
         self.advances_label = QLabel("当前帧数")
-        self.advances_value = QLabel("0")
+        self.advances_value = QLabel("—")
         self.advances_value.setObjectName("CaptureStatusValue")
         self.timer_label = QLabel("Timer:")
         self.timer_value = QLabel("0")
@@ -2675,13 +2692,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(label, row, 0)
         layout.addWidget(widget, row, 1, 1, 3)
 
-    def _build_seed_group(self) -> QGroupBox:
-        group = QGroupBox("Seed")
-        group.setObjectName("CapturedSeedGroup")
+    def _build_seed_group(self) -> QFrame:
+        group = QFrame()
         layout = QGridLayout(group)
-        layout.setContentsMargins(10, 0, 10, 0)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
+        layout.setContentsMargins(7, 5, 7, 5)
+        layout.setHorizontalSpacing(5)
+        layout.setVerticalSpacing(3)
         self.seed32_inputs = [QLineEdit(group) for _ in range(4)]
         for box in self.seed32_inputs:
             box.setReadOnly(True)
@@ -2691,17 +2707,19 @@ class MainWindow(QMainWindow):
         self.seed64_outputs = [QLineEdit() for _ in range(2)]
         for output in self.seed64_outputs:
             output.setReadOnly(True)
-            output.setObjectName("Readonly")
-            output.setFixedHeight(26)
-            output.setMinimumWidth(0)
-            output.setPlaceholderText("等待捕捉")
+            output.setFixedHeight(16)
+            output.setPlaceholderText("—")
             output.setAccessibleName(f"捕获 Seed {self.seed64_outputs.index(output)}")
-            output.setFont(QFont("Cascadia Mono", 10))
+            font = QFont("Cascadia Mono")
+            font.setPixelSize(11)
+            output.setFont(font)
+            output.setFixedWidth(output.fontMetrics().horizontalAdvance("F" * 16) + 6)
+            output.setTextMargins(0, 0, 0, 0)
 
-        layout.addWidget(QLabel("Seed0"), 0, 0)
-        layout.addWidget(self.seed64_outputs[0], 0, 1, 1, 3)
-        layout.addWidget(QLabel("Seed1"), 1, 0)
-        layout.addWidget(self.seed64_outputs[1], 1, 1, 1, 3)
+        layout.addWidget(QLabel("Seed0"), 1, 0)
+        layout.addWidget(self.seed64_outputs[0], 1, 1)
+        layout.addWidget(QLabel("Seed1"), 2, 0)
+        layout.addWidget(self.seed64_outputs[1], 2, 1)
         return group
 
     def _build_rng_info_group(self) -> QGroupBox:
@@ -3125,11 +3143,11 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         self.monitor_splitter = WorkspaceSplit(
             self._profile_settings, "monitor-panels", breakpoint=0,
-            vertical=(400, 300), orientation=Qt.Orientation.Vertical,
+            vertical=(260, 440), orientation=Qt.Orientation.Vertical,
         )
         self.monitor_preview = self._build_preview_panel()
         self.monitor_preview_scroll = scroll_surface(self.monitor_preview)
-        self.monitor_preview_scroll.setMinimumHeight(210)
+        self.monitor_preview_scroll.setMinimumHeight(240)
         self.live_log_panel = LiveLogPanel(self._run_log_buffer)
         self.live_log_panel.expandRequested.connect(self._show_run_logs)
         self.monitor_splitter.addWidget(self.monitor_preview_scroll)
@@ -3138,7 +3156,14 @@ class MainWindow(QMainWindow):
         self.monitor_splitter.setStretchFactor(1, 1)
         self.monitor_splitter.restore_sizes()
         layout.addWidget(self.monitor_splitter)
+        self.preview_aspect_container.geometryChanged.connect(self._sync_monitor_preview_layout)
         return sidebar
+
+    def _sync_monitor_preview_layout(self) -> None:
+        available = self.monitor_splitter.height() - self.live_log_panel.minimumHeight() - self.monitor_splitter.handleWidth()
+        required = self.monitor_preview.minimumSizeHint().height()
+        self.monitor_preview_scroll.setMinimumHeight(max(210, min(required, available)))
+        self._refresh_preview_presentation()
 
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
@@ -3146,19 +3171,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(4)
-        self.capture_status_strip = QFrame()
-        self.capture_status_strip.setObjectName("CaptureStatusStrip")
-        self.capture_status_strip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        status_layout = QGridLayout(self.capture_status_strip)
-        status_layout.setContentsMargins(10, 6, 10, 6)
-        status_layout.setHorizontalSpacing(16)
-        status_layout.setVerticalSpacing(2)
-        status_layout.addWidget(self.advances_label, 0, 0)
-        status_layout.addWidget(self.advances_value, 1, 0)
-        status_layout.addWidget(self.progress_label, 0, 1)
-        status_layout.addWidget(self.progress_value, 1, 1)
-        status_layout.setColumnStretch(0, 1)
-        status_layout.setColumnStretch(1, 1)
+        self.seed_group.layout().addWidget(self.advances_label, 0, 0)
+        self.seed_group.layout().addWidget(self.advances_value, 0, 1)
         self.advances_value.setAccessibleName("视频当前 RNG 帧数")
         self.progress_value.setAccessibleName("视频眨眼捕捉进度")
         self.advances_value.setToolTip("当前 RNG 推进数（advance），不是视频帧率。")
@@ -3201,6 +3215,11 @@ class MainWindow(QMainWindow):
         self.preview_label.setMinimumSize(0, 0)
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.preview_label.setScaledContents(False)
+        self.video_overlay = VideoInfoOverlay(
+            self.preview_label, self.seed_group, self.seed64_outputs, self.progress_label,
+            self.progress_value, self.threshold,
+        )
+        self.preview_label.info_overlay = self.video_overlay
         aspect_layout.addWidget(self.preview_label)
         preview_layout.addWidget(self.preview_aspect_container, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.preview_group)
@@ -3214,8 +3233,6 @@ class MainWindow(QMainWindow):
         source_row.addWidget(self.monitor_source_status, 1)
         source_row.addWidget(self.monitor_frame_info)
         layout.addLayout(source_row)
-        layout.addWidget(self.capture_status_strip)
-        layout.addWidget(self.seed_group)
         layout.addStretch(1)
         return panel
 
@@ -3725,10 +3742,6 @@ class MainWindow(QMainWindow):
                 color: #626D79;
                 font-size: 12px;
             }
-            QLabel#CaptureStatusValue {
-                font-size: 16px;
-                font-weight: 500;
-            }
             QToolButton#CaptureAdvancedToggle {
                 background: transparent;
                 color: #52606D;
@@ -3775,25 +3788,10 @@ class MainWindow(QMainWindow):
                 color: #626D79;
                 font-size: 11px;
             }
-            QFrame#CaptureStatusStrip {
-                background: #F0F7F4;
-                border: 0;
-                border-radius: 8px;
-            }
-            QFrame#CaptureStatusStrip QLabel {
-                color: #64707D;
-                font-size: 12px;
-            }
-            QFrame#CaptureStatusStrip QLabel#CaptureStatusValue {
-                color: #087C58;
-                font-size: 22px;
-                font-weight: 500;
-            }
             QWidget#PreviewAspectContainer {
                 background: transparent;
             }
             QGroupBox#CaptureConfigGroup,
-            QGroupBox#CapturedSeedGroup,
             QGroupBox#CapturePreviewGroup {
                 border: 0;
                 border-radius: 0;
@@ -4438,6 +4436,7 @@ class MainWindow(QMainWindow):
             self.title_label.setText(self.title_label.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, 175) if compact else title)
             self.title_label.setToolTip(APP_TITLE)
             self._refresh_navigation_space()
+            QTimer.singleShot(0, self, self._sync_monitor_preview_layout)
 
     def _refresh_navigation_space(self, *_args) -> None:
         self.navigation_status.setVisible(self.tabs.width() >= 960)
@@ -4745,7 +4744,6 @@ class MainWindow(QMainWindow):
         self.capture_device_label.setText("采集设备" if self.lang == "zh" else "Capture Device")
         self.capture_api_label.setText("采集方式" if self.lang == "zh" else "Capture API")
         self.capture_group.setTitle(self._text("capture"))
-        self.seed_group.setTitle(self._text("seed"))
         self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
         self.lead_label.setText("队首" if self.lang == "zh" else "Lead")
         self.lead_combo.set_language(self.lang)
@@ -4776,7 +4774,8 @@ class MainWindow(QMainWindow):
         self.show_stats_check.setText("显示能力值" if self.lang == "zh" else "Show Stats")
         self.iv_calculator_button.setText("个体值计算器" if self.lang == "zh" else "IV Calculator")
         self._refresh_result_columns()
-        self._update_auto_rng_header(advances=self._tracked_advances)
+        if any(box.text() for box in self.seed64_outputs):
+            self._update_auto_rng_header(advances=self._tracked_advances)
         if not self._preview_timer.isActive():
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
@@ -4886,6 +4885,17 @@ class MainWindow(QMainWindow):
             self._display_tracked_advances(int(current_advances))
         advances = self._tracked_advances
         normalized_phase = str(phase_text).removeprefix("状态：").strip()
+        capturing = normalized_phase in {
+            AutoRngPhase.CAPTURE_SEED.value, AutoRngPhase.REIDENTIFY.value,
+            AutoTidRngPhase.CAPTURE_TIDSID.value,
+        }
+        if capturing and normalized_phase != self._header_phase_text:
+            self.video_overlay.begin_capture(automatic=True)
+        elif not capturing and (
+            normalized_phase != self._header_phase_text or normalized_phase in _AUTO_HEADER_TERMINAL_PHASES
+        ):
+            self.video_overlay.finish_capture()
+        self.video_overlay.set_automatic(normalized_phase not in _AUTO_HEADER_TERMINAL_PHASES)
         header_loop_index = 0 if normalized_phase in _AUTO_HEADER_TERMINAL_PHASES else loop_index
         self._update_auto_rng_header(
             loop_index=header_loop_index,
@@ -5137,6 +5147,7 @@ class MainWindow(QMainWindow):
         self.preview_label.clear()
         self.preview_label.setText(self._text("no_preview"))
         self.monitor_frame_info.setText("等待视频画面")
+        self.video_overlay.finish_capture()
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
 
@@ -6870,6 +6881,7 @@ class MainWindow(QMainWindow):
                     )
         annotated_copy = getattr(annotated, "copy", None)
         self._latest_annotated_preview_frame = annotated_copy() if callable(annotated_copy) else annotated
+        self.video_overlay.set_match_score(None if preview is None else preview.match_score)
         self._refresh_preview_presentation()
         if self._picture_in_picture is not None and self._picture_in_picture.isVisible():
             self._sync_picture_in_picture_frame()
@@ -6881,10 +6893,8 @@ class MainWindow(QMainWindow):
                 resolution += "（放大投影窗口可提高清晰度）"
         score = "" if preview is None else f" | score {preview.match_score:.3f}"
         height, width = frame.shape[:2]
-        self.monitor_frame_info.setText(
-            f"{width} × {height}" + (f" · 匹配 {preview.match_score:.3f}" if preview is not None else "")
-        )
-        self.monitor_frame_info.setToolTip("视频分辨率与眼睛模板匹配分数")
+        self.monitor_frame_info.setText(f"{width} × {height}")
+        self.monitor_frame_info.setToolTip("视频分辨率")
         if config_error is not None:
             annotation_status = " | 识别配置无效，显示原始画面"
         else:
@@ -7511,6 +7521,9 @@ class MainWindow(QMainWindow):
         return "已完成"
 
     def _handle_auto_rng_run_state_changed(self, running: bool) -> None:
+        self.video_overlay.set_automatic(running)
+        if not running:
+            self.video_overlay.finish_capture()
         if running:
             self._qq_task_details["自动定点"] = ""
             if self._active_auto_rng_run_id is not None:
@@ -7543,6 +7556,9 @@ class MainWindow(QMainWindow):
         self._active_auto_rng_round_id = None
 
     def _handle_auto_tid_run_state_changed(self, running: bool) -> None:
+        self.video_overlay.set_automatic(running)
+        if not running:
+            self.video_overlay.finish_capture()
         if running:
             self._qq_task_details["自动 TID"] = ""
             if self._active_auto_tid_run_id is not None:
@@ -7629,9 +7645,12 @@ class MainWindow(QMainWindow):
             if hasattr(self, "auto_tid_rng_tab"):
                 # The runner generates results from its frozen configuration.
                 self.auto_tid_rng_tab.set_tid_seed(seed_pair, generate=False)
+            self._display_tracked_advances(0)
+            self.video_overlay.finish_capture(success=True)
 
         def capture_tidsid_seed_service() -> AutoTidSeedResult:
             self._capture_cancel.clear()
+            self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
 
             def store_frame(frame: object) -> None:
                 self.autoCaptureFrameChanged.emit(frame)
@@ -7891,7 +7910,7 @@ class MainWindow(QMainWindow):
             self._display_frame(frame)
 
     def _handle_auto_capture_progress(self, done: int, total: int) -> None:
-        self.progress_value.setText(f"{done}/{total}")
+        self.video_overlay.set_capture_progress(done, total, automatic=True)
         for panel in (self.auto_rng_tab, self.auto_tid_rng_tab):
             if panel._run_state_active:
                 panel.runtime_insights.capture_signal(done, total)
@@ -7941,6 +7960,7 @@ class MainWindow(QMainWindow):
             self._sync_seed64_from_state32()
             self._sync_bdsp_data_from_auto_rng(state.to_seed_pair64())
         self._start_auto_advance_tracking(seed_result)
+        self.video_overlay.finish_capture(success=True)
 
     def _state32_from_auto_seed_result(self, seed_result: AutoRngSeedResult) -> SeedState32:
         seed = seed_result.seed
@@ -8174,6 +8194,7 @@ class MainWindow(QMainWindow):
             )
 
         def capture_seed_service() -> AutoRngSeedResult:
+            self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
             self._capture_cancel.clear()
 
             def store_frame(frame: object) -> None:
@@ -8229,6 +8250,7 @@ class MainWindow(QMainWindow):
 
         def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             self._capture_cancel.clear()
+            self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
             source_config = exit_tracking_config if seed_result.after_exit_reseed else tracking_config
             source_npc = source_config.npc
 
@@ -8365,6 +8387,7 @@ class MainWindow(QMainWindow):
 
         def reidentify_exit_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             self._capture_cancel.clear()
+            self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
 
             def store_frame(frame: object) -> None:
                 self.autoCaptureFrameChanged.emit(frame)
@@ -9343,7 +9366,7 @@ class MainWindow(QMainWindow):
         self._capture_progress = (0, DEFAULT_BLINK_COUNT)
         with self._capture_lock:
             self._capture_frame = None
-        self.progress_value.setText(f"0/{DEFAULT_BLINK_COUNT}")
+        self.video_overlay.set_capture_progress(0, DEFAULT_BLINK_COUNT)
         self.capture_button.setText(self._text("stop_capture"))
         self.reidentify_button.setEnabled(False)
         self.tidsid_button.setEnabled(False)
@@ -9427,7 +9450,7 @@ class MainWindow(QMainWindow):
         self._capture_progress = (0, reidentify_blink_count)
         with self._capture_lock:
             self._capture_frame = None
-        self.progress_value.setText(f"0/{reidentify_blink_count}")
+        self.video_overlay.set_capture_progress(0, reidentify_blink_count)
         self.capture_button.setText(self._text("stop_capture"))
         self.tidsid_button.setEnabled(False)
         self.statusBar().showMessage(f"Capturing {reidentify_blink_count} blinks...")
@@ -9506,7 +9529,7 @@ class MainWindow(QMainWindow):
         self._capture_progress = (0, config.capture.blink_count)
         with self._capture_lock:
             self._capture_frame = None
-        self.progress_value.setText(f"0/{config.capture.blink_count}")
+        self.video_overlay.set_capture_progress(0, config.capture.blink_count)
         self.capture_button.setText(self._text("stop_capture"))
         self.statusBar().showMessage(f"Capturing {config.capture.blink_count} Pokemon blinks...")
         self._write_run_log(
@@ -9561,11 +9584,12 @@ class MainWindow(QMainWindow):
                 self._refresh_preview_presentation()
             else:
                 self._display_frame(frame)
-        self.progress_value.setText(f"{done}/{total}")
+        self.video_overlay.set_capture_progress(done, total)
         if self._is_capturing():
             return
 
         self._capture_timer.stop()
+        self.video_overlay.finish_capture()
         thread = self._capture_thread
         self._capture_thread = None
         if thread is not None:
@@ -9612,6 +9636,7 @@ class MainWindow(QMainWindow):
                 box.setText(text)
             self._sync_seed64_from_state32()
         self.progress_value.setText(f"{total}/{total}")
+        self.video_overlay.finish_capture(success=True)
         initial_advances = getattr(result, "advances", 0) if self._capture_mode == "reidentify" else 0
         if self._capture_mode == "tidsid":
             self.auto_tid_rng_tab.set_tid_seed(result.state)
