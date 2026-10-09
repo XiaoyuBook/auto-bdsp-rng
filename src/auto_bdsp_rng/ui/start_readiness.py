@@ -404,9 +404,10 @@ class StartReadinessController(QObject):
                 if panel is w.auto_rng_tab:
                     panel._runtime_script_editor_expanded = True
                     panel._set_runtime_script_summary_visible(True)
-                    panel.config_panel.ensureWidgetVisible(panel.script_group)
                     missing = panel._missing_script_fields()
                     focus = missing[0][0] if missing else panel.seed_script_combo
+                    panel.config_groups.reveal(focus)
+                    panel.config_panel.ensureWidgetVisible(focus)
                 else:
                     panel.script_toggle.setChecked(True)
                     panel._set_scripts_expanded(True)

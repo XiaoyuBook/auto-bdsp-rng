@@ -645,11 +645,11 @@ def test_auto_tid_configuration_and_scripts_share_a_narrow_settings_view(app, tm
     assert top_controls is not None
     assert panel.frame_threshold.parentWidget() is top_controls
     assert panel.delay.parentWidget() is top_controls
-    assert panel.seed_script_picker.parentWidget() is panel.script_fields
-    assert panel.name_script_picker.parentWidget() is panel.script_fields
+    assert panel.script_fields.isAncestorOf(panel.seed_script_picker)
+    assert panel.script_fields.isAncestorOf(panel.name_script_picker)
     assert panel.seed_script_combo.parentWidget() is panel.seed_script_picker
     assert panel.name_script_combo.parentWidget() is panel.name_script_picker
-    assert panel.refresh_scripts_button.parentWidget() is panel.script_fields
+    assert panel.refresh_scripts_button.parentWidget() is panel.script_header
     assert panel.seed_script_combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     assert panel.name_script_combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     panel.resize(430, 600)
@@ -659,14 +659,13 @@ def test_auto_tid_configuration_and_scripts_share_a_narrow_settings_view(app, tm
     assert panel.config_panel.isAncestorOf(panel.script_fields)
     assert panel.script_fields.isVisible()
     assert panel.config_scroll.horizontalScrollBar().maximum() == 0
-    panel.script_toggle.click()
-    app.processEvents()
-    assert panel.script_fields.isHidden()
-    panel.script_toggle.click()
+    assert panel.script_toggle.isHidden()
     panel.config_scroll.ensureWidgetVisible(panel.name_script_combo)
     app.processEvents()
     assert panel.script_fields.isVisible()
-    assert panel.seed_script_picker.geometry().bottom() < panel.name_script_picker.geometry().top()
+    seed_row = panel.script_rows[panel.seed_script_combo]
+    name_row = panel.script_rows[panel.name_script_combo]
+    assert not seed_row.geometry().intersects(name_row.geometry())
     original_delay = panel.delay.value()
     panel.local_views.setCurrentIndex(1)
     assert panel.runtime_scroll.isVisible()

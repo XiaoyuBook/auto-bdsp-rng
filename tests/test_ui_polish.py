@@ -13,7 +13,7 @@ from auto_bdsp_rng.automation.auto_rng.models import AutoRngPhase, AutoRngProgre
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngProgress
 from auto_bdsp_rng.gen8_id import IDState8
 from auto_bdsp_rng.rng_core import SeedPair64
-from auto_bdsp_rng.ui import main_window as mw
+from auto_bdsp_rng.ui import auto_rng_panel, auto_tid_rng_panel, main_window as mw
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
 
@@ -29,6 +29,10 @@ def wait(app, condition):
 @pytest.fixture
 def window(monkeypatch, tmp_path):
     # Explicit INI files remain inside pytest's isolated run directory.
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'offscreen')
+    for module, name in ((auto_rng_panel, 'auto'), (auto_tid_rng_panel, 'tid')):
+        monkeypatch.setattr(module, 'QSettings', lambda *args, n=name: QSettings(
+            str(tmp_path / f'{n}.ini'), QSettings.Format.IniFormat))
     from tests.test_easycon_panel import FakeNativeBackend, UnsupportedKeyboardHookFactory
     original = mw.EasyConPanel
     monkeypatch.setattr(mw, 'EasyConPanel', lambda *a, **kw: original(
@@ -248,13 +252,11 @@ def test_tid_targets_two_rows_alignment_scroll_and_delete(window, count):
         assert badge.y() >= inputs.y() + p.target_input.height()
     assert p.frame_threshold.mapTo(w, QPoint()).y() < p.delay.mapTo(w, QPoint()).y()
     assert p.script_fields.isVisible()
-    p.script_toggle.click()
-    app.processEvents()
-    assert p.script_fields.isHidden()
-    p.script_toggle.click()
-    app.processEvents()
-    assert p.script_fields.isVisible()
-    assert p.seed_script_combo.mapTo(w, QPoint()).y() < p.name_script_combo.mapTo(w, QPoint()).y()
+    assert p.script_toggle.isHidden()
+    assert p.config_groups.pages['basic'].isAncestorOf(p.script_fields)
+    rows = list(p.script_rows.values())
+    for index, row in enumerate(rows):
+        assert all(not row.geometry().intersects(other.geometry()) for other in rows[index + 1:])
     assert p.config_scroll.horizontalScrollBar().maximum() == 0
     if count == 50:
         rects = [p.target_list.visualItemRect(p.target_list.item(i)) for i in range(count)]

@@ -1937,6 +1937,13 @@ class MainWindow(QMainWindow):
         )
         self.auto_rng_tab = AutoRngPanel(run_log_sink=self._run_log_sink("自动定点"))
         self.auto_tid_rng_tab = AutoTidRngPanel(run_log_sink=self._run_log_sink("自动 TID"))
+        for binding, source in (
+            (self.auto_rng_tab.seed_config_binding, self.seed_config_combo),
+            (self.auto_tid_rng_tab.seed_config_binding, self.seed_config_combo),
+            (self.auto_rng_tab.reidentify_config_binding, self.reidentify_config_combo),
+        ):
+            binding.bind_source(source)
+            binding.editRequested.connect(self._edit_automation_config)
         self.history_tab = HistoryPanel()
         self.run_records_tab = RunRecordsPanel(
             self.history_tab,
@@ -1960,6 +1967,7 @@ class MainWindow(QMainWindow):
         self.auto_rng_tab.runStateChanged.connect(self._handle_auto_rng_run_state_changed)
         self.auto_rng_tab.ivCalculatorRequested.connect(self.open_iv_calculator)
         self.auto_rng_tab.captureInfoRequested.connect(self.open_ocr_settings)
+        self.auto_rng_tab.shinyCalibrationRequested.connect(self.calibrate_shiny_threshold)
         self.auto_rng_tab.captureLog.connect(self.auto_rng_tab.add_log)
         self.auto_rng_tab.captureError.connect(
             lambda message: self.auto_rng_tab.add_log(message, level="ERROR")
@@ -2382,8 +2390,6 @@ class MainWindow(QMainWindow):
         config_layout = QVBoxLayout(configuration)
         config_layout.setContentsMargins(0, 0, 4, 4)
         config_layout.setSpacing(16)
-        config_layout.addWidget(self.capture_recognition_group)
-        config_layout.addWidget(self.capture_timing_group)
         self.auto_capture_config_toggle = QToolButton()
         self.auto_capture_config_toggle.setObjectName("SeedSectionToggle")
         self.auto_capture_config_toggle.setText("自动流程配置")
@@ -2400,9 +2406,12 @@ class MainWindow(QMainWindow):
                 "收起自动流程配置" if checked else "展开自动流程配置"
             )
         )
-        self.status_group.hide()
-        config_layout.addWidget(self.auto_capture_config_toggle)
+        self.auto_capture_config_toggle.setChecked(True)
+        self.auto_capture_config_toggle.setParent(configuration)
+        self.auto_capture_config_toggle.hide()
         config_layout.addWidget(self.status_group)
+        config_layout.addWidget(self.capture_recognition_group)
+        config_layout.addWidget(self.capture_timing_group)
         config_layout.addStretch(1)
         self.project_xs_config_scroll = scroll_surface(configuration)
         layout.addWidget(self.project_xs_config_scroll, 1)
@@ -2486,10 +2495,11 @@ class MainWindow(QMainWindow):
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox("自动流程配置")
         group.setObjectName("ProjectXsStatusGroup")
+        group.setProperty("seedSection", True)
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         outer = QGridLayout(group)
-        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setContentsMargins(0, 14, 0, 0)
         outer.setHorizontalSpacing(8)
         outer.setVerticalSpacing(10)
 
@@ -2524,6 +2534,17 @@ class MainWindow(QMainWindow):
         self.reidentify_config_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.seed_config_combo.setToolTip("自动定点和自动 TID 流程捕捉 Seed 时使用的配置。")
         self.reidentify_config_combo.setToolTip("自动定点流程校正时使用的配置。")
+        self.seed_config_edit_button = QToolButton()
+        self.reidentify_config_edit_button = QToolButton()
+        for button, combo, title in (
+            (self.seed_config_edit_button, self.seed_config_combo, "Seed 配置"),
+            (self.reidentify_config_edit_button, self.reidentify_config_combo, "校正配置"),
+        ):
+            button.setIcon(workspace_icon("square-pen", "#64707D"))
+            button.setFixedSize(32, 32)
+            button.setAccessibleName("编辑自动流程" + title)
+            button.setToolTip("在本页编辑同一份配置")
+            button.clicked.connect(lambda _checked=False, selected=combo: self._edit_automation_config(str(selected.currentData() or "")))
         self.refresh_seed_configs_button = QPushButton("刷新")
         self.refresh_seed_configs_button.setFixedHeight(32)
         self.refresh_seed_configs_button.setFixedWidth(80)
@@ -2532,12 +2553,14 @@ class MainWindow(QMainWindow):
 
         outer.addWidget(QLabel("Seed 配置"), 0, 0)
         outer.addWidget(self.seed_config_combo, 0, 1)
+        outer.addWidget(self.seed_config_edit_button, 0, 2)
         outer.addWidget(QLabel("校正配置"), 1, 0)
         outer.addWidget(self.reidentify_config_combo, 1, 1)
-        note = QLabel("用于自动定点与自动 TID；手动捕捉与校正使用上方参数。")
+        outer.addWidget(self.reidentify_config_edit_button, 1, 2)
+        note = QLabel("用于自动定点与自动 TID；手动捕捉与校正使用当前编辑配置。")
         note.setObjectName("WorkspaceHint")
         note.setWordWrap(True)
-        outer.addWidget(note, 2, 0, 1, 2)
+        outer.addWidget(note, 2, 0, 1, 3)
         outer.setColumnMinimumWidth(0, 66)
         outer.setColumnStretch(1, 1)
         return group
@@ -3876,17 +3899,6 @@ class MainWindow(QMainWindow):
                 font-size: 15px;
                 font-weight: 500;
             }
-            QGroupBox#ProjectXsStatusGroup {
-                background: #F8FAF9;
-                border: 0;
-                border-radius: 7px;
-                margin-top: 0;
-                padding: 0;
-            }
-            QGroupBox#ProjectXsStatusGroup::title {
-                color: transparent;
-                padding: 0;
-            }
             QGroupBox#CapturePreviewGroup {
                 margin-top: 0;
                 padding: 0;
@@ -5053,6 +5065,34 @@ class MainWindow(QMainWindow):
             self._populate_project_xs_combo(self.reidentify_config_combo, configs, previous_reidentify)
         self._load_config_to_form(self.config_combo.currentText())
 
+        self._refresh_task_config_bindings()
+
+    def _refresh_task_config_bindings(self) -> None:
+        for panel_name, binding_names in (
+            ("auto_rng_tab", ("seed_config_binding", "reidentify_config_binding")),
+            ("auto_tid_rng_tab", ("seed_config_binding",)),
+        ):
+            panel = getattr(self, panel_name, None)
+            if panel is not None:
+                for name in binding_names:
+                    getattr(panel, name).refresh()
+        for button, source in ((self.seed_config_edit_button, self.seed_config_combo),
+                               (self.reidentify_config_edit_button, self.reidentify_config_combo)):
+            button.setEnabled(bool(source.currentData()))
+
+    def _edit_automation_config(self, path: str) -> None:
+        if not path:
+            return
+        if self._is_capturing() or self._selection_mode is not None:
+            self.statusBar().showMessage("请先结束捕捉或框选，再切换编辑配置。")
+            return
+        index = self.config_combo.findData(path)
+        if index < 0:
+            self.config_combo.addItem(Path(path).name, path)
+            index = self.config_combo.count() - 1
+        self.config_combo.setCurrentIndex(index)
+        self.tabs.setCurrentWidget(self.project_xs_tab)
+
     def _populate_project_xs_combo(self, combo: QComboBox, configs: list[Path], previous: object | None) -> None:
         combo.blockSignals(True)
         combo.clear()
@@ -5099,6 +5139,7 @@ class MainWindow(QMainWindow):
             if combo.findData(str(output)) < 0:
                 combo.addItem(output.name, str(output))
         self.config_combo.setCurrentIndex(self.config_combo.findData(str(output)))
+        self._refresh_task_config_bindings()
         self.statusBar().showMessage(f"已新增配置：{output.name}")
 
     def _selected_config_path(self) -> str:
@@ -6537,9 +6578,8 @@ class MainWindow(QMainWindow):
         if self._shiny_calibration_worker is not None:
             return
         auto_rng_active = self.auto_rng_tab._runner_thread is not None
-        self.calibrate_shiny_threshold_button.setEnabled(
-            not auto_rng_active and not self._ocr_activity_running()
-        )
+        for button in (self.calibrate_shiny_threshold_button, self.auto_rng_tab.shiny_calibration_button):
+            button.setEnabled(not auto_rng_active and not self._ocr_activity_running())
 
     def _request_ocr_region_recognition(self, field: str, region: object) -> None:
         configured_region = region if isinstance(region, OcrRegion) else None
@@ -7248,7 +7288,8 @@ class MainWindow(QMainWindow):
         self._shiny_calibration_thread = thread
         if self._ocr_settings_dialog is not None:
             self._ocr_settings_dialog.set_automation_active(True)
-        self.calibrate_shiny_threshold_button.setText("停止校准")
+        for button in (self.calibrate_shiny_threshold_button, self.auto_rng_tab.shiny_calibration_button):
+            button.setText("停止校准")
         event_text = "去吧/上吧 -> 战斗按钮出现" if is_starter else "出现了！ -> 去吧/上吧"
         self.auto_rng_tab.captureLog.emit(f"[闪光判定校准] 开始监控 {event_text}")
         self.statusBar().showMessage(f"正在后台监控 {event_text}...")
@@ -7257,7 +7298,8 @@ class MainWindow(QMainWindow):
     def _stop_shiny_threshold_calibration(self) -> None:
         if self._shiny_calibration_worker is None:
             return
-        self.calibrate_shiny_threshold_button.setEnabled(False)
+        for button in (self.calibrate_shiny_threshold_button, self.auto_rng_tab.shiny_calibration_button):
+            button.setEnabled(False)
         self.auto_rng_tab.captureLog.emit("[闪光判定校准] 正在停止...")
         self.statusBar().showMessage("正在停止闪光判定校准...")
         self._shiny_calibration_worker.stop()
@@ -7269,7 +7311,8 @@ class MainWindow(QMainWindow):
         if self._ocr_settings_dialog is not None:
             self._ocr_settings_dialog.set_automation_active(auto_rng_active)
         self._refresh_shiny_calibration_button_state()
-        self.calibrate_shiny_threshold_button.setText("校准闪光判定")
+        for button in (self.calibrate_shiny_threshold_button, self.auto_rng_tab.shiny_calibration_button):
+            button.setText("校准闪光判定")
 
     def _shiny_threshold_calibration_finished(self, interval_seconds: float) -> None:
         self._reset_shiny_threshold_calibration()

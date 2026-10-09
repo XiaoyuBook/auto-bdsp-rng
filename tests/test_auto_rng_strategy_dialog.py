@@ -183,7 +183,7 @@ def test_strategy_button_replaces_main_form_reserve_frames_row(app, tmp_path):
     sync_row, _ = form.getWidgetPosition(panel.sync_field)
     reverse_row, _ = form.getWidgetPosition(panel.reverse_field)
 
-    assert panel.strategy_settings_button.text() == "设置"
+    assert panel.strategy_settings_button.text() == "校正与补救设置"
     assert panel.strategy_settings_button.objectName() == "SecondaryButton"
     assert panel.strategy_settings_button.size().width() == 180
     assert panel.strategy_settings_button.size().height() == 32
@@ -192,11 +192,10 @@ def test_strategy_button_replaces_main_form_reserve_frames_row(app, tmp_path):
     assert shiny_row < sync_row < reverse_row < button_row
     assert form.labelForField(panel.strategy_settings_button).text() == "校正策略"
     assert form.indexOf(panel.reseeding_threshold) == -1
-    assert panel.shiny_threshold_seconds.isHidden()
-    panel.more_strategy_button.setChecked(True)
-    assert not panel.shiny_threshold_seconds.isHidden()
-    assert not panel.sync_field.isHidden()
-    assert not panel.reverse_field.isHidden()
+    assert panel.config_groups.pages["shiny"].isAncestorOf(panel.shiny_threshold_seconds)
+    assert panel.config_groups.pages["shiny"].isAncestorOf(panel.reverse_field)
+    assert panel.config_groups.pages["continuation"].isAncestorOf(panel.sync_field)
+    assert panel.config_groups.pages["transition"].isAncestorOf(panel.strategy_settings_button)
 
 
 def test_strategy_numeric_fields_use_c_locale_and_qt_integer_limit(app, tmp_path):

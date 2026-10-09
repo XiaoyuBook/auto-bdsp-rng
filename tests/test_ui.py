@@ -3250,6 +3250,9 @@ def test_shiny_threshold_calibration_rejects_concurrent_ocr_activity(app, monkey
     window.calibrate_shiny_threshold()
 
     assert window._shiny_calibration_worker is None
+    window._refresh_shiny_calibration_button_state()
+    assert not window.calibrate_shiny_threshold_button.isEnabled()
+    assert not window.auto_rng_tab.shiny_calibration_button.isEnabled()
     assert warnings == [
         (
             "OCR 正在使用",
@@ -3258,7 +3261,8 @@ def test_shiny_threshold_calibration_rejects_concurrent_ocr_activity(app, monkey
     ]
 
 
-def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app, monkeypatch):
+@pytest.mark.parametrize("use_task_button", [False, True])
+def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app, monkeypatch, use_task_button):
     window = MainWindow()
     cursor_states: list[bool] = []
     shown: list[float] = []
@@ -3272,12 +3276,14 @@ def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app,
     monkeypatch.setattr(window, "_show_shiny_threshold_dialog", lambda interval: shown.append(interval))
 
     started_at = time.monotonic()
-    window.calibrate_shiny_threshold()
+    button = window.auto_rng_tab.shiny_calibration_button if use_task_button else window.calibrate_shiny_threshold_button
+    button.click()
     elapsed = time.monotonic() - started_at
 
     assert elapsed < 0.1
     assert "[闪光判定校准] 开始监控" in window.auto_rng_tab.log_view.toPlainText()
     assert window.calibrate_shiny_threshold_button.text() == "停止校准"
+    assert window.auto_rng_tab.shiny_calibration_button.text() == "停止校准"
     for _ in range(20):
         if shown:
             break
@@ -3285,6 +3291,7 @@ def test_shiny_threshold_calibration_runs_in_background_without_wait_cursor(app,
     assert cursor_states == [False]
     assert shown == [2.5]
     assert window.calibrate_shiny_threshold_button.text() == "校准闪光判定"
+    assert window.auto_rng_tab.shiny_calibration_button.text() == "校准闪光判定"
 
 
 def test_starter_shiny_threshold_calibration_uses_two_stage_regions(app, monkeypatch):
@@ -3604,11 +3611,13 @@ def test_auto_rng_page_uses_compact_toolbar_and_resizable_left_sidebar(app, tmp_
     assert target_tags is not None
     assert target_tags.parentWidget() is panel.target_name_label.parentWidget()
     config_layout = panel.config_contents.layout()
-    assert config_layout.itemAt(3).widget() is panel.runtime_script_card
-    assert config_layout.itemAt(4).widget().objectName() == "ConfigFooter"
-    assert config_layout.itemAt(5).spacerItem() is not None
-    assert panel.more_strategy_button.isCheckable()
-    assert panel.shiny_threshold_seconds.isHidden()
+    assert panel.task_config_card.isAncestorOf(panel.config_groups)
+    assert panel.config_groups.pages["basic"].isAncestorOf(panel.script_group)
+    assert panel.config_groups.pages["shiny"].isAncestorOf(panel.shiny_threshold_seconds)
+    assert config_layout.itemAt(config_layout.count() - 1).spacerItem() is not None
+    assert panel.runtime_script_card.isHidden()
+    assert panel.config_footer.isHidden()
+    assert panel.more_strategy_button.isHidden()
     assert panel.refresh_scripts_button.text() == "刷新"
     assert panel.refresh_scripts_button.toolTip() == "刷新脚本列表"
     assert not any(button.text() == "参数预览" for button in panel.findChildren(QPushButton))
@@ -3672,12 +3681,13 @@ def test_auto_rng_missing_script_shortcut_reveals_and_focuses_field(app, tmp_pat
     assert panel.escape_script_combo.hasFocus()
 
 
-def test_auto_rng_progress_preserves_manual_script_expansion_and_stop_priority(app, tmp_path):
+def test_auto_rng_progress_preserves_selected_configuration_group_and_stop_priority(app, tmp_path):
     panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
+    panel.config_groups.select_group("transition")
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.CAPTURE_SEED))
-    assert panel.script_group.isHidden()
-    panel.runtime_script_summary_toggle.click()
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.SEARCH_TARGET))
+    assert panel.config_groups.stack.currentWidget() is panel.config_groups.pages["transition"]
+    panel.config_groups.select_group("basic")
     assert not panel.script_group.isHidden()
     panel.set_preparing(True)
     assert panel.toolbar_status.text() == "正在准备 · 请稍候"
@@ -3726,7 +3736,8 @@ def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(a
         assert position.y() + widget.height() <= viewport.height()
 
     within_view(panel.runtime_card)
-    assert panel.config_panel.isAncestorOf(panel.runtime_script_card)
+    assert panel.config_panel.isAncestorOf(panel.config_groups)
+    assert panel.config_panel.isAncestorOf(panel.script_group)
     within_view(panel.target_summary_group)
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FINAL_WAIT))
     panel.set_candidate_targets([
@@ -3742,37 +3753,40 @@ def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(a
     panel.candidate_table.setFocus()
     QTest.keyClick(panel.candidate_table, Qt.Key.Key_PageDown)
     assert panel.candidate_table.verticalScrollBar().value() > 0
-    panel.runtime_script_summary_toggle.click()
+    panel.config_groups.select_group("continuation")
     app.processEvents()
     within_view(panel.candidate_table)
 
 
-def test_auto_rng_advanced_strategies_scroll_inside_fixed_sidebar(app, tmp_path):
+def test_auto_rng_configuration_groups_scroll_inside_fixed_sidebar(app, tmp_path):
     panel = AutoRngPanel(
         script_dir=tmp_path,
         settings=_auto_rng_settings(tmp_path),
     )
     panel.resize(1126, 700)
     panel.show()
-    panel.more_strategy_button.setChecked(True)
     app.processEvents()
 
-    scroll_bar = panel.config_panel.verticalScrollBar()
     assert panel.config_panel.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert panel.config_contents.minimumSizeHint().width() <= panel.config_panel.viewport().width()
-    for field in (
-        panel.shiny_threshold_seconds,
-        panel.sync_field,
-        panel.reverse_field,
-        panel.strategy_settings_button,
+    for group, field in (
+        ("basic", panel.seed_script_combo),
+        ("shiny", panel.reverse_field),
+        ("transition", panel.strategy_settings_button),
+        ("continuation", panel.sync_field),
     ):
-        assert not field.isHidden()
+        panel.config_groups.select_group(group)
+        app.processEvents()
+        panel.config_panel.ensureWidgetVisible(field)
+        app.processEvents()
+        assert field.isVisible()
+        assert panel.config_panel.horizontalScrollBar().maximum() == 0
 
-    scroll_bar.setValue(scroll_bar.maximum())
+    panel.config_panel.ensureWidgetVisible(panel.save_task_button)
     app.processEvents()
-    save_top = panel.save_config_button.mapTo(panel.config_panel.viewport(), QPoint(0, 0)).y()
+    save_top = panel.save_task_button.mapTo(panel.config_panel.viewport(), QPoint(0, 0)).y()
     assert 0 <= save_top
-    assert save_top + panel.save_config_button.height() <= panel.config_panel.viewport().height()
+    assert save_top + panel.save_task_button.height() <= panel.config_panel.viewport().height()
 
 
 def test_auto_rng_content_is_added_directly_below_toolbar(app):
@@ -3921,8 +3935,8 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     assert panel.runtime_card.property("state") == "active"
     assert panel.toolbar_status.property("state") == "active"
     assert panel.toolbar_status.text().startswith("运行中")
-    assert not panel.runtime_script_summary.isHidden()
-    assert panel.script_group.isHidden()
+    assert panel.runtime_script_card.isHidden()
+    assert not panel.script_group.isHidden()
     assert panel.previous_round_label.isHidden()
     assert panel.runtime_phase_label.text() == "运行撞闪脚本"
     assert panel.runtime_round_label.text() == "第 2 轮"
@@ -3938,11 +3952,7 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
         "idle",
     ]
     assert not panel.runtime_delay_state_label.isHidden()
-    panel.runtime_script_summary_toggle.click()
-    assert not panel.script_group.isHidden()
-    assert panel.runtime_script_summary_toggle.text() == "收起编辑"
-    panel.runtime_script_summary_toggle.click()
-    assert panel.script_group.isHidden()
+    assert panel.config_groups.stack.currentWidget() is panel.config_groups.pages["basic"]
     panel.set_live_advances(25)
     assert panel.runtime_current_value.text() == "25"
     assert panel.runtime_remaining_value.text() == "75 帧"

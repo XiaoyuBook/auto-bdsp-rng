@@ -15,6 +15,9 @@ from auto_bdsp_rng.ui.task_settings import (
     ScriptAssignmentRow,
     TaskScriptLayout,
     TaskStrategyLayout,
+    TaskConfigurationGroups,
+    TaskConfigBinding,
+    TaskFieldGrid,
     parameter_field,
     section_header,
     task_settings_styles,
@@ -394,6 +397,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     latestMessageChanged = Signal(str)
     ivCalculatorRequested = Signal()
     captureInfoRequested = Signal()  # 临时：手动触发精灵信息捕获
+    shinyCalibrationRequested = Signal()
     captureLog = Signal(str)  # 临时：后台线程日志输出
     captureError = Signal(str)  # 临时：后台线程错误日志输出
     requestStatsCapture = Signal(object, object)  # 临时：后台请求主线程截图能力页(nature, characteristic)
@@ -458,6 +462,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     def _resize_task_parameters(self) -> None:
         if not hasattr(self, "strategy_group") or self.strategy_group.width() <= 0:
             return
+        if hasattr(self, "config_groups"):
+            for field in (self.max_advances, self.max_wait_frames, self.delay_settings_button):
+                field.setMinimumWidth(0)
+                field.setMaximumWidth(16777215)
+            return
         width = max(156, min(320, (self.strategy_group.width() - 42) // 2))
         for field in (self.max_advances, self.max_wait_frames):
             field.setFixedWidth(width)
@@ -484,10 +493,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.overview = OverviewCards(self.target_summary_group, self.runtime_card)
         self.config_contents.layout().insertWidget(0, self.overview)
         self.runtime_content.layout().removeWidget(self.runtime_script_card)
-        self.config_contents.layout().insertWidget(self.config_contents.layout().count() - 2, self.runtime_script_card)
         self.runtime_script_header.show()
         self._runtime_script_editor_expanded = True
         self._set_runtime_script_summary_visible(True)
+        self._organize_task_settings()
         self.runtime_dialog = QDialog(self)
         self.runtime_dialog.setWindowTitle("自动定点运行详情")
         self.runtime_dialog.setModal(False)
@@ -513,6 +522,77 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
         layout.addWidget(content, 1)
         self._apply_panel_style()
+
+    def _organize_task_settings(self) -> None:
+        card = self.task_config_card.layout()
+        old_header = card.takeAt(0).widget()
+        old_header.setParent(self)
+        old_header.hide()
+        card.removeWidget(self.strategy_group)
+        self.task_save_state_label = QLabel("已保存")
+        self.task_save_state_label.setObjectName("TaskSaveState")
+        self.save_task_button = QPushButton("保存配置")
+        self.save_task_button.setObjectName("TaskSaveButton")
+        self.save_task_button.setToolTip("保存当前任务的参数和全部脚本选择，下次启动生效。")
+        self.save_task_button.clicked.connect(self._save_panel_state)
+        card.insertWidget(0, section_header("任务配置", self.task_save_state_label, self.save_task_button))
+        self.config_groups = TaskConfigurationGroups()
+        card.insertWidget(1, self.config_groups)
+        basic = self.config_groups.add_group("basic", "基础配置")
+        shiny = self.config_groups.add_group("shiny", "闪光与反查")
+        transition = self.config_groups.add_group("transition", "过场策略")
+        continuation = self.config_groups.add_group("continuation", "同步与续搜")
+
+        self.seed_config_binding = TaskConfigBinding("Seed 配置")
+        self.reidentify_config_binding = TaskConfigBinding("校正配置")
+        basic.addWidget(parameter_field("Seed 配置", self.seed_config_binding, "定点与 TID 共用"))
+        basic.addWidget(self.strategy_group)
+        basic.addWidget(self.script_group)
+        self.more_strategy_button.hide()
+        self.advanced_strategies.hide()
+        self.extra_scripts_toggle.hide()
+        self.extra_script_fields.hide()
+
+        self.shiny_threshold_seconds.setMinimumWidth(0)
+        self.shiny_threshold_seconds.setMaximumWidth(16777215)
+        shiny_field = parameter_field("闪光阈值", self.shiny_threshold_seconds, "0 表示关闭自动 OCR 判闪")
+        reverse_field = parameter_field("自动反查", self.reverse_field, "开关与反查窗口")
+        shiny.addWidget(shiny_field)
+        shiny.addWidget(reverse_field)
+        shiny.addWidget(self.script_rows[self.reverse_script_combo])
+        self.shiny_calibration_button = QPushButton("校准闪光判定")
+        self.shiny_calibration_button.setObjectName("InlineLinkButton")
+        self.shiny_calibration_button.clicked.connect(self.shinyCalibrationRequested.emit)
+        shiny.addWidget(self.shiny_calibration_button, 0, Qt.AlignmentFlag.AlignLeft)
+
+        transition.addWidget(parameter_field("校正配置", self.reidentify_config_binding, "过场与自动定点校正使用"))
+        transition.addWidget(self.script_rows[self.exit_script_combo])
+        self.strategy_settings_button.setText("校正与补救设置")
+        transition.addWidget(self.strategy_settings_button, 0, Qt.AlignmentFlag.AlignLeft)
+        continuation.addWidget(parameter_field("同步", self.sync_field, "首位精灵与同步性格"))
+        continuation.addWidget(self.escape_continue_check)
+        continuation.addWidget(self.script_rows[self.escape_script_combo])
+        for field, wrapper, row in (
+            (self.shiny_threshold_seconds, shiny_field, 3),
+            (self.reverse_field, reverse_field, 5),
+        ):
+            self.strategy_form.register(field, wrapper.findChild(QLabel, "TaskFieldTitle"), row)
+        for field in self._advanced_strategy_fields:
+            field.show()
+        self.runtime_script_card.setParent(self)
+        self.runtime_script_card.hide()
+        self.config_contents.layout().removeWidget(self.config_footer)
+        self.config_footer.hide()
+
+    def _refresh_task_save_state(self) -> None:
+        if not hasattr(self, "task_save_state_label"):
+            return
+        failed = self.config_saved_label.text() == "保存失败"
+        dirty = not bool(self.config_saved_label.property("saved")) or not bool(self.script_save_state_label.property("saved"))
+        self.task_save_state_label.setText("保存失败" if failed else "有未保存修改" if dirty else "已保存")
+        self.task_save_state_label.setProperty("dirty", dirty)
+        self.task_save_state_label.style().unpolish(self.task_save_state_label)
+        self.task_save_state_label.style().polish(self.task_save_state_label)
 
     def _reveal_running_overview(self, active: bool) -> None:
         if active:
@@ -1233,8 +1313,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         )
         self.refresh_scripts_button.clicked.connect(self.refresh_scripts)
         tools = QHBoxLayout()
-        tools.addWidget(self.script_status_label)
+        script_title = QLabel("基础脚本")
+        script_title.setObjectName("TaskFieldTitle")
+        tools.addWidget(script_title)
         tools.addStretch(1)
+        tools.addWidget(self.script_status_label)
         tools.addWidget(self.refresh_scripts_button)
         layout.addLayout(tools)
         self.starter_automation_check = QCheckBox("御三家全自动")
@@ -1249,10 +1332,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.starter_script_description.hide()
         self.starter_script_description.setObjectName("TaskFieldHint")
         layout.addWidget(self.starter_script_description)
-        self.manual_script_fields = QWidget()
-        main_fields = QVBoxLayout(self.manual_script_fields)
-        main_fields.setContentsMargins(0, 0, 0, 0)
-        main_fields.setSpacing(0)
+        self.manual_script_fields = TaskFieldGrid(columns=3)
         layout.addWidget(self.manual_script_fields)
         self.extra_scripts_toggle = QToolButton()
         self.extra_scripts_toggle.setCheckable(True)
@@ -1346,7 +1426,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.script_rows[combo] = row
             if combo is self.escape_script_combo:
                 extra_fields.addWidget(self.escape_continue_check)
-            (main_fields if index < 3 else extra_fields).addWidget(row)
+            if index < 3:
+                self.manual_script_fields.add_field(row)
+            else:
+                extra_fields.addWidget(row)
             legacy_row = 1 + index * 2
             layout.register_legacy_position(
                 legacy_row,
@@ -1415,6 +1498,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.manual_script_fields.setVisible(not active)
         self.extra_scripts_toggle.setVisible(not active)
         self.extra_script_fields.setVisible(not active and self.extra_scripts_toggle.isChecked())
+        if hasattr(self, "config_groups"):
+            self.extra_scripts_toggle.hide()
+            self.extra_script_fields.hide()
+            for row in self.script_rows.values():
+                row.setVisible(not active)
         self.escape_continue_check.setVisible(not active)
         self.starter_script_description.setVisible(active)
         self.auto_reverse_combo.setEnabled(not active)
@@ -1730,6 +1818,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         )
 
     def _set_runtime_script_summary_visible(self, visible: bool) -> None:
+        if hasattr(self, "config_groups"):
+            return
         if (
             not hasattr(self, "runtime_script_summary")
             or not hasattr(self, "runtime_script_header")
@@ -2228,6 +2318,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.loop_count.setVisible(visible)
 
     def _set_advanced_strategies_visible(self, visible: bool) -> None:
+        if hasattr(self, "config_groups"):
+            if visible:
+                self.config_groups.select_group("shiny")
+            return
         set_disclosure_state(self.more_strategy_button, visible)
         self.advanced_strategies.setVisible(visible)
         for field in self._advanced_strategy_fields:
@@ -2273,6 +2367,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.save_scripts_button.style().polish(self.save_scripts_button)
         self._update_toolbar_status()
 
+        self._refresh_task_save_state()
+
     def _mark_config_dirty(self, *_args: object) -> None:
         if self._config_state_tracking_ready:
             self._set_config_saved(False)
@@ -2297,6 +2393,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 button.style().polish(button)
         self._update_toolbar_status()
 
+        self._refresh_task_save_state()
+
     def _missing_script_fields(self) -> list[tuple[QComboBox, str]]:
         if self.starter_automation_check.isChecked():
             return []
@@ -2315,8 +2413,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_script_editor_expanded = True
         self._set_runtime_script_summary_visible(True)
         combo = missing[0][0]
-        if combo is self.escape_script_combo:
-            self.extra_scripts_toggle.setChecked(True)
+        self.config_groups.reveal(combo)
         self.config_contents.layout().activate()
         self.config_panel.ensureWidgetVisible(combo)
         combo.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -3707,6 +3804,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if s.status() != s.Status.NoError:
             self._set_config_saved(False)
             self.config_saved_label.setText("保存失败")
+            self._refresh_task_save_state()
             self.configSaveFailed.emit("配置保存失败，请检查设置目录是否可写后重试。")
             return
         self._set_config_saved(True)

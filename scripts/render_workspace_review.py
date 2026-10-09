@@ -20,6 +20,7 @@ parser.add_argument("--tid-columns-only", action="store_true", help="Review TID 
 parser.add_argument("--seed-only", action="store_true", help="Review Seed configuration, timing and video threshold at all window sizes")
 parser.add_argument("--auto-only", action="store_true", help="Review the static target/status overview, configuration and details")
 parser.add_argument("--task-settings-only", action="store_true", help="Review both task parameter/script forms and their expanded states")
+parser.add_argument("--task-groups-only", action="store_true", help="Review fixed automation configuration categories and shared file bindings")
 args = parser.parse_args()
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["QT_SCALE_FACTOR"] = str(args.dpi / 100)
@@ -99,7 +100,7 @@ def capture(w, name, page, state, width, height, out):
     w.tabs.setCurrentWidget(page)
     w.easycon_tab.hide_tools()
     w.easycon_tab.output_toggle.setChecked(name == "script-output")
-    w.auto_capture_config_toggle.setChecked(name == "seed-auto")
+    w.auto_capture_config_toggle.setChecked(True)
     if name.startswith("seed"):
         w.project_xs_config_scroll.verticalScrollBar().setValue(0)
     w.history_tab.meta_toggle.setChecked(name == "records-meta")
@@ -108,9 +109,12 @@ def capture(w, name, page, state, width, height, out):
     w.auto_rng_tab.runtime_details_toggle.setChecked(name == "auto-details")
     w.auto_tid_rng_tab.runtime_details_toggle.setChecked(name == "tid-details")
     w.auto_tid_rng_tab.seed_toggle.setChecked(name == "tid-seed")
-    if w.auto_rng_tab._runtime_script_editor_expanded != (name == "auto-scripts"):
+    if not hasattr(w.auto_rng_tab, "config_groups") and w.auto_rng_tab._runtime_script_editor_expanded != (name == "auto-scripts"):
         w.auto_rng_tab.runtime_script_summary_toggle.click()
     if name.startswith("auto-"):
+        page.config_groups.select_group({"auto-shiny": "shiny", "auto-strategies": "shiny",
+                                        "auto-transition": "transition", "auto-continuation": "continuation",
+                                        "auto-config-expanded": "transition"}.get(name, "basic"))
         page.config_panel.verticalScrollBar().setValue(0)
         page.runtime_panel.verticalScrollBar().setValue(0)
     elif name.startswith("tid-"):
@@ -134,21 +138,13 @@ def capture(w, name, page, state, width, height, out):
         target = w.reidentify_1_pk_npc if name == "seed-advanced" else w.status_group
         w.project_xs_config_scroll.ensureWidgetVisible(target, 0, 8)
         settle(w)
-    if name in ("auto-strategies", "auto-scripts"):
-        target = w.auto_rng_tab.more_strategy_button if name == "auto-strategies" else w.auto_rng_tab.runtime_script_card
-        w.auto_rng_tab.config_panel.ensureWidgetVisible(target, 0, 8)
-        settle(w)
-    if args.task_settings_only:
+    if args.task_settings_only or (args.task_groups_only and page in (w.auto_rng_tab, w.auto_tid_rng_tab)):
         if page is w.auto_rng_tab:
-            page.more_strategy_button.setChecked(name == "auto-config-expanded")
-            page.extra_scripts_toggle.setChecked(name == "auto-config-expanded")
-            if not page._runtime_script_editor_expanded:
-                page.runtime_script_summary_toggle.click()
-            area, contents, scripts = page.config_panel, page.config_contents, page.runtime_script_card
+            area, contents, scripts = page.config_panel, page.config_contents, page.task_config_card
         else:
             page.local_views.setCurrentIndex(0)
             page.script_toggle.setChecked(True)
-            area, contents, scripts = page.config_scroll, page.config_panel, page.script_group
+            area, contents, scripts = page.config_scroll, page.config_panel, page.task_config_card
         settle(w)
         area.verticalScrollBar().setValue(page.task_config_card.y())
         settle(w)
@@ -263,6 +259,9 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
         elif args.task_settings_only:
             pages = [("auto-config", w.auto_rng_tab), ("auto-config-expanded", w.auto_rng_tab),
                      ("tid-settings", w.auto_tid_rng_tab)]
+        elif args.task_groups_only:
+            pages = [("auto-" + key, w.auto_rng_tab) for key in ("basic", "shiny", "transition", "continuation")]
+            pages += [("tid-settings", w.auto_tid_rng_tab), ("seed-auto", w.project_xs_tab)]
         for width, height in sizes:
             w.resize(width, height)
             for name, page in pages:
