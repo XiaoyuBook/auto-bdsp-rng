@@ -1658,7 +1658,7 @@ class MainWindow(QMainWindow):
         self._shiny_calibration_thread: QThread | None = None
         self._shiny_calibration_worker: ShinyThresholdCalibrationWorker | None = None
         self._static_generation_thread: threading.Thread | None = None
-        self._static_generation_result: tuple[StaticEncounterRecord, list[State8]] | None = None
+        self._static_generation_result: tuple[StaticEncounterRecord, list[State8], bool] | None = None
         self._static_generation_error: Exception | None = None
         self._static_generation_timer = QTimer(self)
         self._static_generation_timer.setInterval(50)
@@ -7342,9 +7342,7 @@ class MainWindow(QMainWindow):
 
     def _auto_refresh_results(self) -> None:
         if getattr(self, "_states", None):
-            editing = self.query_toggle.isChecked()
-            self.generate_results()
-            self.query_toggle.setChecked(editing)
+            self._generate_static_results(collapse_query=False)
 
     def _current_profile(self) -> Profile8:
         return Profile8(
@@ -9761,6 +9759,9 @@ class MainWindow(QMainWindow):
                                             "已停止捕捉" if self._capture_cancel.is_set() else "")
 
     def generate_results(self) -> None:
+        self._generate_static_results(collapse_query=True)
+
+    def _generate_static_results(self, *, collapse_query: bool) -> None:
         try:
             record = self.encounter_combo.currentData()
             if record is None:
@@ -9783,7 +9784,7 @@ class MainWindow(QMainWindow):
             self._show_error("Generation failed", exc)
             return
         if criteria.max_advances >= 1_000_000:
-            self._start_static_generation(record, criteria)
+            self._start_static_generation(record, criteria, collapse_query=collapse_query)
             return
         self._static_result_state = "searching"
         self._refresh_static_result_state()
@@ -9794,9 +9795,11 @@ class MainWindow(QMainWindow):
             self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
-        self._finish_static_generation(record, states)
+        self._finish_static_generation(record, states, collapse_query=collapse_query)
 
-    def _start_static_generation(self, record: StaticEncounterRecord, criteria: StaticSearchCriteria) -> None:
+    def _start_static_generation(
+        self, record: StaticEncounterRecord, criteria: StaticSearchCriteria, *, collapse_query: bool,
+    ) -> None:
         if self._static_generation_thread is not None and self._static_generation_thread.is_alive():
             self.statusBar().showMessage("Static generation is already running")
             return
@@ -9811,7 +9814,7 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._static_generation_error = exc
             else:
-                self._static_generation_result = (record, states)
+                self._static_generation_result = (record, states, collapse_query)
 
         thread = threading.Thread(target=run, name="static-generation", daemon=True)
         self._static_generation_thread = thread
@@ -9841,17 +9844,22 @@ class MainWindow(QMainWindow):
             self._refresh_static_result_state()
             self._show_error("Generation failed", RuntimeError("Static generation finished without results"))
             return
-        record, states = result
-        self._finish_static_generation(record, states)
+        record, states, collapse_query = result
+        self._finish_static_generation(record, states, collapse_query=collapse_query)
 
-    def _finish_static_generation(self, record: StaticEncounterRecord, states: list[State8]) -> None:
+    def _finish_static_generation(
+        self, record: StaticEncounterRecord, states: list[State8], *, collapse_query: bool = True,
+    ) -> None:
         self._static_result_state = "complete"
         self._states = states
         self._active_record = record
         self._populate_table(states)
         name = POKEMON_LABELS_ZH.get(record.description, record.description) if self.lang == "zh" else record.description
         self.query_summary.setText(f"{name} · {len(states)} 条结果 · 点击查询条件重新编辑")
-        self.query_toggle.setChecked(False)
+        # Automatic refresh leaves the live editing state alone, including
+        # changes made while a background search was running.
+        if collapse_query:
+            self.query_toggle.setChecked(False)
         self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
 
     def _populate_table(self, states: list[State8]) -> None:

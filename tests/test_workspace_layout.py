@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QBoxLayout
+from PySide6.QtWidgets import QApplication, QBoxLayout, QStyle, QStyleOptionViewItem
 from tests.test_start_readiness import window
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngProgress
@@ -162,6 +162,46 @@ def test_runtime_views_keep_results_in_first_screen_and_preserve_configuration(w
         panel.local_views.setCurrentIndex(1)
         assert table.rowCount() >= 20
     assert auto.max_wait_frames.value() == 456
+
+
+@pytest.mark.parametrize("size", [(860, 600), (1150, 900)])
+def test_tid_numeric_columns_remain_readable_after_horizontal_scroll(window, monkeypatch, size):
+    w, panel = window, window.auto_tid_rng_tab
+    monkeypatch.setattr(w, "_screen_available_geometry", lambda: QRect(0, 0, 2400, 1400))
+    w.resize(*size)
+    w.tabs.setCurrentWidget(panel)
+    panel.local_views.setCurrentIndex(1)
+    panel.set_id_states(
+        [IDState8(1234567, 54321, 65432, 4095, 123456),
+         IDState8(1000000000, 65535, 65535, 4095, 999999)],
+        elapsed_seconds=(1234.5, 9876.5), measured_wall_time=1791525600,
+    )
+    settle()
+    table = panel.id_table
+    assert w.size().toTuple() == size
+    assert w.monitor_sidebar.width() >= (400 if size[0] == 860 else 476)
+    assert panel.runtime_scroll.horizontalScrollBar().maximum() == 0
+    assert table.horizontalScrollBar().maximum() > 0
+    for row in range(table.rowCount()):
+        for column in range(7):
+            item = table.item(row, column)
+            table.scrollToItem(item)
+            settle()
+            cell = table.visualItemRect(item)
+            assert table.viewport().rect().contains(cell)
+            option = QStyleOptionViewItem()
+            option.initFrom(table)
+            table.itemDelegate().initStyleOption(option, table.indexFromItem(item))
+            option.rect = cell
+            text_rect = table.style().subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, table)
+            assert option.fontMetrics.elidedText(item.text(), Qt.TextElideMode.ElideRight, text_rect.width()) == item.text()
+            header = table.horizontalHeader()
+            assert table.columnWidth(column) >= header.fontMetrics().horizontalAdvance(table.horizontalHeaderItem(column).text()) + 16
+    panel.copy_results()
+    copied = QApplication.clipboard().text()
+    assert "1234567\t54321\t65432\t4095\t123456\t20:34.5" in copied
+    assert "1000000000\t65535\t65535\t4095\t999999" in copied
+    assert "2026.10.09" in copied
 
 
 def test_real_static_generation_collapses_conditions_and_can_reopen_each_group(window):

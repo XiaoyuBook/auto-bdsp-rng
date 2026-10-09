@@ -16,6 +16,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--dpi", type=int, choices=(100, 150), default=100)
 parser.add_argument("--output", type=Path, default=Path("logs/ui-review/redesign"))
+parser.add_argument("--tid-columns-only", action="store_true", help="Review TID numeric columns and arrival times at 860/1150 widths")
 args = parser.parse_args()
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["QT_SCALE_FACTOR"] = str(args.dpi / 100)
@@ -27,7 +28,7 @@ import cv2
 from pytest import MonkeyPatch
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QAbstractButton, QAbstractSpinBox, QComboBox, QLineEdit, QScrollArea, QWidget
+from PySide6.QtWidgets import QApplication, QAbstractButton, QAbstractItemView, QAbstractSpinBox, QComboBox, QLineEdit, QScrollArea, QWidget
 
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngProgress
@@ -102,7 +103,7 @@ def capture(w, name, page, state, width, height, out):
     if name.startswith("auto-"):
         page.local_views.setCurrentIndex(int(name == "auto-runtime"))
     elif name.startswith("tid-"):
-        page.local_views.setCurrentIndex(int(name == "tid-runtime"))
+        page.local_views.setCurrentIndex(int(name.startswith("tid-runtime")))
     elif name.startswith("data"):
         w.query_toggle.setChecked(name != "data-results")
         if name != "data-results":
@@ -117,6 +118,12 @@ def capture(w, name, page, state, width, height, out):
     elif name in ("script-control", "script-library"):
         w.easycon_tab.show_tools("control" if name == "script-control" else "library")
     settle(w)
+    if args.tid_columns_only:
+        table = w.auto_tid_rng_tab.id_table
+        column = 6 if name == "tid-runtime-time" else 0
+        table.setCurrentCell(0, column)
+        table.scrollToItem(table.item(0, column), QAbstractItemView.ScrollHint.PositionAtCenter)
+        settle(w)
     if name in ("records-meta", "records-feed"):
         target = w.history_tab.seed_value_label if name == "records-meta" else w.history_tab.history_scroll
         w.history_tab.detail_scroll.ensureWidgetVisible(target, 8, 8)
@@ -142,7 +149,7 @@ def capture(w, name, page, state, width, height, out):
         if bounds.left() < 0 or bounds.right() >= page.width():
             overflow.append({"name": control.objectName() or control.accessibleName() or type(control).__name__,
                              "bounds": [bounds.x(), bounds.y(), bounds.width(), bounds.height()]})
-    return {"file": filename, "state": state, "page": name, "requested": [width, height],
+    result = {"file": filename, "state": state, "page": name, "requested": [width, height],
             "window": geometry(w), "dpr": w.devicePixelRatioF(), "left": geometry(w.tabs),
             "right": geometry(w.monitor_sidebar), "video": geometry(w.preview_label),
             "preview_panel": geometry(w.monitor_preview_scroll), "live_logs": geometry(w.live_log_panel),
@@ -154,6 +161,14 @@ def capture(w, name, page, state, width, height, out):
             "overlay_status": [w.video_overlay.status_panel.x(), w.video_overlay.status_panel.y(),
                                w.video_overlay.status_panel.width(), w.video_overlay.status_panel.height()],
             "scrolls": scrolls, "horizontal_overflow": overflow}
+    if args.tid_columns_only:
+        table = w.auto_tid_rng_tab.id_table
+        result["tid_columns"] = [{"header": table.horizontalHeaderItem(column).text(),
+                                  "width": table.columnWidth(column),
+                                  "values": [table.item(row, column).text() for row in range(table.rowCount())]}
+                                 for column in range(table.columnCount())]
+        result["tid_horizontal_scroll"] = [table.horizontalScrollBar().value(), table.horizontalScrollBar().maximum()]
+    return result
 
 
 out = args.output.resolve()
@@ -173,8 +188,8 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
     empty_pages = [("auto-settings", w.auto_rng_tab), ("tid-settings", w.auto_tid_rng_tab),
                    ("seed", w.project_xs_tab), ("data-rng", w.bdsp_tab), ("script", w.easycon_tab),
                    ("records", w.run_records_tab), ("details", w.run_records_tab)]
-    sizes = [(860, 600), (1150, 900), (1440, 960), (854, 480)]
-    for state in ("empty", "populated"):
+    sizes = [(860, 600), (1150, 900)] if args.tid_columns_only else [(860, 600), (1150, 900), (1440, 960), (854, 480)]
+    for state in (("populated",) if args.tid_columns_only else ("empty", "populated")):
         if state == "populated":
             populate(w)
         pages = empty_pages if state == "empty" else [
@@ -186,6 +201,19 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
             ("script-control", w.easycon_tab), ("script-library", w.easycon_tab), ("script-output", w.easycon_tab),
             ("records-list", w.run_records_tab), ("records-meta", w.run_records_tab), ("records-feed", w.run_records_tab),
             ("seed-auto", w.project_xs_tab), ("seed-advanced", w.project_xs_tab)]
+        if args.tid_columns_only:
+            tid = w.auto_tid_rng_tab
+            tid.apply_progress(AutoTidRngProgress(
+                phase=AutoTidRngPhase.WAIT_NAME_TRIGGER, loop_index=2,
+                current_advances=1234500, target_advances=1234567, trigger_advances=1234547,
+                target_display_tid=123456, wait_target_at=time.monotonic() + 42.5,
+            ))
+            tid.set_id_states(
+                [IDState8(1234567, 54321, 65432, 4095, 123456),
+                 IDState8(1000000000, 65535, 65535, 4095, 999999)],
+                elapsed_seconds=(1234.5, 9876.5), measured_wall_time=1791525600,
+            )
+            pages = [("tid-runtime", tid), ("tid-runtime-time", tid)]
         for width, height in sizes:
             w.resize(width, height)
             for name, page in pages:

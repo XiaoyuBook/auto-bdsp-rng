@@ -641,6 +641,82 @@ def test_static_generation_runs_in_background(app, monkeypatch):
     assert window.generate_button.isEnabled()
 
 
+@pytest.mark.parametrize(
+    "automatic,initial_open,waiting_open,expected_open",
+    [(True, True, None, True), (True, False, None, False),
+     (True, False, True, True), (True, True, False, False),
+     (False, True, None, False), (False, False, True, False)],
+)
+def test_background_generation_respects_refresh_intent_and_live_query_state(
+    app, monkeypatch, automatic, initial_open, waiting_open, expected_open,
+):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
+    window.generate_results()
+    states = list(window._states)
+    assert states
+    errors = []
+    monkeypatch.setattr(window, "_show_error", lambda title, error: errors.append(error))
+    gate, entered = threading.Event(), threading.Event()
+
+    def deferred_generation(_criteria):
+        entered.set()
+        assert gate.wait(5), "The test must release the background search"
+        return states
+
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", deferred_generation)
+    window.query_toggle.setChecked(initial_open)
+    changes = []
+    window.query_toggle.toggled.connect(changes.append)
+    window.max_advances.setText("1000000")
+    try:
+        if automatic:
+            window._auto_refresh_results()
+        else:
+            window.generate_button.click()
+        assert entered.wait(2)
+        assert window._static_generation_thread.is_alive()
+        assert not window.generate_button.isEnabled()
+        assert window.query_toggle.isChecked() == initial_open
+        if waiting_open is not None:
+            window.query_toggle.setChecked(waiting_open)
+        gate.set()
+        deadline = time.monotonic() + 3
+        while window._static_generation_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            QTest.qWait(10)
+        assert window._static_generation_thread is None
+        assert window.generate_button.isEnabled()
+        assert window.query_toggle.isChecked() == expected_open
+        if automatic:
+            assert changes == ([] if waiting_open is None else [waiting_open])
+        assert window.table.rowCount() == len(states)
+        assert not errors
+    finally:
+        gate.set()
+        worker = window._static_generation_thread
+        if worker is not None:
+            worker.join(timeout=2)
+            window._poll_static_generation_thread()
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_synchronous_auto_refresh_does_not_toggle_query_panel(app, expanded):
+    window = MainWindow()
+    _set_bdsp_seed(window)
+    window.max_advances.setText("2")
+    window.generate_results()
+    window.query_toggle.setChecked(expanded)
+    changes = []
+    window.query_toggle.toggled.connect(changes.append)
+    window._auto_refresh_results()
+    assert window.query_toggle.isChecked() == expanded
+    assert changes == []
+    assert window.table.rowCount() == 3
+
+
 def test_bdsp_max_advances_matches_pokefinder_limit(app):
     window = MainWindow()
 

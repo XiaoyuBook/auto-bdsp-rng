@@ -1057,7 +1057,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.id_table.searchStatusChanged.connect(self._show_id_search_status)
         self.id_table.verticalHeader().setVisible(False)
         self.id_table.verticalHeader().setDefaultSectionSize(32)
-        self.id_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.id_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.id_table.horizontalHeader().setStretchLastSection(False)
         self.id_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.id_table.setColumnWidth(6, 180)
