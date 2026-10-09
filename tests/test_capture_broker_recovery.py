@@ -225,13 +225,11 @@ def test_controller_reconnects_to_real_child_after_stale_record(broker_record, m
     controller = CaptureBrokerProcess(
         manifest_path=manifest.manifest_path, first_frame_timeout=0.2, open_timeout=2.0,
     )
-    # Windows venv python.exe is a launcher with a different PID from the
-    # interpreter. Use a direct child (as in the packaged app), with the same
-    # source/dependency paths as this test process.
+    # Exercise the same interpreter entry point as run_dev_gui.bat, including
+    # the Windows venv redirector. Dependencies must come from that venv.
     child_code = "\n".join((
         "import sys",
         "import time",
-        f"sys.path[:] = {sys.path!r}",
         "import numpy as np",
         "from auto_bdsp_rng.capture_broker import CaptureBroker, FakeCapture",
         "class SlowCapture(FakeCapture):",
@@ -244,7 +242,7 @@ def test_controller_reconnects_to_real_child_after_stale_record(broker_record, m
         "raise SystemExit(0 if broker.serve_forever() else 2)",
     ))
     monkeypatch.setattr(controller, "_command", lambda: [
-        sys._base_executable, "-c", child_code, manifest.manifest_path, str(os.getpid()), str(open_delay)
+        sys.executable, "-c", child_code, manifest.manifest_path, str(os.getpid()), str(open_delay)
     ])
     child = None
     try:

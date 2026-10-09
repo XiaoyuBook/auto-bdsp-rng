@@ -256,6 +256,19 @@ class CaptureBrokerProcess:
             child_environment.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
             popen_kwargs["env"] = child_environment
             if sys.platform == "win32":
+                base_executable = getattr(sys, "_base_executable", None)
+                if (
+                    not getattr(sys, "frozen", False)
+                    and sys.prefix != sys.base_prefix
+                    and base_executable
+                    and base_executable != sys.executable
+                ):
+                    # Windows venv python.exe redirects to another process,
+                    # so Popen.pid would not match the Broker manifest PID.
+                    # Run the interpreter directly while retaining the venv
+                    # identity and its installed dependencies.
+                    popen_kwargs["executable"] = base_executable
+                    child_environment["__PYVENV_LAUNCHER__"] = sys.executable
                 creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 if creation_flags:
                     popen_kwargs["creationflags"] = creation_flags

@@ -173,6 +173,48 @@ def test_child_receives_msmf_environment_before_imports(monkeypatch, tmp_path):
     assert "OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS" not in process_module.os.environ
 
 
+@pytest.mark.parametrize("platform, virtualenv, frozen, direct_interpreter", [
+    ("win32", True, False, True),
+    ("win32", False, False, False),
+    ("win32", True, True, False),
+    ("linux", True, False, False),
+])
+def test_child_bypasses_windows_venv_redirector_only_in_source_venv(
+    monkeypatch, tmp_path, platform, virtualenv, frozen, direct_interpreter
+):
+    child = _FakeProcess()
+    launches = []
+    executable = "project/.venv/Scripts/python.exe"
+    base_executable = "Python312/python.exe"
+    monkeypatch.setattr(process_module.sys, "platform", platform)
+    monkeypatch.setattr(process_module.sys, "prefix", "project/.venv" if virtualenv else "Python312")
+    monkeypatch.setattr(process_module.sys, "base_prefix", "Python312")
+    monkeypatch.setattr(process_module.sys, "executable", executable)
+    monkeypatch.setattr(process_module.sys, "_base_executable", base_executable, raising=False)
+    monkeypatch.setattr(process_module.sys, "frozen", frozen, raising=False)
+    monkeypatch.delenv("__PYVENV_LAUNCHER__", raising=False)
+    monkeypatch.setattr(process_module, "discover_manifest", lambda _path: SimpleNamespace(
+        pid=child.pid, session_id="session", state=BrokerState.RUNNING,
+    ))
+
+    def popen(command, **kwargs):
+        launches.append((command, kwargs))
+        return child
+
+    controller = CaptureBrokerProcess(manifest_path=tmp_path / "broker.json", popen_factory=popen)
+    monkeypatch.setattr(controller, "_recover_or_reject_existing_broker", lambda: None)
+    assert controller.start()
+    command, kwargs = launches[0]
+    assert command[0] == executable
+    if direct_interpreter:
+        assert kwargs["executable"] == base_executable
+        assert kwargs["env"]["__PYVENV_LAUNCHER__"] == executable
+    else:
+        assert "executable" not in kwargs
+        assert "__PYVENV_LAUNCHER__" not in kwargs["env"]
+    assert "__PYVENV_LAUNCHER__" not in process_module.os.environ
+
+
 def test_capture_broker_process_rejects_a_live_owner_before_spawning(monkeypatch, tmp_path):
     manifest = SimpleNamespace(
         pid=9876,
