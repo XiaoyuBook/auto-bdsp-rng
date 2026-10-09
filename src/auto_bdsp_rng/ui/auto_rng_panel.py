@@ -2467,30 +2467,47 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 height: 0;
             }
             QLabel#ConfigSavedLabel, QLabel#ScriptSaveStateLabel {
-                color: $text_secondary;
+                color: #5E6B76;
+                background: #F2F5F7;
+                border: 1px solid #E4E9ED;
+                border-radius: 6px;
+                padding: 3px 8px;
                 font-size: 11px;
+                min-height: 18px;
             }
             QLabel#ConfigSavedLabel[saved="false"], QLabel#ScriptSaveStateLabel[saved="false"] {
-                color: $warning;
+                color: #8D5A16;
+                background: $warning_soft;
+                border-color: #EBCF9E;
             }
             QLabel#ScriptStatusLabel {
-                border: 0;
-                padding: 0;
-                color: #687480;
-                background: transparent;
+                border: 1px solid #E4E9ED;
+                border-radius: 6px;
+                padding: 3px 8px;
+                color: #5E6B76;
+                background: #F2F5F7;
                 font-size: 12px;
                 font-weight: 400;
             }
             QLabel#ScriptStatusLabel[state="ready"] {
-                color: #597467;
-                background: transparent;
+                color: #167653;
+                background: $accent_soft;
+                border-color: #C8E5D9;
             }
             QLabel#ScriptStatusLabel[state="warning"] {
-                color: $warning;
-                background: transparent;
+                color: #8D5A16;
+                background: $warning_soft;
+                border-color: #EBCF9E;
             }
-            QGroupBox#TargetSummaryGroup,
             QGroupBox#AutoRngStrategyGroup {
+                background: $surface;
+                border: 1px solid $card_border;
+                border-radius: 9px;
+                margin: 0;
+                padding: 10px 12px 12px 12px;
+                font-weight: 400;
+            }
+            QGroupBox#TargetSummaryGroup {
                 background: transparent;
                 border: 0;
                 border-radius: 0;
@@ -2593,6 +2610,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QGroupBox#AutoRngStrategyGroup QLabel {
                 font-weight: 400;
             }
+            QGroupBox#AutoRngStrategyGroup > QLabel {
+                color: $text_secondary;
+            }
             QGroupBox#AutoRngStrategyGroup QSpinBox,
             QGroupBox#AutoRngStrategyGroup QDoubleSpinBox,
             QGroupBox#AutoRngStrategyGroup QComboBox,
@@ -2606,6 +2626,19 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 color: $text;
                 font-size: 13px;
                 font-weight: 400;
+            }
+            QGroupBox#AutoRngStrategyGroup QSpinBox:hover,
+            QGroupBox#AutoRngStrategyGroup QDoubleSpinBox:hover,
+            QGroupBox#AutoRngStrategyGroup QComboBox:hover,
+            QGroupBox#AutoRngStrategyGroup QLineEdit:hover {
+                border-color: #B8C4CE;
+                background: #FCFDFC;
+            }
+            QGroupBox#AutoRngStrategyGroup QSpinBox:focus,
+            QGroupBox#AutoRngStrategyGroup QDoubleSpinBox:focus,
+            QGroupBox#AutoRngStrategyGroup QComboBox:focus,
+            QGroupBox#AutoRngStrategyGroup QLineEdit:focus {
+                background: #FFFFFF;
             }
             QGroupBox#AutoRngStrategyGroup QSpinBox,
             QGroupBox#AutoRngStrategyGroup QDoubleSpinBox {
@@ -2882,6 +2915,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 color: $text;
                 font-size: 14px;
                 font-weight: 500;
+            }
+            QGroupBox#AutoRngScriptGroup QLabel#ScriptFieldLabel {
+                padding-left: 1px;
             }
             QGroupBox#AutoRngScriptGroup::title {
                 subcontrol-origin: margin;

@@ -385,7 +385,13 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QLabel#AutoTidTitle, QLabel#AutoTidSectionTitle { font-size: 15px; font-weight: 500; }
             QLabel#AutoTidSubtitle, QLabel#AutoTidMuted, QLabel#AutoTidResultCount,
             QLabel#AutoTidTargetCount, QLabel#AutoTidSaveState, QLabel#AutoTidScriptSaveState { color: #626D79; font-size: 12px; }
-            QLabel#AutoTidSaveState[dirty="true"], QLabel#AutoTidScriptSaveState[dirty="true"] { color: #9e600e; }
+            QLabel#AutoTidSaveState, QLabel#AutoTidScriptSaveState {
+                background: #F2F5F7; border: 1px solid #E4E9ED; border-radius: 6px;
+                padding: 3px 8px; min-height: 18px;
+            }
+            QLabel#AutoTidSaveState[dirty="true"], QLabel#AutoTidScriptSaveState[dirty="true"] {
+                color: #8D5A16; background: $warning_soft; border-color: #EBCF9E;
+            }
             QFrame#AutoTidRuntimeCard { background: $surface; border: 1px solid $card_border; border-radius: 11px; }
             QFrame#AutoTidRuntimeCard[state="failed"] { border-color: #ECCAC6; }
             QLabel#AutoTidRuntimePhase { font-size: 18px; font-weight: 500; }
@@ -401,6 +407,21 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             QFrame#AutoTidRuntimeCard[state="failed"] QLabel#AutoTidStateDot { color: #ac4b42; }
             QFrame#AutoTidRuntimeCard[state="idle"] QLabel#AutoTidStateDot { color: #8da299; }
             QFrame#AutoTidDivider { border: 0; background: $separator; max-height: 1px; }
+            QWidget#AutoTidTargets, QWidget#AutoTidTopControls {
+                background: $surface; border: 1px solid $card_border; border-radius: 9px;
+                padding: 11px 12px 12px 12px;
+            }
+            QWidget#AutoTidTargets > QLabel, QWidget#AutoTidTopControls > QLabel {
+                color: $text; font-weight: 500;
+            }
+            QWidget#AutoTidTargets QLineEdit:hover,
+            QWidget#AutoTidTopControls QSpinBox:hover {
+                border-color: #B8C4CE; background: #FCFDFC;
+            }
+            QWidget#AutoTidTargets QLineEdit:focus,
+            QWidget#AutoTidTopControls QSpinBox:focus {
+                background: #FFFFFF;
+            }
             QFrame#AutoTidScripts { background: #ffffff; border: 1px solid $card_border; border-radius: 8px; }
             QFrame#AutoTidScriptBody { background: transparent; border: 0; }
             QWidget#AutoTidResults,
