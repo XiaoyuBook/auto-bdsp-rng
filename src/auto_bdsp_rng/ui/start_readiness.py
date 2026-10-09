@@ -358,12 +358,14 @@ class StartReadinessController(QObject):
 
     def eventFilter(self, watched, event):
         if watched is self.window.preview_label and event.type() in (QEvent.Type.Resize, QEvent.Type.Paint):
-            visible = watched.pixmap().isNull() and watched.height() >= 170 and not watched._selection_enabled
+            size = self.preview_button.sizeHint()
+            visible = (watched.pixmap().isNull() and watched.height() >= 128
+                       and watched.width() >= size.width() + 16 and not watched._selection_enabled)
             self.preview_button.setVisible(visible)
             if visible:
-                size = self.preview_button.sizeHint()
                 self.preview_button.resize(size.width(), 34)
-                self.preview_button.move((watched.width() - size.width()) // 2, watched.height() // 2 + 26)
+                self.preview_button.move((watched.width() - size.width()) // 2,
+                                         min(watched.height() - 42, watched.height() // 2 + 18))
         return False
 
     def start(self):
@@ -383,7 +385,10 @@ class StartReadinessController(QObject):
         elif action in ("seed", "seed_value"):
             w.tabs.setCurrentWidget(w.project_xs_tab)
             w.reveal_page_configuration(w.project_xs_tab)
-            (w.seed32_inputs[0] if action == "seed_value" else w.seed_config_combo).setFocus()
+            control = w.seed64_outputs[0] if action == "seed_value" else w.seed_config_combo
+            area = w.monitor_preview_scroll if action == "seed_value" else w.project_xs_config_scroll
+            area.ensureWidgetVisible(control)
+            control.setFocus()
         elif action == "ocr":
             w.open_ocr_settings()
         else:

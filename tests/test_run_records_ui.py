@@ -414,7 +414,10 @@ def test_auto_rng_round_button_opens_round_records_instead_of_detailed_logs(
 def test_auto_rng_round_button_preserves_unread_detailed_log_count(app, tmp_path):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
     records = window.run_records_tab
+    window.show()
     records.view_tabs.setCurrentIndex(records.LOG_TAB)
+    window.tabs.setCurrentWidget(records)
+    app.processEvents()  # Mark startup device warnings read before this test's error.
     window.tabs.setCurrentWidget(window.auto_rng_tab)
     window._run_log_buffer.publish("自动定点", "需要查看的错误", level="ERROR")
     app.processEvents()

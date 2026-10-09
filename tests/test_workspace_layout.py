@@ -18,8 +18,7 @@ def test_narrow_pages_reflow_without_changing_fonts_or_controls(window, monkeypa
     font_size = w.auto_rng_tab.runtime_current_value.font().pixelSize()
     w.resize(860, 600)
     for page, splitter in ((w.auto_rng_tab, w.auto_rng_tab.workspace_splitter),
-                           (w.auto_tid_rng_tab, w.auto_tid_rng_tab.workspace_splitter),
-                           (w.project_xs_tab, w.project_xs_splitter)):
+                           (w.auto_tid_rng_tab, w.auto_tid_rng_tab.workspace_splitter)):
         w.tabs.setCurrentWidget(page)
         settle()
         assert w.width() == 860 and w.height() == 600
@@ -28,12 +27,15 @@ def test_narrow_pages_reflow_without_changing_fonts_or_controls(window, monkeypa
         assert splitter.widget(1).isVisible()
         assert w.help_button.isVisible()
         assert w.view_status_logs_button.isVisible()
-    assert w.project_xs_splitter.geometry() == w.project_xs_tab.rect()
+    w.tabs.setCurrentWidget(w.project_xs_tab)
+    settle()
+    assert w.project_xs_config_scroll.geometry() == w.project_xs_tab.rect()
+    assert w.monitor_sidebar.isVisible()
     w.tabs.setCurrentWidget(w.bdsp_tab)
     settle()
     assert w.bdsp_reflow.layout.direction() == QBoxLayout.Direction.TopToBottom
-    w.resize(1260, 900)
-    for page, splitter in ((w.auto_rng_tab, w.auto_rng_tab.workspace_splitter), (w.project_xs_tab, w.project_xs_splitter)):
+    w.resize(1500, 900)
+    for page, splitter in ((w.auto_rng_tab, w.auto_rng_tab.workspace_splitter), (w.auto_tid_rng_tab, w.auto_tid_rng_tab.workspace_splitter)):
         w.tabs.setCurrentWidget(page)
         settle()
         assert splitter.orientation() == Qt.Orientation.Horizontal
@@ -60,7 +62,7 @@ def test_readiness_and_empty_state_reveal_configuration_without_page_header(wind
 
 def test_splitter_preferences_keep_independent_orientations(window, monkeypatch):
     monkeypatch.setattr(window, "_screen_available_geometry", lambda: QRect(0, 0, 1800, 1100))
-    window.resize(1150, 900)
+    window.resize(1500, 900)
     p = window.auto_rng_tab
     split = p.workspace_splitter
     window.tabs.setCurrentWidget(p)

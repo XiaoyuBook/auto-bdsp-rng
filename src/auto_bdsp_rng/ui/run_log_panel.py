@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -340,21 +341,23 @@ class RunLogPanel(QWidget):
         root.setContentsMargins(0, 14, 0, 0)
         root.setSpacing(10)
 
-        filters = QHBoxLayout()
+        filters = QGridLayout()
+        self.filters_layout = filters
+        self._compact_filters = False
         filters.setContentsMargins(0, 0, 0, 0)
         filters.setSpacing(10)
 
         source_field, self.source_combo = self._combo_field("来源", "全部来源")
         self.source_combo.setObjectName("RunLogSourceFilter")
         self.source_combo.setMinimumWidth(120)
-        filters.addLayout(source_field)
+        filters.addLayout(source_field, 0, 0)
 
         level_field, self.level_combo = self._combo_field("级别", "全部级别")
         self.level_combo.setObjectName("RunLogLevelFilter")
         for level, label in self._LEVEL_LABELS.items():
             self.level_combo.addItem(label, level)
         self.level_combo.setMinimumWidth(104)
-        filters.addLayout(level_field)
+        filters.addLayout(level_field, 0, 1)
 
         search_field = QVBoxLayout()
         search_field.setSpacing(3)
@@ -365,9 +368,11 @@ class RunLogPanel(QWidget):
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setMinimumWidth(130)
         search_field.addWidget(self.search_edit)
-        filters.addLayout(search_field, 1)
+        filters.addLayout(search_field, 0, 2)
+        filters.setColumnStretch(2, 1)
 
         toggle_row = QHBoxLayout()
+        self.filter_toggles = toggle_row
         toggle_row.setContentsMargins(0, 0, 0, 0)
         toggle_row.setSpacing(12)
         self.follow_check = QCheckBox("自动跟随", self)
@@ -379,7 +384,7 @@ class RunLogPanel(QWidget):
         self.save_check.setChecked(self._save_enabled)
         toggle_row.addWidget(self.follow_check)
         toggle_row.addWidget(self.save_check)
-        filters.addLayout(toggle_row)
+        filters.addLayout(toggle_row, 0, 3)
         root.addLayout(filters)
 
         self.correlation_frame = QFrame(self)
@@ -524,6 +529,20 @@ class RunLogPanel(QWidget):
             }
             """)
         )
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        compact = self.width() < 760
+        if compact == self._compact_filters:
+            return
+        self._compact_filters = compact
+        self.filters_layout.removeItem(self.filter_toggles)
+        if compact:
+            self.filters_layout.addLayout(self.filter_toggles, 1, 0, 1, 3, Qt.AlignmentFlag.AlignLeft)
+        else:
+            self.filters_layout.addLayout(self.filter_toggles, 0, 3)
+        for column, width in enumerate((110, 96, 90) if compact else (110, 104, 140)):
+            self.table.setColumnWidth(column, width)
 
     @staticmethod
     def _field_label(text: str) -> QLabel:

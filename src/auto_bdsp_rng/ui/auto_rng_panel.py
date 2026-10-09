@@ -9,7 +9,7 @@ from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
-from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit
+from auto_bdsp_rng.ui.workspace_layout import ToolbarReflow, WorkspaceSplit
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont
@@ -584,6 +584,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.toolbar_status.setParent(toolbar)
         self.toolbar_status.hide()
         row.addLayout(right_layout)
+        self.toolbar_reflow = ToolbarReflow(toolbar, row)
         return toolbar
 
     def _build_config_panel(self) -> QScrollArea:

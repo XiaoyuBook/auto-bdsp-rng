@@ -13,7 +13,7 @@ from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem, TableWorkbench
-from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.workspace_layout import ToolbarReflow, WorkspaceSplit, scroll_surface
 
 from PySide6.QtCore import QObject, QRect, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QGuiApplication
@@ -569,6 +569,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.toolbar_actions.addWidget(self.start_button)
         self.toolbar_actions.addWidget(self.stop_button)
         self.toolbar_actions.addWidget(self.ocr_button)
+        self.toolbar_reflow = ToolbarReflow(toolbar, row)
         return toolbar
 
     def _build_config_group(self) -> QFrame:

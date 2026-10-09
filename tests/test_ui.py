@@ -657,7 +657,7 @@ def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
     assert speed_min.geometry().bottom() < show_stats.geometry().top()
 
 
-def test_project_xs_controls_use_confirmed_split_layout(
+def test_project_xs_configuration_uses_shared_video_sidebar(
     app,
     isolated_ui_qsettings,
 ):
@@ -670,11 +670,7 @@ def test_project_xs_controls_use_confirmed_split_layout(
     app.processEvents()
     app.processEvents()
 
-    capture = window.capture_group.geometry()
-    seed = window.seed_group.geometry()
-    capture_top = window.capture_group.mapTo(window.project_xs_splitter, QPoint(0, 0)).y()
-
-    assert 16 <= capture_top <= 20
+    assert window.project_xs_config_scroll.isAncestorOf(window.capture_group)
     assert not hasattr(window, "video_source_group")
     assert window.video_source_dialog.parent() is window
     assert not window.video_source_dialog.isVisible()
@@ -701,8 +697,8 @@ def test_project_xs_controls_use_confirmed_split_layout(
     assert window.easycon_tab.connection_dialog.isVisible()
     assert window.easycon_tab.connection_presentation()[1] == "disconnected"
     window.easycon_tab.connection_dialog.hide()
-    assert seed.x() == capture.x()
-    assert seed.y() > capture.bottom()
+    assert window.monitor_sidebar.isAncestorOf(window.seed_group)
+    assert not window.project_xs_tab.isAncestorOf(window.preview_label)
     assert window.window_prefix.parent() is window.capture_group
     assert not window.monitor_window.isVisible()
     assert not window.window_prefix.isVisible()
@@ -716,7 +712,7 @@ def test_project_xs_controls_use_confirmed_split_layout(
     assert isinstance(window.white_delay, ChevronDoubleSpinBox)
     assert window.threshold.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.UpDownArrows
     assert window.white_delay.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.UpDownArrows
-    assert window.preview_title_label.text() == "捕获预览"
+    assert window.preview_title_label.text() == "视频源"
     assert window.picture_in_picture_button.objectName() == "InlineLinkButton"
     assert window.calibrate_shiny_threshold_button.objectName() == "InlineLinkButton"
     assert window.iv_calculator_button.objectName() == "InlineLinkButton"
@@ -5520,6 +5516,20 @@ def test_main_window_auto_rng_reidentify_service_uses_project_xs(app, tmp_path, 
     warmup_windows: list[float | None] = []
     passed_observations: list[BlinkObservation] = []
     observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=100.0)
+
+    # Keep the elapsed-advance assertion independent of the user's NPC config.
+    def fake_load_config(path, blink_count):
+        return ProjectXsTrackingConfig(
+            source_path=tmp_path / Path(str(path)).name,
+            capture=BlinkCaptureConfig(
+                eye_image_path=tmp_path / "eye.png",
+                roi=(0, 0, 40, 40),
+                blink_count=blink_count,
+            ),
+            npc=0,
+        )
+
+    monkeypatch.setattr(main_window_module, "load_project_xs_config", fake_load_config)
 
     def fake_capture(config, *_args, **kwargs):
         capture_counts.append(config.blink_count)

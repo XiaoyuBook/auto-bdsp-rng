@@ -1,5 +1,5 @@
 from __future__ import annotations
-from auto_bdsp_rng.ui.workspace_layout import WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.workspace_layout import ToolbarReflow, WorkspaceSplit, scroll_surface
 
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -932,7 +932,7 @@ class EasyConPanel(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.workspace_splitter = WorkspaceSplit(None, "easycon", breakpoint=0, horizontal=(240, 880))
+        self.workspace_splitter = WorkspaceSplit(None, "easycon", breakpoint=760, horizontal=(240, 880), vertical=(170, 450))
         side_panel.setMinimumWidth(224)
         side_panel.setMaximumWidth(16777215)
         self.sidebar_scroll = scroll_surface(side_panel)
@@ -1386,6 +1386,22 @@ class EasyConPanel(QWidget):
         )
         self.stop_button.clicked.connect(self._stop_active_script)
         layout.addWidget(self.stop_button)
+        # Keep file actions and execution actions together when the page narrows.
+        while layout.count():
+            layout.takeAt(0)
+        file_actions = QHBoxLayout()
+        file_actions.setSpacing(8)
+        for button in (self.open_button, self.new_button, self.save_button, shortcut_label):
+            file_actions.addWidget(button)
+        file_actions.addStretch(1)
+        execution_actions = QHBoxLayout()
+        execution_actions.setSpacing(8)
+        execution_actions.addStretch(1)
+        for control in (self.elapsed_label, self.run_button, self.pause_button, self.stop_button):
+            execution_actions.addWidget(control)
+        layout.addLayout(file_actions)
+        layout.addLayout(execution_actions)
+        self.toolbar_reflow = ToolbarReflow(area, layout)
         return area
 
     # ── 连接设置与底部控制区 ──────────────────────────────

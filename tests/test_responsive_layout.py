@@ -188,10 +188,11 @@ def test_main_window_reflows_within_short_screen(
     assert available.contains(window.geometry())
     window.tabs.setCurrentWidget(window.project_xs_tab)
     app.processEvents()
-    assert isinstance(window.project_xs_splitter, QSplitter)
-    assert window.project_xs_splitter.orientation() == Qt.Orientation.Vertical
-    assert window.project_xs_splitter.widget(0).isAncestorOf(window.capture_group)
-    assert window.project_xs_splitter.widget(1).isAncestorOf(window.status_group)
+    assert isinstance(window.workspace_splitter, QSplitter)
+    assert window.workspace_splitter.orientation() == Qt.Orientation.Horizontal
+    assert window.project_xs_config_scroll.isAncestorOf(window.capture_group)
+    assert window.project_xs_config_scroll.isAncestorOf(window.status_group)
+    assert window.monitor_sidebar.isAncestorOf(window.preview_label)
     assert not hasattr(window, "project_xs_controls_scroll")
     assert not hasattr(window, "bdsp_content_scroll")
 
@@ -209,7 +210,7 @@ def test_main_window_uses_design_geometry_when_screen_can_fit_it(app, monkeypatc
     assert window.geometry().bottom() <= available.bottom() - MAIN_WINDOW_SCREEN_MARGIN
     window.tabs.setCurrentWidget(window.project_xs_tab)
     app.processEvents()
-    assert window.project_xs_splitter.orientation() == Qt.Orientation.Horizontal
+    assert window.workspace_splitter.orientation() == Qt.Orientation.Horizontal
 
 
 def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
@@ -269,7 +270,7 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     assert not window.auto_advance_badge.isVisible()
     assert not window.navigation_status.isVisible()
     assert window.navigation_status.text() == "● 定点 · 第 9999 轮"
-    assert window.navigation_status.geometry().right() <= window.tabs.width()
+    assert window.monitor_sidebar.isVisible()
     assert window.auto_phase_badge.toolTip() == "阶段 搜索目标 Display TID"
     assert window.auto_advance_badge.toolTip() == "advance 1000000000"
     assert "阶段 搜索目标 Display TID" in window.navigation_status.toolTip()
@@ -491,7 +492,7 @@ def test_main_header_run_state_finalizes_without_final_progress(
     assert window._header_loop_index == 0
 
 
-def test_project_xs_reflows_only_on_narrow_window(app, monkeypatch, tmp_path: Path) -> None:
+def test_monitor_stays_on_right_when_seed_configuration_narrows(app, monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         MainWindow,
         "_screen_available_geometry",
@@ -502,12 +503,15 @@ def test_project_xs_reflows_only_on_narrow_window(app, monkeypatch, tmp_path: Pa
     window.show()
     window.resize(980, 640)
     app.processEvents()
-    assert window.project_xs_splitter.orientation() == Qt.Orientation.Vertical
+    assert window.workspace_splitter.orientation() == Qt.Orientation.Horizontal
+    assert window.monitor_sidebar.isVisible()
+    assert window.project_xs_config_scroll.isVisible()
 
     window.resize(1280, 760)
     app.processEvents()
 
-    assert window.project_xs_splitter.orientation() == Qt.Orientation.Horizontal
+    assert window.workspace_splitter.orientation() == Qt.Orientation.Horizontal
+    assert window.monitor_sidebar.geometry().left() > window.tabs.geometry().right()
 
 
 def test_window_geometry_and_tab_restore_when_effective_scale_matches(

@@ -175,6 +175,7 @@ from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer
+from auto_bdsp_rng.ui.live_log_panel import LiveLogPanel
 from auto_bdsp_rng.ui.run_records_panel import RunRecordsPanel
 from auto_bdsp_rng.ui.workspace_style import configure_workspace_style
 from auto_bdsp_rng.ui.spin_box import ChevronDoubleSpinBox as QDoubleSpinBox
@@ -238,7 +239,6 @@ MAIN_WINDOW_GEOMETRY_KEYS = (
 )
 MAIN_WINDOW_UI_SCALE_KEY = "window/ui_scale_percent"
 MAIN_WINDOW_CURRENT_TAB_KEY = "window/current_tab"
-PROJECT_XS_HORIZONTAL_LEFT_WIDTH = 300
 PROJECT_XS_PREVIEW_MIN_HEIGHT = 260
 _AUTO_HEADER_TERMINAL_PHASES = frozenset(("空闲", "已停止", "已完成", "失败"))
 
@@ -1166,8 +1166,8 @@ class _AspectRatioContainer(QWidget):
         policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
-        self.setMinimumWidth(480)
-        self.setFixedHeight(270)
+        self.setMinimumWidth(0)
+        self.setFixedHeight(180)
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802
         return True
@@ -1176,14 +1176,14 @@ class _AspectRatioContainer(QWidget):
         return max(1, round(int(width) * self._ratio_height / self._ratio_width))
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(640, 360)
+        return QSize(352, 198)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(480, 270)
+        return QSize(0, 0)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        QTimer.singleShot(0, self._sync_height_to_width)
+        QTimer.singleShot(0, self, self._sync_height_to_width)
 
     def _sync_height_to_width(self) -> None:
         target_height = self.heightForWidth(self.width())
@@ -1978,8 +1978,21 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.run_records_tab, "日志中心")
-        root_layout.addWidget(self.tabs, 1)
-        _make_labels_copyable(self.tabs)
+        self.monitor_sidebar = self._build_monitor_sidebar()
+        self.workspace_splitter = WorkspaceSplit(
+            self._profile_settings, "monitor", breakpoint=0, horizontal=(760, 360),
+        )
+        self.workspace_splitter.setObjectName("MonitorWorkspaceSplitter")
+        self.tabs.setMinimumWidth(520)
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self.workspace_splitter.addWidget(self.tabs)
+        self.workspace_splitter.addWidget(self.monitor_sidebar)
+        self.workspace_splitter.setStretchFactor(0, 1)
+        self.workspace_splitter.setStretchFactor(1, 0)
+        self.workspace_splitter.restore_sizes()
+        self.workspace_splitter.splitterMoved.connect(self._refresh_navigation_space)
+        root_layout.addWidget(self.workspace_splitter, 1)
+        _make_labels_copyable(root)
 
         self.setCentralWidget(root)
         status_bar = QStatusBar()
@@ -2039,7 +2052,7 @@ class MainWindow(QMainWindow):
         configuration = {
             self.auto_rng_tab: self.auto_rng_tab.config_panel,
             self.auto_tid_rng_tab: self.auto_tid_rng_tab.config_scroll,
-            self.project_xs_tab: self.project_xs_splitter.widget(0),
+            self.project_xs_tab: self.project_xs_config_scroll,
             self.bdsp_tab: self.bdsp_config_scroll,
             self.easycon_tab: self.easycon_tab.sidebar_scroll,
         }.get(page)
@@ -2331,43 +2344,32 @@ class MainWindow(QMainWindow):
         dialog.show()
 
     def _build_project_xs_tab(self) -> QWidget:
-        splitter = WorkspaceSplit(self._profile_settings, "seed", horizontal=(PROJECT_XS_HORIZONTAL_LEFT_WIDTH, 700))
-        self.project_xs_splitter = splitter
-        splitter.setObjectName("ProjectXsSplitter")
-        splitter.setChildrenCollapsible(False)
-
-        # Keep manual capture controls beside the shared preview.
-        left = QWidget()
-        left.setObjectName("ProjectXsConfigPanel")
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(16, 18, 16, 18)
-        left_layout.setSpacing(8)
+        configuration = QWidget()
+        configuration.setObjectName("ProjectXsConfigPanel")
+        config_layout = QVBoxLayout(configuration)
+        config_layout.setContentsMargins(18, 18, 18, 18)
+        config_layout.setSpacing(16)
+        heading = QHBoxLayout()
+        title = QLabel("Seed 捕捉配置")
+        title.setObjectName("SectionTitle")
+        reference = QLabel("Project_Xs")
+        reference.setObjectName("WorkspaceHint")
+        heading.addWidget(title)
+        heading.addStretch(1)
+        heading.addWidget(reference)
+        config_layout.addLayout(heading)
         self.capture_group = self._build_blink_group()
         self.seed_group = self._build_seed_group()
-        left_layout.addWidget(self.capture_group)
-        left_layout.addWidget(self.seed_group)
-        left_layout.addStretch(1)
-
-        # 右侧：状态条（紧凑） + 预览（下部）
         self.status_group = self._build_project_status_group()
-        right = QWidget()
-        right.setObjectName("ProjectXsPreviewPanel")
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(18, 18, 18, 18)
-        right_layout.setSpacing(16)
-        right_layout.addWidget(self.status_group)
-        right_layout.addWidget(self._build_preview_panel(), 1)
-
-        splitter.addWidget(scroll_surface(left))
-        splitter.addWidget(scroll_surface(right))
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        splitter.restore_sizes()
+        config_layout.addWidget(self.capture_group)
+        config_layout.addWidget(self.status_group)
+        config_layout.addStretch(1)
+        self.project_xs_config_scroll = scroll_surface(configuration)
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(splitter)
+        layout.addWidget(self.project_xs_config_scroll)
         return page
 
     def _build_bdsp_tab(self) -> QWidget:
@@ -2469,7 +2471,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.seed_config_combo, 0, 1)
         outer.addWidget(QLabel("校正配置"), 1, 0)
         outer.addWidget(self.reidentify_config_combo, 1, 1)
-        note = QLabel("用于自动流程；手动捕捉与校正使用左侧参数。")
+        note = QLabel("用于自动定点与自动 TID；手动捕捉与校正使用上方参数。")
         note.setObjectName("WorkspaceHint")
         note.setWordWrap(True)
         outer.addWidget(note, 2, 0, 1, 2)
@@ -2589,9 +2591,10 @@ class MainWindow(QMainWindow):
         self.browse_button.setFixedWidth(52)
         config_row.addWidget(self.config_combo, 1)
         config_row.addWidget(self.browse_button)
+        config_row.addWidget(self.save_config_button)
         config_selector.addLayout(config_row)
         layout.addLayout(config_selector, 0, 0, 1, 4)
-        config_note = QLabel("编辑下方参数后保存到此文件；手动操作使用下方参数。")
+        config_note = QLabel("选择或编辑配置后开始捕捉；右侧视频持续显示识别结果与进度。")
         config_note.setObjectName("WorkspaceHint")
         config_note.setWordWrap(True)
         layout.addWidget(config_note, 1, 0, 1, 4)
@@ -2657,7 +2660,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.capture_advanced_fields, 8, 0, 1, 4)
         self.capture_advanced_fields.hide()
         self.capture_advanced_button.toggled.connect(self._set_capture_advanced_visible)
-        layout.addWidget(self.save_config_button, 9, 2, 1, 2, Qt.AlignmentFlag.AlignRight)
         layout.setColumnMinimumWidth(0, 108)
         return group
 
@@ -2677,7 +2679,7 @@ class MainWindow(QMainWindow):
         group = QGroupBox("Seed")
         group.setObjectName("CapturedSeedGroup")
         layout = QGridLayout(group)
-        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setContentsMargins(10, 0, 10, 0)
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
         self.seed32_inputs = [QLineEdit(group) for _ in range(4)]
@@ -2690,7 +2692,10 @@ class MainWindow(QMainWindow):
         for output in self.seed64_outputs:
             output.setReadOnly(True)
             output.setObjectName("Readonly")
-            output.setFixedHeight(32)
+            output.setFixedHeight(26)
+            output.setMinimumWidth(0)
+            output.setPlaceholderText("等待捕捉")
+            output.setAccessibleName(f"捕获 Seed {self.seed64_outputs.index(output)}")
             output.setFont(QFont("Cascadia Mono", 10))
 
         layout.addWidget(QLabel("Seed0"), 0, 0)
@@ -3110,26 +3115,53 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.refresh_capture_devices)
         return dialog
 
+    def _build_monitor_sidebar(self) -> QWidget:
+        sidebar = QFrame()
+        sidebar.setObjectName("MonitorSidebar")
+        sidebar.setMinimumWidth(310)
+        sidebar.setMaximumWidth(640)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(10, 8, 0, 0)
+        layout.setSpacing(10)
+        self.monitor_splitter = WorkspaceSplit(
+            self._profile_settings, "monitor-panels", breakpoint=0,
+            vertical=(400, 300), orientation=Qt.Orientation.Vertical,
+        )
+        self.monitor_preview = self._build_preview_panel()
+        self.monitor_preview_scroll = scroll_surface(self.monitor_preview)
+        self.monitor_preview_scroll.setMinimumHeight(210)
+        self.live_log_panel = LiveLogPanel(self._run_log_buffer)
+        self.live_log_panel.expandRequested.connect(self._show_run_logs)
+        self.monitor_splitter.addWidget(self.monitor_preview_scroll)
+        self.monitor_splitter.addWidget(self.live_log_panel)
+        self.monitor_splitter.setStretchFactor(0, 0)
+        self.monitor_splitter.setStretchFactor(1, 1)
+        self.monitor_splitter.restore_sizes()
+        layout.addWidget(self.monitor_splitter)
+        return sidebar
+
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("CapturePreviewPanel")
-        panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(4)
         self.capture_status_strip = QFrame()
         self.capture_status_strip.setObjectName("CaptureStatusStrip")
         self.capture_status_strip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        status_layout = QHBoxLayout(self.capture_status_strip)
-        status_layout.setContentsMargins(14, 9, 14, 9)
-        status_layout.setSpacing(8)
-        status_layout.addWidget(self.progress_label)
-        status_layout.addWidget(self.progress_value)
-        status_layout.addSpacing(20)
-        status_layout.addWidget(self.advances_label)
-        status_layout.addWidget(self.advances_value)
-        status_layout.addStretch(1)
-        layout.addWidget(self.capture_status_strip)
+        status_layout = QGridLayout(self.capture_status_strip)
+        status_layout.setContentsMargins(10, 6, 10, 6)
+        status_layout.setHorizontalSpacing(16)
+        status_layout.setVerticalSpacing(2)
+        status_layout.addWidget(self.advances_label, 0, 0)
+        status_layout.addWidget(self.advances_value, 1, 0)
+        status_layout.addWidget(self.progress_label, 0, 1)
+        status_layout.addWidget(self.progress_value, 1, 1)
+        status_layout.setColumnStretch(0, 1)
+        status_layout.setColumnStretch(1, 1)
+        self.advances_value.setAccessibleName("视频当前 RNG 帧数")
+        self.progress_value.setAccessibleName("视频眨眼捕捉进度")
+        self.advances_value.setToolTip("当前 RNG 推进数（advance），不是视频帧率。")
         self.preview_group = QGroupBox()
         self.preview_group.setObjectName("CapturePreviewGroup")
         self.preview_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -3139,10 +3171,11 @@ class MainWindow(QMainWindow):
 
         preview_controls = QHBoxLayout()
         preview_controls.setContentsMargins(0, 0, 0, 0)
-        preview_controls.setSpacing(10)
-        self.preview_title_label = QLabel("捕获预览")
+        preview_controls.setSpacing(6)
+        self.preview_title_label = QLabel("视频源")
         self.preview_title_label.setObjectName("SectionTitle")
-        self.main_preview_overlay_check = QCheckBox("显示识别框")
+        self.main_preview_overlay_check = QCheckBox("识别框")
+        self.main_preview_overlay_check.setToolTip("显示眼睛、ROI 与 OCR 识别框")
         self.main_preview_overlay_check.setChecked(True)
         self.main_preview_overlay_check.toggled.connect(self._refresh_preview_presentation)
         self.picture_in_picture_button = QPushButton("独立预览")
@@ -3170,8 +3203,20 @@ class MainWindow(QMainWindow):
         self.preview_label.setScaledContents(False)
         aspect_layout.addWidget(self.preview_label)
         preview_layout.addWidget(self.preview_aspect_container, 0, Qt.AlignmentFlag.AlignTop)
-        preview_layout.addStretch(1)
-        layout.addWidget(self.preview_group, 1)
+        layout.addWidget(self.preview_group)
+        source_row = QHBoxLayout()
+        self.monitor_source_status = QLabel("未连接")
+        self.monitor_source_status.setObjectName("MonitorSourceStatus")
+        self.monitor_source_status.setMinimumWidth(0)
+        self.monitor_source_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.monitor_frame_info = QLabel("等待视频画面")
+        self.monitor_frame_info.setObjectName("WorkspaceHint")
+        source_row.addWidget(self.monitor_source_status, 1)
+        source_row.addWidget(self.monitor_frame_info)
+        layout.addLayout(source_row)
+        layout.addWidget(self.capture_status_strip)
+        layout.addWidget(self.seed_group)
+        layout.addStretch(1)
         return panel
 
     def _build_results(self) -> QWidget:
@@ -3701,25 +3746,38 @@ class MainWindow(QMainWindow):
                 background: transparent;
             }
 
-            QSplitter#ProjectXsSplitter {
-                background: #FFFFFF;
-            }
-            QSplitter#ProjectXsSplitter::handle {
-                background: #E0E5EB;
-                width: 1px;
-            }
             QWidget#ProjectXsConfigPanel {
                 background: #F8F9FB;
             }
-            QWidget#ProjectXsPreviewPanel {
-                background: #F2F4F7;
+            QFrame#MonitorSidebar {
+                background: #F8F9FB;
+                border: 0;
+                border-left: 1px solid #E3E8ED;
             }
             QWidget#CapturePreviewPanel {
-                background: transparent;
+                background: #FFFFFF;
             }
-            QFrame#CaptureStatusStrip {
+            QFrame#LiveLogPanel {
                 background: #FFFFFF;
                 border: 1px solid #E3E8ED;
+                border-radius: 8px;
+            }
+            QPlainTextEdit#LiveLogText {
+                background: #F8F9FB;
+                color: #52606D;
+                border: 0;
+                border-radius: 6px;
+                padding: 6px;
+                font-size: 12px;
+                selection-background-color: #C8E5D9;
+            }
+            QLabel#MonitorSourceStatus {
+                color: #626D79;
+                font-size: 11px;
+            }
+            QFrame#CaptureStatusStrip {
+                background: #F0F7F4;
+                border: 0;
                 border-radius: 8px;
             }
             QFrame#CaptureStatusStrip QLabel {
@@ -3727,8 +3785,9 @@ class MainWindow(QMainWindow):
                 font-size: 12px;
             }
             QFrame#CaptureStatusStrip QLabel#CaptureStatusValue {
-                color: #202A33;
-                font-size: 14px;
+                color: #087C58;
+                font-size: 22px;
+                font-weight: 500;
             }
             QWidget#PreviewAspectContainer {
                 background: transparent;
@@ -3764,7 +3823,19 @@ class MainWindow(QMainWindow):
                 padding: 0;
             }
             QGroupBox#CapturedSeedGroup {
-                border-top: 1px solid #E3E8ED;
+                border: 0;
+                margin-top: 0;
+                padding: 0;
+            }
+            QGroupBox#CapturedSeedGroup::title {
+                color: transparent;
+            }
+            QGroupBox#CapturedSeedGroup QLineEdit {
+                background: #F7F8FA;
+                border: 1px solid #E3E8ED;
+                min-height: 24px;
+                padding: 0 6px;
+                font-size: 12px;
             }
             QGroupBox#CaptureConfigGroup::title,
             QGroupBox#CapturedSeedGroup::title,
@@ -4366,7 +4437,10 @@ class MainWindow(QMainWindow):
             title = APP_TITLE if self.lang == "zh" else self._text("title")
             self.title_label.setText(self.title_label.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, 175) if compact else title)
             self.title_label.setToolTip(APP_TITLE)
-            self.navigation_status.setVisible(not compact)
+            self._refresh_navigation_space()
+
+    def _refresh_navigation_space(self, *_args) -> None:
+        self.navigation_status.setVisible(self.tabs.width() >= 960)
 
     def event(self, event) -> bool:  # type: ignore[override]
         handled = super().event(event)
@@ -4684,7 +4758,7 @@ class MainWindow(QMainWindow):
         self.shiny_charm.setText("闪耀护符" if self.lang == "zh" else "Shiny Charm")
         self.oval_charm.setText("圆形护符" if self.lang == "zh" else "Oval Charm")
         self.preview_group.setTitle("")
-        self.preview_title_label.setText(self._text("preview"))
+        self.preview_title_label.setText("视频源" if self.lang == "zh" else "Video")
         self.config_label.setText(self._text("config"))
         self.browse_button.setText(self._text("browse"))
         self.monitor_window.setText(self._text("monitor_window"))
@@ -4736,6 +4810,7 @@ class MainWindow(QMainWindow):
             )
         if advances is not None:
             self._header_advances = int(advances)
+            self.advances_value.setText(str(advances))
             self._set_header_badge_text(
                 self.auto_advance_badge,
                 f"advance {advances}",
@@ -5061,6 +5136,7 @@ class MainWindow(QMainWindow):
         self._clear_easycon_image_search_result()
         self.preview_label.clear()
         self.preview_label.setText(self._text("no_preview"))
+        self.monitor_frame_info.setText("等待视频画面")
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
 
@@ -5095,6 +5171,8 @@ class MainWindow(QMainWindow):
             full_text = "视频源 未连接"
         button.set_status(full_text, state)
         button.setToolTip(f"{full_text}\n{status}\n点击打开视频源设置")
+        self.monitor_source_status.setText(full_text)
+        self.monitor_source_status.setToolTip(f"{full_text}\n{status}")
 
     def _update_easycon_header(
         self,
@@ -6802,6 +6880,11 @@ class MainWindow(QMainWindow):
             if frame_width < 1280 or frame_height < 720:
                 resolution += "（放大投影窗口可提高清晰度）"
         score = "" if preview is None else f" | score {preview.match_score:.3f}"
+        height, width = frame.shape[:2]
+        self.monitor_frame_info.setText(
+            f"{width} × {height}" + (f" · 匹配 {preview.match_score:.3f}" if preview is not None else "")
+        )
+        self.monitor_frame_info.setToolTip("视频分辨率与眼睛模板匹配分数")
         if config_error is not None:
             annotation_status = " | 识别配置无效，显示原始画面"
         else:
@@ -6814,6 +6897,7 @@ class MainWindow(QMainWindow):
         if self._selection_preview_frame is not None:
             frame = self._selection_preview_frame
         pixmap = self._frame_to_pixmap(frame)
+        self.monitor_frame_info.setText(f"{pixmap.width()} × {pixmap.height()}")
         target = self.preview_label.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
             return

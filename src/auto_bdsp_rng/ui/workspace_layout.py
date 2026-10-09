@@ -1,6 +1,6 @@
 """Resizable native page surfaces; no changes to automation state or UI font scale."""
 import json
-from PySide6.QtCore import QEvent, QObject, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtWidgets import QBoxLayout, QFrame, QScrollArea, QSplitter
 
 
@@ -89,4 +89,34 @@ class ColumnReflow(QObject):
     def eventFilter(self, obj, event):
         if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
             self.refresh()
+        return False
+
+
+class ToolbarReflow(QObject):
+    """Wrap toolbar groups when a persistent sidebar reduces page width."""
+
+    def __init__(self, toolbar, layout):
+        super().__init__(toolbar)
+        self.toolbar, self.layout = toolbar, layout
+        self._pending = False
+        toolbar.installEventFilter(self)
+        self.refresh()
+
+    def refresh(self):
+        self._pending = False
+        margins = self.layout.contentsMargins()
+        required = sum(self.layout.itemAt(i).sizeHint().width() for i in range(self.layout.count()))
+        required += margins.left() + margins.right() + max(0, self.layout.count() - 1) * self.layout.spacing()
+        stacked = self.toolbar.width() < required
+        direction = QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
+        if self.layout.direction() != direction:
+            self.layout.setDirection(direction)
+        height = max(56, self.layout.sizeHint().height() + 16) if stacked else 56
+        if self.toolbar.height() != height:
+            self.toolbar.setFixedHeight(height)
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.LayoutRequest) and not self._pending:
+            self._pending = True
+            QTimer.singleShot(0, self.toolbar, self.refresh)
         return False
