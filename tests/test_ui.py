@@ -146,14 +146,16 @@ def _set_bdsp_seed(window: MainWindow) -> None:
     window.bdsp_seed64_inputs[1].setText("1111111122222222")
 
 
-@pytest.mark.parametrize("level", ["beginner", "expert"])
-def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_path, monkeypatch, level):
+def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_path, monkeypatch):
     from auto_bdsp_rng import app_settings
     from auto_bdsp_rng.ui.startup_dialog import StartupNoticeDialog
     from tests.test_startup_webview import evaluate, wait_until
 
     monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "welcome.json")
-    app_settings.save_settings({"rng_mode": "guided"})
+    legacy = {"experience_level": "beginner", "rng_mode": "guided",
+              "guide_progress": {"version": 1, "session_id": "old-session",
+                                 "step": "target_selection", "status": "in_progress"}}
+    app_settings.save_settings(legacy)
     monkeypatch.setattr(main_window_module, "should_show_startup_notice", app_settings.should_show_startup_notice)
     window = MainWindow()
     window.show()
@@ -162,130 +164,23 @@ def test_main_window_startup_webview_and_help_share_the_same_dialog(app, tmp_pat
     wait_until(lambda: first.ready)
     window.tabs.setCurrentWidget(window.project_xs_tab)
     assert isinstance(first, StartupNoticeDialog)
-    assert first.parentWidget() is window
     window.show_startup_choice()
     assert window._startup_notice_dialog is first
-    evaluate(first, f"document.querySelector('[data-level={level}]').click()")
     evaluate(first, "document.querySelector('.start').click()")
     wait_until(lambda: window._startup_notice_dialog is None)
-    assert app_settings.get_experience_level() == level
-    if level == "beginner":
-        wait_until(lambda: window.guide_controller.overlay is not None and window.guide_controller.overlay.isVisible())
-        assert window.guide_button.text() == "继续引导"
-        assert window.tabs.currentWidget() is window.project_xs_tab
-        assert window.guide_controller.overlay.waiting_for_page
-        window.guide_controller.pause()
-    else:
-        assert window.guide_controller.overlay is None
-        assert window.guide_button.text() == "开始引导"
-        assert window.guide_button.menu() is None
-    progress = app_settings.get_guide_progress()
+    assert not hasattr(window, "guide_controller")
+    assert not hasattr(window, "guide_button")
+    assert window.tabs.currentWidget() is window.project_xs_tab
+    assert app_settings.load_settings() == dict(legacy, startup_notice_acknowledged=True)
     window._maybe_show_startup_notice()
     assert window._startup_notice_dialog is None
     window.startup_choice_action.trigger()
     wait_until(lambda: window._startup_notice_dialog is not None)
     second = window._startup_notice_dialog
     wait_until(lambda: second.ready)
-    assert isinstance(second, StartupNoticeDialog)
     second.reject()
     wait_until(lambda: window._startup_notice_dialog is None)
-    assert app_settings.get_experience_level() == level
-    assert app_settings.get_guide_progress() == progress
-
-
-def test_main_window_guide_start_resume_restart_and_completed_entry(app, tmp_path, monkeypatch):
-    from PySide6.QtTest import QTest
-    from auto_bdsp_rng import app_settings
-
-    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guides.json")
-    app_settings.save_settings({"experience_level": "beginner", "rng_mode": "guided", "other": "保留"})
-    window = MainWindow()
-    window.show()
-    app.processEvents()
-    assert window.guide_button.text() == "开始引导"
-    assert window.guide_button.menu() is None
-    window.tabs.setCurrentWidget(window.project_xs_tab)
-    window.bdsp_seed64_inputs[0].setText("123456789ABCDEF0")
-    window.guide_button.click()
-    first = app_settings.get_guide_progress()
-    assert first is not None
-    assert window.guide_button.text() == "继续引导"
-    assert [a.text() for a in window.guide_button.menu().actions()] == ["重新开始引导"]
-    assert window.guide_controller.overlay.isVisible()
-    assert window.tabs.currentWidget() is window.project_xs_tab
-    assert window.guide_controller.overlay.waiting_for_page
-    assert first["step"] == "target_selection"
-    window.guide_controller.overlay.close_button.click()
-    assert not window.guide_controller.overlay.isVisible()
-    window.tabs.setCurrentWidget(window.auto_tid_rng_tab)
-    window.guide_button.click()
-    assert app_settings.get_guide_progress() == first
-    assert window.guide_controller.overlay.isVisible()
-    assert window.tabs.currentWidget() is window.auto_tid_rng_tab
-    bar = window.tabs.tabBar()
-    QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(window.tabs.indexOf(window.auto_rng_tab)).center())
-    assert window.tabs.currentWidget() is window.auto_rng_tab
-    assert not window.guide_controller.overlay.waiting_for_page
-    assert app_settings.get_guide_progress() == first
-    window.guide_controller.pause()
-    reopened = MainWindow()
-    assert reopened.guide_button.text() == "继续引导"
-    assert reopened.guide_controller.overlay is None
-    window.tabs.setCurrentWidget(window.bdsp_tab)
-    window.guide_controller.restart_action.trigger()
-    assert window.tabs.currentWidget() is window.bdsp_tab
-    assert window.guide_controller.overlay.waiting_for_page
-    second = app_settings.get_guide_progress()
-    assert second["session_id"] != first["session_id"]
-    assert second["step"] == "target_selection"
-    QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(window.tabs.indexOf(window.auto_rng_tab)).center())
-    assert window.tabs.currentWidget() is window.auto_rng_tab
-    assert not window.guide_controller.overlay.waiting_for_page
-    assert app_settings.get_guide_progress() == second
-    assert window.bdsp_seed64_inputs[0].text() == "123456789ABCDEF0"
-    assert app_settings.load_settings()["other"] == "保留"
-    window.guide_controller.pause()
-    settings = app_settings.load_settings()
-    settings["guide_progress"]["status"] = "completed"
-    app_settings.save_settings(settings)
-    window.guide_controller.refresh()
-    assert window.guide_button.text() == "开始引导"
-    assert window.guide_button.menu() is None
-
-
-def test_main_window_guide_write_failure_preserves_progress_and_workspace(app, tmp_path, monkeypatch):
-    from auto_bdsp_rng import app_settings
-    from auto_bdsp_rng.ui import guide as guide_module
-
-    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guides.json")
-    window = MainWindow()
-    window.show()
-    app.processEvents()
-    window.tabs.setCurrentWidget(window.project_xs_tab)
-    warnings = []
-    monkeypatch.setattr(guide_module.QMessageBox, "warning", lambda *args: warnings.append(args))
-
-    def fail(*args):
-        raise OSError("disk full")
-
-    with monkeypatch.context() as scope:
-        scope.setattr(app_settings.os, "replace", fail)
-        window.guide_button.click()
-        assert warnings
-        assert window.guide_button.text() == "开始引导"
-        assert window.guide_controller.overlay is None
-        assert app_settings.get_guide_progress() is None
-        assert window.tabs.currentWidget() is window.project_xs_tab
-    window.guide_button.click()
-    progress = app_settings.get_guide_progress()
-    window.guide_controller.pause()
-    with monkeypatch.context() as scope:
-        scope.setattr(app_settings.os, "replace", fail)
-        window.guide_controller.restart_action.trigger()
-        assert app_settings.get_guide_progress() == progress
-        assert not window.guide_controller.overlay.isVisible()
-        window.guide_button.click()
-        assert window.guide_controller.overlay.isVisible()
+    assert app_settings.load_settings() == dict(legacy, startup_notice_acknowledged=True)
 
 
 @pytest.mark.parametrize("video_connected", [True, False])
@@ -357,118 +252,8 @@ def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_pa
     window.close()
 
 
-def test_main_window_guide_spotlight_tracks_real_controls_after_move_resize_and_scroll(app, tmp_path, monkeypatch):
-    from PySide6.QtCore import QRect
-    from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QScrollArea
-    from auto_bdsp_rng import app_settings
-
-    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guide.json")
-    window = MainWindow()
-    monkeypatch.setattr(window, "_screen_available_geometry", lambda: QRect(0, 0, 2000, 1400))
-    window.show()
-    QTest.qWait(100)
-    window.guide_button.click()
-    overlay = window.guide_controller.overlay
-    assert not overlay.waiting_for_page
-    target = window.auto_rng_tab.target_button
-    for width, height, x, y in ((1150, 760, 190, 80), (860, 600, 60, 190), (1150, 760, 230, 120)):
-        window.move(x, y)
-        window.resize(width, height)
-        QTest.qWait(100)
-        # Splitter and tab layouts settle through queued Qt layout requests.
-        for _ in range(25):
-            if not overlay.relayout.isActive():
-                break
-            QTest.qWait(20)
-        # Compute bounds by walking the widget hierarchy, independently of the
-        # global-coordinate conversion used by the spotlight.
-        position = QPoint()
-        ancestor = target
-        while ancestor is not overlay.parentWidget():
-            position += ancestor.pos()
-            ancestor = ancestor.parentWidget()
-        assert overlay.hole.contains(QRect(position, target.size()))
-        assert not overlay.mask().contains(position + target.rect().center())
-        assert overlay.rect().contains(overlay.tip.geometry())
-        assert not overlay.hole.intersects(overlay.tip.geometry())
-        assert overlay.mask().contains(QPoint(5, 5))
-    window.resize(860, 600)
-    QTest.qWait(100)
-    ancestor = target.parentWidget()
-    while not isinstance(ancestor, QScrollArea):
-        ancestor = ancestor.parentWidget()
-    assert ancestor.verticalScrollBar().maximum() >= 12
-    ancestor.verticalScrollBar().setValue(12)
-    QTest.qWait(100)
-    position = overlay.mapFromGlobal(target.mapToGlobal(target.rect().center()))
-    assert overlay.hole.contains(position)
-    QTest.keyClick(target, Qt.Key.Key_Tab)
-    assert overlay.close_button.hasFocus()
-    QTest.keyClick(overlay.close_button, Qt.Key.Key_Escape)
-    assert not overlay.isVisible()
-    assert app_settings.get_guide_progress() is not None
 
 
-def test_main_window_guide_page_prompt_tracks_tab_and_waits_for_activation(app, tmp_path, monkeypatch):
-    from PySide6.QtCore import QRect
-    from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QStyle, QStyleOptionTab
-    from auto_bdsp_rng import app_settings
-
-    monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "guide.json")
-    window = MainWindow()
-    monkeypatch.setattr(window, "_screen_available_geometry", lambda: QRect(0, 0, 2000, 1400))
-    window.tabs.setCurrentWidget(window.easycon_tab)
-    window.show()
-    QTest.qWait(100)
-    window.guide_button.click()
-    overlay = window.guide_controller.overlay
-    bar = window.tabs.tabBar()
-    progress = app_settings.get_guide_progress()
-    for width, height, x, y in ((1150, 760, 190, 80), (860, 600, 60, 190), (1150, 760, 230, 120)):
-        window.move(x, y)
-        window.resize(width, height)
-        QTest.qWait(100)
-        assert overlay.isVisible() and overlay.waiting_for_page
-        assert window.tabs.currentWidget() is window.easycon_tab
-        position = QPoint()
-        ancestor = bar
-        while ancestor is not overlay.parentWidget():
-            position += ancestor.pos()
-            ancestor = ancestor.parentWidget()
-        index = window.tabs.indexOf(window.auto_rng_tab)
-        option = QStyleOptionTab()
-        bar.initStyleOption(option, index)
-        text_area = bar.style().subElementRect(QStyle.SubElement.SE_TabBarTabText, option, bar).translated(position)
-        assert abs(overlay.hole.center().x() - text_area.center().x()) <= 1
-        assert abs(overlay.hole.center().y() - text_area.center().y()) <= 1
-        assert overlay.hole.left() < text_area.left() - 5
-        assert overlay.hole.right() > text_area.right() + 5
-        assert not overlay.mask().contains(text_area.center())
-        # The trailing gap is covered, while the label remains clickable.
-        gap = position + bar.tabRect(index).topRight() + QPoint(-2, bar.tabRect(index).height() // 2)
-        assert overlay.mask().contains(gap)
-        for index in range(1, window.tabs.count()):
-            assert overlay.mask().contains(position + bar.tabRect(index).center())
-        assert overlay.rect().contains(overlay.tip.geometry())
-        assert not overlay.hole.intersects(overlay.tip.geometry())
-    QTest.keyClick(bar, Qt.Key.Key_Right)
-    QTest.keyClick(bar, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
-    assert window.tabs.currentWidget() is window.easycon_tab
-    QTest.keyClick(overlay.close_button, Qt.Key.Key_Tab)
-    assert bar.hasFocus()
-    QTest.keyClick(bar, Qt.Key.Key_Space)
-    QTest.qWait(100)
-    assert window.tabs.currentWidget() is window.auto_rng_tab
-    assert overlay.isVisible() and not overlay.waiting_for_page
-    assert window.auto_rng_tab.target_button.hasFocus()
-    assert app_settings.get_guide_progress() == progress
-    QTest.keyClick(window.auto_rng_tab.target_button, Qt.Key.Key_Escape)
-    assert not overlay.isVisible()
-    window.guide_button.click()
-    assert overlay.isVisible() and not overlay.waiting_for_page
-    assert app_settings.get_guide_progress() == progress
 
 
 def _auto_rng_settings(tmp_path: Path) -> QSettings:
@@ -3594,7 +3379,7 @@ def test_auto_rng_panel_has_target_button_and_no_old_main_regions(app):
     assert not panel.candidate_empty_label.isHidden()
     assert not hasattr(panel, "search_target_summary")
     assert hasattr(panel, "target_button")
-    assert panel.target_button.text() == "设置"
+    assert panel.target_button.text() == "目标设置"
     assert panel.target_button.toolTip() == "打开目标精灵设置"
     assert not hasattr(panel, "parameter_preview")
     assert not hasattr(panel, "preview_button")
@@ -3632,9 +3417,10 @@ def test_auto_rng_panel_keeps_hidden_message_mirror_and_live_runtime_card(app):
     assert index >= 0
     row, column, row_span, column_span = panel.content_grid.getItemPosition(index)
     assert (row, column, row_span, column_span) == (1, 0, 1, 2)
-    assert panel.content_grid.itemAtPosition(0, 0).widget() is panel.local_views
-    assert panel.local_views.widget(0) is panel.config_panel
-    assert panel.local_views.widget(1) is panel.runtime_panel
+    assert panel.content_grid.itemAtPosition(0, 0).widget() is panel.config_panel
+    assert panel.overview.isAncestorOf(panel.target_summary_group)
+    assert panel.overview.isAncestorOf(panel.runtime_card)
+    assert not hasattr(panel, "local_views")
 
 
 def test_auto_rng_target_data_and_script_shortcuts_use_existing_workspaces(
@@ -3867,7 +3653,7 @@ def test_auto_rng_missing_script_shortcut_reveals_and_focuses_field(app, tmp_pat
     panel.resize(1126, 740)
     panel.show()
     assert not panel.script_group.isHidden()
-    panel.local_views.setCurrentIndex(1)
+    panel.config_panel.verticalScrollBar().setValue(0)
     app.processEvents()
     panel.runtime_setup_button.click()
     app.processEvents()
@@ -3931,9 +3717,8 @@ def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(a
     app.processEvents()
     panel = window.auto_rng_tab
     assert not panel.script_group.isHidden()
-    panel.local_views.setCurrentIndex(1)
     app.processEvents()
-    viewport = panel.runtime_panel.viewport()
+    viewport = panel.config_panel.viewport()
 
     def within_view(widget):
         position = widget.mapTo(viewport, QPoint(0, 0))
@@ -3942,13 +3727,16 @@ def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(a
 
     within_view(panel.runtime_card)
     assert panel.config_panel.isAncestorOf(panel.runtime_script_card)
-    assert panel.runtime_panel.verticalScrollBar().maximum() == 0
+    within_view(panel.target_summary_group)
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FINAL_WAIT))
     panel.set_candidate_targets([
         SimpleNamespace(advances=1000 + i, shiny=0, nature=0, ivs=(31,) * 6)
         for i in range(25)
     ], locked_index=24)
+    panel.runtime_details_toggle.click()
     app.processEvents()
+    viewport = panel.runtime_panel.viewport()
+    assert panel.runtime_dialog.isVisible()
     within_view(panel.candidate_table)
     assert panel.candidate_table.item(0, 0).text() == "已锁定"
     panel.candidate_table.setFocus()
@@ -3996,8 +3784,8 @@ def test_auto_rng_content_is_added_directly_below_toolbar(app):
     assert content.objectName() == "AutoRngContent"
     assert content.parentWidget() is panel
     assert not hasattr(panel, "content_scroll")
-    assert panel.content_grid.indexOf(panel.local_views) >= 0
-    assert panel.local_views.widget(0) is panel.config_panel
+    assert panel.content_grid.indexOf(panel.config_panel) >= 0
+    assert not hasattr(panel, "local_views")
     assert panel.layout().itemAt(0).widget() is panel.toolbar
 
 

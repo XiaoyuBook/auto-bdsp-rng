@@ -261,7 +261,7 @@ def test_auto_rng_panel_applies_accepted_target_draft(app, tmp_path, monkeypatch
 
     assert len(panel.targets()) == 2
     assert panel.targets()[1][1].height_min == 11
-    assert panel.target_count_label.text() == "2 组目标条件"
+    assert panel.target_count_label.text() == "目标条件 · 2 组"
 
 
 def test_many_targets_scroll_without_covering_footer(app):

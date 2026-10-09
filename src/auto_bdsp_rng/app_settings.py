@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 import threading
-import uuid
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
@@ -103,77 +102,8 @@ def set_experience_level(
         settings["experience_level"] = level
         if acknowledge_startup:
             settings["startup_notice_acknowledged"] = True
-            if level == "beginner" and not _unfinished_guide(settings.get("guide_progress")):
-                settings["guide_progress"] = _new_guide_progress()
         save_settings(settings, path)
     return level
-
-
-def _new_guide_progress() -> dict[str, Any]:
-    return {"version": 1, "session_id": uuid.uuid4().hex, "step": "target_selection", "status": "in_progress"}
-
-
-GUIDE_STEPS = (
-    "target_selection", "search_range", "delay_strategy", "max_wait",
-    "shiny_threshold", "sync", "auto_reverse", "correction_strategy",
-    "save_config", "task_configured", "connect_devices", "devices_connected",
-    "seed_capture_page", "seed_capture_config", "seed_capture_actions",
-    "seed_capture_tools", "seed_capture_save", "auto_flow_config", "script_preview",
-    "easycon_intro", "easycon_recording", "auto_script_config", "easycon_script_config",
-    "first_auto_run",
-)
-
-LEGACY_GUIDE_STEPS = frozenset(("independent_preview", "preview_opened", "capture_overview_done"))
-
-
-def _unfinished_guide(value: Any) -> bool:
-    return (
-        isinstance(value, dict)
-        and type(value.get("version")) is int and value["version"] == 1
-        and isinstance(value.get("session_id"), str) and bool(value["session_id"])
-        and (value.get("step") in GUIDE_STEPS or value.get("step") in LEGACY_GUIDE_STEPS)
-        and value.get("status") == "in_progress"
-    )
-
-
-def get_guide_progress(path: Path | None = None) -> dict[str, Any] | None:
-    value = load_settings(path).get("guide_progress")
-    return dict(value) if _unfinished_guide(value) else None
-
-
-def start_guide_progress(path: Path | None = None) -> dict[str, Any]:
-    with _SETTINGS_LOCK:
-        settings = load_settings(path)
-        progress = _new_guide_progress()
-        settings["guide_progress"] = progress
-        save_settings(settings, path)
-    return dict(progress)
-
-
-def advance_guide_progress(step: str, detail: str = "", path: Path | None = None) -> dict[str, Any]:
-    """Save a guide position without replacing its session or other settings."""
-    if step not in GUIDE_STEPS:
-        raise ValueError("unknown guide step")
-    with _SETTINGS_LOCK:
-        settings = load_settings(path)
-        previous = settings.get("guide_progress")
-        if not _unfinished_guide(previous):
-            raise ValueError("no unfinished guide")
-        progress = dict(previous, step=step, detail=detail)
-        settings["guide_progress"] = progress
-        save_settings(settings, path)
-    return dict(progress)
-
-
-def complete_guide_progress(path: Path | None = None) -> None:
-    """Finish the current guide while retaining its session and other settings."""
-    with _SETTINGS_LOCK:
-        settings = load_settings(path)
-        previous = settings.get("guide_progress")
-        if not _unfinished_guide(previous):
-            raise ValueError("no unfinished guide")
-        settings["guide_progress"] = dict(previous, status="completed")
-        save_settings(settings, path)
 
 
 def is_run_log_enabled(path: Path | None = None) -> bool:

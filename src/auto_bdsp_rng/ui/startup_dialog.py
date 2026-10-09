@@ -1,4 +1,4 @@
-"""The local WebView used by the first-launch mode chooser."""
+"""The local welcome page shown on first launch."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
-from auto_bdsp_rng.app_settings import ExperienceLevel, set_experience_level
+from auto_bdsp_rng.app_settings import set_startup_notice_acknowledged
 from auto_bdsp_rng.resources import resource_path
 
 
@@ -35,9 +35,9 @@ class _WelcomeBridge(QObject):
     def pageReady(self) -> None:
         self._dialog.ready = True
 
-    @Slot(str)
-    def choose(self, level: str) -> None:
-        self._dialog.submit_choice(level)
+    @Slot()
+    def enterWorkspace(self) -> None:  # noqa: N802
+        self._dialog.enter_workspace()
 
 
 class StartupNoticeDialog(QDialog):
@@ -45,10 +45,10 @@ class StartupNoticeDialog(QDialog):
         self,
         parent: QWidget | None = None,
         *,
-        save_choice: Callable[[ExperienceLevel], object] | None = None,
+        save_acknowledgement: Callable[[], object] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("选择乱数方式")
+        self.setWindowTitle("欢迎使用")
         self.setObjectName("StartupNoticeDialog")
         self.setModal(True)
         self.resize(940, 620)
@@ -56,10 +56,8 @@ class StartupNoticeDialog(QDialog):
         self.ready = False
         self._submitting = False
         self._positioned = False
-        self.selected_experience_level: ExperienceLevel | None = None
-        self._save_choice = save_choice or (
-            lambda level: set_experience_level(level, acknowledge_startup=True)
-        )
+        self.acknowledged = False
+        self._save_acknowledgement = save_acknowledgement or (lambda: set_startup_notice_acknowledged(True))
         self.page_url = QUrl.fromLocalFile(str(resource_path("docs", "assets", "welcome", "index.html")))
 
         layout = QVBoxLayout(self)
@@ -110,22 +108,21 @@ class StartupNoticeDialog(QDialog):
             self.ready = False
             self.stack.setCurrentIndex(1)
 
-    def submit_choice(self, level: str) -> None:
-        if not self.ready or self._submitting or level not in ("beginner", "expert"):
+    def enter_workspace(self) -> None:
+        if not self.ready or self._submitting:
             return
         self._submitting = True
-        selected: ExperienceLevel = "beginner" if level == "beginner" else "expert"
         try:
-            self._save_choice(selected)
+            self._save_acknowledgement()
         except OSError:
             self._submitting = False
-            self.bridge.saveFailed.emit("无法保存选择，请检查设置目录是否可写后重试。")
+            self.bridge.saveFailed.emit("无法保存设置，请检查设置目录是否可写后重试。")
             return
-        self.selected_experience_level = selected
+        self.acknowledged = True
         self.accept()
 
     def accept(self) -> None:
-        if self.selected_experience_level is not None:
+        if self.acknowledged:
             super().accept()
 
     def showEvent(self, event) -> None:  # noqa: N802

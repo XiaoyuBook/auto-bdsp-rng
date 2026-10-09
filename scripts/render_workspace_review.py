@@ -14,10 +14,11 @@ import time
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dpi", type=int, choices=(100, 150), default=100)
+parser.add_argument("--dpi", type=int, choices=(100, 125, 150), default=100)
 parser.add_argument("--output", type=Path, default=Path("logs/ui-review/redesign"))
 parser.add_argument("--tid-columns-only", action="store_true", help="Review TID numeric columns and arrival times at 860/1150 widths")
 parser.add_argument("--seed-only", action="store_true", help="Review Seed configuration, timing and video threshold at all window sizes")
+parser.add_argument("--auto-only", action="store_true", help="Review the static target/status overview, configuration and details")
 args = parser.parse_args()
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["QT_SCALE_FACTOR"] = str(args.dpi / 100)
@@ -109,7 +110,6 @@ def capture(w, name, page, state, width, height, out):
     if w.auto_rng_tab._runtime_script_editor_expanded != (name == "auto-scripts"):
         w.auto_rng_tab.runtime_script_summary_toggle.click()
     if name.startswith("auto-"):
-        page.local_views.setCurrentIndex(int(name in ("auto-runtime", "auto-details")))
         page.config_panel.verticalScrollBar().setValue(0)
         page.runtime_panel.verticalScrollBar().setValue(0)
     elif name.startswith("tid-"):
@@ -148,7 +148,8 @@ def capture(w, name, page, state, width, height, out):
         w.history_tab.detail_scroll.ensureWidgetVisible(target, 8, 8)
         settle(w)
     filename = f"{state}-{name}-{width}x{height}-{args.dpi}.png"
-    w.grab().save(str(out / filename))
+    surface = w.auto_rng_tab.runtime_dialog if name == "auto-details" else w
+    surface.grab().save(str(out / filename))
     scrolls = []
     for area in page.findChildren(QScrollArea):
         if area.isVisible():
@@ -160,7 +161,7 @@ def capture(w, name, page, state, width, height, out):
     for control in page.findChildren(QWidget):
         if not isinstance(control, (QAbstractButton, QAbstractSpinBox, QComboBox, QLineEdit)):
             continue
-        if not control.isVisible():
+        if not control.isVisible() or control.window() is not w:
             continue
         bounds = QRect(control.mapTo(page, QPoint()), control.size())
         # Vertical clipping within a scroll area is intentional; horizontal
@@ -238,6 +239,9 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
         elif args.seed_only:
             pages = [("seed", w.project_xs_tab), ("seed-advanced", w.project_xs_tab),
                      ("seed-auto", w.project_xs_tab)]
+        elif args.auto_only:
+            pages = [(name, w.auto_rng_tab) for name in (
+                "auto-overview", "auto-strategies", "auto-scripts", "auto-details")]
         for width, height in sizes:
             w.resize(width, height)
             for name, page in pages:

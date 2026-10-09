@@ -162,7 +162,6 @@ from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
-from auto_bdsp_rng.ui.guide import GuideController
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
@@ -1696,7 +1695,6 @@ class MainWindow(QMainWindow):
         self._sync_seed64_from_state32()
         self._apply_language()
         self._restore_window_geometry()
-        self.guide_controller = GuideController(self, self.guide_button)
         self.statusBar().showMessage(self._text("ready"))
         QTimer.singleShot(0, self._maybe_show_startup_notice)
 
@@ -1868,11 +1866,6 @@ class MainWindow(QMainWindow):
         self.help_button.setToolTip("帮助")
         self.help_button.setAccessibleName("帮助")
         self.help_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.guide_button = QToolButton()
-        self.guide_button.setObjectName("GuideButton")
-        self.guide_button.setFixedSize(104, 32)
-        self.guide_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.guide_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.brand_logo = QLabel()
         self.brand_logo.setObjectName("BrandLogo")
         self.brand_logo.setFixedSize(32, 32)
@@ -1906,7 +1899,6 @@ class MainWindow(QMainWindow):
         self.qq_notification_button.setAccessibleName("QQ 通知设置")
         self.qq_notification_button.clicked.connect(self.show_qq_notifications)
         header_layout.addWidget(self.qq_notification_button)
-        header_layout.addWidget(self.guide_button)
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
@@ -2052,7 +2044,7 @@ class MainWindow(QMainWindow):
         )
         self.help_menu_controller.install(self.help_button)
         self.startup_choice_action = self.help_menu_controller.help_menu.addAction(
-            "选择乱数方式…", self.show_startup_choice
+            "欢迎页面…", self.show_startup_choice
         )
         self.help_menu_controller.help_menu.addAction("术语与操作帮助", lambda: show_terminology(self))
         self.update_controller.busyChanged.connect(
@@ -2070,7 +2062,7 @@ class MainWindow(QMainWindow):
         self.auto_tid_rng_tab.preparationRequested.connect(lambda: self.readiness.show_for(self.auto_tid_rng_tab))
 
     def reveal_page_configuration(self, page) -> None:
-        if page in (self.auto_rng_tab, self.auto_tid_rng_tab):
+        if page is self.auto_tid_rng_tab:
             page.local_views.setCurrentIndex(0)
         elif page is self.bdsp_tab:
             self.query_toggle.setChecked(True)
@@ -2360,12 +2352,6 @@ class MainWindow(QMainWindow):
             return
         dialog = StartupNoticeDialog(self)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        def apply_startup_choice() -> None:
-            self.guide_controller.refresh()
-            if dialog.selected_experience_level == "beginner":
-                QTimer.singleShot(0, self.guide_controller.begin_or_resume)
-
-        dialog.accepted.connect(apply_startup_choice)
         dialog.finished.connect(lambda _result: setattr(self, "_startup_notice_dialog", None))
         self._startup_notice_dialog = dialog
         dialog.show()
@@ -3796,30 +3782,6 @@ class MainWindow(QMainWindow):
                 background: #055B41;
                 border-color: #055B41;
             }
-            QToolButton#GuideButton {
-                background: #F0F8F4;
-                border: 1px solid #C5DFD2;
-                border-radius: 7px;
-                color: #087C58;
-                padding: 0;
-                font-size: 13px;
-                font-weight: 500;
-            }
-            QToolButton#GuideButton[resumable="true"] {
-                padding-right: 18px;
-            }
-            QToolButton#GuideButton[resumable="true"]::menu-button {
-                width: 20px;
-                border-left: 1px solid #C5DFD2;
-                border-top-right-radius: 7px;
-                border-bottom-right-radius: 7px;
-            }
-            QToolButton#GuideButton:hover,
-            QToolButton#GuideButton:pressed {
-                background: #EAF4EF;
-                border-color: #8EBBA6;
-                color: #087C58;
-            }
             QToolButton#HelpMenuButton {
                 background: transparent;
                 border: 1px solid transparent;
@@ -4549,7 +4511,6 @@ class MainWindow(QMainWindow):
         self.auto_tid_rng_tab._save_panel_state()
         self._save_profile_settings()
         self._save_window_geometry()
-        self.guide_controller.pause()
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
         super().closeEvent(event)
@@ -6273,10 +6234,7 @@ class MainWindow(QMainWindow):
             self._cancel_preview_selection()
             return
         if self._selection_mode == "eye":
-            if self.guide_controller.eye_guide.selecting_eye:
-                self.apply_selected_eye(roi, preserve_roi=True)
-            else:
-                self.apply_selected_eye(roi)
+            self.apply_selected_eye(roi)
         elif self._selection_mode == "ocr_region":
             self.apply_selected_ocr_region(roi)
         elif self._selection_mode == "tid_ocr_region":

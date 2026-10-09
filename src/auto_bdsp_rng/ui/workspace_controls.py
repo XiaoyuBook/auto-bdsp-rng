@@ -228,8 +228,9 @@ class SpeciesAvatar(QWidget):
         if self._sprite.isNull():
             workspace_icon("pokeball", "#087C58").paint(painter, self.rect().adjusted(8, 8, -8, -8))
         else:
-            size = self._sprite.size().scaled(30, 30, Qt.AspectRatioMode.KeepAspectRatio)
-            rect = QRect((36 - size.width()) // 2, (36 - size.height()) // 2, size.width(), size.height())
+            inset = max(3, round(min(self.width(), self.height()) * .08))
+            size = self._sprite.size().scaled(self.width() - inset * 2, self.height() - inset * 2, Qt.AspectRatioMode.KeepAspectRatio)
+            rect = QRect((self.width() - size.width()) // 2, (self.height() - size.height()) // 2, size.width(), size.height())
             painter.drawPixmap(rect, self._sprite)
 
 

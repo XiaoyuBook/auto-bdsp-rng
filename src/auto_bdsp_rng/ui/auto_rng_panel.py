@@ -9,7 +9,8 @@ from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
-from auto_bdsp_rng.ui.workspace_layout import LocalViews, ToolbarReflow
+from auto_bdsp_rng.ui.workspace_layout import ToolbarReflow
+from auto_bdsp_rng.ui.auto_rng_overview import OverviewCards, StaticFlowMap, TargetConditions
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont
@@ -378,8 +379,6 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     targetDataRequested = Signal()
     targetDialogOpened = Signal()
     targetDialogClosed = Signal()
-    guideDialogOpened = Signal(str)
-    guideDialogClosed = Signal(str, int)
     configSaved = Signal()
     configSaveFailed = Signal(str)
     configEdited = Signal()
@@ -460,16 +459,28 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.content_grid.setVerticalSpacing(0)
         self.config_panel = self._build_config_panel()
         self.runtime_panel = self._build_runtime_panel()
-        self.local_views = LocalViews()
-        self.local_views.addTab(self.config_panel, "任务设置")
-        self.local_views.addTab(self.runtime_panel, "运行现场")
-        # Script selectors belong to the continuous settings surface.
+        self.runtime_content.layout().removeWidget(self.runtime_card)
+        self.config_contents.layout().removeWidget(self.target_summary_group)
+        self.overview = OverviewCards(self.target_summary_group, self.runtime_card)
+        self.config_contents.layout().insertWidget(0, self.overview)
         self.runtime_content.layout().removeWidget(self.runtime_script_card)
         self.config_contents.layout().insertWidget(self.config_contents.layout().count() - 2, self.runtime_script_card)
         self.runtime_script_header.show()
         self._set_runtime_script_summary_visible(False)
-        self.content_grid.addWidget(self.local_views, 0, 0, 1, 2)
-        self.runStateChanged.connect(lambda active: self.local_views.setCurrentIndex(1) if active else None)
+        self.runtime_dialog = QDialog(self)
+        self.runtime_dialog.setWindowTitle("自动定点运行详情")
+        self.runtime_dialog.setModal(False)
+        self.runtime_dialog.resize(680, 700)
+        dialog_layout = QVBoxLayout(self.runtime_dialog)
+        dialog_layout.setContentsMargins(12, 12, 12, 12)
+        dialog_layout.addWidget(self.runtime_panel)
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        close.rejected.connect(self.runtime_dialog.close)
+        dialog_layout.addWidget(close)
+        self.runtime_dialog.finished.connect(lambda _result: self.runtime_details_toggle.setChecked(False))
+        self.content_grid.addWidget(self.config_panel, 0, 0, 1, 2)
+        self.runStateChanged.connect(self._reveal_running_overview)
         # Keep the old message widgets as compatibility state surfaces.  The
         # visible message and log entry now live in the main window footer.
         self.content_grid.addWidget(self._build_log_group(), 1, 0, 1, 2)
@@ -481,6 +492,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
         layout.addWidget(content, 1)
         self._apply_panel_style()
+
+    def _reveal_running_overview(self, active: bool) -> None:
+        if active:
+            self.config_panel.verticalScrollBar().setValue(0)
 
     def _sync_run_controls(self) -> None:
         """Keep the toolbar status hint in step with lifecycle controls."""
@@ -646,7 +661,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.save_config_button.setObjectName("ConfigSaveButton")
         self.save_config_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_config_button.setAccessibleName("保存任务配置")
-        self.save_config_button.setToolTip("保存左侧任务配置；右侧脚本选择单独保存。点击开始时会自动保存全部配置。")
+        self.save_config_button.setToolTip("保存任务参数；脚本选择可在下方单独保存。点击开始时会自动保存全部配置。")
         self.save_config_button.clicked.connect(self._save_config_state)
         footer_layout.addWidget(note)
         footer_layout.addWidget(self.save_config_button, 0, Qt.AlignmentFlag.AlignRight)
@@ -854,19 +869,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.delay_strategy_dialog.set_values(self._delay_strategy_config)
         self.delay_strategy_dialog.set_show_time(self._delay_show_sample_time)
         self._refresh_delay_dialog_preview()
-        self.guideDialogOpened.emit("delay_strategy")
-        result = QDialog.DialogCode.Rejected
-        try:
-            result = self.delay_strategy_dialog.exec()
-            if result != QDialog.DialogCode.Accepted:
-                self.delay_strategy_dialog.set_values(self._delay_strategy_config)
-                self._refresh_delay_dialog_preview()
-                return
-            self._commit_delay_strategy_config(
-                self.delay_strategy_dialog.values(), persist=True, emit=True,
-            )
-        finally:
-            self.guideDialogClosed.emit("delay_strategy", int(result))
+        result = self.delay_strategy_dialog.exec()
+        if result != QDialog.DialogCode.Accepted:
+            self.delay_strategy_dialog.set_values(self._delay_strategy_config)
+            self._refresh_delay_dialog_preview()
+            return
+        self._commit_delay_strategy_config(
+            self.delay_strategy_dialog.values(), persist=True, emit=True,
+        )
 
     @Slot(object)
     def _save_delay_strategy_draft(self, config: object) -> None:
@@ -1128,16 +1138,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def open_strategy_dialog(self) -> None:
         original_values = self.strategy_dialog.values()
-        self.guideDialogOpened.emit("correction_strategy")
-        result = QDialog.DialogCode.Rejected
-        try:
-            result = self.strategy_dialog.exec()
-            if result == QDialog.DialogCode.Accepted:
-                self._save_strategy_settings()
-                return
-            self.strategy_dialog.set_values(*original_values)
-        finally:
-            self.guideDialogClosed.emit("correction_strategy", int(result))
+        result = self.strategy_dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            self._save_strategy_settings()
+            return
+        self.strategy_dialog.set_values(*original_values)
 
     def _build_script_group(self) -> QGroupBox:
         group = QGroupBox()
@@ -1341,7 +1346,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
         header = QHBoxLayout()
         header.setSpacing(8)
-        runtime_title = QLabel("运行现场")
+        runtime_title = QLabel("运行详情")
         runtime_title.setObjectName("SectionTitle")
         self.runtime_log_button = QPushButton("轮次记录")
         self.runtime_log_button.setIcon(workspace_icon("external", "#687480"))
@@ -1361,13 +1366,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         add_card_shadow(self.runtime_card)
         self.runtime_card.setProperty("state", "idle")
         self.runtime_card.setMinimumHeight(0)
-        self.runtime_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.runtime_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         runtime_layout = QVBoxLayout(self.runtime_card)
         runtime_layout.setContentsMargins(16, 13, 16, 12)
         runtime_layout.setSpacing(6)
 
         runtime_top = QHBoxLayout()
-        runtime_top.setSpacing(8)
+        runtime_top.setSpacing(6)
+        runtime_caption = QLabel("流程状态")
+        runtime_caption.setObjectName("OverviewCaption")
         self.runtime_state_dot = QLabel("●")
         self.runtime_state_dot.setObjectName("RuntimeStateDot")
         self.runtime_phase_label = QLabel("准备就绪")
@@ -1375,11 +1382,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_round_label = QLabel("任务已停止")
         self.runtime_round_label.setObjectName("RuntimeRoundLabel")
         self.runtime_round_label.setMaximumHeight(22)
-        runtime_top.addWidget(self.runtime_state_dot, 0, Qt.AlignmentFlag.AlignVCenter)
-        runtime_top.addWidget(self.runtime_phase_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        runtime_top.addWidget(runtime_caption)
         runtime_top.addStretch(1)
         runtime_top.addWidget(self.runtime_round_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.runtime_state_label = QLabel("待命")
+        self.runtime_state_label.setObjectName("RuntimeStateLabel")
+        runtime_top.addWidget(self.runtime_state_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        runtime_top.addWidget(self.runtime_state_label)
         runtime_layout.addLayout(runtime_top)
+        self.runtime_flow = StaticFlowMap()
+        runtime_layout.addWidget(self.runtime_flow)
+        self.runtime_phase_label.setWordWrap(True)
+        runtime_layout.addWidget(self.runtime_phase_label)
 
         self.runtime_description_label = QLabel(
             "请先确认目标并选择过帧、撞闪脚本，然后点击右上角“开始”。"
@@ -1437,11 +1451,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         runtime_footer_layout.addWidget(self.runtime_delay_state_label)
         runtime_footer_layout.addStretch(1)
         self.runtime_details_toggle = QToolButton()
-        self.runtime_details_toggle.setObjectName("RuntimeScriptSummaryToggle")
-        self.runtime_details_toggle.setText("阶段记录")
+        self.runtime_details_toggle.setObjectName("RuntimeDetailsButton")
+        self.runtime_details_toggle.setText("详情")
+        self.runtime_details_toggle.setAccessibleName("查看自动定点运行详情")
         self.runtime_details_toggle.setCheckable(True)
-        configure_disclosure_button(self.runtime_details_toggle, compact=True)
-        runtime_footer_layout.addWidget(self.runtime_details_toggle)
+        self.runtime_details_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        runtime_top.addWidget(self.runtime_details_toggle)
         self.target_data_button = QPushButton("查看目标数据")
         self.target_data_button.setIcon(workspace_icon("external", "#687480"))
         self.target_data_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1497,19 +1512,33 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_content = panel
         self._refresh_runtime_steps(AutoRngPhase.IDLE)
         self._set_runtime_script_summary_visible(True)
-        # Preserve expanded metrics and stage details, while the normal view
-        # leaves the candidate table in the first screenful.
+        # Detailed values and candidates share one nonmodal detail window;
+        # the live phase and actual flow stay beside the target in the page.
         runtime_layout.removeWidget(self.runtime_metrics)
         self.runtime_details.layout().insertWidget(0, self.runtime_metrics)
+        runtime_layout.removeWidget(self.runtime_footer)
+        self.runtime_details.layout().insertWidget(1, self.runtime_footer)
+        runtime_layout.removeWidget(self.runtime_details)
+        layout.insertWidget(1, self.runtime_details)
         self.runtime_compact_values = QLabel("当前 — · 目标 — · 距离 —")
         self.runtime_compact_values.setObjectName("WorkspaceHint")
         self.runtime_compact_values.setWordWrap(True)
-        runtime_layout.insertWidget(1, self.runtime_compact_values)
-        runtime_layout.setContentsMargins(12, 8, 12, 8)
-        self.runtime_card.setStyleSheet("QLabel#RuntimePhaseLabel { font-size: 15px; }")
-        header.itemAt(0).widget().hide()
-        header.removeWidget(self.runtime_log_button)
-        runtime_top.addWidget(self.runtime_log_button)
+        self.runtime_compact_values.setParent(self.runtime_details)
+        self.runtime_compact_values.hide()
+        self.runtime_focus = QWidget()
+        focus_row = QHBoxLayout(self.runtime_focus)
+        focus_row.setContentsMargins(0, 8, 0, 0)
+        self.runtime_focus_caption = QLabel("距启动")
+        self.runtime_focus_caption.setObjectName("MutedLabel")
+        self.runtime_focus_value = RuntimeValueLabel("—")
+        self.runtime_focus_value.setObjectName("OverviewMetricValue")
+        focus_row.addWidget(self.runtime_focus_caption)
+        focus_row.addStretch(1)
+        focus_row.addWidget(self.runtime_focus_value)
+        runtime_layout.addWidget(self.runtime_focus)
+        self.runtime_focus.hide()
+        runtime_layout.addStretch(1)
+        runtime_layout.setContentsMargins(14, 12, 14, 12)
         self.candidate_tools.menu.addAction("复制选中行", self.candidate_tools.copy_selected)
         return scroll
 
@@ -1762,6 +1791,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 self._runtime_completed_steps.discard(active_index)
                 self._runtime_step_index = active_index
         self._runtime_phase = phase_value
+        self.runtime_flow.set_phase(phase_value)
         for index, circle in enumerate(self.runtime_step_circles):
             if index == active_index:
                 if terminal == "failed":
@@ -1811,6 +1841,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_round_label.setText(self._runtime_round_text(loop_index))
         self.runtime_description_label.setText("本轮开始，等待测种或校正结果。")
         self.runtime_card.setToolTip("")
+        self._refresh_compact_runtime()
         self.clear_candidate_targets("正在准备本轮候选目标")
 
     def _runtime_round_text(self, loop_index: int) -> str:
@@ -1909,14 +1940,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                     item.setForeground(QColor("#087C58" if column == 0 else "#202A33"))
                 self.candidate_table.setItem(row, column, item)
         self.candidate_table.setSortingEnabled(sorting)
-        visible_rows = min(9, max(5, len(display_indexes)))
+        visible_rows = RUNTIME_CANDIDATE_VISIBLE_ROWS
         self.candidate_table.setFixedHeight(30 + visible_rows * 30 + 2)
         if total > len(display_indexes):
             self.candidate_count_label.setText(
                 f"{total} 条候选 · 显示 {len(display_indexes)} 条"
             )
             self.candidate_count_label.setToolTip(
-                f"运行页最多显示 {RUNTIME_CANDIDATE_DISPLAY_LIMIT} 条；完整列表请查看轮次记录。"
+                f"运行详情最多显示 {RUNTIME_CANDIDATE_DISPLAY_LIMIT} 条；完整列表请查看轮次记录。"
             )
         else:
             self.candidate_count_label.setToolTip("本轮候选目标")
@@ -1946,34 +1977,46 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         target_card.setObjectName("TargetCard")
         target_card.setMinimumHeight(66)
         target_card_contents = QVBoxLayout(target_card)
-        target_card_contents.setContentsMargins(12, 12, 12, 12)
-        target_card_contents.setSpacing(10)
+        target_card_contents.setContentsMargins(14, 12, 14, 12)
+        target_card_contents.setSpacing(8)
+        target_header = QHBoxLayout()
+        target_caption = QLabel("当前目标")
+        target_caption.setObjectName("OverviewCaption")
+        target_header.addWidget(target_caption)
+        target_header.addStretch(1)
+        target_card_contents.addLayout(target_header)
         target_card_layout = QHBoxLayout()
-        target_card_contents.addLayout(target_card_layout)
-        target_card_layout.setSpacing(8)
+        target_card_contents.addLayout(target_card_layout, 1)
+        target_card_layout.setSpacing(14)
         self.target_avatar = SpeciesAvatar()
+        self.target_avatar.setFixedSize(72, 72)
         target_card_layout.addWidget(self.target_avatar)
         target_text_layout = QVBoxLayout()
         target_text_layout.setContentsMargins(0, 0, 0, 0)
-        target_text_layout.setSpacing(0)
-        target_caption = QLabel("目标精灵")
-        target_caption.setObjectName("MutedLabel")
+        target_text_layout.setSpacing(4)
+        target_text_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.target_name_label = QLabel("-")
         self.target_name_label.setObjectName("TargetNameLabel")
-        target_text_layout.addWidget(target_caption)
+        self.target_metadata_label = QLabel()
+        self.target_metadata_label.setObjectName("MutedLabel")
+        self.target_metadata_label.setWordWrap(True)
+        self.target_name_label.setWordWrap(True)
         target_text_layout.addWidget(self.target_name_label)
+        target_text_layout.addWidget(self.target_metadata_label)
         target_card_layout.addLayout(target_text_layout, 1)
         self.target_summary_title = QLabel("精灵筛选列表：-")
         self.target_summary_title.hide()
-        self.target_button = QPushButton("设置")
+        self.target_button = QPushButton("目标设置")
+        self.target_button.setIcon(workspace_icon("settings-2", "#087C58"))
         self.target_button.setObjectName("TargetOpenButton")
         self.target_button.setAccessibleName("设置目标精灵")
-        self.target_button.setFixedSize(54, 32)
+        self.target_button.setFixedHeight(26)
         self.target_button.setToolTip("打开目标精灵设置")
         self.target_button.clicked.connect(self.open_target_dialog)
         target_card_layout.addWidget(self.target_summary_title)
-        target_card_layout.addWidget(self.target_button)
+        target_header.addWidget(self.target_button)
         layout.addWidget(target_card)
+        add_card_shadow(target_card)
 
         target_tags_widget = QWidget(group)
         target_tags_widget.setObjectName("TargetTags")
@@ -1981,12 +2024,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         target_tags.setContentsMargins(0, 0, 0, 0)
         target_tags.setSpacing(6)
         self.target_count_label = QLabel("0 组目标条件")
-        self.target_count_label.setObjectName("GreenTag")
+        self.target_count_label.setObjectName("TargetConditionsCaption")
         self.target_match_label = QLabel("匹配任一即可")
-        self.target_match_label.setObjectName("NeutralTag")
+        self.target_match_label.setObjectName("TargetMatchHint")
         target_tags.addWidget(self.target_count_label)
-        target_tags.addWidget(self.target_match_label)
         target_tags.addStretch(1)
+        target_tags.addWidget(self.target_match_label)
         target_card_contents.addWidget(target_tags_widget)
         self.target_condition_summary = QLabel()
         self.target_condition_summary.setObjectName("TargetConditionLabel")
@@ -1994,19 +2037,21 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         target_card_contents.addWidget(self.target_condition_summary)
         self.target_condition_summary.hide()
 
-        self.target_summary_scroll = QScrollArea()
+        self.target_summary_scroll = TargetConditions()
         self.target_summary_scroll.setObjectName("TargetSummaryScroll")
         self.target_summary_scroll.setWidgetResizable(True)
-        self.target_summary_scroll.setMinimumHeight(42)
-        self.target_summary_scroll.setMaximumHeight(70)
+        self.target_summary_scroll.setMinimumHeight(24)
+        self.target_summary_scroll.setMaximumHeight(102)
+        self.target_summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.target_summary_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.target_summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.target_summary_container = QWidget()
         self.target_summary_layout = QVBoxLayout(self.target_summary_container)
         self.target_summary_layout.setContentsMargins(0, 0, 0, 0)
-        self.target_summary_layout.setSpacing(3)
+        self.target_summary_layout.setSpacing(6)
+        self.target_summary_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.target_summary_scroll.setWidget(self.target_summary_container)
-        layout.addWidget(self.target_summary_scroll)
+        target_card_contents.addWidget(self.target_summary_scroll)
         self.target_summary_group = group
 
         self.target_form = StaticTargetForm(self)
@@ -2164,7 +2209,6 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_script_editor_expanded = True
         self._set_runtime_script_summary_visible(True)
         combo = missing[0][0]
-        self.local_views.setCurrentIndex(0)
         self.config_contents.layout().activate()
         self.config_panel.ensureWidgetVisible(combo)
         combo.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -2263,6 +2307,13 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.toolbar_status.setProperty("state", state)
         self.toolbar_status.style().unpolish(self.toolbar_status)
         self.toolbar_status.style().polish(self.toolbar_status)
+        if hasattr(self, "runtime_state_label"):
+            card_state = self.runtime_card.property("state")
+            self.runtime_state_label.setText(
+                "停止中" if self._stop_pending else "启动中" if self._preparing
+                else {"active": "运行中", "completed": "已完成", "failed": "失败"}.get(card_state, "待命")
+            )
+            self.runtime_round_label.setVisible(self._runtime_loop_index > 0)
         if hasattr(self, "runtime_setup_button") and hasattr(self, "script_labels"):
             missing = self._missing_script_fields()
             idle = self._runtime_phase in (None, AutoRngPhase.IDLE) and not busy and not self._stop_pending
@@ -2275,12 +2326,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 )
 
     def _set_runtime_card_state(self, state: str) -> None:
+        if state != "active" and hasattr(self, "runtime_focus"):
+            self.runtime_focus.hide()
         if self.runtime_card.property("state") == state:
             return
         if state == "active":
             # Fold once on entry, never on each progress tick: users may reopen it.
             self._runtime_script_editor_expanded = False
         self.runtime_card.setProperty("state", state)
+        self.runtime_state_label.setText({"idle": "待命", "active": "运行中", "completed": "已完成", "failed": "失败"}[state])
         self.runtime_metrics.setVisible(state != "idle")
         self.runtime_footer.setVisible(state != "idle")
         if state == "idle":
@@ -2293,7 +2347,13 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def _set_runtime_details_visible(self, visible: bool) -> None:
         self.runtime_details.setVisible(visible)
-        set_disclosure_state(self.runtime_details_toggle, visible)
+        if hasattr(self, "runtime_dialog"):
+            if visible:
+                available = self.screen().availableGeometry()
+                self.runtime_dialog.resize(min(680, available.width() - 40), min(700, available.height() - 60))
+            self.runtime_dialog.setVisible(visible)
+            if visible:
+                self.runtime_dialog.raise_()
 
     @staticmethod
     def _runtime_value(value: object, *, suffix: str = "") -> str:
@@ -2443,12 +2503,25 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 border: 1px solid $card_border;
                 border-radius: 9px;
             }
+            QWidget#AutoRngOverview, QWidget#StaticFlowMap { background: transparent; }
+            QLabel#OverviewCaption { font-size: 13px; font-weight: 500; color: $text; }
+            QLabel#TargetConditionsCaption, QLabel#TargetMatchHint {
+                font-size: 11px; color: $text_secondary; background: transparent;
+            }
+            QWidget#TargetTags { border-top: 1px solid $separator; padding-top: 8px; }
+            QScrollArea#TargetSummaryScroll, QScrollArea#TargetSummaryScroll QWidget {
+                background: transparent; border: 0;
+            }
+            QScrollArea#TargetSummaryScroll QLabel#TargetConditionLabel {
+                background: $accent_soft; color: #426351; border-radius: 5px;
+                padding: 5px 7px; font-size: 12px;
+            }
             QWidget#TargetTags {
                 background: transparent;
             }
             QLabel#TargetNameLabel {
                 color: $text;
-                font-size: 18px;
+                font-size: 22px;
                 font-weight: 500;
             }
             QLabel#GreenTag,
@@ -2597,8 +2670,21 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             QFrame#RuntimeCard {
                 background: $runtime_gradient;
                 border: 1px solid $card_border;
-                border-radius: 11px;
+                border-radius: 9px;
             }
+            QToolButton#RuntimeDetailsButton {
+                background: transparent; color: $accent; border: 1px solid transparent;
+                border-radius: 5px; min-height: 24px; padding: 0 5px; font-size: 11px;
+            }
+            QToolButton#RuntimeDetailsButton:hover, QToolButton#RuntimeDetailsButton:checked {
+                background: $accent_soft;
+            }
+            QToolButton#RuntimeDetailsButton:focus { border-color: $accent; }
+            QLabel#RuntimeStateLabel { font-size: 11px; color: $text_secondary; }
+            QFrame#RuntimeCard[state="active"] QLabel#RuntimeStateLabel { color: $accent; }
+            QFrame#RuntimeCard[state="failed"] QLabel#RuntimeStateLabel { color: $error; }
+            QLabel#OverviewMetricValue { font-size: 20px; font-weight: 500; color: $accent; }
+            QPushButton#TargetOpenButton { color: $accent; font-size: 11px; }
             QFrame#RuntimeCard[state="active"] {
                 border-color: #DCECE4;
             }
@@ -2969,6 +3055,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_compact_values.setText(
             f"当前 {self.runtime_current_value.text()} · 目标 {self.runtime_target_value.text()} · 距离 {self.runtime_remaining_value.text()}"
         )
+        waiting = self._runtime_phase in (AutoRngPhase.FINAL_WAIT, AutoRngPhase.FINAL_CALIBRATE, AutoRngPhase.FINAL_ADJUST)
+        self.runtime_focus_caption.setText("距撞帧启动" if waiting else "当前帧数")
+        value = self.runtime_remaining_value.text() if waiting else self.runtime_current_value.text()
+        self.runtime_focus_value.setText(value)
+        self.runtime_focus.setVisible(self.runtime_card.property("state") == "active" and value != "—")
 
     def apply_progress(self, progress: AutoRngProgress) -> None:
         self.runtime_insights.update_progress(progress)
@@ -3143,8 +3234,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         name = POKEMON_LABELS_ZH.get(record.description, record.description)
         self.target_summary_title.setText(f"精灵筛选列表：{name}")
         self.target_name_label.setText(name)
+        category = {
+            "starters": "御三家", "gifts": "礼物", "fossils": "化石", "stationary": "定点",
+            "roamers": "游走", "legends": "传说", "ramanasParkPureSpace": "玫瑰公园",
+            "ramanasParkStrangeSpace": "玫瑰公园", "mythics": "幻之宝可梦",
+        }.get(record.category.value, "定点")
+        self.target_metadata_label.setText(f"{category} · {record.template.level} 级")
         self.target_avatar.set_species(int(record.template.species), name)
-        self.target_count_label.setText(f"{len(targets)} 组目标条件")
+        self.target_count_label.setText(f"目标条件 · {len(targets)} 组")
         self.target_summary_scroll.setVisible(len(targets) > 1)
         conditions = _target_condition_text(targets[0][1], "any")
         self.target_condition_summary.setText(conditions)
@@ -3157,6 +3254,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             _target_condition_text(state_filter, shiny_mode)
             for _record, state_filter, shiny_mode in targets
         ))
+        self.target_match_label.setVisible(len(targets) > 1)
+        # Every condition stays inside the target card, including a single
+        # shiny-only filter. Multiple groups remain individually readable.
+        self.target_condition_summary.hide()
+        self.target_summary_scroll.show()
         for index, (_record, state_filter, shiny_mode) in enumerate(targets, start=1):
             label = QLabel(f"{index}. {_target_condition_text(state_filter, shiny_mode)}")
             label.setObjectName("TargetConditionLabel")
@@ -3164,6 +3266,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
             self.target_summary_layout.addWidget(label)
             self.target_summary_labels.append(label)
+        QTimer.singleShot(0, self.target_summary_scroll, self.target_summary_scroll.fit_content)
         self._refresh_runtime_script_summary()
 
     def set_search_context_summary(

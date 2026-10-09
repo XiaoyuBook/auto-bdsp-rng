@@ -26,10 +26,16 @@ def test_narrow_pages_reflow_without_changing_fonts_or_controls(window, monkeypa
         w.tabs.setCurrentWidget(page)
         settle()
         assert w.width() == 860 and w.height() == 600
-        assert page.local_views.currentIndex() == 0
-        assert page.local_views.currentWidget().isVisible()
-        page.local_views.setCurrentIndex(1)
-        assert page.local_views.currentWidget().isVisible()
+        if page is w.auto_rng_tab:
+            assert not hasattr(page, "local_views")
+            assert page.config_panel.isVisible()
+            assert page.overview.isAncestorOf(page.target_summary_group)
+            assert page.overview.isAncestorOf(page.runtime_card)
+        else:
+            assert page.local_views.currentIndex() == 0
+            assert page.local_views.currentWidget().isVisible()
+            page.local_views.setCurrentIndex(1)
+            assert page.local_views.currentWidget().isVisible()
         assert w.help_button.isVisible()
         assert w.view_status_logs_button.isVisible()
     w.tabs.setCurrentWidget(w.project_xs_tab)
@@ -44,7 +50,11 @@ def test_narrow_pages_reflow_without_changing_fonts_or_controls(window, monkeypa
     for page in (w.auto_rng_tab, w.auto_tid_rng_tab):
         w.tabs.setCurrentWidget(page)
         settle()
-        assert page.local_views.currentIndex() == 1
+        if page is w.auto_rng_tab:
+            assert page.config_panel.isVisible()
+            assert page.overview.row.direction() == QBoxLayout.Direction.LeftToRight
+        else:
+            assert page.local_views.currentIndex() == 1
     assert w.auto_rng_tab.runtime_current_value.font().pixelSize() == font_size == 28
     assert w.auto_rng_tab.max_wait_frames.value() == original
 
@@ -138,7 +148,7 @@ def test_default_geometry_keeps_forms_navigation_and_monitor_usable(window, monk
         assert area.horizontalScrollBar().maximum() == 0
 
 
-def test_runtime_views_keep_results_in_first_screen_and_preserve_configuration(window, monkeypatch):
+def test_runtime_details_keep_results_and_preserve_configuration(window, monkeypatch):
     w = window
     monkeypatch.setattr(w, "_screen_available_geometry", lambda: QRect(0, 0, 1800, 1200))
     w.resize(860, 600)
@@ -154,12 +164,22 @@ def test_runtime_views_keep_results_in_first_screen_and_preserve_configuration(w
         w.tabs.setCurrentWidget(panel)
         panel.runStateChanged.emit(True)
         settle()
-        assert panel.local_views.currentIndex() == 1
+        if panel is auto:
+            panel.runtime_details_toggle.click()
+            settle()
+            assert panel.runtime_dialog.isVisible()
+        else:
+            assert panel.local_views.currentIndex() == 1
         assert area.horizontalScrollBar().maximum() == 0
         top = table.mapTo(area.viewport(), table.rect().topLeft()).y()
         assert top + table.horizontalHeader().height() + 2 * table.verticalHeader().defaultSectionSize() < area.viewport().height()
-        panel.local_views.setCurrentIndex(0)
-        panel.local_views.setCurrentIndex(1)
+        if panel is auto:
+            panel.runtime_dialog.close()
+            panel.runtime_details_toggle.click()
+            assert panel.runtime_dialog.isVisible()
+        else:
+            panel.local_views.setCurrentIndex(0)
+            panel.local_views.setCurrentIndex(1)
         assert table.rowCount() >= 20
     assert auto.max_wait_frames.value() == 456
 
