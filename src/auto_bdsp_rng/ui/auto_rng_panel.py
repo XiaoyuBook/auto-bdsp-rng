@@ -1238,6 +1238,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         tools.addWidget(self.refresh_scripts_button)
         layout.addLayout(tools)
         self.starter_automation_check = QCheckBox("御三家全自动")
+        self.starter_automation_check.setVisible(False)
         self.starter_automation_check.setToolTip(
             "选择御三家后启用：内置测种 → 自动对话与 Timeline → 判闪 → 内置反查。\n"
             "从“怎么回事？刚才那两人……”接管；自动反查始终开启，本轮 delay 必须小于 78 帧。"
@@ -1378,6 +1379,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             return
         valid = self._starter_targets_valid()
         busy = self._preparing or self._runner_thread is not None
+        # The option only belongs to a single, supported starter target.  Keep
+        # it out of the normal script workflow until the target selection
+        # makes the mode meaningful; a busy valid target remains visible but
+        # disabled so its current state is still clear.
+        self.starter_automation_check.setVisible(valid)
         self.starter_automation_check.setEnabled(valid and not busy)
         if not valid and self.starter_automation_check.isChecked():
             self.starter_automation_check.setChecked(False)
