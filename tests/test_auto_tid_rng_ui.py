@@ -96,7 +96,8 @@ def test_tid_wait_updates_use_startup_delay_and_preserve_table_selection(configu
     assert panel.runtime_remaining_value.text() == "00:43.5"
     assert panel.runtime_trigger_detail.text() == "触发帧 240 · delay 20"
     assert panel.runtime_delay_value.text() == "20 帧"
-    assert "000001" in panel.runtime_description_label.text()
+    assert "TID 000001" in panel.runtime_compact_values.text()
+    assert "等待 00:43.5" in panel.runtime_compact_values.text()
     assert panel.runtime_round_label.text() == "第 4 轮"
     assert panel.id_table.item(1, 4) is item
     assert panel.id_table.currentRow() == 1
@@ -219,6 +220,8 @@ def test_tid_dates_stay_fixed_and_countdown_does_not_touch_table(configured_tid_
     clock[0] += 1
     QTest.qWait(150)
     assert panel.runtime_remaining_value.text() == "00:42.5"
+    assert "TID 000003" in panel.runtime_compact_values.text()
+    assert "等待 00:42.5" in panel.runtime_compact_values.text()
     assert changed == []
     assert table.currentRow() == 2
     panel.apply_progress(replace(waiting, current_advances=1))
@@ -634,8 +637,8 @@ def test_auto_tid_content_is_added_directly_below_toolbar(app, tmp_path: Path) -
     assert toolbar is not None
 
 
-def test_auto_tid_configuration_and_collapsible_scripts_use_separate_columns(app, tmp_path: Path) -> None:
-    panel = AutoTidRngPanel(script_dir=tmp_path)
+def test_auto_tid_configuration_and_scripts_share_a_narrow_settings_view(app, tmp_path: Path) -> None:
+    panel = AutoTidRngPanel(script_dir=tmp_path, settings=_settings(tmp_path))
 
     top_controls = panel.findChild(QWidget, "AutoTidTopControls")
 
@@ -647,18 +650,29 @@ def test_auto_tid_configuration_and_collapsible_scripts_use_separate_columns(app
     assert panel.seed_script_combo.parentWidget() is panel.seed_script_picker
     assert panel.name_script_combo.parentWidget() is panel.name_script_picker
     assert panel.refresh_scripts_button.parentWidget() is panel.script_fields
-    assert panel.seed_script_combo.minimumWidth() >= 160
-    assert panel.name_script_combo.minimumWidth() >= 160
     assert panel.seed_script_combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     assert panel.name_script_combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
-    panel.resize(1150, 820)
+    panel.resize(430, 600)
     panel.show()
     app.processEvents()
-    assert not panel.script_fields.isVisible()
+    assert panel.local_views.currentWidget() is panel.config_scroll
+    assert panel.config_panel.isAncestorOf(panel.script_fields)
+    assert panel.script_fields.isVisible()
+    assert panel.config_scroll.horizontalScrollBar().maximum() == 0
     panel.script_toggle.click()
     app.processEvents()
+    assert panel.script_fields.isHidden()
+    panel.script_toggle.click()
+    panel.config_scroll.ensureWidgetVisible(panel.name_script_combo)
+    app.processEvents()
     assert panel.script_fields.isVisible()
-    assert panel.config_panel.geometry().right() < panel.runtime_scroll.geometry().left()
+    assert panel.seed_script_picker.geometry().bottom() < panel.name_script_picker.geometry().top()
+    original_delay = panel.delay.value()
+    panel.local_views.setCurrentIndex(1)
+    assert panel.runtime_scroll.isVisible()
+    panel.local_views.setCurrentIndex(0)
+    assert panel.script_fields.isVisible()
+    assert panel.delay.value() == original_delay
     for combo in (panel.seed_script_combo, panel.name_script_combo):
         picker = panel.script_picker_widgets[combo]
         edit_button = panel.script_edit_buttons[combo]

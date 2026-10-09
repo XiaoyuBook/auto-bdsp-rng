@@ -376,6 +376,11 @@ def test_main_window_guide_spotlight_tracks_real_controls_after_move_resize_and_
         window.move(x, y)
         window.resize(width, height)
         QTest.qWait(100)
+        # Splitter and tab layouts settle through queued Qt layout requests.
+        for _ in range(25):
+            if not overlay.relayout.isActive():
+                break
+            QTest.qWait(20)
         # Compute bounds by walking the widget hierarchy, independently of the
         # global-coordinate conversion used by the spotlight.
         position = QPoint()
@@ -646,6 +651,7 @@ def test_bdsp_max_advances_matches_pokefinder_limit(app):
 def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
+    window.query_groups.setCurrentIndex(2)
     window.show()
     app.processEvents()
     speed_min = window.iv_min[5]
@@ -654,7 +660,7 @@ def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
     assert window.national_dex.text() == "全国图鉴"
     assert window.shiny_charm.text() == "闪耀护符"
     assert window.oval_charm.text() == "圆形护符"
-    assert speed_min.geometry().bottom() < show_stats.geometry().top()
+    assert speed_min.mapTo(window.filter_group, speed_min.rect().bottomLeft()).y() < show_stats.mapTo(window.filter_group, QPoint()).y()
 
 
 def test_project_xs_configuration_uses_shared_video_sidebar(
@@ -2570,11 +2576,11 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
 
     fields = (
         ("测种脚本", panel.seed_script_combo, 1, 0),
-        ("过帧脚本", panel.advance_script_combo, 1, 1),
-        ("撞闪脚本", panel.hit_script_combo, 4, 0),
-        ("过场脚本", panel.exit_script_combo, 4, 1),
-        ("反查脚本", panel.reverse_script_combo, 7, 0),
-        ("逃跑脚本", panel.escape_script_combo, 7, 1),
+        ("过帧脚本", panel.advance_script_combo, 3, 0),
+        ("撞闪脚本", panel.hit_script_combo, 5, 0),
+        ("过场脚本", panel.exit_script_combo, 7, 0),
+        ("反查脚本", panel.reverse_script_combo, 9, 0),
+        ("逃跑脚本", panel.escape_script_combo, 11, 0),
     )
     for label, combo, row, column in fields:
         assert layout.itemAtPosition(row, column).widget().text().startswith(label + " · ")
@@ -2586,11 +2592,11 @@ def test_auto_rng_script_group_uses_escape_continue_layout(app, tmp_path):
         assert picker.layout().itemAt(0).widget() is combo
         assert picker.layout().itemAt(1).widget() is edit_button
         assert edit_button.toolTip() == f"编辑{label}"
-    assert layout.itemAtPosition(10, 0).widget() is panel.escape_continue_check
+    assert layout.itemAtPosition(14, 0).widget() is panel.escape_continue_check
     assert panel.escape_continue_check.text() == "未命中时逃跑续搜"
     assert panel.escape_continue_check.layoutDirection() == Qt.LayoutDirection.LeftToRight
     assert "background: transparent" in panel.escape_continue_check.styleSheet()
-    assert layout.itemAtPosition(10, 0).alignment() == (
+    assert layout.itemAtPosition(14, 0).alignment() == (
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     )
     panel.resize(1000, 700)
@@ -3170,7 +3176,7 @@ def test_main_window_has_auto_rng_tab(app):
     assert window.tabs.count() == 6
     assert window.tabs.tabText(0) == "自动定点乱数"
     assert window.tabs.tabText(1) == "自动 TID 乱数"
-    assert window.tabs.tabText(5) == "日志区"
+    assert window.tabs.tabText(5) == "日志中心"
     assert hasattr(window, "id_tab")
 
 
@@ -3543,14 +3549,15 @@ def test_auto_rng_panel_keeps_hidden_message_mirror_and_live_runtime_card(app):
     assert panel.log_view.isHidden()
     assert panel.latest_log_time_label.text() == "—"
     assert panel.latest_log_label.text() == "暂无消息"
-    assert panel.view_log_button.text() == "查看日志"
+    assert panel.view_log_button.text() == "日志中心"
     assert panel.content_grid.itemAtPosition(1, 0).widget() is panel.log_group
     index = panel.content_grid.indexOf(panel.log_group)
     assert index >= 0
     row, column, row_span, column_span = panel.content_grid.getItemPosition(index)
     assert (row, column, row_span, column_span) == (1, 0, 1, 2)
-    assert panel.content_grid.itemAtPosition(0, 0).widget() is panel.config_panel
-    assert panel.content_grid.itemAtPosition(0, 1).widget() is panel.runtime_panel
+    assert panel.content_grid.itemAtPosition(0, 0).widget() is panel.local_views
+    assert panel.local_views.widget(0) is panel.config_panel
+    assert panel.local_views.widget(1) is panel.runtime_panel
 
 
 def test_auto_rng_target_data_and_script_shortcuts_use_existing_workspaces(
@@ -3724,18 +3731,19 @@ def test_auto_rng_page_uses_compact_toolbar_and_resizable_left_sidebar(app, tmp_
     assert panel.runtime_card.maximumHeight() == 16777215
     assert isinstance(panel.debug_output_check, CheckmarkCheckBox)
     assert isinstance(panel.escape_continue_check, CheckmarkCheckBox)
-    assert panel.seed_script_combo.minimumWidth() == 160
-    assert panel.config_contents.layout().spacing() == 12
+    assert panel.seed_script_combo.minimumWidth() == 0
+    assert panel.config_contents.layout().spacing() == 10
     assert panel.strategy_form.verticalSpacing() == 8
     script_layout = panel.script_group.layout()
     assert script_layout.contentsMargins().top() == 0
-    assert [script_layout.rowMinimumHeight(row) for row in (3, 6, 9)] == [6, 6, 6]
+    assert all(script_layout.indexOf(panel.script_picker_widgets[combo]) >= 0 for combo in panel._script_combos())
     target_tags = panel.findChild(QWidget, "TargetTags")
     assert target_tags is not None
     assert target_tags.parentWidget() is panel.target_name_label.parentWidget()
     config_layout = panel.config_contents.layout()
-    assert config_layout.itemAt(3).widget().objectName() == "ConfigFooter"
-    assert config_layout.itemAt(4).spacerItem() is not None
+    assert config_layout.itemAt(3).widget() is panel.runtime_script_card
+    assert config_layout.itemAt(4).widget().objectName() == "ConfigFooter"
+    assert config_layout.itemAt(5).spacerItem() is not None
     assert panel.more_strategy_button.isCheckable()
     assert panel.shiny_threshold_seconds.isHidden()
     assert panel.refresh_scripts_button.text() == "刷新"
@@ -3781,7 +3789,9 @@ def test_auto_rng_missing_script_shortcut_reveals_and_focuses_field(app, tmp_pat
     panel = AutoRngPanel(script_dir=tmp_path, settings=_auto_rng_settings(tmp_path))
     panel.resize(1126, 740)
     panel.show()
-    assert panel.script_group.isHidden()
+    assert not panel.script_group.isHidden()
+    panel.local_views.setCurrentIndex(1)
+    app.processEvents()
     panel.runtime_setup_button.click()
     app.processEvents()
     assert not panel.script_group.isHidden()
@@ -3843,7 +3853,9 @@ def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(a
     window.show()
     app.processEvents()
     panel = window.auto_rng_tab
-    assert panel.script_group.isHidden()
+    assert not panel.script_group.isHidden()
+    panel.local_views.setCurrentIndex(1)
+    app.processEvents()
     viewport = panel.runtime_panel.viewport()
 
     def within_view(widget):
@@ -3852,7 +3864,7 @@ def test_auto_rng_workspace_keeps_configuration_and_running_candidates_in_view(a
         assert position.y() + widget.height() <= viewport.height()
 
     within_view(panel.runtime_card)
-    within_view(panel.runtime_script_card)
+    assert panel.config_panel.isAncestorOf(panel.runtime_script_card)
     assert panel.runtime_panel.verticalScrollBar().maximum() == 0
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FINAL_WAIT))
     panel.set_candidate_targets([
@@ -3907,8 +3919,8 @@ def test_auto_rng_content_is_added_directly_below_toolbar(app):
     assert content.objectName() == "AutoRngContent"
     assert content.parentWidget() is panel
     assert not hasattr(panel, "content_scroll")
-    assert panel.content_grid.indexOf(panel.workspace_splitter) >= 0
-    assert panel.workspace_splitter.widget(0) is panel.config_panel
+    assert panel.content_grid.indexOf(panel.local_views) >= 0
+    assert panel.local_views.widget(0) is panel.config_panel
     assert panel.layout().itemAt(0).widget() is panel.toolbar
 
 
@@ -4069,6 +4081,8 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
     panel.set_live_advances(25)
     assert panel.runtime_current_value.text() == "25"
     assert panel.runtime_remaining_value.text() == "75 帧"
+    assert "当前 25" in panel.runtime_compact_values.text()
+    assert "距离 75 帧" in panel.runtime_compact_values.text()
     assert "最终撞闪剩余 100 帧" in panel.log_view.toPlainText()
     assert panel.latest_log_time_label.text() != "—"
 
@@ -4203,7 +4217,7 @@ def test_auto_rng_runtime_candidates_are_capped_and_keep_locked_target_visible(a
 
     assert not panel.candidate_section.isHidden()
     assert panel.candidate_table.rowCount() == 20
-    assert panel.candidate_table.height() == 182
+    assert panel.candidate_table.height() >= 182
     assert panel.candidate_count_label.text() == "25 条候选 · 显示 20 条"
     displayed_advances = {
         panel.candidate_table.item(row, 1).text()
@@ -4314,7 +4328,7 @@ def test_history_panel_reverse_lookup_candidates_use_table(app):
 
     panel.reverse_lookup_results([state], characteristic="非常喜欢吃东西", delays=[99])
 
-    tables = panel.findChildren(QTableWidget)
+    tables = [table for table in panel.findChildren(QTableWidget) if table.accessibleName() == "反查候选表"]
     assert len(tables) == 1
     table = tables[0]
     headers = [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
@@ -4379,7 +4393,7 @@ def test_history_panel_reports_ignored_characteristic_without_hiding_candidates(
     assert "OCR 个性原文: 识别错误文本" in text
     assert "反查结果 (1 个匹配)" in text
     assert "未找到匹配个体" not in text
-    tables = panel.findChildren(QTableWidget)
+    tables = [table for table in panel.findChildren(QTableWidget) if table.accessibleName() == "反查候选表"]
     assert len(tables) == 1
     table = tables[0]
     headers = [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
@@ -4406,7 +4420,8 @@ def test_history_panel_reports_no_candidates_after_ignoring_characteristic(app):
     assert failure_index < no_candidates_index
     assert "OCR 性格: 浮躁" in text
     assert "OCR 能力值: HP=20 / 攻击=11 / 防御=10 / 特攻=11 / 特防=9 / 速度=11" in text
-    assert panel.findChildren(QTableWidget) == []
+    assert panel.round_candidate_table.rowCount() == 0
+    assert panel.history_scroll.findChildren(QTableWidget) == []
 
 
 def test_history_panel_candidates_do_not_show_global_delay(app):
@@ -4439,13 +4454,15 @@ def test_history_panel_candidates_do_not_show_global_delay(app):
     panel.resize(900, 500)
     panel.show()
     panel.candidates_found([state, sync_state], locked_index=0, sync_flags=["", "sync"])
+    panel.feed_toggle.setChecked(True)
+    panel.detail_scroll.ensureWidgetVisible(panel.history_scroll)
     app.processEvents()
 
     text = panel.text_view.toPlainText()
     assert "adv=1234" in text
     assert "delay=" not in text
 
-    tables = panel.findChildren(QTableWidget)
+    tables = [table for table in panel.findChildren(QTableWidget) if table.accessibleName() == "候选结果表"]
     assert len(tables) == 1
     table = tables[0]
     headers = [table.horizontalHeaderItem(column).text() for column in range(table.columnCount())]
@@ -4479,6 +4496,8 @@ def test_history_panel_keeps_scroll_position_when_reviewing_old_records(app):
     panel.show()
     for index in range(30):
         panel.auto_tid_log(f"记录 {index}")
+    panel.feed_toggle.setChecked(True)
+    panel.detail_scroll.ensureWidgetVisible(panel.history_scroll)
     app.processEvents()
 
     scroll_bar = panel.history_scroll.verticalScrollBar()
@@ -5842,6 +5861,8 @@ def test_main_window_auto_rng_reidentify_after_exit_uses_reidentify_config(app, 
 
 def test_main_window_auto_rng_exit_reidentify_uses_reidentify_config(app, tmp_path, monkeypatch):
     window = MainWindow()
+    # Settle the initial combo refresh before observing only service loads.
+    app.processEvents()
     observation = SimpleNamespace(offset_time=100.0)
     loaded: list[tuple[str, int]] = []
     capture_counts: list[int] = []

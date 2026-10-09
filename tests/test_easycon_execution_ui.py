@@ -257,7 +257,7 @@ def test_real_loop_counter_stays_visible_during_wait_and_after_stop_without_vide
         panel.shutdown()
 
 
-def test_follow_reveals_line_in_outer_scroll_and_after_showing_page(easycon_panel, tmp_path):
+def test_follow_reveals_line_after_temporary_tools_and_showing_page(easycon_panel, tmp_path):
     panel = easycon_panel
     panel.resize(860, 430)
     panel.show()
@@ -267,8 +267,9 @@ def test_follow_reveals_line_in_outer_scroll_and_after_showing_page(easycon_pane
     panel.load_script(path)
     trace = publish(panel, path, text, 70)
     QTest.qWait(100)
-    outer = panel.workspace_splitter.widget(1)
-    outer.verticalScrollBar().setValue(outer.verticalScrollBar().maximum())
+    panel.show_tools("control")
+    panel.hide_tools()
+    panel.editor.verticalScrollBar().setValue(panel.editor.verticalScrollBar().maximum())
     trace.record(ExecutionPoint(SourceLocation(str(path), 1), "等待", monotonic()))
     panel.execution.poll()
     QTest.qWait(100)

@@ -247,11 +247,15 @@ def test_tid_targets_two_rows_alignment_scroll_and_delete(window, count):
         assert p.target_list.isHidden()
         assert badge.y() >= inputs.y() + p.target_input.height()
     assert p.frame_threshold.mapTo(w, QPoint()).y() < p.delay.mapTo(w, QPoint()).y()
-    assert not p.script_fields.isVisible()
+    assert p.script_fields.isVisible()
+    p.script_toggle.click()
+    app.processEvents()
+    assert p.script_fields.isHidden()
     p.script_toggle.click()
     app.processEvents()
     assert p.script_fields.isVisible()
-    assert p.seed_script_combo.mapTo(w, QPoint()).x() < p.name_script_combo.mapTo(w, QPoint()).x()
+    assert p.seed_script_combo.mapTo(w, QPoint()).y() < p.name_script_combo.mapTo(w, QPoint()).y()
+    assert p.config_scroll.horizontalScrollBar().maximum() == 0
     if count == 50:
         rects = [p.target_list.visualItemRect(p.target_list.item(i)) for i in range(count)]
         complete_rows = {r.top() for r in rects if p.target_list.viewport().rect().contains(r)}

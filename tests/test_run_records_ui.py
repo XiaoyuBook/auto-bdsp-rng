@@ -57,18 +57,17 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     app.processEvents()
     # A font with taller lines can schedule a second height-for-width layout.
     QTest.qWait(10)
-    assert easycon_panel.view_log_button.height() == 30
-    assert easycon_panel.overview_panel.rect().contains(easycon_panel.view_log_button.geometry())
-    assert easycon_panel.overview_panel.rect().contains(easycon_panel.latest_log_label.geometry())
-    assert not easycon_panel.view_log_button.geometry().intersects(
-        easycon_panel.latest_log_label.geometry()
-    )
-    assert easycon_panel.latest_log_label.height() >= easycon_panel.latest_log_label.heightForWidth(
-        easycon_panel.latest_log_label.width()
-    )
+    assert easycon_panel.overview_panel.isHidden()
+    assert easycon_panel.complete_log_button.isVisible()
+    assert not easycon_panel.tools_panel.isVisible()
+    original_editor = easycon_panel.editor
+    easycon_panel.control_tools_button.click()
+    app.processEvents()
+    assert easycon_panel.record_btn.isVisible()
+    assert easycon_panel.editor is original_editor
     side_panel = easycon_panel.overview_panel.parentWidget()
     assert easycon_panel.keyboard_control_group.parentWidget() is side_panel
-    assert easycon_panel.overview_panel.geometry().bottom() < easycon_panel.keyboard_control_group.geometry().top()
+    assert easycon_panel.sidebar_scroll.isAncestorOf(easycon_panel.keyboard_control_group)
     assert easycon_panel.action_row.isHidden()
     assert easycon_panel.findChild(QWidget, "EasyConControlPanel") is None
     toolbar = easycon_panel.findChild(QWidget, "EasyConToolbar")
@@ -95,15 +94,16 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     footer = records_panel.log_panel.footer_frame
     assert footer.height() == 42
     for button in (
-        records_panel.log_panel.clear_button,
         records_panel.log_panel.copy_button,
         records_panel.log_panel.export_button,
-        records_panel.log_panel.open_dir_button,
     ):
         assert button.height() == 34
         assert footer.rect().contains(button.geometry())
         assert button.geometry().top() == 4
         assert footer.rect().bottom() - button.geometry().bottom() == 4
+    assert records_panel.log_panel.clear_button.isHidden()
+    assert records_panel.log_panel.open_dir_button.isHidden()
+    assert [action.text() for action in records_panel.log_panel.more_button.menu().actions()] == ["清空显示", "日志目录"]
 
 
 def test_run_records_header_and_history_empty_state_switch_cleanly(app):

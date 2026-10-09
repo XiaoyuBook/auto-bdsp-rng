@@ -8,7 +8,8 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QRect, QSettings, QSize, Qt
-from PySide6.QtWidgets import QApplication, QSplitter, QTabWidget
+from PySide6.QtWidgets import QApplication, QSplitter
+from auto_bdsp_rng.ui.workspace_layout import WorkspacePages
 
 from auto_bdsp_rng.automation.easycon import EasyConConfig
 from auto_bdsp_rng.ui import MainWindow
@@ -183,8 +184,8 @@ def test_main_window_reflows_within_short_screen(
     assert window.minimumSize() == MAIN_WINDOW_MIN_SIZE
     assert window.width() >= MAIN_WINDOW_MIN_SIZE.width()
     assert window.height() >= MAIN_WINDOW_MIN_SIZE.height()
-    assert isinstance(window.tabs, QTabWidget)
-    assert type(window.tabs) is QTabWidget
+    assert isinstance(window.tabs, WorkspacePages)
+    assert window.tabs.tabBar().parentWidget() is window.tabs.navigation
     assert available.contains(window.geometry())
     window.tabs.setCurrentWidget(window.project_xs_tab)
     app.processEvents()
@@ -349,7 +350,7 @@ def test_confirmed_navigation_and_seed_preview_use_content_geometry(
 
     stylesheet = " ".join(window.styleSheet().split())
     assert "min-width: 0;" in stylesheet
-    assert "margin-right: 25px;" in stylesheet
+    assert "margin-right: 12px;" in stylesheet
     assert "border-bottom: 2px solid #087C58;" in stylesheet
     assert window.styleSheet().count("QLabel#WindowTitle {") == 1
     assert window.styleSheet().count("QLabel#WindowVersion {") == 1

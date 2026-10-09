@@ -267,6 +267,11 @@ class RunRecordsPanel(QWidget):
         if self.view_tabs.currentIndex() == self.LOG_TAB:
             self._mark_logs_read_if_visible()
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.subtitle_label.setVisible(self.width() >= 560)
+        self.live_status_label.setToolTip(self.subtitle_label.text())
+
     def _mark_logs_read_if_visible(self) -> None:
         if not self.log_panel.isVisible() or self._unread_problem_count == 0:
             return

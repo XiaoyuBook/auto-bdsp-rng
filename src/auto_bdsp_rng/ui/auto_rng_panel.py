@@ -9,7 +9,7 @@ from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
-from auto_bdsp_rng.ui.workspace_layout import ToolbarReflow, WorkspaceSplit
+from auto_bdsp_rng.ui.workspace_layout import LocalViews, ToolbarReflow
 
 from PySide6.QtCore import QObject, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont
@@ -454,11 +454,16 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.content_grid.setVerticalSpacing(0)
         self.config_panel = self._build_config_panel()
         self.runtime_panel = self._build_runtime_panel()
-        self.workspace_splitter = WorkspaceSplit(self._settings, "static", breakpoint=1040, horizontal=(280, 840))
-        self.workspace_splitter.addWidget(self.config_panel)
-        self.workspace_splitter.addWidget(self.runtime_panel)
-        self.workspace_splitter.restore_sizes()
-        self.content_grid.addWidget(self.workspace_splitter, 0, 0, 1, 2)
+        self.local_views = LocalViews()
+        self.local_views.addTab(self.config_panel, "任务设置")
+        self.local_views.addTab(self.runtime_panel, "运行现场")
+        # Script selectors belong to the continuous settings surface.
+        self.runtime_content.layout().removeWidget(self.runtime_script_card)
+        self.config_contents.layout().insertWidget(self.config_contents.layout().count() - 2, self.runtime_script_card)
+        self.runtime_script_header.show()
+        self._set_runtime_script_summary_visible(False)
+        self.content_grid.addWidget(self.local_views, 0, 0, 1, 2)
+        self.runStateChanged.connect(lambda active: self.local_views.setCurrentIndex(1) if active else None)
         # Keep the old message widgets as compatibility state surfaces.  The
         # visible message and log entry now live in the main window footer.
         self.content_grid.addWidget(self._build_log_group(), 1, 0, 1, 2)
@@ -601,8 +606,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         contents.setObjectName("AutoRngConfigContents")
         contents.setMinimumWidth(264)
         layout = QVBoxLayout(contents)
-        layout.setContentsMargins(16, 18, 16, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(10)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -1171,7 +1176,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.starter_script_description = QLabel("内置御三家测种 → 自动撞帧 → 判闪 → 御三家反查（脚本库 0.0.5）")
         self.starter_script_description.setWordWrap(True)
         self.starter_script_description.hide()
-        layout.addWidget(self.starter_script_description, 11, 0, 1, 2)
+        layout.addWidget(self.starter_script_description, 13, 0, 1, 2)
 
         def combo_factory() -> _RefreshingScriptComboBox:
             return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
@@ -1186,7 +1191,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.script_picker_widgets: dict[QComboBox, QWidget] = {}
         for combo in self._script_combos():
             combo.setFixedHeight(32)
-            combo.setMinimumWidth(160)
+            combo.setMinimumWidth(0)
             combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.escape_continue_check = QCheckBox("未命中时逃跑续搜")
         self.escape_continue_check.setFixedHeight(30)
@@ -1213,7 +1218,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             ("逃跑脚本", self.escape_script_combo, 6, 1),
         )
         self.script_labels: dict[QComboBox, QLabel] = {}
-        for label_text, combo, row, column in script_fields:
+        for index, (label_text, combo, _row, _column) in enumerate(script_fields):
+            row, column = index * 2, 0
             label = QLabel(label_text)
             label.setObjectName("ScriptFieldLabel")
             combo.setAccessibleName(label_text)
@@ -1251,16 +1257,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             layout.addWidget(picker, row + 2, column)
         layout.addWidget(
             self.escape_continue_check,
-            10,
+            14,
             0,
             1,
             2,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
-        for spacer_row in (3, 6, 9):
-            layout.setRowMinimumHeight(spacer_row, 6)
         layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(1, 0)
         self.escape_continue_check.toggled.connect(self._update_script_status)
         self.starter_automation_check.toggled.connect(self._update_starter_mode)
         self.starter_automation_check.toggled.connect(self._update_script_status)
@@ -1327,8 +1331,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         panel = QWidget()
         panel.setObjectName("AutoRngRuntimeContent")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 16, 18, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -1365,6 +1369,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_phase_label.setObjectName("RuntimePhaseLabel")
         self.runtime_round_label = QLabel("任务已停止")
         self.runtime_round_label.setObjectName("RuntimeRoundLabel")
+        self.runtime_round_label.setMaximumHeight(22)
         runtime_top.addWidget(self.runtime_state_dot, 0, Qt.AlignmentFlag.AlignVCenter)
         runtime_top.addWidget(self.runtime_phase_label, 0, Qt.AlignmentFlag.AlignVCenter)
         runtime_top.addStretch(1)
@@ -1488,6 +1493,20 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runtime_content = panel
         self._refresh_runtime_steps(AutoRngPhase.IDLE)
         self._set_runtime_script_summary_visible(True)
+        # Preserve expanded metrics and stage details, while the normal view
+        # leaves the candidate table in the first screenful.
+        runtime_layout.removeWidget(self.runtime_metrics)
+        self.runtime_details.layout().insertWidget(0, self.runtime_metrics)
+        self.runtime_compact_values = QLabel("当前 — · 目标 — · 距离 —")
+        self.runtime_compact_values.setObjectName("WorkspaceHint")
+        self.runtime_compact_values.setWordWrap(True)
+        runtime_layout.insertWidget(1, self.runtime_compact_values)
+        runtime_layout.setContentsMargins(12, 8, 12, 8)
+        self.runtime_card.setStyleSheet("QLabel#RuntimePhaseLabel { font-size: 15px; }")
+        header.itemAt(0).widget().hide()
+        header.removeWidget(self.runtime_log_button)
+        runtime_top.addWidget(self.runtime_log_button)
+        self.candidate_tools.menu.addAction("复制选中行", self.candidate_tools.copy_selected)
         return scroll
 
     def _build_runtime_script_header(self) -> QWidget:
@@ -1590,7 +1609,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self._runtime_script_editor_expanded = False
         if hasattr(self, "previous_round_label"):
             self.previous_round_label.setVisible(not visible)
-        self.runtime_script_header.setVisible(visible)
+        self.runtime_script_header.show()
         self._refresh_runtime_script_summary()
         self.runtime_script_summary.setVisible(visible and not self._runtime_script_editor_expanded)
         self.script_group.setVisible(not visible or self._runtime_script_editor_expanded)
@@ -1688,7 +1707,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.candidate_table.setItemDelegate(RowSeparatorDelegate(self.candidate_table))
         self.candidate_table.setWordWrap(False)
         self.candidate_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.candidate_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.candidate_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.candidate_table.verticalHeader().setVisible(False)
         self.candidate_table.verticalHeader().setDefaultSectionSize(30)
         table_header = self.candidate_table.horizontalHeader()
@@ -1696,9 +1715,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         table_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         for column, width in enumerate((76, 100, 78, 82)):
             self.candidate_table.setColumnWidth(column, width)
-        table_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        table_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self.candidate_table.setColumnWidth(4, 170)
         self.candidate_table.hide()
         self.candidate_tools = TableWorkbench(self.candidate_table, header, self._settings, "candidates", pinned_columns=2)
+        header.removeWidget(self.candidate_tools.copy_button)
+        self.candidate_tools.copy_button.setParent(section)
+        self.candidate_tools.copy_button.hide()
+        self.candidate_tools.tools_button.setText("表格")
         layout.addWidget(self.candidate_table)
         self.candidate_empty_label = QLabel("开始运行后显示本轮候选目标")
         self.candidate_empty_label.setObjectName("RuntimeCandidatesEmpty")
@@ -1884,7 +1908,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                     item.setForeground(QColor("#087C58" if column == 0 else "#202A33"))
                 self.candidate_table.setItem(row, column, item)
         self.candidate_table.setSortingEnabled(sorting)
-        visible_rows = min(RUNTIME_CANDIDATE_VISIBLE_ROWS, max(1, len(display_indexes)))
+        visible_rows = min(9, max(5, len(display_indexes)))
         self.candidate_table.setFixedHeight(30 + visible_rows * 30 + 2)
         if total > len(display_indexes):
             self.candidate_count_label.setText(
@@ -2141,8 +2165,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_script_editor_expanded = True
         self._set_runtime_script_summary_visible(True)
         combo = missing[0][0]
-        self.runtime_content.layout().activate()
-        self.runtime_panel.ensureWidgetVisible(combo)
+        self.local_views.setCurrentIndex(0)
+        self.config_contents.layout().activate()
+        self.config_panel.ensureWidgetVisible(combo)
         combo.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _update_script_status(self) -> None:
@@ -2963,6 +2988,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.runtime_remaining_value.setText(
                 self._runtime_value(self._runtime_trigger_advances - current, suffix=" 帧")
             )
+        self._refresh_compact_runtime()
+
+    def _refresh_compact_runtime(self) -> None:
+        self.runtime_compact_values.setText(
+            f"当前 {self.runtime_current_value.text()} · 目标 {self.runtime_target_value.text()} · 距离 {self.runtime_remaining_value.text()}"
+        )
 
     def apply_progress(self, progress: AutoRngProgress) -> None:
         self.runtime_insights.update_progress(progress)
@@ -3044,6 +3075,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 + (f"\n{runtime_tooltip}" if runtime_tooltip else "")
             )
         self.runtime_card.setToolTip(runtime_tooltip)
+        self._refresh_compact_runtime()
         self.autoProgressChanged.emit(progress)
         self._last_failed_progress_message = (
             progress.log_message if progress.phase == AutoRngPhase.FAILED else None

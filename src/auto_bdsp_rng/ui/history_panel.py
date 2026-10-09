@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QListWidget,
     QListWidgetItem,
     QLayout,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -362,6 +364,7 @@ class HistoryPanel(QWidget):
         self._current_run_context: object = None
         self._current_target_label = "自动定点"
         self._select_next_record = False
+        self._compact = None
         self._build_ui()
         self._scroll_top_timer = QTimer(self)
         self._scroll_top_timer.setSingleShot(True)
@@ -396,12 +399,23 @@ class HistoryPanel(QWidget):
         self.export_button.clicked.connect(self.export_to_file)
         toolbar.addWidget(self.summary_label)
         toolbar.addStretch()
-        toolbar.addWidget(self.copy_button)
-        toolbar.addWidget(self.clear_button)
-        toolbar.addWidget(self.export_button)
+        self.round_picker_button = QPushButton("选择轮次")
+        self.round_picker_button.setCheckable(True)
+        self.round_picker_button.toggled.connect(self._show_round_picker)
+        toolbar.addWidget(self.round_picker_button)
+        more = QToolButton()
+        more.setText("更多")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        for text, button in (("复制全部", self.copy_button), ("清空", self.clear_button), ("导出", self.export_button)):
+            menu.addAction(text, button.click)
+            button.setParent(self)
+            button.hide()
+        more.setMenu(menu)
+        toolbar.addWidget(more)
         layout.addLayout(toolbar)
 
-        filters = QHBoxLayout()
+        filters = QGridLayout()
         filters.setContentsMargins(0, 0, 0, 0)
         filters.setSpacing(8)
         result_label = QLabel("结果")
@@ -426,11 +440,11 @@ class HistoryPanel(QWidget):
         self.search_edit.setPlaceholderText("目标、Seed、Adv 或结果")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._refresh_round_list)
-        filters.addWidget(result_label)
-        filters.addWidget(self.result_filter)
-        filters.addSpacing(4)
-        filters.addWidget(search_label)
-        filters.addWidget(self.search_edit, 1)
+        filters.addWidget(result_label, 0, 0)
+        filters.addWidget(self.result_filter, 0, 1)
+        filters.addWidget(search_label, 1, 0)
+        filters.addWidget(self.search_edit, 1, 1)
+        filters.setColumnStretch(1, 1)
         layout.addLayout(filters)
 
         self.empty_state = QFrame(self)
@@ -471,6 +485,7 @@ class HistoryPanel(QWidget):
         list_panel.setObjectName("HistoryRoundListPanel")
         list_panel.setMinimumWidth(220)
         list_panel.setMaximumWidth(330)
+        self.list_panel = list_panel
         list_layout = QVBoxLayout(list_panel)
         list_layout.setContentsMargins(0, 0, 0, 0)
         list_layout.setSpacing(0)
@@ -499,13 +514,15 @@ class HistoryPanel(QWidget):
         list_layout.addWidget(self.round_list_heading)
         list_layout.addWidget(self.round_list, 1)
 
-        detail_panel = QWidget(self.round_splitter)
+        detail_panel = QWidget()
         detail_panel.setObjectName("HistoryRoundDetail")
+        detail_panel.setMinimumWidth(0)
+        detail_panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         detail_layout = QVBoxLayout(detail_panel)
         detail_layout.setContentsMargins(14, 12, 12, 12)
         detail_layout.setSpacing(10)
 
-        detail_header = QHBoxLayout()
+        detail_header = QVBoxLayout()
         detail_header.setContentsMargins(0, 0, 0, 0)
         detail_heading = QVBoxLayout()
         detail_heading.setContentsMargins(0, 0, 0, 0)
@@ -517,15 +534,14 @@ class HistoryPanel(QWidget):
         self.detail_title_label.setStyleSheet(ui_styles("color: #202A33; font-size: 16px; font-weight: 500;"))
         self.detail_status_label = QLabel("", detail_panel)
         self.detail_status_label.setObjectName("HistoryDetailStatus")
-        title_row.addWidget(self.detail_title_label)
+        title_row.addWidget(self.detail_title_label, 1)
         title_row.addWidget(self.detail_status_label)
-        title_row.addStretch()
         self.detail_time_label = QLabel("", detail_panel)
         self.detail_time_label.setObjectName("HistoryDetailTime")
         self.detail_time_label.setStyleSheet("color: #687480; font-size: 12px;")
         detail_heading.addLayout(title_row)
         detail_heading.addWidget(self.detail_time_label)
-        detail_header.addLayout(detail_heading, 1)
+        detail_header.addLayout(detail_heading)
 
         self.copy_round_button = QPushButton("复制本轮", detail_panel)
         self.copy_round_button.setObjectName("HistoryCopyRound")
@@ -543,12 +559,16 @@ class HistoryPanel(QWidget):
             "QPushButton:hover { background: #DBF1E6; }"
             "QPushButton:disabled { color: #A0A9B2; background: #E0E5EB; border-color: #E0E5EB; }"
         )
-        detail_header.addWidget(self.copy_round_button)
-        detail_header.addWidget(self.related_logs_button)
+        detail_actions = QHBoxLayout()
+        detail_actions.addWidget(self.copy_round_button)
+        detail_actions.addWidget(self.related_logs_button)
+        detail_actions.addStretch(1)
+        detail_header.addLayout(detail_actions)
         detail_layout.addLayout(detail_header)
 
         meta_frame = QFrame(detail_panel)
         meta_frame.setObjectName("HistoryRoundMeta")
+        self.meta_frame = meta_frame
         meta_frame.setStyleSheet(
             "QFrame#HistoryRoundMeta { border-top: 1px solid #F0F2F5; "
             "border-bottom: 1px solid #F0F2F5; }"
@@ -563,6 +583,14 @@ class HistoryPanel(QWidget):
         self.candidate_value_label = self._add_meta_column(meta_layout, 3, "候选结果")
         for column in range(4):
             meta_layout.setColumnStretch(column, 1)
+        meta_items = [meta_layout.itemAtPosition(row, column).widget() for column in range(4) for row in range(2)]
+        for widget in meta_items:
+            meta_layout.removeWidget(widget)
+        for index, (row, col, span) in enumerate(((0, 0, 1), (4, 0, 2), (0, 1, 1), (2, 0, 2))):
+            meta_layout.addWidget(meta_items[index * 2], row, col, 1, span)
+            meta_layout.addWidget(meta_items[index * 2 + 1], row + 1, col, 1, span)
+        for col in range(4):
+            meta_layout.setColumnStretch(col, 1 if col < 2 else 0)
         detail_layout.addWidget(meta_frame)
 
         self.warning_frame = QFrame(detail_panel)
@@ -586,6 +614,7 @@ class HistoryPanel(QWidget):
         feed_title.setStyleSheet(ui_styles("color: #202A33; font-size: 13px; font-weight: 500;"))
         feed_note = QLabel("候选数据为识别当时的快照", detail_panel)
         feed_note.setStyleSheet("color: #687480; font-size: 12px;")
+        feed_note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         feed_heading.addWidget(feed_title)
         feed_heading.addStretch()
         feed_heading.addWidget(feed_note)
@@ -616,18 +645,86 @@ class HistoryPanel(QWidget):
         detail_layout.addWidget(self.history_scroll, 1)
 
         self.round_splitter.addWidget(list_panel)
-        self.round_splitter.addWidget(detail_panel)
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setObjectName("HistoryDetailScroll")
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.detail_scroll.setMinimumSize(0, 0)
+        self.detail_scroll.setWidget(detail_panel)
+        self.detail_panel = self.detail_scroll
+        self.round_splitter.addWidget(self.detail_scroll)
         self.round_splitter.setStretchFactor(0, 0)
         self.round_splitter.setStretchFactor(1, 1)
         self.round_splitter.setSizes([250, 760])
         layout.addWidget(self.round_splitter, 1)
         self.round_splitter.hide()
 
+        # Selected-round summary and candidate data own the narrow surface;
+        # full metadata and the event feed remain available on demand.
+        self.meta_toggle = QToolButton()
+        self.meta_toggle.setText("Seed / 轮次详情")
+        self.meta_toggle.setCheckable(True)
+        self.meta_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.meta_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.meta_toggle.toggled.connect(self.meta_frame.setVisible)
+        self.meta_toggle.toggled.connect(lambda checked: self.meta_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
+        self.meta_frame.hide()
+        detail_layout.insertWidget(1, self.meta_toggle)
+        self.round_summary = QLabel("目标 — · 候选 — · 锁定帧 —")
+        self.round_summary.setWordWrap(True)
+        detail_layout.insertWidget(2, self.round_summary)
+        self.round_candidate_table = self._create_candidate_table(_FeedEntry(kind="table"))
+        self.round_candidate_table.setAccessibleName("本轮候选快照")
+        self.round_candidate_table.setMinimumHeight(100)
+        self.round_candidate_table.setMaximumHeight(16777215)
+        self.round_candidate_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        detail_layout.removeWidget(self.history_scroll)
+        detail_layout.addWidget(self.round_candidate_table, 1)
+        self.feed_toggle = QToolButton()
+        self.feed_toggle.setText("处理详情")
+        self.feed_toggle.setCheckable(True)
+        self.feed_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.feed_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.feed_toggle.toggled.connect(self.history_scroll.setVisible)
+        self.feed_toggle.toggled.connect(lambda checked: self.feed_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
+        detail_layout.addWidget(self.feed_toggle)
+        self.history_scroll.setMaximumHeight(180)
+        self.history_scroll.hide()
+        detail_layout.addWidget(self.history_scroll)
+        for i in range(feed_heading.count()):
+            if feed_heading.itemAt(i).widget():
+                feed_heading.itemAt(i).widget().hide()
+        self.detail_title_label.setWordWrap(True)
+        self.detail_title_label.setMinimumHeight(22)
+        self.detail_title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.detail_time_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
         # Plain-text mirror kept for exports and callers that use text_view.toPlainText().
         self.text_view = _CopyableTextEdit(self)
         self.text_view.setFont(QFont("Consolas", 10))
         self.text_view.hide()
         self.view = self.text_view
+
+    def _show_round_picker(self, show):
+        if self._compact:
+            self.list_panel.setMaximumWidth(16777215)
+            self.list_panel.setVisible(show)
+            self.detail_panel.setVisible(not show)
+            self.round_picker_button.setText("返回本轮" if show else "选择轮次")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not hasattr(self, "list_panel"):
+            return
+        compact = self.width() < 760
+        if compact != self._compact:
+            self._compact = compact
+            self.round_picker_button.setVisible(compact)
+            self.list_panel.setMaximumWidth(16777215 if compact else 330)
+            self.list_panel.setVisible(not compact or self.round_picker_button.isChecked())
+            self.detail_panel.setVisible(not compact or not self.round_picker_button.isChecked())
+
 
     @staticmethod
     def _add_meta_column(layout: QGridLayout, column: int, title: str) -> QLabel:
@@ -893,6 +990,8 @@ class HistoryPanel(QWidget):
             return
         self._selected_uid = selected_uid
         self._render_selected_record()
+        if current is not None and self._compact:
+            self.round_picker_button.setChecked(False)
 
     def _update_detail_header(self) -> None:
         record = self._selected_record()
@@ -908,6 +1007,7 @@ class HistoryPanel(QWidget):
             self.seed_value_label.setText("-")
             self.locked_adv_value_label.setText("-")
             self.candidate_value_label.setText("-")
+            self.round_summary.setText("目标 — · 候选 — · 锁定帧 —")
             self.warning_label.clear()
             self.warning_frame.hide()
             return
@@ -943,6 +1043,8 @@ class HistoryPanel(QWidget):
             str(record.locked_advances) if record.locked_advances is not None else "-"
         )
         self.candidate_value_label.setText(f"{record.candidate_count} 个")
+        locked = record.locked_advances if record.locked_advances is not None else "—"
+        self.round_summary.setText(f"{record.target_label} · {record.candidate_count} 个候选 · 锁定帧 {locked}")
         if record.warnings:
             self.warning_label.setText("\n".join(record.warnings))
             self.warning_frame.show()
@@ -964,7 +1066,9 @@ class HistoryPanel(QWidget):
         self._update_detail_header()
         record = self._selected_record()
         if record is None:
+            self.round_candidate_table.setRowCount(0)
             return
+        self._refresh_candidate_snapshot(record)
         self._rendering_record = True
         try:
             for entry in record.entries:
@@ -973,7 +1077,12 @@ class HistoryPanel(QWidget):
             self._rendering_record = False
         self._scroll_top_timer.start(0)
 
+    def _refresh_candidate_snapshot(self, record) -> None:
+        latest = next((entry for entry in reversed(record.entries) if entry.kind == "table" and not entry.reverse), None)
+        self._fill_candidate_table(self.round_candidate_table, latest or _FeedEntry(kind="table"))
+
     def _scroll_selected_record_to_top(self) -> None:
+        self.detail_scroll.verticalScrollBar().setValue(0)
         self.history_scroll.verticalScrollBar().setValue(0)
 
     def _render_entry(self, entry: _FeedEntry) -> None:
@@ -1004,6 +1113,8 @@ class HistoryPanel(QWidget):
         record.updated_at = datetime.now()
         if record.uid == self._selected_uid:
             self._render_entry(entry)
+            if entry.kind == "table":
+                self._refresh_candidate_snapshot(record)
 
     def _touch_record(self, record: _RoundRecord | None = None) -> None:
         record = record or self._active_record()
@@ -1293,6 +1404,27 @@ class HistoryPanel(QWidget):
         for column, width in enumerate(widths):
             table.setColumnWidth(column, width)
 
+        self._fill_candidate_table(table, entry)
+
+        visible_rows = min(len(entry.rows), 7)
+        table.setFixedHeight(min(300, 34 + visible_rows * 32 + 22))
+        table.setMinimumWidth(0)
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        table.setStyleSheet(
+            ui_styles("QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #FAFBFC; "
+            "border: 0; color: #202A33; }"
+            "QTableWidget#HistoryCandidateTable::item { padding: 3px 6px; }"
+            "QTableWidget#HistoryCandidateTable::item:selected { background: #DCEFE6; color: #202A33; }"
+            "QTableWidget#HistoryCandidateTable QHeaderView::section { background: #F0F3F6; color: #687480; "
+            "border: 0; border-bottom: 1px solid #F0F2F5; "
+            "padding: 6px; font-weight: 500; }")
+        )
+        return table
+
+    @staticmethod
+    def _fill_candidate_table(table: QTableWidget, entry: _FeedEntry) -> None:
+        table.setRowCount(len(entry.rows))
+        headers = REVERSE_HEADERS if entry.reverse else CANDIDATE_HEADERS
         shiny_column = headers.index("异色")
         status_column = headers.index("状态")
         for row_index, values in enumerate(entry.rows):
@@ -1321,21 +1453,6 @@ class HistoryPanel(QWidget):
                     font.setBold(True)
                     item.setFont(font)
                 table.setItem(row_index, column, item)
-
-        visible_rows = min(len(entry.rows), 7)
-        table.setFixedHeight(min(300, 34 + visible_rows * 32 + 22))
-        table.setMinimumWidth(0)
-        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        table.setStyleSheet(
-            ui_styles("QTableWidget#HistoryCandidateTable { background: #FFFFFF; alternate-background-color: #FAFBFC; "
-            "border: 0; color: #202A33; }"
-            "QTableWidget#HistoryCandidateTable::item { padding: 3px 6px; }"
-            "QTableWidget#HistoryCandidateTable::item:selected { background: #DCEFE6; color: #202A33; }"
-            "QTableWidget#HistoryCandidateTable QHeaderView::section { background: #F0F3F6; color: #687480; "
-            "border: 0; border-bottom: 1px solid #F0F2F5; "
-            "padding: 6px; font-weight: 500; }")
-        )
-        return table
 
     # ── 事件方法 ───────────────────────────────────────────────
 

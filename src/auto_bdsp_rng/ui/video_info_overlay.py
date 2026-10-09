@@ -57,6 +57,8 @@ class VideoInfoOverlay(QObject):
         self.seed_panel.setAccessibleName("视频帧数与 Seed")
         self.seed_panel.setStyleSheet(_PANEL_STYLE)
         self._seed_fields = seed_fields
+        self._frame_caption = seed_panel.layout().itemAtPosition(0, 0).widget()
+        self._progress_caption = progress_label
         for field in seed_fields:
             field.textChanged.connect(self._refresh)
         self.progress_value = progress_value
@@ -96,10 +98,12 @@ class VideoInfoOverlay(QObject):
         self.threshold.valueChanged.connect(threshold.setValue)
         threshold.valueChanged.connect(self.threshold.setValue)
         threshold.valueChanged.connect(self._refresh_score_color)
-        match_layout.addWidget(QLabel("匹配"))
+        self.match_caption = QLabel("匹配")
+        self.threshold_caption = QLabel("阈值")
+        match_layout.addWidget(self.match_caption)
         match_layout.addWidget(self.score_value)
         match_layout.addSpacing(4)
-        match_layout.addWidget(QLabel("阈值"))
+        match_layout.addWidget(self.threshold_caption)
         match_layout.addWidget(self.threshold)
         status_layout.addWidget(self.match_row)
 
@@ -178,6 +182,13 @@ class VideoInfoOverlay(QObject):
             return
 
         bounds = bounds.adjusted(6, 6, -6, -6)
+        compact = bounds.width() < 350
+        self._frame_caption.setText("帧" if compact else "当前帧数")
+        self._progress_caption.setText("进度" if compact else "眨眼进度")
+        self.threshold.setVisible(not compact)
+        self.threshold_caption.setVisible(not compact)
+        self.match_caption.setVisible(not compact)
+        self.match_row.setToolTip(f"匹配分数 / 阈值 {self._threshold_source.value():.2f}")
         if show_status:
             self.status_panel.layout().activate()
             self.status_panel.adjustSize()

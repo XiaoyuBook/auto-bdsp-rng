@@ -338,6 +338,27 @@ def test_each_workspace_anchor_survives_resize_and_hidden_strategy_rows(guided):
             assert_body_text_is_readable(overlay.tip)
 
 
+def test_guide_reveals_settings_and_collapsed_seed_configuration(guided):
+    window, panel, controller = guided
+    panel.max_wait_frames.setValue(456)
+    panel.local_views.setCurrentIndex(1)
+    controller._go("target_selection")
+    QTest.qWait(150)
+    assert panel.local_views.currentIndex() == 0
+    assert panel.target_button.isVisible()
+    assert panel.max_wait_frames.value() == 456
+    window.tabs.setCurrentWidget(window.project_xs_tab)
+    window.auto_capture_config_toggle.setChecked(False)
+    controller._go("auto_flow_config")
+    QTest.qWait(150)
+    assert window.auto_capture_config_toggle.isChecked()
+    target = window.seed_config_combo
+    assert target.isVisible()
+    center = controller.overlay.mapFromGlobal(target.mapToGlobal(target.rect().center()))
+    assert controller.overlay.hole.contains(center)
+    assert not controller.overlay.mask().contains(center)
+
+
 def test_recording_demo_pause_resume_and_learning_handoff(guided):
     window, panel, controller = guided
     controller._go("easycon_intro")

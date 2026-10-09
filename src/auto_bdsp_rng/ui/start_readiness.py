@@ -385,6 +385,7 @@ class StartReadinessController(QObject):
         elif action in ("seed", "seed_value"):
             w.tabs.setCurrentWidget(w.project_xs_tab)
             w.reveal_page_configuration(w.project_xs_tab)
+            w.auto_capture_config_toggle.setChecked(True)
             control = w.seed64_outputs[0] if action == "seed_value" else w.seed_config_combo
             area = w.monitor_preview_scroll if action == "seed_value" else w.project_xs_config_scroll
             area.ensureWidgetVisible(control)
@@ -403,12 +404,12 @@ class StartReadinessController(QObject):
                 if panel is w.auto_rng_tab:
                     panel._runtime_script_editor_expanded = True
                     panel._set_runtime_script_summary_visible(True)
-                    panel.runtime_panel.ensureWidgetVisible(panel.script_group)
+                    panel.config_panel.ensureWidgetVisible(panel.script_group)
                     missing = panel._missing_script_fields()
                     focus = missing[0][0] if missing else panel.seed_script_combo
                 else:
                     panel.script_toggle.setChecked(True)
                     panel._set_scripts_expanded(True)
-                    panel.runtime_scroll.ensureWidgetVisible(panel.script_fields)
+                    panel.config_scroll.ensureWidgetVisible(panel.script_fields)
                     focus = panel.name_script_combo if self.phase() == AutoTidRngPhase.CAPTURE_TIDSID else panel.seed_script_combo
                 focus.setFocus()

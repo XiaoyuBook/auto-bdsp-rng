@@ -7,7 +7,7 @@ from shiboken6 import isValid
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF, QRegion
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QMenu, QMessageBox, QScrollArea, QStyle,
+    QApplication, QDialog, QLabel, QMenu, QMessageBox, QScrollArea, QStyle,
     QStyleOptionTab, QToolButton, QWidget,
 )
 
@@ -137,8 +137,17 @@ class GuideSpotlight(QWidget):
         if self.waiting_for_page:
             return
         target = self.focus_target
+        window = self.main_window
+        for panel in (window.auto_rng_tab, window.auto_tid_rng_tab):
+            if panel.config_panel is target or panel.config_panel.isAncestorOf(target):
+                panel.local_views.setCurrentIndex(0)
+        if window.status_group is target or window.status_group.isAncestorOf(target):
+            window.auto_capture_config_toggle.setChecked(True)
+        easycon = window.easycon_tab
+        if easycon.sidebar_scroll is target or easycon.sidebar_scroll.isAncestorOf(target):
+            easycon.show_tools("library" if easycon.script_sources is target else "control")
         if self.spec.script_editing:
-            easycon = self.main_window.easycon_tab
+            easycon.show_tools("control")
             easycon.sidebar_scroll.ensureWidgetVisible(easycon.record_btn, 12, 12)
         ancestor = target.parentWidget()
         ancestors = []
@@ -866,7 +875,8 @@ class GuideController(QObject):
         candidates.extend((overlay.close_button, *overlay.tip.findChildren(QWidget)))
         result = []
         for widget in candidates:
-            if widget not in result and widget.isVisible() and widget.isEnabled() and widget.focusPolicy() != Qt.FocusPolicy.NoFocus:
+            if (not isinstance(widget, QLabel) and widget not in result and widget.isVisible()
+                    and widget.isEnabled() and widget.focusPolicy() != Qt.FocusPolicy.NoFocus):
                 result.append(widget)
         return result
 

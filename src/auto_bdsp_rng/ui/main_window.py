@@ -3,7 +3,7 @@ from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.static_result_items import StatDisplayMode, StatResultItem
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
-from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, LocalViews, MonitorWorkspaceSplit, WorkspacePages, WorkspaceSplit, scroll_surface
 from auto_bdsp_rng.ui.video_info_overlay import VideoInfoOverlay
 from auto_bdsp_rng.notifications.qq_service import QQNotificationService
 from auto_bdsp_rng.ui.qq_notifications import QQNotificationDialog, notification_icon
@@ -231,7 +231,7 @@ MOCK_CAPTURE_DEVICE = "mock_video"
 # Preserve the default workspace; smaller windows reflow and scroll at the
 # current font size. Existing user-selected process-wide scaling is retained.
 MAIN_WINDOW_DEFAULT_SIZE = QSize(1150, 900)
-MAIN_WINDOW_MIN_SIZE = QSize(*DEFAULT_UI_BASELINE)
+MAIN_WINDOW_MIN_SIZE = QSize(854, 480)
 MAIN_WINDOW_SCREEN_MARGIN = 16
 MAIN_WINDOW_GEOMETRY_KEYS = (
     "window/x",
@@ -1822,7 +1822,7 @@ class MainWindow(QMainWindow):
 
         header = QFrame()
         header.setObjectName("Header")
-        header.setFixedHeight(56)
+        header.setFixedHeight(50)
         self.header = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(16, 8, 12, 8)
@@ -1904,7 +1904,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
-        self.tabs = QTabWidget()
+        self.tabs = WorkspacePages()
         self.tabs.setObjectName("WorkspaceTabs")
         self.tabs.tabBar().setExpanding(False)
         self.tabs.tabBar().setDrawBase(False)
@@ -1996,25 +1996,23 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.run_records_tab, "日志中心")
         self.monitor_sidebar = self._build_monitor_sidebar()
-        self.workspace_splitter = WorkspaceSplit(
-            self._profile_settings, "monitor", breakpoint=0, horizontal=(760, 360),
-        )
+        self.workspace_splitter = MonitorWorkspaceSplit(self._profile_settings)
         self.workspace_splitter.setObjectName("MonitorWorkspaceSplitter")
-        self.tabs.setMinimumWidth(520)
-        self.tabs.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self.tabs.setMinimumWidth(400)
         self.workspace_splitter.addWidget(self.tabs)
         self.workspace_splitter.addWidget(self.monitor_sidebar)
         self.workspace_splitter.setStretchFactor(0, 1)
         self.workspace_splitter.setStretchFactor(1, 0)
         self.workspace_splitter.restore_sizes()
         self.workspace_splitter.splitterMoved.connect(self._refresh_navigation_space)
+        root_layout.addWidget(self.tabs.navigation)
         root_layout.addWidget(self.workspace_splitter, 1)
         _make_labels_copyable(root)
 
         self.setCentralWidget(root)
         status_bar = QStatusBar()
         status_bar.setObjectName("WorkspaceStatusBar")
-        status_bar.setFixedHeight(30)
+        status_bar.setFixedHeight(24)
         self.view_status_logs_button = QToolButton()
         self.view_status_logs_button.setObjectName("StatusLogButton")
         self.view_status_logs_button.setText("日志中心")
@@ -2066,6 +2064,12 @@ class MainWindow(QMainWindow):
         self.auto_tid_rng_tab.preparationRequested.connect(lambda: self.readiness.show_for(self.auto_tid_rng_tab))
 
     def reveal_page_configuration(self, page) -> None:
+        if page in (self.auto_rng_tab, self.auto_tid_rng_tab):
+            page.local_views.setCurrentIndex(0)
+        elif page is self.bdsp_tab:
+            self.query_toggle.setChecked(True)
+        elif page is self.easycon_tab:
+            page.show_tools("control")
         configuration = {
             self.auto_rng_tab: self.auto_rng_tab.config_panel,
             self.auto_tid_rng_tab: self.auto_tid_rng_tab.config_scroll,
@@ -2364,8 +2368,8 @@ class MainWindow(QMainWindow):
         configuration = QWidget()
         configuration.setObjectName("ProjectXsConfigPanel")
         config_layout = QVBoxLayout(configuration)
-        config_layout.setContentsMargins(18, 18, 18, 18)
-        config_layout.setSpacing(16)
+        config_layout.setContentsMargins(12, 10, 12, 12)
+        config_layout.setSpacing(10)
         heading = QHBoxLayout()
         title = QLabel("Seed 捕捉配置")
         title.setObjectName("SectionTitle")
@@ -2379,6 +2383,15 @@ class MainWindow(QMainWindow):
         self.seed_group = self._build_seed_group()
         self.status_group = self._build_project_status_group()
         config_layout.addWidget(self.capture_group)
+        self.auto_capture_config_toggle = QToolButton()
+        self.auto_capture_config_toggle.setText("自动流程配置")
+        self.auto_capture_config_toggle.setCheckable(True)
+        self.auto_capture_config_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.auto_capture_config_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.auto_capture_config_toggle.toggled.connect(self.status_group.setVisible)
+        self.auto_capture_config_toggle.toggled.connect(lambda checked: self.auto_capture_config_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
+        self.status_group.hide()
+        config_layout.addWidget(self.auto_capture_config_toggle)
         config_layout.addWidget(self.status_group)
         config_layout.addStretch(1)
         self.project_xs_config_scroll = scroll_surface(configuration)
@@ -2386,56 +2399,86 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self.project_xs_config_scroll)
+        self.capture_toolbar = QWidget()
+        actions = QHBoxLayout(self.capture_toolbar)
+        actions.setContentsMargins(12, 10, 12, 10)
+        actions.setSpacing(8)
+        for button in (self.capture_button, self.reidentify_button, self.tidsid_button):
+            actions.addWidget(button, 1)
+        layout.addWidget(self.capture_toolbar)
+        layout.addWidget(self.project_xs_config_scroll, 1)
         return page
 
     def _build_bdsp_tab(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("BdspWorkspace")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
 
         # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
-        self.profile_group.setMaximumHeight(72)
-        profile_scroll = scroll_surface(self.profile_group)
-        profile_scroll.setFixedHeight(76)
+        layout.addWidget(self.profile_group)
         configuration = QWidget()
         configuration.setObjectName("BdspConfiguration")
         configuration_layout = QVBoxLayout(configuration)
         configuration_layout.setContentsMargins(0, 0, 0, 0)
-        configuration_layout.addWidget(profile_scroll)
 
         # 第 2 行：参数区（三列：乱数信息 + 设置 + 筛选项）
         params_widget = QWidget()
         params_widget.setObjectName("BdspParameters")
-        params_row = QHBoxLayout(params_widget)
-        params_row.setContentsMargins(8, 12, 8, 12)
-        params_row.setSpacing(12)
+        params_row = QVBoxLayout(params_widget)
+        params_row.setContentsMargins(0, 0, 0, 0)
+        params_row.setSpacing(0)
         self.rng_info_group = self._build_rng_info_group()
         self.rng_info_group.setMinimumWidth(240)
         self.static_group = self._build_static_group()
         self.static_group.setMinimumWidth(260)
         self.filter_group = self._build_filter_group()
-        params_row.addWidget(self.rng_info_group)
-        params_row.addWidget(self.static_group)
-        params_row.addWidget(self.filter_group, 1)
+        self.query_groups = LocalViews()
+        for group, title in ((self.rng_info_group, "乱数"), (self.static_group, "遭遇"), (self.filter_group, "筛选")):
+            self.query_groups.addTab(group, title)
+        params_row.addWidget(self.query_groups)
+        self.query_groups.currentChanged.connect(self._sync_query_group_height)
         configuration_layout.addWidget(params_widget)
         self.bdsp_config_scroll = scroll_surface(configuration)
-        self.bdsp_reflow = ColumnReflow(self.bdsp_config_scroll, params_row)
+        self.bdsp_reflow = ColumnReflow(self.bdsp_config_scroll, self.filter_group.layout(), breakpoint=540)
+        self.bdsp_reflow.reflowed.connect(self._sync_query_group_height)
 
         # 第 3 行 + 第 4 行：结果表格（工具栏 + 表格）
         self.results_panel = self._build_results()
-        self.bdsp_splitter = WorkspaceSplit(self._profile_settings, "data", breakpoint=0, vertical=(430, 260), orientation=Qt.Orientation.Vertical)
-        self.bdsp_splitter.addWidget(self.bdsp_config_scroll)
-        self.bdsp_splitter.addWidget(self.results_panel)
-        self.bdsp_splitter.restore_sizes()
-        layout.addWidget(self.bdsp_splitter, 1)
+        self.query_toggle = QToolButton()
+        self.query_toggle.setText("查询条件")
+        self.query_toggle.setCheckable(True)
+        self.query_toggle.setChecked(True)
+        self.query_toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.query_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.query_toggle.toggled.connect(self._set_query_visible)
+        self.query_summary = QLabel("编辑乱数、遭遇与筛选条件")
+        self.query_summary.setObjectName("WorkspaceHint")
+        self.query_summary.setWordWrap(True)
+        self.results_panel.layout().insertWidget(1, self.query_summary)
+        self.results_panel.layout().insertWidget(2, self.bdsp_config_scroll)
+        self.bdsp_config_scroll.setMinimumHeight(0)
+        self.bdsp_config_scroll.setMaximumHeight(330)
+        self.bdsp_config_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._sync_query_group_height()
+        self.results_toolbar.insertWidget(0, self.query_toggle)
+        layout.addWidget(self.results_panel, 1)
         self.height_min.setToolTip(TERMS[10][1])
         self.weight_min.setToolTip(TERMS[10][1])
         self.iv_count_display.setToolTip(TERMS[9][1])
         return panel
+
+    def _set_query_visible(self, visible: bool) -> None:
+        self.bdsp_config_scroll.setVisible(visible)
+        self.query_toggle.setArrowType(Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow)
+
+    def _sync_query_group_height(self, *_args) -> None:
+        if self.query_groups.currentWidget() is not None:
+            group = self.query_groups.currentWidget()
+            self.query_groups.setMinimumHeight(group.minimumSizeHint().height() + 40)
+
 
     def _build_project_status_group(self) -> QGroupBox:
         group = QGroupBox("自动流程配置")
@@ -2615,18 +2658,6 @@ class MainWindow(QMainWindow):
         config_note.setObjectName("WorkspaceHint")
         config_note.setWordWrap(True)
         layout.addWidget(config_note, 1, 0, 1, 4)
-
-        capture_actions = QVBoxLayout()
-        capture_actions.setContentsMargins(0, 0, 0, 0)
-        capture_actions.setSpacing(8)
-        self.capture_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        capture_actions.addWidget(self.capture_button)
-        secondary_actions = QHBoxLayout()
-        secondary_actions.setSpacing(8)
-        secondary_actions.addWidget(self.reidentify_button, 1)
-        secondary_actions.addWidget(self.tidsid_button, 1)
-        capture_actions.addLayout(secondary_actions)
-        layout.addLayout(capture_actions, 2, 0, 1, 4)
 
         recognition_title = QLabel("识别参数")
         recognition_title.setObjectName("WorkspaceSubheading")
@@ -2820,8 +2851,7 @@ class MainWindow(QMainWindow):
     def _build_profile_group(self) -> QGroupBox:
         group = QGroupBox("存档信息")
         group.setObjectName("ProfileGroup")
-        group.setMinimumHeight(64)
-        group.setMaximumHeight(72)
+        group.setMinimumHeight(0)
 
         outer = QHBoxLayout(group)
         outer.setContentsMargins(12, 4, 12, 6)
@@ -2874,6 +2904,29 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.oval_charm)
 
         outer.addStretch()
+        # Keep the editable values and model bindings, in two compact rows.
+        # Charms remain editable through the existing profile manager.
+        while outer.count():
+            item = outer.takeAt(0)
+            if item.widget() and item.widget() not in (self.profile_name, self.profile_manager_button, self.tid, self.sid, self.tsv, self.profile_game_value):
+                item.widget().hide()
+        first = QHBoxLayout()
+        first.setSpacing(8)
+        self.profile_name.setMinimumWidth(0)
+        self.profile_name.setMaximumWidth(16777215)
+        first.addWidget(self.profile_name, 1)
+        first.addWidget(self.profile_game_value)
+        first.addWidget(self.profile_manager_button)
+        second = QHBoxLayout()
+        second.setSpacing(6)
+        for text, field in (("TID", self.tid), ("SID", self.sid), ("TSV", self.tsv)):
+            second.addWidget(QLabel(text))
+            field.setFixedWidth(68)
+            second.addWidget(field)
+        second.addStretch(1)
+        outer.setDirection(QHBoxLayout.Direction.TopToBottom)
+        outer.addLayout(first)
+        outer.addLayout(second)
         return group
 
     def _build_filter_group(self) -> QGroupBox:
@@ -3136,18 +3189,18 @@ class MainWindow(QMainWindow):
     def _build_monitor_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("MonitorSidebar")
-        sidebar.setMinimumWidth(310)
-        sidebar.setMaximumWidth(640)
+        sidebar.setMinimumWidth(260)
+        sidebar.setMaximumWidth(720)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(10, 8, 0, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 0, 0)
+        layout.setSpacing(6)
         self.monitor_splitter = WorkspaceSplit(
             self._profile_settings, "monitor-panels", breakpoint=0,
             vertical=(260, 440), orientation=Qt.Orientation.Vertical,
         )
         self.monitor_preview = self._build_preview_panel()
         self.monitor_preview_scroll = scroll_surface(self.monitor_preview)
-        self.monitor_preview_scroll.setMinimumHeight(240)
+        self.monitor_preview_scroll.setMinimumHeight(0)
         self.live_log_panel = LiveLogPanel(self._run_log_buffer)
         self.live_log_panel.expandRequested.connect(self._show_run_logs)
         self.monitor_splitter.addWidget(self.monitor_preview_scroll)
@@ -3161,15 +3214,21 @@ class MainWindow(QMainWindow):
 
     def _sync_monitor_preview_layout(self) -> None:
         available = self.monitor_splitter.height() - self.live_log_panel.minimumHeight() - self.monitor_splitter.handleWidth()
-        required = self.monitor_preview.minimumSizeHint().height()
-        self.monitor_preview_scroll.setMinimumHeight(max(210, min(required, available)))
+        chrome = 76
+        if available > 0:
+            max_width = max(1, round(max(1, available - chrome) * 16 / 9))
+            self.preview_aspect_container.setMaximumWidth(max_width)
+        required = self.preview_aspect_container.height() + chrome
+        # The preview follows its width. Logs fill the rest, without a saved
+        # vertical split leaving a large blank area below the video.
+        self.monitor_preview_scroll.setFixedHeight(required)
         self._refresh_preview_presentation()
 
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("CapturePreviewPanel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
         self.seed_group.layout().addWidget(self.advances_label, 0, 0)
         self.seed_group.layout().addWidget(self.advances_value, 0, 1)
@@ -3178,7 +3237,7 @@ class MainWindow(QMainWindow):
         self.advances_value.setToolTip("当前 RNG 推进数（advance），不是视频帧率。")
         self.preview_group = QGroupBox()
         self.preview_group.setObjectName("CapturePreviewGroup")
-        self.preview_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.preview_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         preview_layout = QVBoxLayout(self.preview_group)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(8)
@@ -3233,7 +3292,6 @@ class MainWindow(QMainWindow):
         source_row.addWidget(self.monitor_source_status, 1)
         source_row.addWidget(self.monitor_frame_info)
         layout.addLayout(source_row)
-        layout.addStretch(1)
         return panel
 
     def _build_results(self) -> QWidget:
@@ -3247,6 +3305,7 @@ class MainWindow(QMainWindow):
         toolbar_widget.setObjectName("ResultsToolbar")
         toolbar_widget.setFixedHeight(38)
         toolbar = QHBoxLayout(toolbar_widget)
+        self.results_toolbar = toolbar
         toolbar.setContentsMargins(0, 0, 0, 2)
         toolbar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -3297,6 +3356,25 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
         self.static_table_tools = TableWorkbench(self.table, toolbar, self._profile_settings, "static")
+        # A single secondary menu keeps the fixed query action line usable.
+        for control in (self.copy_button, self.export_button, self.filter_presets,
+                        self.static_table_tools.copy_button, self.static_table_tools.tools_button):
+            toolbar.removeWidget(control)
+            control.setParent(panel)
+            control.hide()
+        self.results_more_button = QToolButton()
+        self.results_more_button.setText("更多")
+        self.results_more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.results_more_menu = QMenu(self.results_more_button)
+        self.results_more_menu.addAction("复制全部结果", self.copy_results)
+        self.results_more_menu.addAction("复制选中行", self.static_table_tools.copy_selected)
+        self.results_more_menu.addAction("导出 CSV", self.export_results)
+        self.filter_presets.menu.setTitle("筛选方案")
+        self.results_more_menu.addMenu(self.filter_presets.menu)
+        self.static_table_tools.menu.setTitle("表格设置")
+        self.results_more_menu.addMenu(self.static_table_tools.menu)
+        self.results_more_button.setMenu(self.results_more_menu)
+        toolbar.addWidget(self.results_more_button)
         layout.addWidget(self.table, 1)
         self.static_empty_state = TableEmptyState(self.table)
         self._static_result_state = "initial"
@@ -3374,30 +3452,30 @@ class MainWindow(QMainWindow):
             QTabWidget#WorkspaceTabs::tab-bar {
                 left: 18px;
             }
-            QTabWidget#WorkspaceTabs, QTabWidget#WorkspaceTabs > QTabBar {
+            QWidget#WorkspaceNavigation, QTabBar#WorkspaceNavigationBar {
                 background: #FFFFFF;
                 border-bottom: 1px solid #F0F2F5;
             }
-            QTabWidget#WorkspaceTabs > QTabBar::tab {
+            QTabBar#WorkspaceNavigationBar::tab {
                 background: #FFFFFF;
                 border: 0;
                 border-bottom: 1px solid #F0F2F5;
                 color: #52606D;
                 min-width: 0;
-                min-height: 44px;
-                margin-right: 25px;
-                padding: 0 0 1px 0;
+                min-height: 38px;
+                margin-right: 12px;
+                padding: 0 8px 1px 8px;
                 font-size: 13px;
                 font-weight: 400;
             }
-            QTabWidget#WorkspaceTabs > QTabBar::tab:selected {
+            QTabBar#WorkspaceNavigationBar::tab:selected {
                 background: #FFFFFF;
                 color: #087C58;
                 border-bottom: 2px solid #087C58;
                 padding-bottom: 0;
                 font-weight: 500;
             }
-            QTabWidget#WorkspaceTabs > QTabBar::tab:hover:!selected {
+            QTabBar#WorkspaceNavigationBar::tab:hover:!selected {
                 background: #F7F8FA;
                 color: #202A33;
             }
@@ -4439,7 +4517,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self, self._sync_monitor_preview_layout)
 
     def _refresh_navigation_space(self, *_args) -> None:
-        self.navigation_status.setVisible(self.tabs.width() >= 960)
+        self.navigation_status.setVisible(self.width() >= 1050)
 
     def event(self, event) -> bool:  # type: ignore[override]
         handled = super().event(event)
@@ -7264,7 +7342,9 @@ class MainWindow(QMainWindow):
 
     def _auto_refresh_results(self) -> None:
         if getattr(self, "_states", None):
+            editing = self.query_toggle.isChecked()
             self.generate_results()
+            self.query_toggle.setChecked(editing)
 
     def _current_profile(self) -> Profile8:
         return Profile8(
@@ -9769,6 +9849,9 @@ class MainWindow(QMainWindow):
         self._states = states
         self._active_record = record
         self._populate_table(states)
+        name = POKEMON_LABELS_ZH.get(record.description, record.description) if self.lang == "zh" else record.description
+        self.query_summary.setText(f"{name} · {len(states)} 条结果 · 点击查询条件重新编辑")
+        self.query_toggle.setChecked(False)
         self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
 
     def _populate_table(self, states: list[State8]) -> None:
@@ -9811,7 +9894,12 @@ class MainWindow(QMainWindow):
         self.export_button.setEnabled(has_results)
 
     def _focus_static_configuration(self, control) -> None:
+        self.tabs.setCurrentWidget(self.bdsp_tab)
         self.reveal_page_configuration(self.bdsp_tab)
+        for index, group in enumerate((self.rng_info_group, self.static_group, self.filter_group)):
+            if group is control or group.isAncestorOf(control):
+                self.query_groups.setCurrentIndex(index)
+                break
         control.setFocus()
         QTimer.singleShot(0, self.bdsp_config_scroll, lambda: self.bdsp_config_scroll.ensureWidgetVisible(control))
 

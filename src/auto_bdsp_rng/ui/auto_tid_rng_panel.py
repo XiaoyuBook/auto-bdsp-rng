@@ -13,7 +13,7 @@ from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem, TableWorkbench
-from auto_bdsp_rng.ui.workspace_layout import ToolbarReflow, WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.workspace_layout import LocalViews, ToolbarReflow, scroll_surface
 
 from PySide6.QtCore import QObject, QRect, QSize, QSettings, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QGuiApplication
@@ -313,9 +313,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
         self.config_panel = self._build_config_group()
-        self.workspace_splitter = WorkspaceSplit(self._settings, "tid", breakpoint=1040, horizontal=(280, 840))
         self.config_scroll = scroll_surface(self.config_panel)
-        self.workspace_splitter.addWidget(self.config_scroll)
+        self.local_views = LocalViews()
+        self.local_views.addTab(self.config_scroll, "任务设置")
         self.runtime_scroll = QScrollArea()
         self.runtime_scroll.setObjectName("AutoTidRuntimeScroll")
         self.runtime_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -324,8 +324,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.runtime_content = QWidget()
         self.runtime_content.setObjectName("AutoTidRuntimeContent")
         runtime_layout = QVBoxLayout(self.runtime_content)
-        runtime_layout.setContentsMargins(18, 16, 18, 14)
-        runtime_layout.setSpacing(10)
+        runtime_layout.setContentsMargins(12, 10, 12, 12)
+        runtime_layout.setSpacing(8)
         header = QHBoxLayout()
         header.addWidget(self._section_title("运行现场"))
         header.addStretch(1)
@@ -335,14 +335,18 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         header.addWidget(self.view_round_button)
         runtime_layout.addLayout(header)
         runtime_layout.addWidget(self._build_runtime_group())
+        header.itemAt(0).widget().hide()
+        header.removeWidget(self.view_round_button)
+        self.runtime_card.layout().itemAt(0).layout().addWidget(self.view_round_button)
         self.script_group = self._build_script_group()
         self.id_table_group = self._build_id_table_group()
         runtime_layout.addWidget(self.id_table_group, 1)
-        runtime_layout.addWidget(self.script_group)
+        self.config_panel.layout().insertWidget(self.config_panel.layout().count() - 2, self.script_group)
+        self.script_toggle.setChecked(True)
         self.runtime_scroll.setWidget(self.runtime_content)
-        self.workspace_splitter.addWidget(self.runtime_scroll)
-        self.workspace_splitter.restore_sizes()
-        row.addWidget(self.workspace_splitter, 1)
+        self.local_views.addTab(self.runtime_scroll, "运行数据")
+        row.addWidget(self.local_views, 1)
+        self.runStateChanged.connect(lambda active: self.local_views.setCurrentIndex(1) if active else None)
         self._legacy_log_group = self._build_log_group()
         self._legacy_log_group.setParent(self)
         self._legacy_log_group.hide()
@@ -546,8 +550,19 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.title_label.hide()
         self.subtitle_label = QLabel("未命中时自动重新测种")
         self.subtitle_label.setObjectName("AutoTidSubtitle")
-        row.addWidget(self.subtitle_label)
-        row.addSpacing(10)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        self.mode_combo.show()
+        self.debug_output_check.show()
+        mode_row.addWidget(self.mode_combo)
+        mode_row.addWidget(self.loop_count)
+        mode_row.addWidget(self.debug_output_check)
+        mode_row.addStretch(1)
+        row.addLayout(mode_row)
+        self.subtitle_label.setParent(toolbar)
+        self.subtitle_label.hide()
+        self.mode_combo.setToolTip("未命中时自动重新测种")
+        self.mode_combo.currentIndexChanged.connect(lambda: self.loop_count.setVisible(self.mode_combo.currentData() == "count"))
         self.latest_log_label = QLabel("暂无消息")
         self.latest_log_label.setObjectName("AutoTidLatest")
         self.latest_log_label.setMaximumHeight(32)
@@ -577,8 +592,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         panel.setObjectName("AutoTidConfigPanel")
         panel.setMinimumWidth(264)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 18, 16, 18)
-        layout.setSpacing(18)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(10)
         header = QHBoxLayout()
         header.addWidget(self._section_title("任务配置"))
         header.addStretch(1)
@@ -741,7 +756,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.runtime_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(self.runtime_card)
         layout.setContentsMargins(16, 16, 16, 12)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
         top = QHBoxLayout()
         self.runtime_state_dot = QLabel("●")
         self.runtime_state_dot.setObjectName("AutoTidStateDot")
@@ -751,6 +766,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         top.addWidget(self.runtime_phase_label)
         top.addStretch(1)
         self.runtime_round_label = self._muted_label("尚未开始")
+        self.runtime_round_label.setMaximumHeight(22)
         top.addWidget(self.runtime_round_label)
         layout.addLayout(top)
         self.runtime_description_label = self._muted_label("设置目标 Display TID 和脚本，然后开始任务。")
@@ -788,7 +804,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.runtime_footer = QFrame()
         self.runtime_footer.setObjectName("AutoTidRuntimeFooter")
         footer = QHBoxLayout(self.runtime_footer)
-        footer.setContentsMargins(0, 8, 0, 0)
+        footer.setContentsMargins(0, 0, 0, 0)
         footer.addWidget(self._muted_label("本次 delay"))
         self.runtime_delay_value = QLabel("—")
         footer.addWidget(self.runtime_delay_value)
@@ -817,7 +833,12 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.target_data_button.setParent(self.runtime_card)
         self.target_data_button.hide()
         layout.addWidget(self.runtime_footer)
-        self.runtime_details = self.runtime_insights
+        self.runtime_details = QWidget()
+        expanded = QVBoxLayout(self.runtime_details)
+        expanded.setContentsMargins(0, 0, 0, 0)
+        layout.removeWidget(self.runtime_metrics)
+        expanded.addWidget(self.runtime_metrics)
+        expanded.addWidget(self.runtime_insights)
         layout.addWidget(self.runtime_details)
         self.runtime_details.hide()
         self.runtime_details_toggle.toggled.connect(self._set_runtime_details_visible)
@@ -830,6 +851,11 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.actual_delay_result = QLabel("—", self)
         for label in (self.target_result, self.trigger_result, self.ocr_result, self.actual_delay_result):
             label.hide()
+        self.runtime_compact_values = self._muted_label("当前 — · 目标 — · TID —")
+        self.runtime_compact_values.setWordWrap(True)
+        layout.insertWidget(1, self.runtime_compact_values)
+        layout.setContentsMargins(12, 8, 12, 8)
+        self.runtime_card.setStyleSheet("QLabel#AutoTidRuntimePhase { font-size: 15px; }")
         return self.runtime_card
 
     def _build_script_group(self) -> QWidget:
@@ -884,19 +910,19 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.reverse_id_script_combo.hide()
         self.script_edit_buttons = {}
         self.script_picker_widgets = {}
-        for column, (title, combo) in enumerate((("测种脚本", self.seed_script_combo), ("取名脚本", self.name_script_combo))):
-            combo.setMinimumWidth(160)
+        for row, (title, combo) in enumerate((("测种脚本", self.seed_script_combo), ("取名脚本", self.name_script_combo))):
+            combo.setMinimumWidth(0)
             combo.setFixedHeight(32)
             combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             picker = self._build_script_picker(self.script_fields, combo, title)
-            fields.addWidget(self._muted_label(title), 0, column)
-            fields.addWidget(picker, 1, column)
-            fields.setColumnStretch(column, 1)
+            fields.addWidget(self._muted_label(title), row * 2, 0)
+            fields.addWidget(picker, row * 2 + 1, 0)
+            fields.setColumnStretch(0, 1)
             combo.currentIndexChanged.connect(self._refresh_script_summary)
         self.seed_script_picker = self.script_picker_widgets[self.seed_script_combo]
         self.name_script_picker = self.script_picker_widgets[self.name_script_combo]
         self.refresh_scripts_button = self._link_button("刷新脚本列表", self.refresh_scripts)
-        fields.addWidget(self.refresh_scripts_button, 2, 0, 1, 2, Qt.AlignmentFlag.AlignRight)
+        fields.addWidget(self.refresh_scripts_button, 4, 0, Qt.AlignmentFlag.AlignRight)
         card_layout.addWidget(self.script_fields)
         self.script_fields.hide()
         self.script_toggle.toggled.connect(self._set_scripts_expanded)
@@ -1040,8 +1066,22 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.id_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.id_table.setMinimumHeight(170)
         self.id_table_tools = TableWorkbench(self.id_table, actions, self._settings, "ids", column_settings=False)
-        actions.addWidget(self.copy_button)
-        actions.addWidget(self.export_button)
+        actions.removeWidget(self.id_table_tools.copy_button)
+        self.id_table_tools.copy_button.setParent(group)
+        self.id_table_tools.copy_button.hide()
+        self.result_more_button = QToolButton()
+        self.result_more_button.setText("更多")
+        self.result_more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        result_menu = QMenu(self.result_more_button)
+        result_menu.addAction("复制全部", self.copy_button.click)
+        result_menu.addAction("复制选中行", self.id_table_tools.copy_selected)
+        result_menu.addAction("导出全部 CSV", self.export_button.click)
+        self.result_more_button.setMenu(result_menu)
+        self.copy_button.setParent(group)
+        self.export_button.setParent(group)
+        self.copy_button.hide()
+        self.export_button.hide()
+        actions.addWidget(self.result_more_button)
         self.id_table.model().layoutChanged.connect(self._id_layout_changed)
         layout.addWidget(self.id_table, 1)
         self.id_empty_state = TableEmptyState(self.id_table)
@@ -1300,6 +1340,12 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         text = self._duration_text(remaining)
         if self.runtime_remaining_value.text() != text:
             self.runtime_remaining_value.setText(text)
+        progress = self._last_progress
+        display = f"{progress.target_display_tid:06d}" if progress.target_display_tid is not None else "—"
+        self.runtime_compact_values.setText(
+            f"当前 {self.runtime_current_value.text()} · 目标 {self.runtime_target_value.text()}\n"
+            f"TID {display}" + (f" · 等待 {text}" if progress.phase == AutoTidRngPhase.WAIT_NAME_TRIGGER else "")
+        )
 
     def _render_runtime(self, progress: AutoTidRngProgress) -> None:
         phase = progress.phase
@@ -1333,7 +1379,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         elif phase == AutoTidRngPhase.WAIT_NAME_TRIGGER:
             title = "等待取名"
             trigger = progress.trigger_advances
-            description = f"已选中 Display TID {display}，到达 {self._runtime_number(trigger)} 帧时执行取名脚本。"
+            description = f"到达 {self._runtime_number(trigger)} 帧后执行取名脚本。"
         elif phase == AutoTidRngPhase.RUN_NAME_SCRIPT:
             title = "执行取名脚本"
             description = f"已到达取名触发帧，正在执行取名脚本。目标 Display TID {display}。"

@@ -9,7 +9,7 @@ from pathlib import Path, PureWindowsPath
 from time import monotonic
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen, QPixmap, QTextCursor, QTextFormat
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -927,21 +927,36 @@ class EasyConPanel(QWidget):
         layout.addWidget(self._build_right_buttons())
 
         content = QWidget()
+        self.editor_content = content
         content.setStyleSheet(f"background: {self.CLR_BG};")
         content_layout = QHBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.workspace_splitter = WorkspaceSplit(None, "easycon", breakpoint=760, horizontal=(240, 880), vertical=(170, 450))
+        self.workspace_splitter = WorkspaceSplit(None, "easycon-editor", breakpoint=0, horizontal=(880,))
         side_panel.setMinimumWidth(224)
         side_panel.setMaximumWidth(16777215)
         self.sidebar_scroll = scroll_surface(side_panel)
         self.sidebar_scroll.setMinimumWidth(240)
-        self.workspace_splitter.addWidget(self.sidebar_scroll)
-        self.workspace_splitter.addWidget(scroll_surface(editor_panel))
+        self.tools_panel = QFrame()
+        self.tools_panel.setObjectName("EasyConToolsPanel")
+        self.tools_panel.setMaximumHeight(210)
+        tools_layout = QVBoxLayout(self.tools_panel)
+        tools_layout.setContentsMargins(12, 4, 12, 4)
+        tools_layout.setSpacing(4)
+        close_tools = QPushButton("关闭工具，返回编辑")
+        self.close_tools_button = close_tools
+        close_tools.clicked.connect(self.hide_tools)
+        self.tools_panel.installEventFilter(self)
+        tools_layout.addWidget(close_tools)
+        tools_layout.addWidget(self.sidebar_scroll, 1)
+        self.overview_panel.hide()
+        self.workspace_splitter.addWidget(editor_panel)
         self.workspace_splitter.restore_sizes()
         content_layout.addWidget(self.workspace_splitter, 1)
 
+        layout.addWidget(self.tools_panel)
+        self.tools_panel.hide()
         layout.addWidget(content, 1)
 
         self.connection_dialog = self._build_connection_dialog()
@@ -950,6 +965,37 @@ class EasyConPanel(QWidget):
         # 状态栏
         layout.addWidget(self._build_bottom_status())
         self.easycon_status.hide()
+
+    def show_tools(self, section="library") -> None:
+        self.tools_panel.show()
+        self._sync_tools_layout()
+        self.script_sources.setVisible(section == "library")
+        self.source_title.setVisible(section == "library")
+        self.keyboard_control_group.setVisible(section != "library")
+        target = self.record_btn if section == "control" else self.script_sources
+        self.tools_panel.layout().activate()
+        self.sidebar_scroll.widget().layout().activate()
+        self.sidebar_scroll.ensureWidgetVisible(target, 12, 12)
+        target.setFocus()
+
+    def hide_tools(self) -> None:
+        self.tools_panel.hide()
+        self._sync_tools_layout()
+        self.editor.setFocus()
+
+    def _sync_tools_layout(self) -> None:
+        if not hasattr(self, "editor_content"):
+            return
+        # At short window heights the tool is a temporary full-body view.
+        # Reuse the editor so drafts, execution position and undo survive.
+        short = self.height() < 400 and not self.tools_panel.isHidden()
+        self.editor_content.setVisible(not short)
+        self.tools_panel.setMaximumHeight(16777215 if short else 210)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "tools_panel"):
+            self._sync_tools_layout()
 
     # ── 菜单栏 ──────────────────────────────────────────
 
@@ -1034,6 +1080,7 @@ class EasyConPanel(QWidget):
         layout.setSpacing(8)
 
         source_title = QLabel("脚本")
+        self.source_title = source_title
         source_title.setStyleSheet(ui_styles("font-weight: 500; font-size: 13px; background: transparent;"))
         layout.addWidget(source_title)
         self.script_sources = ScriptSourceTree()
@@ -1044,7 +1091,8 @@ class EasyConPanel(QWidget):
         log_header.setStyleSheet(
             ui_styles(f"font-weight: 500; font-size: 15px; padding: 0; border: 0; background: {self.CLR_PANEL_BG};")
         )
-        layout.addWidget(log_header)
+        log_header.setParent(area)
+        log_header.hide()
 
         overview_panel = QFrame()
         overview_panel.setMinimumHeight(112)
@@ -1200,7 +1248,7 @@ class EasyConPanel(QWidget):
         area.setObjectName("EasyConEditorArea")
         area.setStyleSheet(f"background: {self.CLR_BG};")
         layout = QVBoxLayout(area)
-        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(0)
 
         # 编辑器标题行
@@ -1261,8 +1309,14 @@ class EasyConPanel(QWidget):
         )
         output_layout = QHBoxLayout(output_header)
         output_layout.setContentsMargins(0, 0, 0, 0)
-        output_title = QLabel("运行输出")
-        output_title.setStyleSheet(ui_styles("font-size: 13px; font-weight: 500; background: transparent;"))
+        output_title = QToolButton()
+        self.output_toggle = output_title
+        output_title.setText("运行输出")
+        output_title.setCheckable(True)
+        output_title.setArrowType(Qt.ArrowType.RightArrow)
+        output_title.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        output_title.toggled.connect(self.log_panel.setVisible)
+        output_title.toggled.connect(lambda checked: output_title.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow))
         output_layout.addWidget(output_title)
         output_layout.addStretch(1)
         complete_log_button = QPushButton("日志中心")
@@ -1281,7 +1335,7 @@ class EasyConPanel(QWidget):
 
         self.log_panel.setMinimumHeight(96)
         self.log_panel.setMaximumHeight(132)
-        self.log_panel.setVisible(True)
+        self.log_panel.setVisible(False)
         layout.addWidget(self.log_panel)
         return area
 
@@ -1391,8 +1445,16 @@ class EasyConPanel(QWidget):
             layout.takeAt(0)
         file_actions = QHBoxLayout()
         file_actions.setSpacing(8)
-        for button in (self.open_button, self.new_button, self.save_button, shortcut_label):
+        self.library_button = self._easycon_light_button("脚本库")
+        self.library_button.clicked.connect(lambda: self.show_tools("library"))
+        self.control_tools_button = self._easycon_light_button("控制与录制")
+        self.control_tools_button.clicked.connect(lambda: self.show_tools("control"))
+        for button in (self.library_button, self.open_button, self.new_button, self.save_button, self.control_tools_button):
             file_actions.addWidget(button)
+        shortcut_label.hide()
+        for button in (self.open_button, self.new_button, self.save_button):
+            button.setIcon(QIcon())
+            button.setStyleSheet(btn_style + "QPushButton { padding: 0 7px; }")
         file_actions.addStretch(1)
         execution_actions = QHBoxLayout()
         execution_actions.setSpacing(8)
@@ -1660,6 +1722,24 @@ class EasyConPanel(QWidget):
 
         self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆")
         self.keyboard_mapping_label.setStyleSheet(f"font-size: 10px; color: {self.CLR_HINT}; background: transparent;")
+
+        # Keep mode and recording actions together inside the temporary panel.
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget() and item.widget() not in (mode_frame, self.mapping_button, self.keyboard_shortcut_label):
+                item.widget().hide()
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(6)
+        compact_heading = QHBoxLayout()
+        compact_heading.addWidget(QLabel("控制与录制"))
+        compact_heading.addStretch(1)
+        compact_heading.addWidget(self.keyboard_controller_state_label)
+        compact_heading.addWidget(self.recording_state_label)
+        layout.addLayout(compact_heading)
+        layout.addWidget(mode_frame)
+        layout.addLayout(recording_actions)
+        layout.addWidget(self.mapping_button)
+        layout.addWidget(self.keyboard_shortcut_label)
 
         return group
 
@@ -4036,6 +4116,8 @@ class EasyConPanel(QWidget):
         self._append_log("error", f"系统级键盘捕获已意外停止{detail}")
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is getattr(self, "tools_panel", None) and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
+            self._sync_tools_layout()
         if self._vpad_input_source != "qt":
             return super().eventFilter(watched, event)
         if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):

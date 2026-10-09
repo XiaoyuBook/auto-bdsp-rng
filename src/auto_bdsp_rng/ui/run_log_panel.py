@@ -35,9 +35,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -369,6 +371,7 @@ class RunLogPanel(QWidget):
         self.search_edit.setMinimumWidth(130)
         search_field.addWidget(self.search_edit)
         filters.addLayout(search_field, 0, 2)
+        self.search_field = search_field
         filters.setColumnStretch(2, 1)
 
         toggle_row = QHBoxLayout()
@@ -442,25 +445,32 @@ class RunLogPanel(QWidget):
         self.count_label = QLabel("显示 0 条 · 当前会话共 0 条", self)
         self.count_label.setObjectName("RunLogCount")
         self.count_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.count_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         footer.addWidget(self.count_label, 0, Qt.AlignmentFlag.AlignVCenter)
         footer.addStretch()
         self.clear_button = QPushButton("清空显示", self)
         self.copy_button = QPushButton("复制", self)
         self.export_button = QPushButton("导出", self)
         self.open_dir_button = QPushButton("日志目录", self)
-        for button in (
-            self.clear_button,
-            self.copy_button,
-            self.export_button,
-            self.open_dir_button,
-        ):
+        for button in (self.copy_button, self.export_button):
             button.setFixedHeight(34)
             footer.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.more_button = QToolButton()
+        self.more_button.setText("更多")
+        self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_menu = QMenu(self.more_button)
+        self.clear_action = more_menu.addAction("清空显示", self.clear_button.click)
+        self.open_dir_action = more_menu.addAction("日志目录", self.open_dir_button.click)
+        self.more_button.setMenu(more_menu)
+        footer.addWidget(self.more_button)
+        self.clear_button.hide()
+        self.open_dir_button.hide()
         self.clear_button.setObjectName("RunLogClear")
         self.copy_button.setObjectName("RunLogCopy")
         self.export_button.setObjectName("RunLogExport")
         self.open_dir_button.setObjectName("RunLogOpenDirectory")
         self.open_dir_button.setEnabled(self._open_log_dir_callback is not None)
+        self.open_dir_action.setEnabled(self._open_log_dir_callback is not None)
         root.addWidget(self.footer_frame)
 
         self.setStyleSheet(
@@ -537,11 +547,18 @@ class RunLogPanel(QWidget):
             return
         self._compact_filters = compact
         self.filters_layout.removeItem(self.filter_toggles)
+        self.filters_layout.removeItem(self.search_field)
         if compact:
-            self.filters_layout.addLayout(self.filter_toggles, 1, 0, 1, 3, Qt.AlignmentFlag.AlignLeft)
+            self.filters_layout.addLayout(self.search_field, 1, 0, 1, 2)
+            self.filters_layout.addLayout(self.filter_toggles, 2, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+            self.filters_layout.setColumnStretch(1, 1)
+            self.filters_layout.setColumnStretch(2, 0)
         else:
+            self.filters_layout.addLayout(self.search_field, 0, 2)
             self.filters_layout.addLayout(self.filter_toggles, 0, 3)
-        for column, width in enumerate((110, 96, 90) if compact else (110, 104, 140)):
+            self.filters_layout.setColumnStretch(1, 0)
+            self.filters_layout.setColumnStretch(2, 1)
+        for column, width in enumerate((78, 64, 84) if compact else (110, 104, 140)):
             self.table.setColumnWidth(column, width)
 
     @staticmethod

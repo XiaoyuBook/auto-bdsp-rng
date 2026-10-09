@@ -219,6 +219,7 @@ class ExecutionFollower(QObject):
         self.state_label.setText("等待运行")
         self.state_label.setStyleSheet(ui_styles("color: #18805A; font-weight: 500; font-size: 12px;"))
         self.action_label.setText("运行脚本后，将高亮当前语句并自动滚动到执行位置。")
+        self.action_label.hide()
         self.loop_label.clear()
         self.loop_label.hide()
         self.location_label.clear()
@@ -475,6 +476,7 @@ class ExecutionFollower(QObject):
                 for index, loop in enumerate(loops, start=1)
             ))
         if point is None:
+            self.action_label.show()
             self.action_label.setText("准备执行脚本" if snapshot.state == "running" else "本次运行未进入脚本语句")
             self.location_label.setText(Path(snapshot.source).name)
             self.panel.editor.set_execution_line(None)
@@ -484,6 +486,7 @@ class ExecutionFollower(QObject):
             if point.duration_ms is not None and snapshot.state in {"running", "pausing", "paused"}:
                 remaining = point.duration_ms / 1000 if snapshot.state == "paused" else max(0, point.duration_ms / 1000 - (monotonic() - point.started_at))
                 action += f" · 剩余约 {remaining:.1f} 秒"
+            self.action_label.show()
             self.action_label.setText(action)
             location = f"{Path(point.location.source).name} · 第 {point.location.line} 行"
             if point.caller:

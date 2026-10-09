@@ -61,6 +61,10 @@ def configure_workspace_style(app: QApplication | None) -> None:
     """Install once, before constructing the main window and its dialogs."""
     if app is None or getattr(app, "_bdsp_workspace_style", None) is not None:
         return
+    # Lightweight application doubles used by startup tests do not expose the
+    # optional style hook; the real QApplication always does.
+    if not callable(getattr(app, "setStyle", None)):
+        return
     style = WorkspaceStyle()
     app.setStyle(style)
     # Use the base style's light palette for controls not covered by QSS too.
