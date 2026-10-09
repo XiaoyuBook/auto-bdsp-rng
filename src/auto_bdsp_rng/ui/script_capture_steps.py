@@ -15,18 +15,18 @@ def capture_step(window, kind, phase):
         "auto_script_config", caption, title, copy, target, (target, *others), separate_highlights=True)
     if phase == "capture_config":
         return spec("核对当前画面的捕捉配置",
-                    "先选择上方配置文件，再核对 ROI、眼睛模板与识别阈值。人物眨眼时，识别框应同步变色；阈值一般可先用 0.7。"
+                    "先选择上方配置文件，再核对 ROI、眼睛模板与右侧视频右上角的阈值。人物眨眼时，识别框应同步变色；阈值一般可先用 0.7。"
                     "<br>需要重画时，点击「框选眼睛区域」或「截取眼睛」，再在右侧画面按住鼠标右键框选。高级时序参考对应手动乱数教学。"
                     "<br><br>这里手动测试使用当前页面的配置。请确认它与自动流程的「Seed 配置」一致；过场后的校正配置在后续单独设置。" + places,
-                    window.config_combo, window.select_roi_button, window.raw_screenshot_button, window.threshold,
-                    window.capture_advanced_button, window.capture_advanced_fields, window.npc_count)
+                    window.config_combo, window.select_roi_button, window.raw_screenshot_button,
+                    window.video_overlay.threshold, window.capture_timing_group, window.npc_count)
     if phase == "capture_roi":
         eye = window._selection_mode == "eye"
         return spec("右键框选眼睛模板" if eye else "右键框选识别区域",
                     "在亮起的游戏画面按住鼠标右键拖动，松开后确认。" +
                     ("贴着一只睁开的眼睛截取模板。" if eye else "范围要完整包含眼睛，并为眼睛模板留出余量。"), window.preview_label)
     if phase == "capture_save":
-        return spec("保存刚确认的配置", "点击「保存配置」。保存成功后，再点击下一步，亲手运行「" + action + "」。",
+        return spec("保存刚确认的配置", "点击「保存」。保存成功后，再点击下一步，亲手运行「" + action + "」。",
                     window.save_config_button)
     if phase == "capture_start":
         return spec("点击「" + action + "」",
@@ -41,7 +41,7 @@ def capture_step(window, kind, phase):
                         "在 Mock 结果窗口选择「模拟成功」或「模拟失败」，分别测试后续引导与失败后的调整流程。关闭结果窗口会按停止捕捉处理。",
                         window.capture_button)
         return spec("正在" + action,
-                    "请观察绿色边框的独立预览与下方眨眼进度。收集完成后还会计算结果，请耐心等待。<br>需要中止时，点击亮起的停止捕捉按钮；中止不会记作成功。",
+                    "请观察右侧视频画面内的眨眼进度。收集完成后还会计算结果，请耐心等待。<br>需要中止时，点击亮起的停止捕捉按钮；中止不会记作成功。",
                     window.capture_button)
     if phase == "capture_result":
         return spec(action + "成功，请确认",

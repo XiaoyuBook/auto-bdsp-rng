@@ -1,6 +1,6 @@
 """Copyable, interactive information anchored to the displayed video image."""
 
-from PySide6.QtCore import QObject, QRect
+from PySide6.QtCore import QEvent, QObject, QRect
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
@@ -67,6 +67,7 @@ class VideoInfoOverlay(QObject):
         self._selecting = False
         self._seed_available = True
         self._automatic = False
+        self._configuration_mode = False
         self.capture_active = False
         self._score = None
 
@@ -116,7 +117,13 @@ class VideoInfoOverlay(QObject):
         progress_layout.addStretch(1)
         progress_layout.addWidget(progress_value)
         status_layout.addWidget(self.progress_row)
+        preview.installEventFilter(self)
         self._refresh()
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show) and not self._frame_rect.isValid():
+            self._refresh()
+        return False
 
     def set_frame_rect(self, rect: QRect) -> None:
         self._frame_rect = QRect(rect)
@@ -141,6 +148,11 @@ class VideoInfoOverlay(QObject):
 
     def set_automatic(self, automatic: bool) -> None:
         self._automatic = automatic
+        self._refresh()
+
+    def set_configuration_mode(self, enabled: bool) -> None:
+        """Keep the Seed page's threshold editable before video is connected."""
+        self._configuration_mode = enabled
         self._refresh()
 
     def begin_capture(self, *, automatic: bool = False) -> None:
@@ -168,13 +180,14 @@ class VideoInfoOverlay(QObject):
         # Keep a completed manual result copyable after disconnecting video.
         bounds = self._frame_rect if has_frame else self.parent().contentsRect()
         visible = bounds.isValid() and not self._selecting
-        visible = visible and (has_frame or (not self._automatic and any(field.text() for field in self._seed_fields)))
+        configuring = self._configuration_mode and not self._automatic
+        visible = visible and (has_frame or configuring or (not self._automatic and any(field.text() for field in self._seed_fields)))
         show_seed = visible and self._seed_available
-        show_match = self._score is not None and not self._automatic
+        show_match = (self._score is not None or configuring) and not self._automatic
         self.seed_panel.setVisible(show_seed)
         self.match_row.setVisible(show_match)
         self.progress_row.setVisible(self.capture_active)
-        show_status = visible and has_frame and (show_match or self.capture_active)
+        show_status = visible and (has_frame or configuring) and (show_match or self.capture_active)
         self.status_panel.setVisible(show_status)
         self.threshold.setEnabled(not self.capture_active and not self._automatic
                                   and self._threshold_source.isEnabled())
@@ -185,8 +198,8 @@ class VideoInfoOverlay(QObject):
         compact = bounds.width() < 350
         self._frame_caption.setText("帧" if compact else "当前帧数")
         self._progress_caption.setText("进度" if compact else "眨眼进度")
-        self.threshold.setVisible(not compact)
-        self.threshold_caption.setVisible(not compact)
+        self.threshold.setVisible(not compact or configuring)
+        self.threshold_caption.setVisible(not compact or configuring)
         self.match_caption.setVisible(not compact)
         self.match_row.setToolTip(f"匹配分数 / 阈值 {self._threshold_source.value():.2f}")
         if show_status:

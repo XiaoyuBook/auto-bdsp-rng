@@ -17,6 +17,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--dpi", type=int, choices=(100, 150), default=100)
 parser.add_argument("--output", type=Path, default=Path("logs/ui-review/redesign"))
 parser.add_argument("--tid-columns-only", action="store_true", help="Review TID numeric columns and arrival times at 860/1150 widths")
+parser.add_argument("--seed-only", action="store_true", help="Review Seed configuration, timing and video threshold at all window sizes")
 args = parser.parse_args()
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["QT_SCALE_FACTOR"] = str(args.dpi / 100)
@@ -96,8 +97,9 @@ def capture(w, name, page, state, width, height, out):
     w.tabs.setCurrentWidget(page)
     w.easycon_tab.hide_tools()
     w.easycon_tab.output_toggle.setChecked(name == "script-output")
-    w.capture_advanced_button.setChecked(name == "seed-advanced")
     w.auto_capture_config_toggle.setChecked(name == "seed-auto")
+    if name.startswith("seed"):
+        w.project_xs_config_scroll.verticalScrollBar().setValue(0)
     w.history_tab.meta_toggle.setChecked(name == "records-meta")
     w.history_tab.feed_toggle.setChecked(name == "records-feed")
     if name.startswith("auto-"):
@@ -118,6 +120,10 @@ def capture(w, name, page, state, width, height, out):
     elif name in ("script-control", "script-library"):
         w.easycon_tab.show_tools("control" if name == "script-control" else "library")
     settle(w)
+    if name in ("seed-advanced", "seed-auto"):
+        target = w.reidentify_1_pk_npc if name == "seed-advanced" else w.status_group
+        w.project_xs_config_scroll.ensureWidgetVisible(target, 0, 8)
+        settle(w)
     if args.tid_columns_only:
         table = w.auto_tid_rng_tab.id_table
         column = 6 if name == "tid-runtime-time" else 0
@@ -214,6 +220,9 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
                 elapsed_seconds=(1234.5, 9876.5), measured_wall_time=1791525600,
             )
             pages = [("tid-runtime", tid), ("tid-runtime-time", tid)]
+        elif args.seed_only:
+            pages = [("seed", w.project_xs_tab), ("seed-advanced", w.project_xs_tab),
+                     ("seed-auto", w.project_xs_tab)]
         for width, height in sizes:
             w.resize(width, height)
             for name, page in pages:

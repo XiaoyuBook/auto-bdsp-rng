@@ -191,7 +191,8 @@ def test_main_window_reflows_within_short_screen(
     app.processEvents()
     assert isinstance(window.workspace_splitter, QSplitter)
     assert window.workspace_splitter.orientation() == Qt.Orientation.Horizontal
-    assert window.project_xs_config_scroll.isAncestorOf(window.capture_group)
+    assert window.capture_group.geometry().bottom() < window.project_xs_config_scroll.geometry().top()
+    assert window.project_xs_config_scroll.isAncestorOf(window.capture_recognition_group)
     assert window.project_xs_config_scroll.isAncestorOf(window.status_group)
     assert window.monitor_sidebar.isAncestorOf(window.preview_label)
     assert not hasattr(window, "project_xs_controls_scroll")

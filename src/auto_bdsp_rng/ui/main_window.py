@@ -2365,24 +2365,33 @@ class MainWindow(QMainWindow):
         dialog.show()
 
     def _build_project_xs_tab(self) -> QWidget:
-        configuration = QWidget()
-        configuration.setObjectName("ProjectXsConfigPanel")
-        config_layout = QVBoxLayout(configuration)
-        config_layout.setContentsMargins(12, 10, 12, 12)
-        config_layout.setSpacing(10)
+        page = QWidget()
+        page.setObjectName("SeedCaptureWorkspace")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(14)
         heading = QHBoxLayout()
-        title = QLabel("Seed 捕捉配置")
+        title = QLabel("Seed 捕捉")
         title.setObjectName("SectionTitle")
         reference = QLabel("Project_Xs")
         reference.setObjectName("WorkspaceHint")
         heading.addWidget(title)
         heading.addStretch(1)
         heading.addWidget(reference)
-        config_layout.addLayout(heading)
+        layout.addLayout(heading)
+
         self.capture_group = self._build_blink_group()
+        self.capture_toolbar = self.capture_group
+        layout.addWidget(self.capture_group)
         self.seed_group = self._build_seed_group()
         self.status_group = self._build_project_status_group()
-        config_layout.addWidget(self.capture_group)
+        configuration = QWidget()
+        configuration.setObjectName("ProjectXsConfigPanel")
+        config_layout = QVBoxLayout(configuration)
+        config_layout.setContentsMargins(0, 0, 4, 4)
+        config_layout.setSpacing(16)
+        config_layout.addWidget(self.capture_recognition_group)
+        config_layout.addWidget(self.capture_timing_group)
         self.auto_capture_config_toggle = QToolButton()
         self.auto_capture_config_toggle.setText("自动流程配置")
         self.auto_capture_config_toggle.setCheckable(True)
@@ -2395,17 +2404,6 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.status_group)
         config_layout.addStretch(1)
         self.project_xs_config_scroll = scroll_surface(configuration)
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        self.capture_toolbar = QWidget()
-        actions = QHBoxLayout(self.capture_toolbar)
-        actions.setContentsMargins(12, 10, 12, 10)
-        actions.setSpacing(8)
-        for button in (self.capture_button, self.reidentify_button, self.tidsid_button):
-            actions.addWidget(button, 1)
-        layout.addWidget(self.capture_toolbar)
         layout.addWidget(self.project_xs_config_scroll, 1)
         return page
 
@@ -2540,10 +2538,12 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_blink_group(self) -> QGroupBox:
-        group = QGroupBox("捕捉配置")
+        group = QGroupBox("捕捉操作")
         group.setObjectName("CaptureConfigGroup")
+        group.setProperty("seedSection", True)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         layout = QGridLayout(group)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(0, 14, 0, 0)
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(6)
         self.config_label = QLabel()
@@ -2551,16 +2551,24 @@ class MainWindow(QMainWindow):
         self.config_combo.setEditable(True)
         self.config_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.config_combo.setMinimumContentsLength(10)
+        self.config_combo.setMinimumWidth(0)
+        self.config_combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.config_combo.setAccessibleName("Seed 捕捉配置")
         self.config_combo.currentTextChanged.connect(self._load_config_to_form)
         self.config_combo.currentIndexChanged.connect(lambda _index: self._load_config_to_form(self.config_combo.currentText()))
         self.browse_button = QPushButton()
         self.browse_button.clicked.connect(self._browse_config)
+        self.new_capture_config_button = QPushButton("新增")
+        self.new_capture_config_button.setAccessibleName("新增捕捉配置")
+        self.new_capture_config_button.setToolTip("以当前参数创建一份新配置，保留原配置")
+        self.new_capture_config_button.clicked.connect(self._new_capture_config)
         self.capture_button = PrimaryButton()
         self.capture_button.setObjectName("PrimaryButton")
         self.capture_button.clicked.connect(self.capture_seed)
         self.reidentify_button = QPushButton()
         self.reidentify_button.clicked.connect(self.reidentify_seed)
-        self.tidsid_button = QPushButton("TID/SID 测种")
+        self.tidsid_button = PrimaryButton("TID/SID 测种")
+        self.tidsid_button.setObjectName("PrimaryButton")
         self.tidsid_button.clicked.connect(self.capture_tidsid_seed)
         self.save_config_button = QPushButton()
         self.save_config_button.clicked.connect(self.save_current_config)
@@ -2582,6 +2590,7 @@ class MainWindow(QMainWindow):
         self.h = self._spin(1, 10000, 40)
         self.threshold = self._double_spin(0.0, 1.0, 0.9, 2)
         self.white_delay = self._double_spin(0.0, 999.0, 0.0, 1)
+        self.white_delay.setSuffix(" 秒")
         self.advance_delay = self._spin(0, 9999, 0)
         self.advance_delay_2 = self._spin(0, 9999, 0)
         self.npc_count = self._spin(0, 999, 0)
@@ -2596,6 +2605,11 @@ class MainWindow(QMainWindow):
             self.window_prefix,
             self.camera,
             self.display_percent,
+            self.x,
+            self.y,
+            self.w,
+            self.h,
+            self.threshold,
         ):
             legacy_widget.setParent(group)
             legacy_widget.hide()
@@ -2628,6 +2642,7 @@ class MainWindow(QMainWindow):
         compact_button_style = "QPushButton { min-height: 30px; max-height: 32px; padding: 0 10px; border-radius: 7px; }"
         for button in (
             self.browse_button,
+            self.new_capture_config_button,
             self.tidsid_button,
             self.capture_button,
             self.reidentify_button,
@@ -2640,7 +2655,7 @@ class MainWindow(QMainWindow):
         self.monitor_window.setFixedHeight(28)
         self.reidentify_1_pk_npc.setFixedHeight(28)
 
-        # Stack the file label so filenames remain readable in the 30% sidebar.
+        # Keep configuration and actions together, following BlinkWorkspace.
         config_selector = QVBoxLayout()
         config_selector.setContentsMargins(0, 0, 0, 0)
         config_selector.setSpacing(6)
@@ -2648,74 +2663,60 @@ class MainWindow(QMainWindow):
         config_row = QHBoxLayout()
         config_row.setContentsMargins(0, 0, 0, 0)
         config_row.setSpacing(8)
-        self.browse_button.setFixedWidth(52)
+        for button in (self.browse_button, self.new_capture_config_button, self.save_config_button):
+            button.setFixedWidth(54)
         config_row.addWidget(self.config_combo, 1)
         config_row.addWidget(self.browse_button)
+        config_row.addWidget(self.new_capture_config_button)
         config_row.addWidget(self.save_config_button)
         config_selector.addLayout(config_row)
         layout.addLayout(config_selector, 0, 0, 1, 4)
-        config_note = QLabel("选择或编辑配置后开始捕捉；右侧视频持续显示识别结果与进度。")
-        config_note.setObjectName("WorkspaceHint")
-        config_note.setWordWrap(True)
-        layout.addWidget(config_note, 1, 0, 1, 4)
+        actions = QGridLayout()
+        actions.setContentsMargins(0, 4, 0, 0)
+        actions.setSpacing(7)
+        actions.setColumnStretch(0, 1)
+        actions.setColumnStretch(1, 1)
+        actions.addWidget(self.capture_button, 0, 0)
+        actions.addWidget(self.tidsid_button, 0, 1)
+        actions.addWidget(self.reidentify_button, 1, 0, 1, 2)
+        layout.addLayout(actions, 1, 0, 1, 4)
 
-        recognition_title = QLabel("识别参数")
-        recognition_title.setObjectName("WorkspaceSubheading")
-        recognition_header = QHBoxLayout()
-        recognition_header.setContentsMargins(0, 0, 0, 0)
-        recognition_header.setSpacing(12)
-        recognition_header.addWidget(recognition_title)
-        recognition_header.addStretch(1)
-        recognition_header.addWidget(self.calibrate_shiny_threshold_button)
-        layout.addLayout(recognition_header, 3, 0, 1, 4)
+        self.capture_recognition_group = QGroupBox("识别参数")
+        self.capture_recognition_group.setProperty("seedSection", True)
+        recognition_layout = QVBoxLayout(self.capture_recognition_group)
+        recognition_layout.setContentsMargins(0, 14, 0, 0)
+        recognition_layout.setSpacing(6)
         eyes_row = QHBoxLayout()
         eyes_row.setSpacing(8)
         eyes_row.addWidget(self.select_roi_button)
         eyes_row.addWidget(self.raw_screenshot_button)
-        layout.addLayout(eyes_row, 4, 0, 1, 4)
-        self._add_form_row(layout, 5, "threshold", self.threshold)
-        self._add_form_row(layout, 6, "npcs", self.npc_count)
+        recognition_layout.addLayout(eyes_row)
+        recognition_note = QLabel("在右侧视频中右键拖动框选；匹配分数与阈值在画面右上角。")
+        recognition_note.setObjectName("WorkspaceHint")
+        recognition_note.setWordWrap(True)
+        recognition_layout.addWidget(recognition_note)
         self.threshold.setToolTip("眼睛模板的匹配阈值，范围 0–1；数值越高，匹配要求越严格。")
 
-        self.capture_advanced_button = QToolButton()
-        self.capture_advanced_button.setObjectName("CaptureAdvancedToggle")
-        self.capture_advanced_button.setText("高级时序 · 6 项")
-        self.capture_advanced_button.setCheckable(True)
-        self.capture_advanced_button.setArrowType(Qt.ArrowType.RightArrow)
-        self.capture_advanced_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.capture_advanced_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.capture_advanced_button.setAccessibleName("展开高级时序参数")
-        self.capture_advanced_button.setToolTip("校正模式、延迟与 Timeline 模型参数；收起后仍按当前值参与捕捉和校正。")
-        self.capture_advanced_button.setFixedHeight(30)
-        self.capture_advanced_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        layout.addWidget(self.capture_advanced_button, 7, 0, 1, 4)
-        self.capture_advanced_fields = QWidget()
-        self.capture_advanced_fields.setObjectName("CaptureAdvancedFields")
-        advanced_layout = QGridLayout(self.capture_advanced_fields)
-        advanced_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_layout.setVerticalSpacing(6)
-        advanced_layout.setHorizontalSpacing(8)
-        advanced_layout.setColumnMinimumWidth(0, 108)
-        advanced_layout.addWidget(self.reidentify_1_pk_npc, 0, 0, 1, 4)
+        self.capture_timing_group = QGroupBox("高级时序 · 7 项参数")
+        self.capture_timing_group.setProperty("seedSection", True)
+        advanced_layout = QGridLayout(self.capture_timing_group)
+        advanced_layout.setContentsMargins(0, 14, 0, 0)
+        advanced_layout.setVerticalSpacing(7)
+        advanced_layout.setHorizontalSpacing(10)
+        advanced_layout.setColumnMinimumWidth(0, 112)
+        advanced_layout.setColumnStretch(1, 1)
         for row, (key, field) in enumerate((
+            ("npcs", self.npc_count),
             ("time_delay", self.white_delay),
             ("advance_delay", self.advance_delay),
             ("advance_delay_2", self.advance_delay_2),
             ("timeline_npcs", self.timeline_npc),
             ("pokemon_npcs", self.pokemon_npc),
-        ), start=1):
+        )):
             self._add_form_row(advanced_layout, row, key, field)
-        layout.addWidget(self.capture_advanced_fields, 8, 0, 1, 4)
-        self.capture_advanced_fields.hide()
-        self.capture_advanced_button.toggled.connect(self._set_capture_advanced_visible)
-        layout.setColumnMinimumWidth(0, 108)
+        advanced_layout.addWidget(self.reidentify_1_pk_npc, 6, 0, 1, 4)
+        recognition_layout.addWidget(self.calibrate_shiny_threshold_button, 0, Qt.AlignmentFlag.AlignRight)
         return group
-
-    def _set_capture_advanced_visible(self, visible: bool) -> None:
-        self.capture_advanced_fields.setVisible(visible)
-        self.capture_advanced_button.setArrowType(Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow)
-        self.capture_advanced_button.setText("收起高级时序" if visible else "高级时序 · 6 项")
-        self.capture_advanced_button.setAccessibleName("收起高级时序参数" if visible else "展开高级时序参数")
 
     def _add_form_row(self, layout: QGridLayout, row: int, key: str, widget: QWidget) -> None:
         label = QLabel()
@@ -3279,6 +3280,11 @@ class MainWindow(QMainWindow):
             self.progress_value, self.threshold,
         )
         self.preview_label.info_overlay = self.video_overlay
+        self.tabs.currentChanged.connect(
+            lambda _index: self.video_overlay.set_configuration_mode(
+                self.tabs.currentWidget() is self.project_xs_tab
+            )
+        )
         aspect_layout.addWidget(self.preview_label)
         preview_layout.addWidget(self.preview_aspect_container, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.preview_group)
@@ -3919,6 +3925,26 @@ class MainWindow(QMainWindow):
                 left: 0;
                 padding: 0;
                 font-weight: 500;
+            }
+            QWidget#SeedCaptureWorkspace, QWidget#ProjectXsConfigPanel {
+                background: #FFFFFF;
+            }
+            QGroupBox#CaptureConfigGroup, QGroupBox[seedSection="true"] {
+                background: transparent;
+                border: 0;
+                border-top: 1px solid #E3E8ED;
+                border-radius: 0;
+                margin-top: 23px;
+                padding: 0;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QGroupBox#CaptureConfigGroup::title, QGroupBox[seedSection="true"]::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 0;
+                top: 0;
+                padding: 0;
             }
             QLabel#Preview {
                 background: #202A33;
@@ -4843,7 +4869,9 @@ class MainWindow(QMainWindow):
         self.reidentify_button.setText(self._text("reidentify_seed"))
         self.tidsid_button.setText("TID/SID 测种")
         self.calibrate_shiny_threshold_button.setText("校准闪光判定")
-        self.save_config_button.setText(self._text("save_config"))
+        self.save_config_button.setText("保存" if self.lang == "zh" else "Save")
+        self.save_config_button.setAccessibleName(self._text("save_config"))
+        self.save_config_button.setToolTip(self._text("save_config"))
         self.raw_screenshot_button.setText(self._text("raw_screenshot"))
         self.select_roi_button.setText(self._text("select_roi"))
         self.generate_button.setText(self._text("generate"))
@@ -5056,6 +5084,34 @@ class MainWindow(QMainWindow):
                 index = self.config_combo.count() - 1
             self.config_combo.setCurrentIndex(index)
 
+    def _new_capture_config(self) -> None:
+        if self._is_capturing() or self._selection_mode is not None:
+            self.statusBar().showMessage("请先结束捕捉或框选，再新增配置。")
+            return
+        try:
+            config = self._config_from_form()
+            path, _ = QFileDialog.getSaveFileName(
+                self, "新增捕捉配置", str(PROJECT_XS_CONFIGS / f"{config.source_path.stem}_副本.json"),
+                "JSON files (*.json)",
+            )
+            if not path:
+                return
+            output = Path(path)
+            if not output.suffix:
+                output = output.with_suffix(".json")
+            if output.resolve() == config.source_path.resolve():
+                raise ValueError("新增配置需要使用不同的文件名；修改当前配置请点击保存。")
+            save_project_xs_config(replace(config, source_path=output), output)
+        except (ProjectXsIntegrationError, OSError, ValueError) as exc:
+            self._show_error("新增配置失败", exc)
+            return
+        # Add the new file without reloading unrelated/imported selections.
+        for combo in (self.config_combo, self.seed_config_combo, self.reidentify_config_combo):
+            if combo.findData(str(output)) < 0:
+                combo.addItem(output.name, str(output))
+        self.config_combo.setCurrentIndex(self.config_combo.findData(str(output)))
+        self.statusBar().showMessage(f"已新增配置：{output.name}")
+
     def _selected_config_path(self) -> str:
         data = self.config_combo.currentData()
         return str(data or self.config_combo.currentText())
@@ -5226,6 +5282,7 @@ class MainWindow(QMainWindow):
         self.preview_label.setText(self._text("no_preview"))
         self.monitor_frame_info.setText("等待视频画面")
         self.video_overlay.finish_capture()
+        self.video_overlay.set_match_score(None)
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
 

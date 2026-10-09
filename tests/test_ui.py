@@ -752,7 +752,8 @@ def test_project_xs_configuration_uses_shared_video_sidebar(
     app.processEvents()
     app.processEvents()
 
-    assert window.project_xs_config_scroll.isAncestorOf(window.capture_group)
+    assert window.project_xs_tab.isAncestorOf(window.capture_group)
+    assert not window.project_xs_config_scroll.isAncestorOf(window.capture_group)
     assert not hasattr(window, "video_source_group")
     assert window.video_source_dialog.parent() is window
     assert not window.video_source_dialog.isVisible()
