@@ -56,7 +56,7 @@ def test_narrow_toolbar_keeps_start_stop_and_script_controls_reachable(window, m
     monkeypatch.setattr(w, "_screen_available_geometry", lambda: QRect(0, 0, 1800, 1100))
     w.resize(860, 600)
     for page, controls in (
-        (w.auto_rng_tab, [w.auto_rng_tab.start_button, w.auto_rng_tab.stop_button, w.auto_rng_tab.capture_info_button]),
+        (w.auto_rng_tab, [w.auto_rng_tab.start_button, w.auto_rng_tab.stop_button]),
         (w.auto_tid_rng_tab, [w.auto_tid_rng_tab.start_button, w.auto_tid_rng_tab.stop_button]),
         (w.easycon_tab, [w.easycon_tab.open_button, w.easycon_tab.save_button, w.easycon_tab.run_button, w.easycon_tab.pause_button, w.easycon_tab.stop_button]),
     ):

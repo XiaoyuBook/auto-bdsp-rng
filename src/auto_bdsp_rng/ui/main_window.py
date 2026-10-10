@@ -2012,6 +2012,16 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.run_records_tab, "日志中心")
+        self.ocr_tab = LocalViews()
+        self.ocr_info_page = QWidget()
+        self.ocr_tid_page = QWidget()
+        for page in (self.ocr_info_page, self.ocr_tid_page):
+            QVBoxLayout(page).setContentsMargins(0, 0, 0, 0)
+        self.ocr_tab.addTab(self.ocr_info_page, "宝可梦信息")
+        self.ocr_tab.addTab(self.ocr_tid_page, "TID")
+        self.tabs.addTab(self.ocr_tab, "OCR 设置")
+        self.tabs.currentChanged.connect(self._initialize_ocr_page)
+        self.ocr_tab.currentChanged.connect(self._initialize_ocr_page)
         self.monitor_sidebar = self._build_monitor_sidebar()
         self.workspace_splitter = MonitorWorkspaceSplit(self._profile_settings)
         self.workspace_splitter.setObjectName("MonitorWorkspaceSplitter")
@@ -2118,6 +2128,7 @@ class MainWindow(QMainWindow):
             self.auto_tid_rng_tab: "自动 TID",
             self.project_xs_tab: "Seed 捕捉",
             self.easycon_tab: "伊机控",
+            self.ocr_tab: "OCR",
         }.get(self.tabs.currentWidget())
         self._show_run_logs(source)
 
@@ -6444,9 +6455,24 @@ class MainWindow(QMainWindow):
         self.h.setText(str(roi[3]))
         self._refresh_capture_config_summary()
 
+    def _initialize_ocr_page(self, _index: int) -> None:
+        if self.tabs.currentWidget() is self.ocr_tab:
+            if self.ocr_tab.currentWidget() is self.ocr_tid_page:
+                self._ensure_tid_ocr_settings()
+            else:
+                self._ensure_ocr_settings()
+
     def open_ocr_settings(self) -> None:
+        self.ocr_tab.setCurrentWidget(self.ocr_info_page)
+        self.tabs.setCurrentWidget(self.ocr_tab)
+        self._ensure_ocr_settings()
+
+    def _ensure_ocr_settings(self) -> None:
         if self._ocr_settings_dialog is None:
-            dialog = OcrSettingsDialog(self)
+            dialog = OcrSettingsDialog(self.ocr_info_page)
+            dialog.embed_in_workspace()
+            self.ocr_info_page.layout().addWidget(dialog)
+            dialog.show()
             dialog.regionSelectionRequested.connect(self.start_ocr_region_selection)
             dialog.regionDisplayRequested.connect(self._show_ocr_region_overlay)
             dialog.recognitionRequested.connect(self._request_ocr_region_recognition)
@@ -6456,32 +6482,37 @@ class MainWindow(QMainWindow):
             self.ocrWarmupFinished.connect(dialog.finish_warmup)
             self.ocrFullTestFinished.connect(dialog.finish_full_test)
             self._ocr_settings_dialog = dialog
-            if self._ocr_warmup_result is not None:
-                dialog.finish_warmup(*self._ocr_warmup_result)
-            elif self._ocr_warmup_running:
-                dialog.show_warmup_running()
-            dialog.set_automation_active(
-                self.auto_rng_tab._runner_thread is not None
-                or self._shiny_calibration_worker is not None
-            )
-            if self._latest_preview_frame is not None:
-                image_shape = getattr(self._latest_preview_frame, "shape", None)
-                if image_shape is not None:
-                    dialog.set_preview_frame_shape(tuple(image_shape))
-        self._ocr_settings_dialog.show()
-        self._ocr_settings_dialog.raise_()
-        self._ocr_settings_dialog.activateWindow()
+            _make_labels_copyable(dialog)
+        dialog = self._ocr_settings_dialog
+        if self._ocr_warmup_result is not None:
+            dialog.finish_warmup(*self._ocr_warmup_result)
+        elif self._ocr_warmup_running:
+            dialog.show_warmup_running()
+        dialog.set_automation_active(
+            self.auto_rng_tab._runner_thread is not None
+            or self._shiny_calibration_worker is not None
+        )
+        if self._latest_preview_frame is not None:
+            image_shape = getattr(self._latest_preview_frame, "shape", None)
+            if image_shape is not None:
+                dialog.set_preview_frame_shape(tuple(image_shape))
 
     def open_tid_ocr_settings(self) -> None:
+        self.ocr_tab.setCurrentWidget(self.ocr_tid_page)
+        self.tabs.setCurrentWidget(self.ocr_tab)
+        self._ensure_tid_ocr_settings()
+
+    def _ensure_tid_ocr_settings(self) -> None:
         if self._tid_ocr_dialog is None:
-            dialog = TidOcrDialog(self, recognizer=self._recognize_tid_ocr_region)
+            dialog = TidOcrDialog(self.ocr_tid_page, recognizer=self._recognize_tid_ocr_region)
+            dialog.embed_in_workspace()
+            self.ocr_tid_page.layout().addWidget(dialog)
+            dialog.show()
             dialog.regionSelectionRequested.connect(self.start_tid_ocr_region_selection)
             dialog.regionDisplayRequested.connect(self._show_tid_ocr_region_overlay)
             self.tidOcrRegionSelected.connect(dialog.set_region)
             self._tid_ocr_dialog = dialog
-        self._tid_ocr_dialog.show()
-        self._tid_ocr_dialog.raise_()
-        self._tid_ocr_dialog.activateWindow()
+            _make_labels_copyable(dialog)
 
     def _show_ocr_region_overlay(self, field: str, region: object) -> None:
         configured_region = region if isinstance(region, OcrRegion) else None

@@ -59,6 +59,8 @@ def isolate_main_window_ocr_settings(monkeypatch, tmp_path):
     import auto_bdsp_rng.ui.main_window as main_window_module
 
     settings = QSettings(str(tmp_path / "main_window_ocr.ini"), QSettings.Format.IniFormat)
+    profile = QSettings(str(tmp_path / "main_window_profile.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(main_window_module, "QSettings", lambda *_args: profile)
     monkeypatch.setattr(
         main_window_module,
         "OcrSettingsDialog",
@@ -70,11 +72,12 @@ def _settings(tmp_path) -> QSettings:
     return QSettings(str(tmp_path / "ocr.ini"), QSettings.Format.IniFormat)
 
 
-def test_auto_rng_button_opens_ocr_settings_label(app):
+def test_auto_rng_toolbar_leaves_ocr_settings_to_its_page(app):
     panel = AutoRngPanel()
 
     assert panel.capture_info_button.text() == "OCR设置"
     assert "OCR" in panel.capture_info_button.toolTip()
+    assert panel.capture_info_button.isHidden()
 
 
 def test_ocr_settings_dialog_is_non_modal_and_lists_all_fields(app, tmp_path):
@@ -446,6 +449,7 @@ def test_ocr_settings_dialog_can_reimport_default_regions(app, tmp_path):
 
 def test_main_window_opens_ocr_settings_and_saves_selected_region(app):
     window = MainWindow()
+    window.show()
 
     window.open_ocr_settings()
     dialog = window._ocr_settings_dialog
@@ -453,7 +457,42 @@ def test_main_window_opens_ocr_settings_and_saves_selected_region(app):
 
     assert dialog is not None
     assert dialog.isVisible()
+    assert window.tabs.currentWidget() is window.ocr_tab
+    assert window.ocr_tab.currentWidget() is window.ocr_info_page
+    assert not dialog.isWindow()
+    assert dialog.close_button.isHidden()
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    assert dialog.isVisible()
     assert dialog.region_config.get("nature") == OcrRegion(10, 20, 30, 40)
+    dialog.finish_recognition("nature", "胆小")
+    window.tabs.setCurrentWidget(window.auto_rng_tab)
+    window.tabs.setCurrentWidget(window.ocr_tab)
+    assert window._ocr_settings_dialog is dialog
+    assert dialog.table.item(dialog._field_rows["nature"], 4).text() == "胆小"
+
+
+def test_tid_ocr_shortcut_uses_same_page_and_retains_region(app, monkeypatch, tmp_path):
+    from auto_bdsp_rng.ui import tid_ocr_dialog as tid_module
+    settings = QSettings(str(tmp_path / "tid_ocr.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(tid_module, "QSettings", lambda *_args: settings)
+    window = MainWindow()
+    window.show()
+    window.open_tid_ocr_settings()
+    dialog = window._tid_ocr_dialog
+    assert window.tabs.currentWidget() is window.ocr_tab
+    assert window.ocr_tab.currentWidget() is window.ocr_tid_page
+    assert not dialog.isWindow()
+    assert dialog.close_button.isHidden()
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    assert dialog.isVisible()
+    window.tidOcrRegionSelected.emit((10, 20, 80, 30))
+    assert window.auto_tid_rng_tab._ocr_region == OcrRegion(10, 20, 80, 30)
+    assert dialog.region == OcrRegion(10, 20, 80, 30)
+    assert OcrRegion.from_settings_value(settings.value("tid_region")) == OcrRegion(10, 20, 80, 30)
+    window.open_ocr_settings()
+    window.open_tid_ocr_settings()
+    assert window._tid_ocr_dialog is dialog
+    assert dialog.region == OcrRegion(10, 20, 80, 30)
 
 
 def test_main_window_opening_ocr_settings_replays_running_warmup_state(app):

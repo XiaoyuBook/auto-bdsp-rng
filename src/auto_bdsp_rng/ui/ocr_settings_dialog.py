@@ -5,11 +5,13 @@ from collections.abc import Callable
 from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -117,6 +119,7 @@ class OcrSettingsDialog(QDialog):
             " QDialog#OcrSettingsDialog QMessageBox QPushButton { min-width: 76px; }")
         )
         self._settings = settings or QSettings("auto-bdsp-rng", "OcrSettings")
+        self._embedded = False
         self._recognizer = recognizer
         self._warmup_active = False
         self._full_test_active = False
@@ -165,7 +168,7 @@ class OcrSettingsDialog(QDialog):
             self.table.setItem(row, 4, QTableWidgetItem("未测试"))
             self.table.setCellWidget(row, 3, self._build_action_cell(field))
 
-        actions = QHBoxLayout()
+        actions = self.actions_layout = QHBoxLayout()
         self.warmup_button = QPushButton("预热OCR")
         self.warmup_button.clicked.connect(self.start_warmup)
         self.warmup_status = QLabel("未预热")
@@ -178,15 +181,15 @@ class OcrSettingsDialog(QDialog):
         self.test_all_button.clicked.connect(self.test_all)
         self.defaults_button = QPushButton("导入默认区域")
         self.defaults_button.clicked.connect(self.import_default_regions)
-        close_button = QPushButton("关闭")
-        close_button.clicked.connect(self.close)
-        for button in (self.test_current_button, self.test_all_button, self.defaults_button, close_button):
+        self.close_button = QPushButton("关闭")
+        self.close_button.clicked.connect(self.close)
+        for button in (self.test_current_button, self.test_all_button, self.defaults_button, self.close_button):
             actions.addWidget(button)
         layout.addLayout(actions)
 
     def _build_action_cell(self, field: str) -> QWidget:
         widget = QWidget(self.table)
-        layout = QHBoxLayout(widget)
+        layout = QGridLayout(widget)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(5)
         buttons = (
@@ -195,7 +198,7 @@ class OcrSettingsDialog(QDialog):
             ("识别", lambda _checked=False, field=field: self.recognize_field(field)),
             ("重置", lambda _checked=False, field=field: self.reset_region(field)),
         )
-        for text, callback in buttons:
+        for column, (text, callback) in enumerate(buttons):
             button = QPushButton(text)
             button.setObjectName("OcrRowAction")
             button.setFixedHeight(28)
@@ -206,9 +209,60 @@ class OcrSettingsDialog(QDialog):
                 self._display_buttons.append(button)
             if text == "识别":
                 self._recognition_buttons.append(button)
-            layout.addWidget(button)
-        layout.addStretch(1)
+            layout.addWidget(button, 0, column)
+        layout.setColumnStretch(4, 1)
         return widget
+
+    def embed_in_workspace(self) -> None:
+        self._embedded = True
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setMinimumSize(0, 0)
+        self.table.setMinimumHeight(0)
+        self.close_button.hide()
+        while self.actions_layout.count():
+            self.actions_layout.takeAt(0)
+        self.actions_layout.setDirection(QHBoxLayout.Direction.TopToBottom)
+        warmup = QHBoxLayout()
+        warmup.addWidget(self.warmup_button)
+        self.warmup_status.setWordWrap(True)
+        warmup.addWidget(self.warmup_status, 1)
+        tests = QHBoxLayout()
+        for button in (self.test_current_button, self.test_all_button, self.defaults_button):
+            tests.addWidget(button)
+        tests.addStretch(1)
+        self.actions_layout.addLayout(warmup)
+        self.actions_layout.addLayout(tests)
+        self._reflow_embedded_table()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._embedded:
+            self._reflow_embedded_table()
+
+    def reject(self) -> None:
+        if self.isWindow():
+            super().reject()
+
+    def _reflow_embedded_table(self) -> None:
+        compact = self.width() < 850
+        self.table.setColumnHidden(1, compact)
+        self.table.setColumnHidden(2, compact)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed if compact else QHeaderView.ResizeMode.ResizeToContents)
+        if compact:
+            header.resizeSection(0, 126)
+        self.table.verticalHeader().setDefaultSectionSize(76 if compact else 44)
+        for row, field in enumerate(OCR_REGION_FIELDS):
+            cell = self.table.cellWidget(row, 3)
+            buttons = cell.findChildren(QPushButton)
+            grid = cell.layout()
+            while grid.count():
+                grid.takeAt(0)
+            grid.setColumnStretch(4, 0 if compact else 1)
+            for index, button in enumerate(buttons):
+                grid.addWidget(button, index // 2 if compact else 0, index % 2 if compact else index)
+            self._refresh_row(field)
 
     def _save_region(self, field: str) -> None:
         region = self.region_config.get(field)
@@ -267,6 +321,10 @@ class OcrSettingsDialog(QDialog):
                     status = "已按当前帧裁剪"
         self.table.item(row, 1).setText(region_text)
         self.table.item(row, 2).setText(status)
+        label = self.table.item(row, 0)
+        label.setToolTip(f"{OCR_REGION_LABELS[field]}\n{region_text}\n{status}")
+        label.setText(f"{OCR_REGION_LABELS[field]}\n{status}" if self._embedded and self.table.isColumnHidden(1)
+                      else OCR_REGION_LABELS[field])
 
     def set_preview_frame_shape(self, image_shape: tuple[int, ...]) -> None:
         shape = tuple(int(value) for value in image_shape)

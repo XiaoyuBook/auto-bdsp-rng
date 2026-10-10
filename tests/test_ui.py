@@ -284,6 +284,7 @@ def test_main_window_generates_static_results(app, tmp_path):
         "定点数据区",
         "伊机控",
         "日志中心",
+        "OCR 设置",
     ]
     assert window.tabs.tabText(window.tabs.currentIndex()) == "自动定点乱数"
     assert hasattr(window, "id_tab")
@@ -3033,10 +3034,11 @@ def test_main_window_header_shows_auto_rng_runtime_status(app):
 def test_main_window_has_auto_rng_tab(app):
     window = MainWindow()
 
-    assert window.tabs.count() == 6
+    assert window.tabs.count() == 7
     assert window.tabs.tabText(0) == "自动定点乱数"
     assert window.tabs.tabText(1) == "自动 TID 乱数"
     assert window.tabs.tabText(5) == "日志中心"
+    assert window.tabs.tabText(6) == "OCR 设置"
     assert hasattr(window, "id_tab")
 
 

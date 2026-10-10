@@ -679,14 +679,15 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.capture_info_button.setAccessibleName("打开 OCR 设置")
         self.capture_info_button.setFixedHeight(34)
         self.capture_info_button.setMinimumWidth(88)
-        self.capture_info_button.setToolTip("打开 OCR 区域设置窗口")
+        self.capture_info_button.setToolTip("切换到 OCR 设置标签页")
         self.capture_info_button.clicked.connect(self.captureInfoRequested.emit)
 
         right_layout = QHBoxLayout()
         self.toolbar_actions = right_layout
         right_layout.setSpacing(8)
         right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        right_layout.addWidget(self.capture_info_button)
+        self.capture_info_button.setParent(toolbar)
+        self.capture_info_button.hide()
         right_layout.addWidget(self.start_button)
         right_layout.addWidget(self.stop_button)
 

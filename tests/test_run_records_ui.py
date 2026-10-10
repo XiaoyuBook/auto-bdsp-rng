@@ -344,7 +344,7 @@ def test_main_window_uses_run_records_as_sixth_tab_and_keeps_history_alias(
     manager = RunLogManager(tmp_path / "logs")
     window = MainWindow(run_log_manager=manager)
 
-    assert window.tabs.count() == 6
+    assert window.tabs.count() == 7
     assert window.tabs.widget(5) is window.run_records_tab
     assert window.tabs.tabText(5) == "日志中心"
     assert window.run_records_tab.view_tabs.count() == 2

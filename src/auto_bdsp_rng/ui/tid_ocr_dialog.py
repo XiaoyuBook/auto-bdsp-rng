@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QSettings, Qt, Signal
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.ui.workspace_theme import ui_font
@@ -82,12 +82,28 @@ class TidOcrDialog(QDialog):
         self.select_button.clicked.connect(self.regionSelectionRequested.emit)
         self.show_button = QPushButton("显示范围")
         self.show_button.clicked.connect(self.show_region)
-        close_button = QPushButton("关闭")
-        close_button.clicked.connect(self.close)
-        for button in (self.recognize_button, self.select_button, self.show_button, close_button):
+        self.close_button = QPushButton("关闭")
+        self.close_button.clicked.connect(self.close)
+        for button in (self.recognize_button, self.select_button, self.show_button, self.close_button):
             button.setFixedHeight(34)
             actions.addWidget(button)
         layout.addLayout(actions)
+
+    def embed_in_workspace(self) -> None:
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setMinimumSize(0, 0)
+        self.close_button.hide()
+        self.region_value.setWordWrap(True)
+        self.result_value.setWordWrap(True)
+        hint = QLabel("在右侧视频中框选 Display TID；区域修改后自动保存。")
+        hint.setWordWrap(True)
+        self.layout().insertWidget(0, hint)
+        self.layout().addStretch(1)
+
+    def reject(self) -> None:
+        if self.isWindow():
+            super().reject()
 
     def set_region(self, region: OcrRegion | tuple[int, int, int, int]) -> None:
         if not isinstance(region, OcrRegion):
