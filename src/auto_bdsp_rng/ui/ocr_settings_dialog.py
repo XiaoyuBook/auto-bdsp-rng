@@ -252,16 +252,15 @@ class OcrSettingsDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed if compact else QHeaderView.ResizeMode.ResizeToContents)
         if compact:
             header.resizeSection(0, 126)
-        self.table.verticalHeader().setDefaultSectionSize(76 if compact else 44)
+        self.table.verticalHeader().setDefaultSectionSize(44)
         for row, field in enumerate(OCR_REGION_FIELDS):
             cell = self.table.cellWidget(row, 3)
             buttons = cell.findChildren(QPushButton)
             grid = cell.layout()
-            while grid.count():
-                grid.takeAt(0)
-            grid.setColumnStretch(4, 0 if compact else 1)
-            for index, button in enumerate(buttons):
-                grid.addWidget(button, index // 2 if compact else 0, index % 2 if compact else index)
+            grid.setContentsMargins(4, 6, 4, 6)
+            grid.setSpacing(4)
+            for button in buttons:
+                button.setMinimumWidth(40 if compact else 48)
             self._refresh_row(field)
 
     def _save_region(self, field: str) -> None:
