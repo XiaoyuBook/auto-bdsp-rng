@@ -163,19 +163,6 @@ class StartReadinessController(QObject):
         self.dialog.selectionChanged.connect(self.refresh)
         self.dialog.actionRequested.connect(self.navigate)
         self.dialog.startRequested.connect(self.start)
-        self.button = QPushButton("开始前检查")
-        self.button.setObjectName("ReadinessButton")
-        self.button.setFixedHeight(32)
-        self.button.setStyleSheet(workspace_styles("""
-            QPushButton#ReadinessButton {
-                background: transparent; border: 0; color: $text_secondary;
-                font-size: 12px; padding: 0 8px;
-            }
-            QPushButton#ReadinessButton:hover { color: $accent; background: $accent_soft; }
-        """))
-        self.button.clicked.connect(self.show)
-        window.header_layout.insertWidget(window.header_layout.indexOf(window.video_source_header_button), self.button)
-        self._button_layout = window.header_layout
         self.items = ()
         self._cache = {}
         self.preview_button = QPushButton("打开视频源设置", window.preview_label)
@@ -195,15 +182,6 @@ class StartReadinessController(QObject):
         tab = self.window.tabs.currentWidget()
         if tab in (self.window.auto_rng_tab, self.window.auto_tid_rng_tab):
             self.dialog.module_combo.setCurrentIndex(int(tab is self.window.auto_tid_rng_tab))
-            layout, index = tab.toolbar_actions, 0
-        else:
-            layout = self.window.header_layout
-            index = layout.indexOf(self.window.video_source_header_button)
-        if layout is not self._button_layout:
-            self._button_layout.removeWidget(self.button)
-            layout.insertWidget(index, self.button)
-            self._button_layout = layout
-            self.button.show()
         self.refresh()
 
     @property
@@ -341,8 +319,6 @@ class StartReadinessController(QObject):
         mode = self.dialog.mode_combo.currentText()
         missing = "、".join(item.title for item in self.items if item.state == "blocked")
         summary = f"{module} / {mode}\n还需处理：{missing}" if blocked else f"{module} / {mode}\n配置检查通过，启动时完成连接及初始化。"
-        self.button.setText(f"开始前检查 · {blocked}" if blocked else "开始前检查 ✓")
-        self.button.setToolTip(summary + "\n" + "\n".join(f"{item.title}：{item.detail}" for item in self.items if item.state != "ok"))
         if self.dialog.isVisible():
             self.dialog.set_items(self.items, summary, self.panel.start_button.isEnabled())
 

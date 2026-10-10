@@ -246,7 +246,6 @@ def test_main_header_connection_controls_do_not_overlap_at_minimum_width(
     controls = tuple(control for control in (
         window.title_label,
         window.version_label,
-        window.readiness.button,
         window.video_source_header_button,
         window.easycon_header_button,
         window.help_button,
