@@ -2711,11 +2711,6 @@ class MainWindow(QMainWindow):
         self.capture_roi_summary = QLabel()
         self.capture_roi_summary.setObjectName("WorkspaceHint")
         recognition_layout.addWidget(self.capture_roi_summary)
-        threshold_row = QHBoxLayout()
-        threshold_row.addWidget(QLabel("匹配阈值"))
-        threshold_row.addWidget(self.threshold, 1)
-        recognition_layout.addLayout(threshold_row)
-        self.threshold.show()
         self.threshold.setToolTip("眼睛模板的匹配阈值，范围 0–1；数值越高，匹配要求越严格。")
 
         self.capture_timing_group = QGroupBox("高级时序 · 7 项参数")

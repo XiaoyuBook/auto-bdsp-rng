@@ -125,8 +125,8 @@ class SeedConfigEditorController(QObject):
         self.form_layout.insertWidget(0, w.capture_recognition_group)
         self.form_layout.addWidget(w.capture_timing_group)
         w.capture_recognition_group.show()
-        self.advanced_toggle.setChecked(False)
-        w.capture_timing_group.hide()
+        self.advanced_toggle.setChecked(True)
+        w.capture_timing_group.show()
         self.editor.show()
         self.start_tooltips = [
             (control, control.toolTip())

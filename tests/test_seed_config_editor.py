@@ -61,15 +61,19 @@ def test_editor_stays_in_task_and_cancels_without_changing_shared_files(window, 
     assert 0 <= editor.title.mapTo(scroll.viewport(), QPoint(0, 0)).y() < 140
     assert "b.json" in editor.title.text()
     assert window.npc_count.text() == "9"
-    assert not window.capture_timing_group.isVisible()
+    assert window.capture_timing_group.isVisible()
+    assert not window.threshold.isVisible()
+    assert window.video_overlay.threshold.isVisible()
     assert not panel.start_button.isEnabled()
     assert not binding.combo.isEnabled()
     assert editor.save_button.isEnabled()
     assert window.monitor_sidebar.isVisible()
+    editor.advanced_toggle.setChecked(False)
+    assert not window.capture_timing_group.isVisible()
     editor.advanced_toggle.setChecked(True)
     assert window.capture_timing_group.isVisible()
     window.npc_count.setText("31")
-    window.threshold.setValue(.73)
+    window.video_overlay.threshold.setValue(.73)
     editor.cancel_button.click()
     assert second.read_bytes() == before
     assert window.npc_count.text() == "12"
@@ -83,7 +87,7 @@ def test_save_changes_same_shared_file_and_preserves_independent_correction(wind
     first, second, _template = configs
     _panel, binding, editor = open_editor(window, "seed", second)
     window.npc_count.setText("17")
-    window.threshold.setValue(.81)
+    window.video_overlay.threshold.setValue(.81)
     editor.save_button.click()
     saved = load_project_xs_config(second)
     assert saved.npc == 17 and saved.capture.threshold == .81
