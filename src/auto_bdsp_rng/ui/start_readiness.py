@@ -360,7 +360,7 @@ class StartReadinessController(QObject):
             w.easycon_tab.show_connection_dialog()
         elif action in ("seed", "seed_value"):
             if action == "seed_value":
-                w.tabs.setCurrentWidget(w.project_xs_tab)
+                w._show_manual_seed_tools()
                 control = w.seed64_outputs[0]
                 w.monitor_preview_scroll.ensureWidgetVisible(control)
             else:

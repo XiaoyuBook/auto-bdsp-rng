@@ -277,10 +277,10 @@ def _project_xs_munchlax_interval(state: SeedState32) -> float:
 def test_main_window_generates_static_results(app, tmp_path):
     window = MainWindow(profile_settings=_profile_settings(tmp_path))
 
-    assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
+    assert [window.tabs.tabText(index) for index in range(window.tabs.count())
+            if window.tabs.tabBar().isTabVisible(index)] == [
         "自动定点乱数",
         "自动 TID 乱数",
-        "Seed 捕捉",
         "定点数据区",
         "伊机控",
         "日志中心",

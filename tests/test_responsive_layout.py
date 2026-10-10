@@ -337,10 +337,11 @@ def test_confirmed_navigation_and_seed_preview_use_content_geometry(
 
     assert window.size() == QSize(1150, 900)
     tab_bar = window.tabs.tabBar()
-    tab_widths = [tab_bar.tabRect(index).width() for index in range(tab_bar.count())]
+    indexes = [index for index in range(tab_bar.count()) if tab_bar.isTabVisible(index)]
+    tab_widths = [tab_bar.tabRect(index).width() for index in indexes]
     text_widths = [
         tab_bar.fontMetrics().horizontalAdvance(tab_bar.tabText(index))
-        for index in range(tab_bar.count())
+        for index in indexes
     ]
     assert len(set(tab_widths)) > 1
     assert all(

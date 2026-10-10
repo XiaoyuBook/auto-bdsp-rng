@@ -162,7 +162,9 @@ def test_task_bindings_edit_same_seed_file_and_keep_correction_independent(windo
     assert w._selected_auto_reidentify_config_path() == str(first)
     assert w._selected_config_path() == str(first)
     binding.edit_button.click()
-    assert w.tabs.currentWidget() is w.project_xs_tab
+    assert w.tabs.currentWidget() is w.auto_rng_tab
+    assert binding.isAncestorOf(w.seed_config_editor.editor)
+    assert w.seed_config_editor.editor.isVisible()
     assert w._selected_config_path() == str(second)
     assert w.npc_count.text() == "9"
     assert not w.seed_config_combo.isVisible()

@@ -184,6 +184,7 @@ from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
 from auto_bdsp_rng.ui.update_dialog import UpdateController
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
 from auto_bdsp_rng.ui.start_readiness import StartReadinessController
+from auto_bdsp_rng.ui.seed_config_editor import SeedConfigEditorController
 from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_styles
 from auto_bdsp_rng.ui.workspace_controls import (
     PrimaryButton,
@@ -1747,7 +1748,7 @@ class MainWindow(QMainWindow):
 
     def _prepare_auto_easycon_script(self, script_name: str) -> object:
         if not self._video_source_connected:
-            raise RuntimeError("请先在 Seed 捕捉页面连接视频源")
+            raise RuntimeError("请先通过顶部视频源入口连接视频源")
         native_status = self.easycon_tab._native_status()
         if native_status != EasyConStatus.BRIDGE_CONNECTED:
             if native_status == EasyConStatus.RUNNING:
@@ -1899,6 +1900,16 @@ class MainWindow(QMainWindow):
         self.qq_notification_button.setAccessibleName("QQ 通知设置")
         self.qq_notification_button.clicked.connect(self.show_qq_notifications)
         header_layout.addWidget(self.qq_notification_button)
+        self.tools_button = QToolButton()
+        self.tools_button.setObjectName("ToolsMenuButton")
+        self.tools_button.setText("工具")
+        self.tools_button.setAccessibleName("工具")
+        self.tools_button.setFixedHeight(32)
+        self.tools_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.tools_menu = QMenu(self.tools_button)
+        self.manual_seed_action = self.tools_menu.addAction("手动测种与校正", self._show_manual_seed_tools)
+        self.tools_button.setMenu(self.tools_menu)
+        header_layout.addWidget(self.tools_button)
         header_layout.addWidget(self.help_button)
         root_layout.addWidget(header)
 
@@ -1943,7 +1954,7 @@ class MainWindow(QMainWindow):
             (self.auto_rng_tab.reidentify_config_binding, self.reidentify_config_combo),
         ):
             binding.bind_source(source)
-            binding.editRequested.connect(self._edit_automation_config)
+            binding.editRequested.connect(lambda path, view=binding: self._edit_automation_config(path, view))
         self.history_tab = HistoryPanel()
         self.run_records_tab = RunRecordsPanel(
             self.history_tab,
@@ -1997,7 +2008,7 @@ class MainWindow(QMainWindow):
         self.tidOcrRegionSelected.connect(self.auto_tid_rng_tab.set_ocr_region)
         self.tabs.addTab(self.auto_rng_tab, self._text("auto_rng"))
         self.tabs.addTab(self.auto_tid_rng_tab, self._text("auto_tid_rng"))
-        self.tabs.addTab(self.project_xs_tab, self._text("project_xs"))
+        self.tabs.addToolPage(self.project_xs_tab, "手动测种与校正")
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
         self.tabs.addTab(self.run_records_tab, "日志中心")
@@ -2063,6 +2074,7 @@ class MainWindow(QMainWindow):
         )
         self.update_controller.silentCheckFailed.connect(self._handle_silent_update_check_failed)
         self.readiness = StartReadinessController(self)
+        self.seed_config_editor = SeedConfigEditorController(self)
         self.history_tab.empty_navigation = self.readiness.show
         self.history_tab._refresh_round_list()
         self.run_records_tab.log_panel.empty_navigation = self.readiness.show
@@ -2085,6 +2097,20 @@ class MainWindow(QMainWindow):
         }.get(page)
         if configuration is not None:
             configuration.show()
+
+    def _show_manual_seed_tools(self) -> None:
+        if self.tabs.currentWidget() is self.project_xs_tab:
+            return
+        if self.seed_config_editor.active:
+            self.seed_config_editor.reveal()
+            self.statusBar().showMessage("请先保存或取消当前配置编辑，再打开手动测种与校正。")
+            return
+        self._manual_seed_return_page = self.tabs.currentWidget()
+        self.tabs.setCurrentWidget(self.project_xs_tab)
+
+    def _return_from_manual_seed_tools(self) -> None:
+        page = getattr(self, "_manual_seed_return_page", None)
+        self.tabs.setCurrentWidget(page if page is not None and page is not self.project_xs_tab else self.auto_rng_tab)
 
     def _show_current_page_logs(self) -> None:
         source = {
@@ -2371,13 +2397,16 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 14, 16, 12)
         layout.setSpacing(14)
         heading = QHBoxLayout()
-        title = QLabel("Seed 捕捉")
+        title = QLabel("手动测种与校正")
         title.setObjectName("SectionTitle")
         reference = QLabel("Project_Xs")
         reference.setObjectName("WorkspaceHint")
         heading.addWidget(title)
         heading.addStretch(1)
         heading.addWidget(reference)
+        self.manual_seed_return_button = QPushButton("返回任务")
+        self.manual_seed_return_button.clicked.connect(self._return_from_manual_seed_tools)
+        heading.addWidget(self.manual_seed_return_button)
         layout.addLayout(heading)
 
         self.capture_group = self._build_blink_group()
@@ -2675,6 +2704,18 @@ class MainWindow(QMainWindow):
         recognition_note.setObjectName("WorkspaceHint")
         recognition_note.setWordWrap(True)
         recognition_layout.addWidget(recognition_note)
+        self.capture_eye_summary = QLabel()
+        self.capture_eye_summary.setObjectName("WorkspaceHint")
+        self.capture_eye_summary.setWordWrap(True)
+        recognition_layout.addWidget(self.capture_eye_summary)
+        self.capture_roi_summary = QLabel()
+        self.capture_roi_summary.setObjectName("WorkspaceHint")
+        recognition_layout.addWidget(self.capture_roi_summary)
+        threshold_row = QHBoxLayout()
+        threshold_row.addWidget(QLabel("匹配阈值"))
+        threshold_row.addWidget(self.threshold, 1)
+        recognition_layout.addLayout(threshold_row)
+        self.threshold.show()
         self.threshold.setToolTip("眼睛模板的匹配阈值，范围 0–1；数值越高，匹配要求越严格。")
 
         self.capture_timing_group = QGroupBox("高级时序 · 7 项参数")
@@ -3263,6 +3304,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(
             lambda _index: self.video_overlay.set_configuration_mode(
                 self.tabs.currentWidget() is self.project_xs_tab
+                or (hasattr(self, "seed_config_editor") and self.seed_config_editor.editor.isVisible())
             )
         )
         aspect_layout.addWidget(self.preview_label)
@@ -3753,7 +3795,7 @@ class MainWindow(QMainWindow):
                 background: #055B41;
                 border-color: #055B41;
             }
-            QToolButton#HelpMenuButton {
+            QToolButton#HelpMenuButton, QToolButton#ToolsMenuButton {
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 4px;
@@ -3763,12 +3805,13 @@ class MainWindow(QMainWindow):
                 font-size: 13px;
                 font-weight: 400;
             }
-            QToolButton#HelpMenuButton:hover {
+            QToolButton#ToolsMenuButton { padding: 0 8px; }
+            QToolButton#HelpMenuButton:hover, QToolButton#ToolsMenuButton:hover {
                 background: #F7F8FA;
                 border-color: #E0E5EB;
                 color: #202A33;
             }
-            QToolButton#HelpMenuButton::menu-indicator {
+            QToolButton#HelpMenuButton::menu-indicator, QToolButton#ToolsMenuButton::menu-indicator {
                 image: none;
                 width: 0;
             }
@@ -4268,6 +4311,8 @@ class MainWindow(QMainWindow):
         )
         self._window_geometry_restored = True
         tab_index = self._window_setting_int(settings.value(MAIN_WINDOW_CURRENT_TAB_KEY), 0)
+        if tab_index == self.tabs.indexOf(self.project_xs_tab):
+            tab_index = 0
         self.tabs.setCurrentIndex(max(0, min(self.tabs.count() - 1, tab_index)))
         if self._window_restore_maximized:
             QTimer.singleShot(0, self._restore_maximized_window)
@@ -4466,6 +4511,8 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+        if self.seed_config_editor.active:
+            self.seed_config_editor.close(saved=False)
         self.qq_notifications.shutdown()
         # Closing the parent window does not send closeEvent to this panel.
         self.auto_tid_rng_tab._save_panel_state()
@@ -4786,7 +4833,7 @@ class MainWindow(QMainWindow):
         self.version_label.setText(f"v{__version__}")
         self.tabs.setTabText(0, self._text("auto_rng"))
         self.tabs.setTabText(1, self._text("auto_tid_rng"))
-        self.tabs.setTabText(2, self._text("project_xs"))
+        self.tabs.setTabText(2, "手动测种与校正")
         self.tabs.setTabText(3, self._text("bdsp_search"))
         self.tabs.setTabText(4, self._text("easycon"))
         self.tabs.setTabText(5, "日志中心" if self.lang == "zh" else "Log Center")
@@ -5024,18 +5071,13 @@ class MainWindow(QMainWindow):
                 for name in binding_names:
                     getattr(panel, name).refresh()
 
-    def _edit_automation_config(self, path: str) -> None:
+    def _edit_automation_config(self, path: str, binding=None) -> None:
         if not path:
             return
-        if self._is_capturing() or self._selection_mode is not None:
-            self.statusBar().showMessage("请先结束捕捉或框选，再切换编辑配置。")
-            return
-        index = self.config_combo.findData(path)
-        if index < 0:
-            self.config_combo.addItem(Path(path).name, path)
-            index = self.config_combo.count() - 1
-        self.config_combo.setCurrentIndex(index)
-        self.tabs.setCurrentWidget(self.project_xs_tab)
+        if binding is None:
+            panel = self.tabs.currentWidget()
+            binding = (self.auto_tid_rng_tab if panel is self.auto_tid_rng_tab else self.auto_rng_tab).seed_config_binding
+        self.seed_config_editor.open(binding, path)
 
     def _populate_project_xs_combo(self, combo: QComboBox, configs: list[Path], previous: object | None) -> None:
         combo.blockSignals(True)
@@ -5105,6 +5147,9 @@ class MainWindow(QMainWindow):
             config = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
         except ProjectXsIntegrationError:
             return
+        self._apply_capture_config_to_form(config)
+
+    def _apply_capture_config_to_form(self, config: ProjectXsTrackingConfig) -> None:
         roi_x, roi_y, roi_w, roi_h = config.capture.roi
         self.monitor_window.setChecked(config.capture.monitor_window)
         self.reidentify_1_pk_npc.setChecked(config.reidentify_1_pk_npc)
@@ -5123,6 +5168,12 @@ class MainWindow(QMainWindow):
         self.pokemon_npc.setText(str(config.pokemon_npc))
         self.display_percent.setText(str(config.display_percent))
         self._eye_image_path = config.capture.eye_image_path
+        self._refresh_capture_config_summary()
+
+    def _refresh_capture_config_summary(self) -> None:
+        self.capture_eye_summary.setText(f"眼睛模板：{Path(self._eye_image_path).name if self._eye_image_path else '未设置'}")
+        self.capture_eye_summary.setToolTip(str(self._eye_image_path or ""))
+        self.capture_roi_summary.setText("ROI：" + " / ".join(field.text() for field in (self.x, self.y, self.w, self.h)))
 
     def _config_from_form(self) -> ProjectXsTrackingConfig:
         loaded = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
@@ -6360,6 +6411,8 @@ class MainWindow(QMainWindow):
             output_dir.mkdir(parents=True, exist_ok=True)
             config_name = Path(self._selected_config_path()).stem or "current"
             output_path = output_dir / f"{config_name}_eye.png"
+            if self.seed_config_editor.active:
+                output_path = self.seed_config_editor.eye_output_path(output_dir, config_name)
             if not cv2.imwrite(str(output_path), eye):
                 raise ProjectXsIntegrationError(f"Cannot save eye template: {output_path}")
         except Exception as exc:
@@ -6370,6 +6423,7 @@ class MainWindow(QMainWindow):
             self.captureSelectionFinished.emit("eye", False)
             return
         self._eye_image_path = output_path
+        self._refresh_capture_config_summary()
         if preserve_roi:
             rx, ry, rw, rh = (int(field.text() or 0) for field in (self.x, self.y, self.w, self.h))
             if rx <= left and ry <= top and right <= rx + rw and bottom <= ry + rh:
@@ -6393,6 +6447,7 @@ class MainWindow(QMainWindow):
         self.y.setText(str(roi[1]))
         self.w.setText(str(roi[2]))
         self.h.setText(str(roi[3]))
+        self._refresh_capture_config_summary()
 
     def open_ocr_settings(self) -> None:
         if self._ocr_settings_dialog is None:
@@ -7596,13 +7651,23 @@ class MainWindow(QMainWindow):
 
     def _refresh_automation_start_state(self, *_args: object) -> None:
         panels = (self.auto_rng_tab, self.auto_tid_rng_tab)
-        busy = self._automation_script_busy() or any(
+        busy = self.seed_config_editor.active or self._automation_script_busy() or any(
             p._runner_thread is not None or p._preparing for p in panels
         )
         for panel in panels:
             panel.set_start_available(not busy)
+            if self.seed_config_editor.active:
+                reason = "请先保存或取消 Seed 配置编辑，再启动自动任务。"
+                panel.start_button.setToolTip(reason)
+                for action in panel.start_menu.actions():
+                    action.setToolTip(reason)
+        self.manual_seed_action.setEnabled(not busy and self._capture_thread is None)
 
     def _ensure_automation_start_available(self, *, owner=None) -> bool:
+        if self.seed_config_editor.active:
+            self.seed_config_editor.reveal()
+            self.statusBar().showMessage("请先保存或取消 Seed 配置编辑，再启动自动任务。")
+            return False
         for panel, label in (
             (self.auto_rng_tab, "自动定点"),
             (self.auto_tid_rng_tab, "自动 TID"),
@@ -7987,7 +8052,7 @@ class MainWindow(QMainWindow):
         """Compatibility name for ensuring the native persistent backend is ready."""
 
         if not self._video_source_connected:
-            self._show_error("视频源未连接", "请先在 Seed 捕捉页面连接视频源")
+            self._show_error("视频源未连接", "请先通过顶部视频源入口连接视频源")
             return False
         status = self.easycon_tab._native_status()
         if status == EasyConStatus.BRIDGE_CONNECTED:
@@ -9369,7 +9434,7 @@ class MainWindow(QMainWindow):
             )
         )
         if not video_connected:
-            raise RuntimeError("请先在 Seed 捕捉页面连接视频源")
+            raise RuntimeError("请先通过顶部视频源入口连接视频源")
         if native_status != EasyConStatus.BRIDGE_CONNECTED:
             raise RuntimeError("请先连接伊机控")
         if log_details:

@@ -125,6 +125,8 @@ def test_auto_recapture_hides_old_seed_until_new_result_and_clears_on_disconnect
 
 def test_matching_uses_live_result_and_threshold_is_synced_and_locked_during_capture(window, monkeypatch):
     w = window
+    # Local Project_Xs files may have a different user-calibrated threshold.
+    w.threshold.setValue(.9)
     frame = show_frame(w)
     monkeypatch.setattr(w, "_read_live_preview_frame", lambda config: frame)
     monkeypatch.setattr(mw, "render_eye_preview", lambda config, frame: (frame.copy(), SimpleNamespace(match_score=0.87654)))

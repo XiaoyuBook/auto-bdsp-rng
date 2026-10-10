@@ -188,14 +188,19 @@ class TaskConfigBinding(QWidget):
         self.edit_button.setIcon(workspace_icon("square-pen", "#64707D"))
         self.edit_button.setFixedSize(32, 32)
         self.edit_button.setAccessibleName("编辑" + title)
-        self.edit_button.setToolTip("在 Seed 捕捉页编辑同一份配置")
+        self.edit_button.setToolTip("展开当前配置的参数、框选和测试捕捉")
         self.edit_button.setEnabled(False)
         self.edit_button.clicked.connect(lambda: self.editRequested.emit(str(self.combo.currentData() or "")))
-        row = QHBoxLayout(self)
+        self.selector = QWidget()
+        row = QHBoxLayout(self.selector)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(5)
         row.addWidget(self.combo, 1)
         row.addWidget(self.edit_button)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        layout.addWidget(self.selector)
 
     def bind_source(self, source):
         self._source = source

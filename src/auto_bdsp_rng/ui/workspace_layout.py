@@ -57,6 +57,12 @@ class WorkspacePages(QStackedWidget):
         self._bar.addTab(text)
         return index
 
+    def addToolPage(self, widget, text):
+        """Keep legacy page indexes while moving a page out of primary navigation."""
+        index = self.addTab(widget, text)
+        self._bar.setTabVisible(index, False)
+        return index
+
     def tabBar(self):
         return self._bar
 
