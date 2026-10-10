@@ -39,7 +39,7 @@ def test_strategy_dialog_defaults_and_row_order(app, tmp_path):
     assert dialog.policy() == "next_round"
     assert dialog.reidentify_seed_max_attempts.value() == 1
     assert dialog.reidentify_seed_max_attempts.isEnabled()
-    assert dialog.reseeding_threshold.value() == 500_000
+    assert panel.reseeding_threshold.value() == 500_000
     assert [
         dialog.form.labelForField(field).text()
         for field in (
@@ -47,14 +47,12 @@ def test_strategy_dialog_defaults_and_row_order(app, tmp_path):
             dialog.reidentify_max_attempts,
             dialog.reidentify_failure_policy,
             dialog.reidentify_seed_max_attempts,
-            dialog.reseeding_threshold,
         )
     ] == [
         "校正帧数上限",
         "普通校正最大尝试次数",
         "普通校正连续失败后",
         "重测 Seed 最大尝试次数",
-        "过场预留帧数",
     ]
     assert dialog.reidentify_failure_policy.itemData(0) == "next_round"
     assert dialog.reidentify_failure_policy.itemData(1) == "recapture_seed"
@@ -83,19 +81,20 @@ def test_strategy_dialog_cancel_restores_all_values_without_persisting(app, tmp_
     settings = _settings(tmp_path / "auto-rng.ini")
     panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
     original_values = panel.strategy_dialog.values()
+    panel.reseeding_threshold.setValue(65_432)
 
     def edit_then_cancel() -> None:
         panel.reseed_threshold_frames.setValue(123_456)
         panel.reidentify_max_attempts.setValue(7)
         panel.strategy_dialog.set_policy("recapture_seed")
         panel.reidentify_seed_max_attempts.setValue(4)
-        panel.reseeding_threshold.setValue(65_432)
         panel.strategy_dialog.reject()
 
     QTimer.singleShot(0, edit_then_cancel)
     panel.strategy_settings_button.click()
 
     assert panel.strategy_dialog.values() == original_values
+    assert panel.reseeding_threshold.value() == 65_432
     assert not settings.contains("reseed_threshold_frames")
     assert not settings.contains("reidentify_max_attempts")
     assert not settings.contains("reidentify_failure_policy")
@@ -112,10 +111,12 @@ def test_strategy_dialog_restore_defaults_is_transactional(app, tmp_path):
     settings.setValue("reseeding_threshold", 65_432)
     panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
     saved_values = panel.strategy_dialog.values()
+    panel.reseeding_threshold.setValue(234_567)
 
     def reset_then_cancel() -> None:
         panel.strategy_dialog.restore_defaults_button.click()
-        assert panel.strategy_dialog.values() == (900_000, 2, "next_round", 1, 500_000)
+        assert panel.strategy_dialog.values() == (900_000, 2, "next_round", 1)
+        assert panel.reseeding_threshold.value() == 234_567
         panel.strategy_dialog.reject()
 
     QTimer.singleShot(0, reset_then_cancel)
@@ -135,36 +136,39 @@ def test_strategy_dialog_restore_defaults_is_transactional(app, tmp_path):
     QTimer.singleShot(0, reset_then_accept)
     panel.strategy_settings_button.click()
 
-    assert panel.strategy_dialog.values() == (900_000, 2, "next_round", 1, 500_000)
+    assert panel.strategy_dialog.values() == (900_000, 2, "next_round", 1)
+    assert panel.reseeding_threshold.value() == 234_567
     assert int(settings.value("reseed_threshold_frames")) == 900_000
     assert int(settings.value("reidentify_max_attempts")) == 2
     assert settings.value("reidentify_failure_policy") == "next_round"
     assert int(settings.value("reidentify_seed_max_attempts")) == 1
-    assert int(settings.value("reseeding_threshold")) == 500_000
+    assert int(settings.value("reseeding_threshold")) == 65_432
 
 
 def test_strategy_dialog_accept_persists_and_builds_config(app, tmp_path):
     settings_path = tmp_path / "auto-rng.ini"
     settings = _settings(settings_path)
     panel = AutoRngPanel(script_dir=tmp_path, settings=settings)
+    panel.reseeding_threshold.setValue(234_567)
 
     def edit_then_accept() -> None:
         panel.reseed_threshold_frames.setValue(1_234_567)
         panel.reidentify_max_attempts.setValue(12)
         panel.strategy_dialog.set_policy("recapture_seed")
         panel.reidentify_seed_max_attempts.setValue(9)
-        panel.reseeding_threshold.setValue(234_567)
         panel.strategy_dialog.accept()
 
     QTimer.singleShot(0, edit_then_accept)
     panel.strategy_settings_button.click()
+    assert not settings.contains("reseeding_threshold")
+    panel.save_task_button.click()
     settings.sync()
 
     restored_settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
     restored = AutoRngPanel(script_dir=tmp_path, settings=restored_settings)
     config = restored.build_config()
 
-    assert restored.strategy_dialog.values() == (1_000_000, 12, "recapture_seed", 9, 234_567)
+    assert restored.strategy_dialog.values() == (1_000_000, 12, "recapture_seed", 9)
     assert config.reseed_threshold_frames == 1_000_000
     assert config.reidentify_max_attempts == 12
     assert config.reidentify_failure_policy == "recapture_seed"
@@ -172,7 +176,7 @@ def test_strategy_dialog_accept_persists_and_builds_config(app, tmp_path):
     assert config.reseeding_threshold == 234_567
 
 
-def test_strategy_button_replaces_main_form_reserve_frames_row(app, tmp_path):
+def test_strategy_and_transition_settings_use_their_own_groups(app, tmp_path):
     panel = AutoRngPanel(script_dir=tmp_path, settings=_settings(tmp_path / "auto-rng.ini"))
     form = panel.strategy_group.layout()
 
@@ -195,7 +199,9 @@ def test_strategy_button_replaces_main_form_reserve_frames_row(app, tmp_path):
     assert panel.config_groups.pages["shiny"].isAncestorOf(panel.shiny_threshold_seconds)
     assert panel.config_groups.pages["shiny"].isAncestorOf(panel.reverse_field)
     assert panel.config_groups.pages["continuation"].isAncestorOf(panel.sync_field)
-    assert panel.config_groups.pages["transition"].isAncestorOf(panel.strategy_settings_button)
+    assert panel.config_groups.pages["basic"].isAncestorOf(panel.strategy_settings_button)
+    assert panel.config_groups.pages["transition"].isAncestorOf(panel.reseeding_threshold)
+    assert not panel.strategy_dialog.isAncestorOf(panel.reseeding_threshold)
 
 
 def test_strategy_numeric_fields_use_c_locale_and_qt_integer_limit(app, tmp_path):

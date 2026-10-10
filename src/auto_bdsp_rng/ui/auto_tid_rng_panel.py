@@ -460,7 +460,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         card.insertWidget(3, self.config_groups)
         basic = self.config_groups.add_group("basic", "基础配置")
         self.seed_config_binding = TaskConfigBinding("Seed 配置")
-        basic.addWidget(parameter_field("Seed 配置", self.seed_config_binding, "定点与 TID 共用"))
+        basic.addWidget(parameter_field("Seed 配置", self.seed_config_binding, ""))
         basic.addWidget(self.top_controls_group)
         basic.addWidget(self.script_group)
         self.script_toggle.hide()

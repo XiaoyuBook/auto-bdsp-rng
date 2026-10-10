@@ -268,7 +268,6 @@ class AutoRngStrategyDialog(QDialog):
         self.reidentify_failure_policy.addItem("先重测 Seed", "recapture_seed")
         self.reidentify_failure_policy.setFixedSize(215, 34)
         self.reidentify_seed_max_attempts = self._spin(1, DEFAULT_REIDENTIFY_SEED_MAX_ATTEMPTS)
-        self.reseeding_threshold = self._spin(0, DEFAULT_RESEEDING_THRESHOLD_FRAMES)
 
         rows = (
             (
@@ -292,13 +291,6 @@ class AutoRngStrategyDialog(QDialog):
                 "重测 Seed 最大尝试次数",
                 self.reidentify_seed_max_attempts,
                 "可随时预先设置；仅在失败策略为“先重测 Seed”时生效。",
-            ),
-            (
-                "过场预留帧数",
-                self.reseeding_threshold,
-                "提前预留帧数，用于执行过场脚本和完成过场后的校正。\n"
-                "预留太少可能在过场或校正期间错过目标；可先保留默认 50 万帧，再根据实际消耗调整。\n"
-                "仅在选择了过场脚本时生效；设为 0 时关闭过场策略。",
             ),
         )
         for label_text, field, tooltip in rows:
@@ -344,13 +336,12 @@ class AutoRngStrategyDialog(QDialog):
         index = self.reidentify_failure_policy.findData(policy)
         self.reidentify_failure_policy.setCurrentIndex(index if index >= 0 else 0)
 
-    def values(self) -> tuple[int, int, str, int, int]:
+    def values(self) -> tuple[int, int, str, int]:
         return (
             self.reseed_threshold_frames.value(),
             self.reidentify_max_attempts.value(),
             self.policy(),
             self.reidentify_seed_max_attempts.value(),
-            self.reseeding_threshold.value(),
         )
 
     def set_values(
@@ -359,13 +350,11 @@ class AutoRngStrategyDialog(QDialog):
         reidentify_max_attempts: int,
         reidentify_failure_policy: str,
         reidentify_seed_max_attempts: int,
-        reseeding_threshold: int,
     ) -> None:
         self.reseed_threshold_frames.setValue(reseed_threshold_frames)
         self.reidentify_max_attempts.setValue(reidentify_max_attempts)
         self.set_policy(reidentify_failure_policy)
         self.reidentify_seed_max_attempts.setValue(reidentify_seed_max_attempts)
-        self.reseeding_threshold.setValue(reseeding_threshold)
 
     @Slot()
     def restore_defaults(self) -> None:
@@ -374,7 +363,6 @@ class AutoRngStrategyDialog(QDialog):
             DEFAULT_REIDENTIFY_MAX_ATTEMPTS,
             DEFAULT_REIDENTIFY_FAILURE_POLICY,
             DEFAULT_REIDENTIFY_SEED_MAX_ATTEMPTS,
-            DEFAULT_RESEEDING_THRESHOLD_FRAMES,
         )
 
 
@@ -544,9 +532,12 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         continuation = self.config_groups.add_group("continuation", "同步与续搜")
 
         self.seed_config_binding = TaskConfigBinding("Seed 配置")
-        self.reidentify_config_binding = TaskConfigBinding("校正配置")
-        basic.addWidget(parameter_field("Seed 配置", self.seed_config_binding, "定点与 TID 共用"))
+        self.reidentify_config_binding = TaskConfigBinding("过场校正配置")
+        basic.addWidget(parameter_field("Seed 配置", self.seed_config_binding, ""))
         basic.addWidget(self.strategy_group)
+        self.strategy_settings_button.setText("校正与补救设置")
+        strategy_field = parameter_field("校正策略", self.strategy_settings_button, "")
+        basic.addWidget(strategy_field)
         basic.addWidget(self.script_group)
         self.more_strategy_button.hide()
         self.advanced_strategies.hide()
@@ -565,16 +556,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.shiny_calibration_button.clicked.connect(self.shinyCalibrationRequested.emit)
         shiny.addWidget(self.shiny_calibration_button, 0, Qt.AlignmentFlag.AlignLeft)
 
-        transition.addWidget(parameter_field("校正配置", self.reidentify_config_binding, "过场与自动定点校正使用"))
+        transition.addWidget(parameter_field("过场校正配置", self.reidentify_config_binding, "过场后的校正使用"))
+        reserve_field = parameter_field("过场预留帧数", self.reseeding_threshold, "0 表示关闭过场策略")
+        reserve_field.findChild(QLabel, "TaskFieldTitle").setToolTip(self.reseeding_threshold.toolTip())
+        transition.addWidget(reserve_field)
         transition.addWidget(self.script_rows[self.exit_script_combo])
-        self.strategy_settings_button.setText("校正与补救设置")
-        transition.addWidget(self.strategy_settings_button, 0, Qt.AlignmentFlag.AlignLeft)
         continuation.addWidget(parameter_field("同步", self.sync_field, "首位精灵与同步性格"))
         continuation.addWidget(self.escape_continue_check)
         continuation.addWidget(self.script_rows[self.escape_script_combo])
         for field, wrapper, row in (
             (self.shiny_threshold_seconds, shiny_field, 3),
             (self.reverse_field, reverse_field, 5),
+            (self.strategy_settings_button, strategy_field, 6),
         ):
             self.strategy_form.register(field, wrapper.findChild(QLabel, "TaskFieldTitle"), row)
         for field in self._advanced_strategy_fields:
@@ -841,7 +834,19 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.reidentify_max_attempts = self.strategy_dialog.reidentify_max_attempts
         self.reidentify_failure_policy = self.strategy_dialog.reidentify_failure_policy
         self.reidentify_seed_max_attempts = self.strategy_dialog.reidentify_seed_max_attempts
-        self.reseeding_threshold = self.strategy_dialog.reseeding_threshold
+        self.reseeding_threshold = QSpinBox()
+        self.reseeding_threshold.setRange(0, QT_INT_MAX)
+        self.reseeding_threshold.setValue(DEFAULT_RESEEDING_THRESHOLD_FRAMES)
+        self.reseeding_threshold.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.reseeding_threshold.setFixedHeight(32)
+        self.reseeding_threshold.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        set_c_locale(self.reseeding_threshold)
+        self.reseeding_threshold.setFont(_ui_numeric_font(14))
+        self.reseeding_threshold.setToolTip(
+            "提前预留帧数，用于执行过场脚本和完成过场后的校正。\n"
+            "预留太少可能在过场或校正期间错过目标；可先保留默认 50 万帧，再根据实际消耗调整。\n"
+            "仅在选择了过场脚本时生效；设为 0 时关闭过场策略。"
+        )
         self.strategy_settings_button = QPushButton("设置")
         self.strategy_settings_button.setObjectName("SecondaryButton")
         self.strategy_settings_button.setFixedSize(180, 32)
@@ -894,7 +899,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         core = QHBoxLayout()
         core.setSpacing(16)
         max_field = parameter_field("搜索范围", self.max_advances, "当前 Seed 的搜索上限")
-        wait_field = parameter_field("最大等待", self.max_wait_frames, "进入活帧等待的距离")
+        wait_field = parameter_field("最大等待", self.max_wait_frames, "距离目标小于帧数是不进行过帧")
         core.addWidget(max_field, 1)
         core.addWidget(wait_field, 1)
         form.addLayout(core)
@@ -942,21 +947,22 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         strategy_field_width = strategy_choice_width + strategy_spacing + strategy_detail_width
         self.sync_field = QWidget()
         self.sync_field.setObjectName("CompactStrategyField")
-        self.sync_field.setFixedSize(strategy_field_width, 32)
+        self.sync_field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         sync_row = QHBoxLayout(self.sync_field)
         sync_row.setContentsMargins(0, 0, 0, 0)
         sync_row.setSpacing(strategy_spacing)
         self.sync_combo = QComboBox()
         self.sync_combo.addItems(["关闭", "首位普通精灵", "首位同步精灵"])
         self.sync_combo.setFixedHeight(32)
-        self.sync_combo.setFixedWidth(strategy_choice_width)
+        self.sync_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.sync_combo.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
         self.sync_combo.currentIndexChanged.connect(self._on_sync_changed)
         self.sync_nature_input = QLineEdit()
         self.sync_nature_input.setPlaceholderText("性格")
         self.sync_nature_input.setFixedHeight(32)
         self.sync_nature_input.setFixedWidth(strategy_detail_width)
         self.sync_nature_input.setEnabled(False)
-        sync_row.addWidget(self.sync_combo)
+        sync_row.addWidget(self.sync_combo, 1)
         sync_row.addWidget(self.sync_nature_input)
         advanced_form.addRow("同步", self.sync_field)
         form.register(self.sync_field, advanced_form.labelForField(self.sync_field), 4)
@@ -2333,6 +2339,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         for spin in (
             self.max_advances,
             self.max_wait_frames,
+            self.reseeding_threshold,
             self.shiny_threshold_seconds,
             self.reverse_lookup_window,
             self.loop_count,
@@ -3780,6 +3787,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._save_delay_samples()
         s.setValue("max_wait_frames", self.max_wait_frames.value())
         self._save_strategy_settings()
+        # Keep the existing key for compatibility with saved configurations.
+        s.setValue("reseeding_threshold", self.reseeding_threshold.value())
         s.setValue("shiny_threshold", self.shiny_threshold_seconds.value())
         reverse, sync, nature = self._starter_manual_strategy_values or (
             self.auto_reverse_combo.currentIndex(), self.sync_combo.currentIndex(),
@@ -3835,8 +3844,6 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         s.setValue("reidentify_max_attempts", self.reidentify_max_attempts.value())
         s.setValue("reidentify_failure_policy", self.reidentify_failure_policy.currentData())
         s.setValue("reidentify_seed_max_attempts", self.reidentify_seed_max_attempts.value())
-        # Keep the existing key for compatibility with saved configurations.
-        s.setValue("reseeding_threshold", self.reseeding_threshold.value())
 
     def _save_delay_settings(self) -> None:
         s = self._settings

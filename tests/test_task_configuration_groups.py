@@ -32,6 +32,9 @@ def test_visible_save_configuration_persists_parameters_and_scripts(app, tmp_pat
     try:
         field = panel.max_advances if isinstance(panel, AutoRngPanel) else panel.frame_threshold
         field.setValue(456)
+        if isinstance(panel, AutoRngPanel):
+            panel.config_groups.select_group("transition")
+            panel.reseeding_threshold.setValue(654_321)
         selected = str(tmp_path / "备用测种.txt")
         panel.seed_script_combo.setCurrentIndex(panel.seed_script_combo.findData(selected))
         assert panel.task_save_state_label.text() == "有未保存修改"
@@ -40,10 +43,14 @@ def test_visible_save_configuration_persists_parameters_and_scripts(app, tmp_pat
         key = "max_advances" if isinstance(panel, AutoRngPanel) else "frame_threshold"
         assert int(settings.value(key)) == 456
         assert settings.value("seed_script") == selected
+        if isinstance(panel, AutoRngPanel):
+            assert int(settings.value("reseeding_threshold")) == 654_321
         restored = panel_type(script_dir=tmp_path, settings=settings)
         try:
             assert restored.seed_script_combo.currentData() == selected
             assert getattr(restored, key).value() == 456
+            if isinstance(restored, AutoRngPanel):
+                assert restored.reseeding_threshold.value() == 654_321
         finally:
             restored.close()
             restored.deleteLater()

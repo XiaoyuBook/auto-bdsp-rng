@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QRect, QSettings, QSize, Qt
-from PySide6.QtWidgets import QApplication, QSplitter
+from PySide6.QtWidgets import QApplication, QSplitter, QStyle, QStyleOptionComboBox
 from auto_bdsp_rng.ui.workspace_layout import WorkspacePages
 
 from auto_bdsp_rng.automation.easycon import EasyConConfig
@@ -492,6 +492,43 @@ def test_main_header_run_state_finalizes_without_final_progress(
 
     assert window.navigation_status.text() == f"● {task} · {expected_phase}"
     assert window._header_loop_index == 0
+
+
+@pytest.mark.parametrize("width", (860, 1150))
+def test_sync_choices_fit_in_the_main_window_configuration_group(
+    app, monkeypatch, isolated_ui_qsettings, width: int,
+) -> None:
+    monkeypatch.setattr(
+        MainWindow,
+        "_screen_available_geometry",
+        lambda _self: QRect(0, 0, 1920, 1080),
+    )
+    window = MainWindow(profile_settings=isolated_ui_qsettings["MainWindowProfile"])
+    panel = window.auto_rng_tab
+    window.tabs.setCurrentWidget(panel)
+    window.resize(width, 900)
+    panel.config_groups.select_group("continuation")
+    window.show()
+    app.processEvents()
+    app.processEvents()
+
+    for index in range(panel.sync_combo.count()):
+        panel.sync_combo.setCurrentIndex(index)
+        app.processEvents()
+        option = QStyleOptionComboBox()
+        panel.sync_combo.initStyleOption(option)
+        text_rect = panel.sync_combo.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxEditField,
+            panel.sync_combo,
+        )
+        text_width = panel.sync_combo.fontMetrics().horizontalAdvance(panel.sync_combo.currentText())
+        assert text_rect.width() >= text_width
+        assert panel.sync_field.rect().contains(panel.sync_combo.geometry())
+        assert panel.sync_field.rect().contains(panel.sync_nature_input.geometry())
+        assert panel.sync_combo.geometry().right() < panel.sync_nature_input.geometry().left()
+    assert panel.config_panel.horizontalScrollBar().maximum() == 0
 
 
 def test_monitor_stays_on_right_when_seed_configuration_narrows(app, monkeypatch, tmp_path: Path) -> None:

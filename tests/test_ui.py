@@ -2404,7 +2404,8 @@ def test_auto_rng_strategy_parameters_have_hover_explanations(app, tmp_path):
     assert panel.max_wait_frames.suffix() == " 帧"
     assert panel.shiny_threshold_seconds.suffix() == " 秒"
     assert form.indexOf(panel.reseeding_threshold) == -1
-    assert panel.strategy_dialog.form.labelForField(panel.reseeding_threshold).text() == "过场预留帧数"
+    assert panel.reseeding_threshold.parentWidget().findChild(QLabel, "TaskFieldTitle").text() == "过场预留帧数"
+    assert panel.config_groups.pages["transition"].isAncestorOf(panel.reseeding_threshold)
     for control in (
         panel.sync_combo,
         panel.sync_nature_input,
@@ -3772,7 +3773,7 @@ def test_auto_rng_configuration_groups_scroll_inside_fixed_sidebar(app, tmp_path
     for group, field in (
         ("basic", panel.seed_script_combo),
         ("shiny", panel.reverse_field),
-        ("transition", panel.strategy_settings_button),
+        ("transition", panel.reseeding_threshold),
         ("continuation", panel.sync_field),
     ):
         panel.config_groups.select_group(group)
