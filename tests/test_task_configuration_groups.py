@@ -165,5 +165,5 @@ def test_task_bindings_edit_same_seed_file_and_keep_correction_independent(windo
     assert w.tabs.currentWidget() is w.project_xs_tab
     assert w._selected_config_path() == str(second)
     assert w.npc_count.text() == "9"
-    assert w.status_group.isVisible()
-    assert not w.auto_capture_config_toggle.isVisible()
+    assert not w.seed_config_combo.isVisible()
+    assert not w.reidentify_config_combo.isVisible()

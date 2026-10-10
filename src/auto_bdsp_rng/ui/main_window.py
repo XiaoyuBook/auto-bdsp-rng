@@ -2384,32 +2384,12 @@ class MainWindow(QMainWindow):
         self.capture_toolbar = self.capture_group
         layout.addWidget(self.capture_group)
         self.seed_group = self._build_seed_group()
-        self.status_group = self._build_project_status_group()
+        self._build_project_status_widgets()
         configuration = QWidget()
         configuration.setObjectName("ProjectXsConfigPanel")
         config_layout = QVBoxLayout(configuration)
         config_layout.setContentsMargins(0, 0, 4, 4)
         config_layout.setSpacing(16)
-        self.auto_capture_config_toggle = QToolButton()
-        self.auto_capture_config_toggle.setObjectName("SeedSectionToggle")
-        self.auto_capture_config_toggle.setText("自动流程配置")
-        self.auto_capture_config_toggle.setCheckable(True)
-        self.auto_capture_config_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.auto_capture_config_toggle.setAccessibleName("展开自动流程配置")
-        self.auto_capture_config_toggle.setToolTip("展开自动定点与自动 TID 流程使用的 Seed 配置")
-        self.auto_capture_config_toggle.setMinimumHeight(34)
-        self.auto_capture_config_toggle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        configure_disclosure_button(self.auto_capture_config_toggle)
-        self.auto_capture_config_toggle.toggled.connect(self.status_group.setVisible)
-        self.auto_capture_config_toggle.toggled.connect(
-            lambda checked: self.auto_capture_config_toggle.setAccessibleName(
-                "收起自动流程配置" if checked else "展开自动流程配置"
-            )
-        )
-        self.auto_capture_config_toggle.setChecked(True)
-        self.auto_capture_config_toggle.setParent(configuration)
-        self.auto_capture_config_toggle.hide()
-        config_layout.addWidget(self.status_group)
         config_layout.addWidget(self.capture_recognition_group)
         config_layout.addWidget(self.capture_timing_group)
         config_layout.addStretch(1)
@@ -2492,28 +2472,21 @@ class MainWindow(QMainWindow):
             self.query_groups.setMinimumHeight(group.minimumSizeHint().height() + 40)
 
 
-    def _build_project_status_group(self) -> QGroupBox:
-        group = QGroupBox("自动流程配置")
-        group.setObjectName("ProjectXsStatusGroup")
-        group.setProperty("seedSection", True)
-        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-
-        outer = QGridLayout(group)
-        outer.setContentsMargins(0, 14, 0, 0)
-        outer.setHorizontalSpacing(8)
-        outer.setVerticalSpacing(10)
-
-        self.progress_label = QLabel("眨眼进度")
-        self.progress_value = QLabel("0/0")
+    def _build_project_status_widgets(self) -> None:
+        """Create capture status fields and hidden automation config sources."""
+        self.progress_label = QLabel("眨眼进度", self)
+        self.progress_value = QLabel("0/0", self)
         self.progress_value.setObjectName("CaptureStatusValue")
-        self.advances_label = QLabel("当前帧数")
-        self.advances_value = QLabel("—")
+        self.advances_label = QLabel("当前帧数", self)
+        self.advances_value = QLabel("—", self)
         self.advances_value.setObjectName("CaptureStatusValue")
-        self.timer_label = QLabel("Timer:")
-        self.timer_value = QLabel("0")
-        self.x_to_advance_label = QLabel("X to advance:")
+        self.timer_label = QLabel("Timer:", self)
+        self.timer_value = QLabel("0", self)
+        self.x_to_advance_label = QLabel("X to advance:", self)
         self.x_to_advance = self._spin(0, 10_000_000, 165)
+        self.x_to_advance.setParent(self)
         self.advance_button = QPushButton("Advance")
+        self.advance_button.setParent(self)
         self.advance_button.clicked.connect(self.advance_current_seed)
         for widget in (
             self.timer_label,
@@ -2524,46 +2497,21 @@ class MainWindow(QMainWindow):
         ):
             widget.hide()
 
-        self.seed_config_combo = QComboBox()
+        # These models are shared with the task pages. Their selectors used to
+        # be shown on the Seed capture page, but the task pages are now the
+        # single place where automation configuration is selected.
+        self.seed_config_combo = QComboBox(self)
         self.seed_config_combo.setFixedHeight(32)
         self.seed_config_combo.setMinimumWidth(200)
         self.seed_config_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.reidentify_config_combo = QComboBox()
+        self.reidentify_config_combo = QComboBox(self)
         self.reidentify_config_combo.setFixedHeight(32)
         self.reidentify_config_combo.setMinimumWidth(200)
         self.reidentify_config_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.seed_config_combo.setToolTip("自动定点和自动 TID 流程捕捉 Seed 时使用的配置。")
         self.reidentify_config_combo.setToolTip("自动定点流程校正时使用的配置。")
-        self.seed_config_edit_button = QToolButton()
-        self.reidentify_config_edit_button = QToolButton()
-        for button, combo, title in (
-            (self.seed_config_edit_button, self.seed_config_combo, "Seed 配置"),
-            (self.reidentify_config_edit_button, self.reidentify_config_combo, "校正配置"),
-        ):
-            button.setIcon(workspace_icon("square-pen", "#64707D"))
-            button.setFixedSize(32, 32)
-            button.setAccessibleName("编辑自动流程" + title)
-            button.setToolTip("在本页编辑同一份配置")
-            button.clicked.connect(lambda _checked=False, selected=combo: self._edit_automation_config(str(selected.currentData() or "")))
-        self.refresh_seed_configs_button = QPushButton("刷新")
-        self.refresh_seed_configs_button.setFixedHeight(32)
-        self.refresh_seed_configs_button.setFixedWidth(80)
-        self.refresh_seed_configs_button.clicked.connect(self._refresh_config_list)
-        self.refresh_seed_configs_button.hide()
-
-        outer.addWidget(QLabel("Seed 配置"), 0, 0)
-        outer.addWidget(self.seed_config_combo, 0, 1)
-        outer.addWidget(self.seed_config_edit_button, 0, 2)
-        outer.addWidget(QLabel("校正配置"), 1, 0)
-        outer.addWidget(self.reidentify_config_combo, 1, 1)
-        outer.addWidget(self.reidentify_config_edit_button, 1, 2)
-        note = QLabel("用于自动定点与自动 TID；手动捕捉与校正使用当前编辑配置。")
-        note.setObjectName("WorkspaceHint")
-        note.setWordWrap(True)
-        outer.addWidget(note, 2, 0, 1, 3)
-        outer.setColumnMinimumWidth(0, 66)
-        outer.setColumnStretch(1, 1)
-        return group
+        self.seed_config_combo.hide()
+        self.reidentify_config_combo.hide()
 
     def _build_blink_group(self) -> QGroupBox:
         group = QGroupBox("捕捉操作")
@@ -4842,7 +4790,6 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(3, self._text("bdsp_search"))
         self.tabs.setTabText(4, self._text("easycon"))
         self.tabs.setTabText(5, "日志中心" if self.lang == "zh" else "Log Center")
-        self.status_group.setTitle("自动流程配置" if self.lang == "zh" else "Automation configuration")
         self.video_source_dialog.setWindowTitle(
             "视频源设置" if self.lang == "zh" else "Video Source"
         )
@@ -5076,9 +5023,6 @@ class MainWindow(QMainWindow):
             if panel is not None:
                 for name in binding_names:
                     getattr(panel, name).refresh()
-        for button, source in ((self.seed_config_edit_button, self.seed_config_combo),
-                               (self.reidentify_config_edit_button, self.reidentify_config_combo)):
-            button.setEnabled(bool(source.currentData()))
 
     def _edit_automation_config(self, path: str) -> None:
         if not path:

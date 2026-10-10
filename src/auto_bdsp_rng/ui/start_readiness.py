@@ -383,12 +383,24 @@ class StartReadinessController(QObject):
         elif action == "controller":
             w.easycon_tab.show_connection_dialog()
         elif action in ("seed", "seed_value"):
-            w.tabs.setCurrentWidget(w.project_xs_tab)
-            w.reveal_page_configuration(w.project_xs_tab)
-            w.auto_capture_config_toggle.setChecked(True)
-            control = w.seed64_outputs[0] if action == "seed_value" else w.seed_config_combo
-            area = w.monitor_preview_scroll if action == "seed_value" else w.project_xs_config_scroll
-            area.ensureWidgetVisible(control)
+            if action == "seed_value":
+                w.tabs.setCurrentWidget(w.project_xs_tab)
+                control = w.seed64_outputs[0]
+                w.monitor_preview_scroll.ensureWidgetVisible(control)
+            else:
+                panel = self.panel
+                w.tabs.setCurrentWidget(panel)
+                w.reveal_page_configuration(panel)
+                control = (
+                    panel.reidentify_config_binding.combo
+                    if panel is w.auto_rng_tab and self.phase() == AutoRngPhase.REIDENTIFY
+                    else panel.seed_config_binding.combo
+                )
+                if panel is w.auto_rng_tab:
+                    panel.config_groups.reveal(control)
+                    panel.config_panel.ensureWidgetVisible(control)
+                else:
+                    panel.config_scroll.ensureWidgetVisible(control)
             control.setFocus()
         elif action == "ocr":
             w.open_ocr_settings()

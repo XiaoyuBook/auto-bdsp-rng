@@ -642,26 +642,23 @@ def test_easycon_header_uses_panel_connection_presentation(app):
     assert window.easycon_header_button.status_text == "故障"
 
 
-def test_project_xs_status_group_uses_seed_and_reidentify_config_selectors(app):
+def test_project_xs_keeps_automation_config_sources_hidden(app):
     window = MainWindow()
-    layout = window.status_group.layout()
 
+    assert not hasattr(window, "status_group")
+    assert not hasattr(window, "auto_capture_config_toggle")
     assert hasattr(window, "seed_config_combo")
     assert hasattr(window, "reidentify_config_combo")
     assert window.seed_config_combo.findText("config_bebe.json") >= 0
     assert window.reidentify_config_combo.findText("config_bebe.json") >= 0
-    assert window.status_group.title() == "自动流程配置"
-    assert layout.itemAtPosition(0, 1).widget() is window.seed_config_combo
-    assert layout.itemAtPosition(1, 0).widget().text() == "校正配置"
-    assert layout.itemAtPosition(1, 1).widget() is window.reidentify_config_combo
+    assert not window.seed_config_combo.isVisible()
+    assert not window.reidentify_config_combo.isVisible()
     assert window.video_overlay.status_panel.isAncestorOf(window.progress_value)
     assert window.video_overlay.status_panel.isAncestorOf(window.progress_label)
     assert window.advances_value.parentWidget() is window.seed_group
     assert window.advances_label.parentWidget() is window.seed_group
     assert window.reidentify_button.text() == "校正"
     assert window.reidentify_1_pk_npc.text() == "1 PK NPC 校正"
-    assert window.status_group.maximumHeight() >= 148
-    assert window.refresh_seed_configs_button.isHidden()
     assert window.preview_label.minimumHeight() <= 270
     assert not window.progress_label.isHidden()
     assert not window.advances_label.isHidden()
