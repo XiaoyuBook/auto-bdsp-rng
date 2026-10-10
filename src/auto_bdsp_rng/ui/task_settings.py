@@ -149,6 +149,7 @@ class TaskConfigurationGroups(QWidget):
                 return
 
     def _reflow(self):
+        self.navigation.setVisible(len(self.buttons) > 1)
         columns = max(1, min(len(self.buttons), (self.width() + 6) // 114))
         if len(self.buttons) == 4 and columns == 3:
             columns = 2
