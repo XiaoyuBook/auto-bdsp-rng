@@ -1320,11 +1320,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.starter_automation_check = QCheckBox("御三家全自动")
         self.starter_automation_check.setVisible(False)
         self.starter_automation_check.setToolTip(
-            "选择御三家后启用：内置测种 → 自动对话与 Timeline → 判闪 → 内置反查。\n"
-            "从“怎么回事？刚才那两人……”接管；自动反查始终开启，本轮 delay 必须小于 78 帧。"
+            "保证放大模式下 config_starter 配置能够正常捕捉 Seed 即可。"
         )
         layout.addWidget(self.starter_automation_check)
-        self.starter_script_description = QLabel("内置御三家测种 → 自动撞帧 → 判闪 → 御三家反查（脚本库 0.0.5）")
+        self.starter_script_description = QLabel(self.starter_automation_check.toolTip())
         self.starter_script_description.setWordWrap(True)
         self.starter_script_description.hide()
         self.starter_script_description.setObjectName("TaskFieldHint")
