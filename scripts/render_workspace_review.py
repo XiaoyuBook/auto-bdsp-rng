@@ -18,6 +18,7 @@ parser.add_argument("--dpi", type=int, choices=(100, 125, 150), default=100)
 parser.add_argument("--output", type=Path, default=Path("logs/ui-review/redesign"))
 parser.add_argument("--tid-columns-only", action="store_true", help="Review TID numeric columns and arrival times at 860/1150 widths")
 parser.add_argument("--seed-only", action="store_true", help="Review Seed configuration, timing and video threshold at all window sizes")
+parser.add_argument("--data-only", action="store_true", help="Review static search parameters, filters and results at all window sizes")
 parser.add_argument("--auto-only", action="store_true", help="Review the static target/status overview, configuration and details")
 parser.add_argument("--task-settings-only", action="store_true", help="Review both task parameter/script forms and their expanded states")
 parser.add_argument("--task-groups-only", action="store_true", help="Review fixed automation configuration categories and shared file bindings")
@@ -100,7 +101,6 @@ def capture(w, name, page, state, width, height, out):
     w.tabs.setCurrentWidget(page)
     w.easycon_tab.hide_tools()
     w.easycon_tab.output_toggle.setChecked(name == "script-output")
-    w.auto_capture_config_toggle.setChecked(True)
     if name.startswith("seed"):
         w.project_xs_config_scroll.verticalScrollBar().setValue(0)
     w.history_tab.meta_toggle.setChecked(name == "records-meta")
@@ -122,8 +122,8 @@ def capture(w, name, page, state, width, height, out):
         page.runtime_scroll.verticalScrollBar().setValue(0)
     elif name.startswith("data"):
         w.query_toggle.setChecked(name != "data-results")
-        if name != "data-results":
-            w.query_groups.setCurrentIndex({"data-rng": 0, "data-encounter": 1, "data-filter": 2}.get(name, 0))
+        w.filter_toggle.setChecked(name == "data-filter")
+        w.size_filter_toggle.setChecked(name == "data-filter")
         w.bdsp_config_scroll.verticalScrollBar().setValue(0)
     elif name == "details":
         w.run_records_tab.show_logs(None)
@@ -134,6 +134,10 @@ def capture(w, name, page, state, width, height, out):
     elif name in ("script-control", "script-library"):
         w.easycon_tab.show_tools("control" if name == "script-control" else "library")
     settle(w)
+    if name in ("data-rng", "data-filter"):
+        target = w.bdsp_seed64_inputs[0] if name == "data-rng" else w.iv_min[0]
+        w.bdsp_config_scroll.ensureWidgetVisible(target, 0, 8)
+        settle(w)
     if name in ("seed-advanced", "seed-auto"):
         target = w.reidentify_1_pk_npc if name == "seed-advanced" else w.status_group
         w.project_xs_config_scroll.ensureWidgetVisible(target, 0, 8)
@@ -253,6 +257,9 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
         elif args.seed_only:
             pages = [("seed", w.project_xs_tab), ("seed-advanced", w.project_xs_tab),
                      ("seed-auto", w.project_xs_tab)]
+        elif args.data_only:
+            pages = [(name, w.bdsp_tab) for name in (
+                "data-encounter", "data-rng", "data-filter", "data-results")]
         elif args.auto_only:
             pages = [(name, w.auto_rng_tab) for name in (
                 "auto-overview", "auto-strategies", "auto-scripts", "auto-details")]

@@ -3,7 +3,8 @@ from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.static_result_items import StatDisplayMode, StatResultItem
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
-from auto_bdsp_rng.ui.workspace_layout import ColumnReflow, LocalViews, MonitorWorkspaceSplit, WorkspacePages, WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.workspace_layout import LocalViews, MonitorWorkspaceSplit, WorkspacePages, WorkspaceSplit, scroll_surface
+from auto_bdsp_rng.ui.static_workspace import StaticWorkspaceLayout
 from auto_bdsp_rng.ui.video_info_overlay import VideoInfoOverlay
 from auto_bdsp_rng.notifications.qq_service import QQNotificationService
 from auto_bdsp_rng.ui.qq_notifications import QQNotificationDialog, notification_icon
@@ -1664,7 +1665,7 @@ class MainWindow(QMainWindow):
         self._shiny_calibration_thread: QThread | None = None
         self._shiny_calibration_worker: ShinyThresholdCalibrationWorker | None = None
         self._static_generation_thread: threading.Thread | None = None
-        self._static_generation_result: tuple[StaticEncounterRecord, list[State8], bool] | None = None
+        self._static_generation_result: tuple[StaticEncounterRecord, list[State8], bool, StaticSearchCriteria] | None = None
         self._static_generation_error: Exception | None = None
         self._static_generation_timer = QTimer(self)
         self._static_generation_timer.setInterval(50)
@@ -2444,34 +2445,19 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(8)
 
-        # 第 1 行：存档信息 (90-100px)
         self.profile_group = self._build_profile_group()
         layout.addWidget(self.profile_group)
         configuration = QWidget()
-        configuration.setObjectName("BdspConfiguration")
+        configuration.setObjectName("BdspParameters")
         configuration_layout = QVBoxLayout(configuration)
         configuration_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 第 2 行：参数区（三列：乱数信息 + 设置 + 筛选项）
-        params_widget = QWidget()
-        params_widget.setObjectName("BdspParameters")
-        params_row = QVBoxLayout(params_widget)
-        params_row.setContentsMargins(0, 0, 0, 0)
-        params_row.setSpacing(0)
         self.rng_info_group = self._build_rng_info_group()
         self.rng_info_group.setMinimumWidth(240)
         self.static_group = self._build_static_group()
         self.static_group.setMinimumWidth(260)
         self.filter_group = self._build_filter_group()
-        self.query_groups = LocalViews()
-        for group, title in ((self.rng_info_group, "乱数"), (self.static_group, "遭遇"), (self.filter_group, "筛选")):
-            self.query_groups.addTab(group, title)
-        params_row.addWidget(self.query_groups)
-        self.query_groups.currentChanged.connect(self._sync_query_group_height)
-        configuration_layout.addWidget(params_widget)
         self.bdsp_config_scroll = scroll_surface(configuration)
-        self.bdsp_reflow = ColumnReflow(self.bdsp_config_scroll, self.filter_group.layout(), breakpoint=540)
-        self.bdsp_reflow.reflowed.connect(self._sync_query_group_height)
 
         # 第 3 行 + 第 4 行：结果表格（工具栏 + 表格）
         self.results_panel = self._build_results()
@@ -2485,17 +2471,17 @@ class MainWindow(QMainWindow):
         self.query_toggle.setMinimumHeight(32)
         configure_disclosure_button(self.query_toggle)
         self.query_toggle.toggled.connect(self._set_query_visible)
-        self.query_summary = QLabel("编辑乱数、遭遇与筛选条件")
+        self.query_summary = QLabel("设置目标、Seed 和搜索范围")
         self.query_summary.setObjectName("WorkspaceHint")
         self.query_summary.setWordWrap(True)
         self.results_panel.layout().insertWidget(1, self.query_summary)
         self.results_panel.layout().insertWidget(2, self.bdsp_config_scroll)
+        self.query_summary.hide()
         self.bdsp_config_scroll.setMinimumHeight(0)
-        self.bdsp_config_scroll.setMaximumHeight(330)
         self.bdsp_config_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._sync_query_group_height()
         self.results_toolbar.insertWidget(0, self.query_toggle)
         layout.addWidget(self.results_panel, 1)
+        self.static_workspace = StaticWorkspaceLayout(self, panel, configuration)
         self.height_min.setToolTip(TERMS[10][1])
         self.weight_min.setToolTip(TERMS[10][1])
         self.iv_count_display.setToolTip(TERMS[9][1])
@@ -2503,14 +2489,9 @@ class MainWindow(QMainWindow):
 
     def _set_query_visible(self, visible: bool) -> None:
         self.bdsp_config_scroll.setVisible(visible)
+        self.query_summary.setVisible(not visible)
         set_disclosure_state(self.query_toggle, visible)
         self.query_toggle.setAccessibleName("收起查询条件" if visible else "展开查询条件")
-
-    def _sync_query_group_height(self, *_args) -> None:
-        if self.query_groups.currentWidget() is not None:
-            group = self.query_groups.currentWidget()
-            self.query_groups.setMinimumHeight(group.minimumSizeHint().height() + 40)
-
 
     def _build_project_status_widgets(self) -> None:
         """Create capture status fields and hidden automation config sources."""
@@ -3973,8 +3954,8 @@ class MainWindow(QMainWindow):
             QWidget#BdspParameters QGroupBox {
                 border: 0;
                 border-radius: 0;
-                margin-top: 20px;
-                padding: 8px 10px 4px 10px;
+                margin-top: 14px;
+                padding: 4px 6px;
                 font-size: 13px;
                 font-weight: 500;
             }
@@ -3985,7 +3966,7 @@ class MainWindow(QMainWindow):
             }
             QWidget#BdspParameters QGroupBox#BdspEncounterGroup,
             QWidget#BdspParameters QGroupBox#BdspFilterGroup {
-                border-left: 1px solid #EFF2F5;
+                border-left: 0;
             }
             QLabel#RangeSeparator {
                 color: #8A9891;
@@ -4353,6 +4334,7 @@ class MainWindow(QMainWindow):
     def _set_profile_version(self, version: GameVersion) -> None:
         self._profile_version = version
         self.profile_game_value.setText(self._game_label(version))
+        self.static_workspace.refresh_profile()
         self.auto_rng_tab.set_target_version(version)
         self._refresh_encounters()
 
@@ -4842,14 +4824,15 @@ class MainWindow(QMainWindow):
         self.capture_device_label.setText("采集设备" if self.lang == "zh" else "Capture Device")
         self.capture_api_label.setText("采集方式" if self.lang == "zh" else "Capture API")
         self.capture_group.setTitle(self._text("capture"))
-        self.rng_info_group.setTitle("乱数信息" if self.lang == "zh" else "RNG Info")
+        self.rng_info_group.setTitle("Seed 与搜索范围" if self.lang == "zh" else "Seed and Search Range")
         self.lead_label.setText("队首" if self.lang == "zh" else "Lead")
         self.lead_combo.set_language(self.lang)
-        self.static_group.setTitle("设置" if self.lang == "zh" else "Settings")
+        self.static_group.setTitle("目标与队首" if self.lang == "zh" else "Target and Lead")
         self.profile_group.setTitle("存档信息" if self.lang == "zh" else "Profile")
         self.filter_group.setTitle("筛选项" if self.lang == "zh" else "Filters")
         self.profile_manager_button.setText("管理" if self.lang == "zh" else "Manager")
         self.profile_game_value.setText(self._game_label(self._profile_version))
+        self.static_workspace.refresh_profile()
         self.national_dex.setText("全国图鉴" if self.lang == "zh" else "National Dex")
         self.shiny_charm.setText("闪耀护符" if self.lang == "zh" else "Shiny Charm")
         self.oval_charm.setText("圆形护符" if self.lang == "zh" else "Oval Charm")
@@ -8185,25 +8168,24 @@ class MainWindow(QMainWindow):
         record, state_filter, shiny_mode = self.auto_rng_tab.targets()[0]
         self._apply_auto_target_to_bdsp_controls(record, state_filter, shiny_mode)
         try:
-            states = generate_static_candidates(
-                StaticSearchCriteria(
-                    seed=seed,
-                    profile=self._current_profile(),
-                    record=record,
-                    state_filter=state_filter,
-                    initial_advances=0,
-                    max_advances=self.auto_rng_tab.max_advances.value(),
-                    offset=0,
-                    lead=Lead.NONE,
-                    shiny_mode=shiny_mode,
-                )
+            criteria = StaticSearchCriteria(
+                seed=seed,
+                profile=self._current_profile(),
+                record=record,
+                state_filter=state_filter,
+                initial_advances=0,
+                max_advances=self.auto_rng_tab.max_advances.value(),
+                offset=0,
+                lead=Lead.NONE,
+                shiny_mode=shiny_mode,
             )
+            states = generate_static_candidates(criteria)
         except Exception as exc:
             self._static_result_state = "failed"
             self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
-        self._finish_static_generation(record, states)
+        self._finish_static_generation(record, states, criteria=criteria)
 
     def _apply_auto_target_to_bdsp_controls(self, record: StaticEncounterRecord, state_filter: StateFilter, shiny_mode: str) -> None:
         category_index = self.category_combo.findData(record.category.value)
@@ -9901,7 +9883,7 @@ class MainWindow(QMainWindow):
             self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
-        self._finish_static_generation(record, states, collapse_query=collapse_query)
+        self._finish_static_generation(record, states, criteria=criteria, collapse_query=collapse_query)
 
     def _start_static_generation(
         self, record: StaticEncounterRecord, criteria: StaticSearchCriteria, *, collapse_query: bool,
@@ -9920,7 +9902,7 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._static_generation_error = exc
             else:
-                self._static_generation_result = (record, states, collapse_query)
+                self._static_generation_result = (record, states, collapse_query, criteria)
 
         thread = threading.Thread(target=run, name="static-generation", daemon=True)
         self._static_generation_thread = thread
@@ -9950,18 +9932,20 @@ class MainWindow(QMainWindow):
             self._refresh_static_result_state()
             self._show_error("Generation failed", RuntimeError("Static generation finished without results"))
             return
-        record, states, collapse_query = result
-        self._finish_static_generation(record, states, collapse_query=collapse_query)
+        record, states, collapse_query, criteria = result
+        self._finish_static_generation(record, states, criteria=criteria, collapse_query=collapse_query)
 
     def _finish_static_generation(
-        self, record: StaticEncounterRecord, states: list[State8], *, collapse_query: bool = True,
+        self, record: StaticEncounterRecord, states: list[State8], *, criteria: StaticSearchCriteria, collapse_query: bool = True,
     ) -> None:
         self._static_result_state = "complete"
         self._states = states
         self._active_record = record
         self._populate_table(states)
         name = POKEMON_LABELS_ZH.get(record.description, record.description) if self.lang == "zh" else record.description
-        self.query_summary.setText(f"{name} · {len(states)} 条结果 · 点击查询条件重新编辑")
+        self.query_summary.setText(f"{name} · {len(states)} 条结果 · 搜索帧 {criteria.initial_advances}–{criteria.initial_advances + criteria.max_advances}")
+        seeds = criteria.seed.format_seeds()
+        self.query_summary.setToolTip(f"Seed 0: {seeds[0]}\nSeed 1: {seeds[1]}\nOffset: {criteria.offset}")
         # Automatic refresh leaves the live editing state alone, including
         # changes made while a background search was running.
         if collapse_query:
@@ -10010,10 +9994,10 @@ class MainWindow(QMainWindow):
     def _focus_static_configuration(self, control) -> None:
         self.tabs.setCurrentWidget(self.bdsp_tab)
         self.reveal_page_configuration(self.bdsp_tab)
-        for index, group in enumerate((self.rng_info_group, self.static_group, self.filter_group)):
-            if group is control or group.isAncestorOf(control):
-                self.query_groups.setCurrentIndex(index)
-                break
+        if control is self.filter_group or self.filter_group.isAncestorOf(control):
+            self.filter_toggle.setChecked(True)
+            if self.size_filter_group.isAncestorOf(control):
+                self.size_filter_toggle.setChecked(True)
         control.setFocus()
         QTimer.singleShot(0, self.bdsp_config_scroll, lambda: self.bdsp_config_scroll.ensureWidgetVisible(control))
 

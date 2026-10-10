@@ -45,7 +45,10 @@ def test_narrow_pages_reflow_without_changing_fonts_or_controls(window, monkeypa
     assert w.monitor_sidebar.isVisible()
     w.tabs.setCurrentWidget(w.bdsp_tab)
     settle()
-    assert w.bdsp_reflow.layout.direction() == QBoxLayout.Direction.TopToBottom
+    assert not hasattr(w, "query_groups")
+    assert w.rng_info_group.isVisible() and w.static_group.isVisible()
+    assert not w.filter_group.isVisible()
+    assert w.table.height() >= 130
     w.resize(1500, 900)
     for page in (w.auto_rng_tab, w.auto_tid_rng_tab):
         w.tabs.setCurrentWidget(page)
@@ -142,7 +145,7 @@ def test_default_geometry_keeps_forms_navigation_and_monitor_usable(window, monk
         assert w.live_log_panel.text.viewport().height() >= w.live_log_panel.text.fontMetrics().height() + 4
         assert w.monitor_preview_scroll.verticalScrollBar().maximum() == 0
     bar = w.tabs.tabBar()
-    assert all(bar.rect().contains(bar.tabRect(index)) for index in range(6))
+    assert all(bar.rect().contains(bar.tabRect(index)) for index in range(bar.count()) if bar.isTabVisible(index))
     assert not bar.usesScrollButtons()
     for area in (w.auto_rng_tab.config_panel, w.auto_tid_rng_tab.config_scroll, w.project_xs_config_scroll, w.bdsp_config_scroll):
         assert area.horizontalScrollBar().maximum() == 0
@@ -237,12 +240,12 @@ def test_real_static_generation_collapses_conditions_and_can_reopen_each_group(w
     assert w.table.rowCount() == 21
     assert not w.query_toggle.isChecked()
     assert "21" in w.query_summary.text()
-    for control, expected in ((w.bdsp_seed64_inputs[0], 0), (w.encounter_combo, 1), (w.iv_min[0], 2)):
+    for control in (w.bdsp_seed64_inputs[0], w.encounter_combo, w.iv_min[0], w.height_min):
         w._focus_static_configuration(control)
         settle()
-        assert w.query_groups.currentIndex() == expected
         assert w.query_toggle.isChecked() and control.isVisible()
         assert w.bdsp_config_scroll.horizontalScrollBar().maximum() == 0
+    assert w.filter_toggle.isChecked() and w.size_filter_toggle.isChecked()
 
 
 def test_temporary_script_tools_keep_draft_and_restore_editor_at_short_height(window, monkeypatch):

@@ -5,10 +5,20 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from auto_bdsp_rng.data import get_static_encounters
-from auto_bdsp_rng.gen8_static import State8, StateFilter
+from auto_bdsp_rng.gen8_static import Lead, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64
+from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria
 from auto_bdsp_rng.ui import main_window as mw
 from tests.test_start_readiness import window
+
+
+def finish(window, record, states):
+    criteria = StaticSearchCriteria(
+        seed=SeedPair64(1, 2), profile=window._current_profile(),
+        record=record, initial_advances=10, max_advances=20,
+        state_filter=StateFilter(), offset=0, lead=Lead.NONE,
+    )
+    window._finish_static_generation(record, states, criteria=criteria)
 
 
 def populate(window):
@@ -23,7 +33,7 @@ def populate(window):
         )
     ]
     window.tabs.setCurrentWidget(window.bdsp_tab)
-    window._finish_static_generation(record, states)
+    finish(window, record, states)
     return record, states
 
 
@@ -85,11 +95,11 @@ def test_new_results_and_language_use_current_record_without_stale_stats(window)
     assert w.table.item(0, 7).text() == "175"
     other_record = next(r for r in get_static_encounters() if r.species_info.stats != record.species_info.stats)
     new_state = replace(states[0], level=other_record.template.level)
-    w._finish_static_generation(other_record, [new_state])
+    finish(w, other_record, [new_state])
     assert [w.table.item(0, c).text() for c in range(7, 13)] == list(map(str, w._stat_values(new_state)))
     w.show_stats_check.setChecked(False)
     assert [w.table.item(0, c).text() for c in range(7, 13)] == list(map(str, new_state.ivs))
-    w._finish_static_generation(other_record, [])
+    finish(w, other_record, [])
     w.show_stats_check.setChecked(True)
     assert w.table.rowCount() == 0
 

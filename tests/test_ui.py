@@ -468,6 +468,14 @@ def test_background_generation_respects_refresh_intent_and_live_query_state(
         assert window.query_toggle.isChecked() == initial_open
         if waiting_open is not None:
             window.query_toggle.setChecked(waiting_open)
+        # The completed search must describe its submitted parameters even if
+        # the user changes a draft while the worker is waiting.
+        seed_at_start = window.bdsp_seed64_inputs[0].text()
+        for control, value in ((window.initial_advances, "99"),
+                               (window.bdsp_seed64_inputs[0], "1111111111111111")):
+            control.blockSignals(True)
+            control.setText(value)
+            control.blockSignals(False)
         gate.set()
         deadline = time.monotonic() + 3
         while window._static_generation_thread is not None and time.monotonic() < deadline:
@@ -479,6 +487,9 @@ def test_background_generation_respects_refresh_intent_and_live_query_state(
         if automatic:
             assert changes == ([] if waiting_open is None else [waiting_open])
         assert window.table.rowCount() == len(states)
+        assert "搜索帧 0–1000000" in window.query_summary.text()
+        assert seed_at_start in window.query_summary.toolTip()
+        assert "1111111111111111" not in window.query_summary.toolTip()
         assert not errors
     finally:
         gate.set()
@@ -510,19 +521,23 @@ def test_bdsp_max_advances_matches_pokefinder_limit(app):
     assert window.max_advances.text() == "100000"
 
 
-def test_bdsp_filter_tools_do_not_overlap_speed_row(app):
+def test_bdsp_result_display_tools_remain_visible_with_filters_collapsed(app):
     window = MainWindow()
     window.tabs.setCurrentWidget(window.bdsp_tab)
-    window.query_groups.setCurrentIndex(2)
     window.show()
     app.processEvents()
-    speed_min = window.iv_min[5]
     show_stats = window.show_stats_check
 
     assert window.national_dex.text() == "全国图鉴"
     assert window.shiny_charm.text() == "闪耀护符"
     assert window.oval_charm.text() == "圆形护符"
-    assert speed_min.mapTo(window.filter_group, speed_min.rect().bottomLeft()).y() < show_stats.mapTo(window.filter_group, QPoint()).y()
+    assert not window.filter_group.isVisible()
+    assert show_stats.isVisible()
+    assert not window.filter_group.isAncestorOf(show_stats)
+    window.filter_toggle.setChecked(True)
+    app.processEvents()
+    assert window.iv_min[5].isVisible()
+    assert show_stats.isVisible()
 
 
 def test_project_xs_configuration_uses_shared_video_sidebar(
