@@ -166,7 +166,6 @@ class SeedConfigEditorController(QObject):
         self.cancel_button.setEnabled(not capturing)
         w.capture_recognition_group.setEnabled(not capturing)
         w.capture_timing_group.setEnabled(not capturing)
-        w._refresh_capture_config_summary()
         w.video_overlay.set_configuration_mode(
             self.editor.isVisible() or w.tabs.currentWidget() is w.project_xs_tab
         )

@@ -2715,13 +2715,6 @@ class MainWindow(QMainWindow):
         recognition_note.setObjectName("WorkspaceHint")
         recognition_note.setWordWrap(True)
         recognition_layout.addWidget(recognition_note)
-        self.capture_eye_summary = QLabel()
-        self.capture_eye_summary.setObjectName("WorkspaceHint")
-        self.capture_eye_summary.setWordWrap(True)
-        recognition_layout.addWidget(self.capture_eye_summary)
-        self.capture_roi_summary = QLabel()
-        self.capture_roi_summary.setObjectName("WorkspaceHint")
-        recognition_layout.addWidget(self.capture_roi_summary)
         self.threshold.setToolTip("眼睛模板的匹配阈值，范围 0–1；数值越高，匹配要求越严格。")
 
         self.capture_timing_group = QGroupBox("高级时序 · 7 项参数")
@@ -5174,12 +5167,6 @@ class MainWindow(QMainWindow):
         self.pokemon_npc.setText(str(config.pokemon_npc))
         self.display_percent.setText(str(config.display_percent))
         self._eye_image_path = config.capture.eye_image_path
-        self._refresh_capture_config_summary()
-
-    def _refresh_capture_config_summary(self) -> None:
-        self.capture_eye_summary.setText(f"眼睛模板：{Path(self._eye_image_path).name if self._eye_image_path else '未设置'}")
-        self.capture_eye_summary.setToolTip(str(self._eye_image_path or ""))
-        self.capture_roi_summary.setText("ROI：" + " / ".join(field.text() for field in (self.x, self.y, self.w, self.h)))
 
     def _config_from_form(self) -> ProjectXsTrackingConfig:
         loaded = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
@@ -6429,7 +6416,6 @@ class MainWindow(QMainWindow):
             self.captureSelectionFinished.emit("eye", False)
             return
         self._eye_image_path = output_path
-        self._refresh_capture_config_summary()
         if preserve_roi:
             rx, ry, rw, rh = (int(field.text() or 0) for field in (self.x, self.y, self.w, self.h))
             if rx <= left and ry <= top and right <= rx + rw and bottom <= ry + rh:
@@ -6453,7 +6439,6 @@ class MainWindow(QMainWindow):
         self.y.setText(str(roi[1]))
         self.w.setText(str(roi[2]))
         self.h.setText(str(roi[3]))
-        self._refresh_capture_config_summary()
 
     def _initialize_ocr_page(self, _index: int) -> None:
         if self.tabs.currentWidget() is self.ocr_tab:
