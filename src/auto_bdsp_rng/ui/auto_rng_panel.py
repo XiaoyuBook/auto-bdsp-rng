@@ -90,6 +90,7 @@ from auto_bdsp_rng.ui.delay_strategy_dialog import (
     delay_lucide_icon,
 )
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
+from auto_bdsp_rng.ui.script_combo_box import ScriptComboBox
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.workspace_controls import (
     PrimaryToolButton,
@@ -192,16 +193,6 @@ class _CopyableTextEdit(QPlainTextEdit):
             menu.addAction("复制", self.copy, QAction.Shortcut("Ctrl+C"))
             menu.addAction("全选", self.selectAll, QAction.Shortcut("Ctrl+A"))
         menu.exec(event.globalPos())
-
-
-class _RefreshingScriptComboBox(QComboBox):
-    def __init__(self, before_popup: Callable[[], None], parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._before_popup = before_popup
-
-    def showPopup(self) -> None:  # noqa: N802
-        self._before_popup()
-        super().showPopup()
 
 
 SCRIPT_DIR = script_directory()
@@ -1355,8 +1346,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.extra_script_fields.hide()
         self.extra_scripts_toggle.toggled.connect(self.extra_script_fields.setVisible)
 
-        def combo_factory() -> _RefreshingScriptComboBox:
-            return _RefreshingScriptComboBox(lambda: self.refresh_scripts())
+        def combo_factory() -> ScriptComboBox:
+            return ScriptComboBox(lambda: self.refresh_scripts())
 
         self.seed_script_combo = combo_factory()
         self.advance_script_combo = combo_factory()

@@ -62,6 +62,7 @@ from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
+from auto_bdsp_rng.ui.script_combo_box import ScriptComboBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import delay_lucide_icon
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.workspace_controls import (
@@ -1035,9 +1036,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         card_layout.addLayout(summary)
         self.script_fields = TaskFieldGrid()
         self.script_fields.setObjectName("AutoTidScriptFields")
-        self.seed_script_combo = QComboBox()
-        self.name_script_combo = QComboBox()
-        self.reverse_id_script_combo = QComboBox(self.script_fields)
+        self.seed_script_combo = ScriptComboBox(lambda: self.refresh_scripts())
+        self.name_script_combo = ScriptComboBox(lambda: self.refresh_scripts())
+        self.reverse_id_script_combo = ScriptComboBox(lambda: self.refresh_scripts(), self.script_fields)
         self.reverse_id_script_combo.hide()
         self.script_edit_buttons = {}
         self.script_picker_widgets = {}
