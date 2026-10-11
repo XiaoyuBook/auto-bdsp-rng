@@ -23,6 +23,9 @@ SELECTION_CONFIRM_WAIT_MS = 100
 # ordinary press after a clock-controlled A. These waits include scene changes.
 DIALOG_PRESS_MS = 200  # Recording holds span 133-200 ms, at 33 ms resolution.
 DOCTOR_PRESS_INTERVALS_MS = (3540, 1870, 900, 870, 670, 5000, 1140)
+# Reserve the complete doctor sequence plus five seconds for leaving Zoom,
+# fresh start/doctor OCR observations, and controller/worker dispatch latency.
+STARTER_PREPARATION_SECONDS = (sum(DOCTOR_PRESS_INTERVALS_MS) + DIALOG_PRESS_MS) / 1000 + 5.0
 SECOND_PRESS_INTERVALS_MS = (3470,)
 BALL_PRESS_INTERVALS_MS = (4840,)
 # Eleven tracking ticks, the initial transition, eleven timeline events, and

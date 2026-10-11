@@ -757,11 +757,16 @@ class AutoRngRunner:
             if raw_advances < min_reachable:
                 return False
             if self.config.starter_automation:
-                from .starter_flow import TIMELINE_BUFFER
-                elapsed = max(0.0, self.services.monotonic() - self._seed_measured_at(seed))
-                current = seed.current_advances + int(elapsed / 1.018) * (seed.npc + 1)
+                from .starter_flow import STARTER_PREPARATION_SECONDS, TIMELINE_BUFFER
                 anchor = raw_advances - TIMELINE_BUFFER
-                return anchor > current and (anchor - seed.current_advances) % (seed.npc + 1) == 0
+                ticks, remainder = divmod(anchor - seed.current_advances, seed.npc + 1)
+                if remainder:
+                    return False
+                # BlinkTracking advances immediately at measured_at, before
+                # its subsequent 1.018-second ticks. The doctor dialogue must
+                # be ready before the anchor, including time spent searching.
+                anchor_at = self._seed_measured_at(seed) + (ticks - 1) * 1.018
+                return anchor_at > self.services.monotonic() + STARTER_PREPARATION_SECONDS
             # The timeline counter has event-dependent jumps, so its reachable
             # values cannot be inferred from a single modulus.
             return seed.advance_mode != "linear" or is_linear_trigger_reachable(

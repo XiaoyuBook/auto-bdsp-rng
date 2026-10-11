@@ -514,6 +514,26 @@ def test_synchronous_auto_refresh_does_not_toggle_query_panel(app, expanded):
     assert window.table.rowCount() == 3
 
 
+@pytest.mark.parametrize("expanded", [False, True])
+def test_auto_seed_capture_preserves_query_panel_state(app, expanded):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    window.auto_rng_tab.max_advances.setValue(2)
+    window.query_toggle.setChecked(expanded)
+    changes = []
+    window.query_toggle.toggled.connect(changes.append)
+
+    window._handle_auto_seed_captured(AutoRngSeedResult(
+        seed=SeedPair64(0x123456789ABCDEF0, 0x1111111122222222),
+        current_advances=1, npc=0,
+    ))
+
+    assert window.query_toggle.isChecked() == expanded
+    assert changes == []
+    assert window.table.rowCount() == 3
+    assert window._static_result_state == "complete"
+
+
 def test_bdsp_max_advances_matches_pokefinder_limit(app):
     window = MainWindow()
 

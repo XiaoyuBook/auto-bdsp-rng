@@ -14,6 +14,9 @@ from auto_bdsp_rng.automation.auto_rng.starter_flow import (
     is_ball_dialog, normalize_dialog, selection_script, validate_starter_delay,
     DOCTOR_PRESS_INTERVALS_MS, SECOND_PRESS_INTERVALS_MS, BALL_PRESS_INTERVALS_MS,
 )
+from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria, generate_static_candidates
+from auto_bdsp_rng.data import get_static_encounters
+from auto_bdsp_rng.gen8_static import Lead, Profile8, StateFilter
 from auto_bdsp_rng.rng_core.seed import SeedState32
 from auto_bdsp_rng.blink_detection.project_xs import _load_module
 from auto_bdsp_rng.automation.auto_rng.starter_clock import BlinkTracking
@@ -34,12 +37,14 @@ def run_flow(species=387, delay=40, *, missing_second=False, missing_balls=False
              dropped_press=None, stop_at=None, late_zero=None, script_log=None,
              ocr_reads=None, timing_log=None, stall_dialogue=False, cursor_log=None,
              cursor_seconds=.44, cursor_failure=False, stop_in_cursor=False,
-             cursor_finish_at_trigger=False, stall_before_cursor=False):
+             cursor_finish_at_trigger=False, stall_before_cursor=False,
+             target_advances=401, start_seconds=0.0, ocr_seconds=0.0):
     clock, observations = Clock(), []
+    clock.now = start_seconds
     scripts = [] if script_log is None else script_log
     seed = AutoRngSeedResult(SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222),
                              current_advances=1, npc=1, measured_at=0.0)
-    target = AutoRngTarget(raw_target_advances=401)
+    target = AutoRngTarget(raw_target_advances=target_advances)
     # Actual order before A frames 61,167,223,250,276,296,446,480,514 in 11.mp4.
     dialogue = ["怎么回事？刚才那两人……", "咦？test！我们去看看吧！", "………………",
                 "怎么了？你说不要到草丛里去？", "没事没事！", "就进去一下而已，宝可梦不会出来啦。",
@@ -61,6 +66,7 @@ def run_flow(species=387, delay=40, *, missing_second=False, missing_balls=False
         return clock.time()
     def text():
         assert enabled, 'OCR must be paused during fixed keys and clock waits'
+        clock.sleep(ocr_seconds)
         if ocr_reads is not None:
             ocr_reads.append(index)
         if index < len(dialogue):
@@ -341,6 +347,59 @@ def test_resumed_anchor_discards_in_flight_ocr_and_requires_two_fresh_reads():
         for event in release:
             event.set()
         observer.thread.join(1)
+
+
+@pytest.mark.parametrize("species", [387, 390, 393])
+@pytest.mark.parametrize("search_seconds,delay", [(0.0, 40), (30.0, 66)])
+def test_runner_skips_early_real_candidates_and_finishes_starter_dialogue(
+    tmp_path, species, search_seconds, delay,
+):
+    seed = AutoRngSeedResult(
+        SeedState32(0x12345678, 0x9ABCDEF0, 0x11111111, 0x22222222),
+        current_advances=1, npc=1, measured_at=0.0,
+    )
+    record = next(record for record in get_static_encounters() if record.template.species == species)
+    states = generate_static_candidates(StaticSearchCriteria(
+        seed=seed.seed.to_seed_pair64(), profile=Profile8(), record=record,
+        state_filter=StateFilter(), initial_advances=0, max_advances=512,
+        offset=0, lead=Lead.NONE,
+    ))
+    assert len(states) == 513
+    # The old reachability filter selected this target despite its anchor being
+    # reached before the fixed doctor dialogue sequence could finish.
+    assert any(state.advances == 203 for state in states)
+    with pytest.raises(StarterTargetMissed):
+        run_flow(species, delay, target_advances=203)
+
+    clock, selected, finished = Clock(), [], []
+    def search(_seed):
+        clock.sleep(search_seconds)
+        return states
+    def execute(_seed, target, round_delay):
+        selected.append(target.raw_target_advances)
+        result, _, observations, flow, _ = run_flow(
+            species, round_delay, target_advances=target.raw_target_advances,
+            start_seconds=clock.time() + 3.45, ocr_seconds=.5,
+        )
+        assert result == selection_script(species)
+        assert observations[-1][0] == "confirm"
+        assert observations[-1][1] == flow.select_at
+        finished.append(target.raw_target_advances)
+        return ShinyCheckResult(True, 5.0)
+
+    runner = AutoRngRunner(AutoRngConfig(
+        script_dir=tmp_path, start_phase=AutoRngPhase.CAPTURE_SEED,
+        starter_automation=True, target_species=species, auto_reverse=True,
+        fixed_delay=delay, max_advances=512,
+    ), services=AutoRngServices(
+        capture_seed=lambda: seed, search_candidates=search,
+        monotonic=clock.time, run_starter_flow=execute,
+    ))
+    assert runner.run().phase == AutoRngPhase.COMPLETED
+    assert len(finished) == 1
+    assert selected == finished
+    assert selected[0] > 203
+    assert selected[0] in {state.advances for state in states}
 
 
 def test_builtin_runner_hands_back_to_reverse_and_freezes_delay_each_round(tmp_path):

@@ -8246,7 +8246,7 @@ class MainWindow(QMainWindow):
             self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
-        self._finish_static_generation(record, states, criteria=criteria)
+        self._finish_static_generation(record, states, criteria=criteria, collapse_query=False)
 
     def _apply_auto_target_to_bdsp_controls(self, record: StaticEncounterRecord, state_filter: StateFilter, shiny_mode: str) -> None:
         category_index = self.category_combo.findData(record.category.value)
