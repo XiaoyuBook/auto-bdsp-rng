@@ -120,6 +120,33 @@ def test_new_round_does_not_replace_a_selected_historical_round(app):
     assert history._feed_layout.count() == entries_before == len(selected.entries)
 
 
+@pytest.mark.parametrize("reverse_matches", [0, 1])
+def test_reverse_lookup_keeps_search_snapshot_count_and_records_its_own_matches(app, reverse_matches):
+    from types import SimpleNamespace
+
+    history = HistoryPanel()
+    history.begin_run("run-a", "帝牙卢卡")
+    history.cycle_start(1)
+    candidates = [SimpleNamespace(advances=adv, pid=adv, ec=adv) for adv in (100, 200, 300)]
+    history.candidates_found(candidates, 0)
+    history.reverse_lookup_results(candidates[:reverse_matches])
+
+    record = history._selected_record()
+    assert record.candidate_count == 3
+    assert history.round_candidate_table.rowCount() == 3
+    assert history.candidate_value_label.text() == "3 个"
+    assert "3 个候选" in history.round_summary.text()
+    expected = "反查结果 (1 个匹配)" if reverse_matches else "反查结果: 未找到匹配个体"
+    assert expected in history.text_view.toPlainText()
+
+    history.cycle_start(2)
+    history.round_list.setCurrentRow(1)
+    assert history._selected_record() is record
+    assert history.round_candidate_table.rowCount() == 3
+    assert history.candidate_value_label.text() == "3 个"
+    assert "3 个候选" in history.round_summary.text()
+
+
 @pytest.mark.parametrize("after_miss", ["next-round", "finish"])
 def test_starter_missed_round_keeps_its_outcome_and_reason(app, tmp_path, after_miss):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))

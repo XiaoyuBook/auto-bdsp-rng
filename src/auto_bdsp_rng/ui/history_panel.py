@@ -1378,10 +1378,10 @@ class HistoryPanel(QWidget):
         )
         record = self._ensure_record()
         if not reverse:
+            record.candidate_count = len(rows)
             self._set_candidate_snapshot(record, entry)
         if not rows:
             return
-        record.candidate_count = len(rows)
         self._candidate_count += len(rows)
         self._update_summary()
         self._record_entry(entry)
@@ -1680,7 +1680,6 @@ class HistoryPanel(QWidget):
     ) -> None:
         record = self._ensure_record(target_label="自动定点")
         count = len(candidates)
-        record.candidate_count = count
         record.detail_title = "自动反查完成"
         characteristic_match_failed = bool(
             ocr_stats and ocr_stats.get("characteristic_match_failed")
