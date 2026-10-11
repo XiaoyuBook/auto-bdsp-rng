@@ -197,6 +197,7 @@ class _CopyableTextEdit(QPlainTextEdit):
 
 SCRIPT_DIR = script_directory()
 DEFAULT_SHINY_THRESHOLD_SECONDS = 4.0
+DEFAULT_STARTER_SHINY_THRESHOLD_SECONDS = 5.0
 DEFAULT_RESEED_THRESHOLD_FRAMES = 900_000
 DEFAULT_RESEEDING_THRESHOLD_FRAMES = 500_000
 DEFAULT_REIDENTIFY_MAX_ATTEMPTS = 2
@@ -418,8 +419,18 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._runtime_candidate_total = 0
         self._runtime_script_editor_expanded = False
         self._starter_manual_strategy_values: tuple[int, int, str] | None = None
+        self._starter_manual_shiny_threshold: float | None = None
         self._config_state_tracking_ready = False
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoRngPanel")
+        self._starter_shiny_threshold_seconds = float(
+            self._settings.value("starter_shiny_threshold", DEFAULT_STARTER_SHINY_THRESHOLD_SECONDS)
+        )
+        # Migrate custom thresholds from the former shared setting; the old
+        # four-second default becomes the starter-specific five-second default.
+        if not self._settings.contains("starter_shiny_threshold") and self._settings.value("starter_automation", False, type=bool):
+            previous_threshold = float(self._settings.value("shiny_threshold", DEFAULT_SHINY_THRESHOLD_SECONDS))
+            if previous_threshold != DEFAULT_SHINY_THRESHOLD_SECONDS:
+                self._starter_shiny_threshold_seconds = previous_threshold
         self._configured_delay_species = set(decode_delay_profiles(self._settings.value("delay_profiles_json", "")))
         self._build_ui()
         self.refresh_scripts()
@@ -1469,6 +1480,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if not valid and self.starter_automation_check.isChecked():
             self.starter_automation_check.setChecked(False)
         active = self.starter_automation_check.isChecked()
+        if active and self._starter_manual_shiny_threshold is None:
+            self._starter_manual_shiny_threshold = self.shiny_threshold_seconds.value()
+            self.shiny_threshold_seconds.setValue(self._starter_shiny_threshold_seconds)
+        elif not active and self._starter_manual_shiny_threshold is not None:
+            self._starter_shiny_threshold_seconds = self.shiny_threshold_seconds.value()
+            previous_threshold = self._starter_manual_shiny_threshold
+            self._starter_manual_shiny_threshold = None
+            self.shiny_threshold_seconds.setValue(previous_threshold)
         if hasattr(self, "seed_config_binding"):
             self.seed_config_binding.set_fixed_path(starter_seed_config_path() if active else None)
         if active and self._starter_manual_strategy_values is None:
@@ -3783,7 +3802,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self._save_strategy_settings()
         # Keep the existing key for compatibility with saved configurations.
         s.setValue("reseeding_threshold", self.reseeding_threshold.value())
-        s.setValue("shiny_threshold", self.shiny_threshold_seconds.value())
+        s.setValue("shiny_threshold", self.shiny_threshold_seconds.value()
+                   if self._starter_manual_shiny_threshold is None else self._starter_manual_shiny_threshold)
+        s.setValue("starter_shiny_threshold", self._starter_shiny_threshold_seconds
+                   if self._starter_manual_shiny_threshold is None else self.shiny_threshold_seconds.value())
         reverse, sync, nature = self._starter_manual_strategy_values or (
             self.auto_reverse_combo.currentIndex(), self.sync_combo.currentIndex(),
             self.sync_nature_input.text(),

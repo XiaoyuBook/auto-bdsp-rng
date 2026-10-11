@@ -36,6 +36,7 @@ def test_starter_binds_bundles_without_manual_scripts_and_preserves_selections(p
     panel.starter_automation_check.setChecked(True)
     config = panel.build_config()
     assert config.starter_automation and config.auto_reverse
+    assert panel.shiny_threshold_seconds.value() == config.shiny_threshold_seconds == 5.0
     assert not config.escape_continue and config.sync_mode == 0
     assert (config.seed_script_path, config.reverse_script_path) == starter_script_paths()
     assert config.advance_script_path is None and config.hit_script_path is None
@@ -55,15 +56,25 @@ def test_starter_binds_bundles_without_manual_scripts_and_preserves_selections(p
     assert restored.seed_script_path == manual.seed_script_path
     assert restored.hit_script_path == manual.hit_script_path
     assert restored.auto_reverse == manual.auto_reverse
+    assert restored.shiny_threshold_seconds == manual.shiny_threshold_seconds == 4.0
 
 
 def test_existing_custom_delay_and_samples_survive_starter_toggle(panel):
     select(panel, 390)
     panel.fixed_delay.setValue(43)
     panel.record_delay_sample((41,))
+    panel.shiny_threshold_seconds.setValue(2.8)
     panel.starter_automation_check.setChecked(True)
     assert panel.build_config().fixed_delay == 43
     assert panel.delay_samples() == [(41,)]
+    assert panel.shiny_threshold_seconds.value() == 5.0
+    panel.shiny_threshold_seconds.setValue(5.25)
+    panel._sync_run_controls()
+    assert panel.build_config().shiny_threshold_seconds == 5.25
+    panel.starter_automation_check.setChecked(False)
+    assert panel.shiny_threshold_seconds.value() == 2.8
+    panel.starter_automation_check.setChecked(True)
+    assert panel.shiny_threshold_seconds.value() == 5.25
 
 
 def test_script_save_keeps_mode_and_automatic_delay_preset(panel):
@@ -74,6 +85,7 @@ def test_script_save_keeps_mode_and_automatic_delay_preset(panel):
     try:
         assert restored.starter_automation_check.isChecked()
         assert restored.build_config().fixed_delay == 66
+        assert restored.build_config().shiny_threshold_seconds == 5.0
     finally:
         restored.close()
         restored.deleteLater()
@@ -82,14 +94,33 @@ def test_script_save_keeps_mode_and_automatic_delay_preset(panel):
 def test_starter_mode_persists_and_is_disabled_for_mixed_species(panel):
     select(panel, 393)
     panel.starter_automation_check.setChecked(True)
+    panel.shiny_threshold_seconds.setValue(5.4)
     panel._save_panel_state()
     restored = AutoRngPanel(script_dir=panel.script_dir, settings=panel._settings)
     try:
         assert restored.starter_automation_check.isChecked()
         assert restored.build_config().fixed_delay == 66
+        assert restored.build_config().shiny_threshold_seconds == 5.4
         select(restored, 387, 390)
         assert not restored.starter_automation_check.isChecked()
         assert not restored.starter_automation_check.isEnabled()
+        assert restored.shiny_threshold_seconds.value() == 4.0
+    finally:
+        restored.close()
+        restored.deleteLater()
+
+
+@pytest.mark.parametrize("threshold, expected", [(4.0, 5.0), (4.5, 4.5)])
+def test_starter_threshold_migrates_old_shared_setting(panel, threshold, expected):
+    select(panel, 390)
+    panel.starter_automation_check.setChecked(True)
+    panel._save_panel_state()
+    panel._settings.remove("starter_shiny_threshold")
+    panel._settings.setValue("shiny_threshold", threshold)
+    restored = AutoRngPanel(script_dir=panel.script_dir, settings=panel._settings)
+    try:
+        assert restored.starter_automation_check.isChecked()
+        assert restored.build_config().shiny_threshold_seconds == expected
     finally:
         restored.close()
         restored.deleteLater()
