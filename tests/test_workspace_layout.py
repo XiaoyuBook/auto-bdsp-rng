@@ -107,7 +107,7 @@ def test_shared_log_entry_preserves_module_scope(window):
     w._active_auto_tid_run_id = "tid-run"
     w._active_auto_tid_round_id = "tid-round"
     called = []
-    w.run_records_tab.show_logs = lambda source, **kw: called.append((source, kw))
+    w.run_log_window.show_logs = lambda source, **kw: called.append((source, {k:v for k,v in kw.items() if k != "label"}))
     for page, source, run_id, round_id in (
         (w.auto_rng_tab, "自动定点", "layout-run", "layout-round"),
         (w.auto_tid_rng_tab, "自动 TID", "tid-run", "tid-round"),
@@ -118,7 +118,7 @@ def test_shared_log_entry_preserves_module_scope(window):
     ):
         w.tabs.setCurrentWidget(page)
         w.view_status_logs_button.click()
-        assert w.tabs.currentWidget() is w.run_records_tab
+        assert w.tabs.currentWidget() is page
         assert called[-1] == (source, {"run_id": run_id, "round_id": round_id})
     w.tabs.setCurrentWidget(w.auto_tid_rng_tab)
     settle()

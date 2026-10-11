@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint, QSettings, Qt, QTimer
+from PySide6.QtCore import QElapsedTimer, QPoint, QSettings, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QListView, QSizePolicy, QToolButton, QWidget
 
@@ -218,7 +218,11 @@ def test_tid_dates_stay_fixed_and_countdown_does_not_touch_table(configured_tid_
     changed = []
     table.model().dataChanged.connect(lambda first, last, roles: changed.append((first.row(), first.column(), last.row(), last.column())))
     clock[0] += 1
-    QTest.qWait(150)
+    # Wait for Qt to deliver the timer, allowing for load from the full UI suite.
+    deadline = QElapsedTimer()
+    deadline.start()
+    while panel.runtime_remaining_value.text() != "00:42.5" and deadline.elapsed() < 1000:
+        QTest.qWait(10)
     assert panel.runtime_remaining_value.text() == "00:42.5"
     assert "TID 000003" in panel.runtime_compact_values.text()
     assert "等待 00:42.5" in panel.runtime_compact_values.text()
@@ -378,7 +382,7 @@ def test_tid_round_record_button_opens_round_view(app):
     window.tabs.setCurrentWidget(window.auto_tid_rng_tab)
     window.auto_tid_rng_tab.view_round_button.click()
     assert window.tabs.currentWidget() is window.run_records_tab
-    assert window.run_records_tab.view_tabs.currentWidget() is window.run_records_tab.history_panel
+    assert window.run_records_tab.history_panel.parentWidget() is window.run_records_tab
 
 
 def test_auto_tid_panel_builds_config_with_target_list(app, tmp_path: Path) -> None:

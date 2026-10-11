@@ -14,6 +14,7 @@ from auto_bdsp_rng.ui import MainWindow
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES, RunLogBuffer, RunLogPanel
 from auto_bdsp_rng.ui.run_records_panel import RunRecordsPanel
+from auto_bdsp_rng.ui.run_log_window import RunLogWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
 
 
@@ -87,33 +88,33 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     assert run_rect.right() < stop_rect.left()
 
     records_panel = window.run_records_tab
-    window.tabs.setCurrentWidget(records_panel)
-    records_panel.view_tabs.setCurrentWidget(records_panel.log_panel)
+    window._show_run_logs(None)
+    log = window.run_log_window.log_panel
     app.processEvents()
-    footer = records_panel.log_panel.footer_frame
+    footer = log.footer_frame
     assert footer.height() == 42
     for button in (
-        records_panel.log_panel.copy_button,
-        records_panel.log_panel.export_button,
+        log.copy_button,
+        log.export_button,
     ):
         assert button.height() == 34
         assert footer.rect().contains(button.geometry())
         assert button.geometry().top() == 4
         assert footer.rect().bottom() - button.geometry().bottom() == 4
-    assert records_panel.log_panel.clear_button.isHidden()
-    assert records_panel.log_panel.open_dir_button.isHidden()
-    assert [action.text() for action in records_panel.log_panel.more_button.menu().actions()] == ["清空显示", "日志目录"]
+    assert log.clear_button.isHidden()
+    assert log.open_dir_button.isHidden()
+    assert [action.text() for action in log.more_button.menu().actions()] == ["清空显示", "日志目录"]
 
 
 def test_run_records_header_and_history_empty_state_switch_cleanly(app):
     history = HistoryPanel()
-    records = RunRecordsPanel(history, RunLogBuffer())
+    records = RunRecordsPanel(history)
     records.resize(1000, 650)
     records.show()
     app.processEvents()
 
-    assert records.heading.height() == 42
-    assert records.title_label.text() == "日志中心"
+    assert records.heading.height() == 34
+    assert records.title_label.text() == "轮次记录"
     assert records.subtitle_label.text() == "本次会话"
     assert records.live_status_label.text() == "等待任务"
     assert history.empty_state.isVisible()
@@ -151,39 +152,22 @@ def test_run_records_header_and_history_empty_state_switch_cleanly(app):
     assert not history.export_button.isEnabled()
 
 
-@pytest.mark.parametrize("width", [860, 1150])
-def test_log_view_buttons_and_session_status_share_one_aligned_row(app, width):
-    buffer = RunLogBuffer()
-    records = RunRecordsPanel(HistoryPanel(), buffer)
+@pytest.mark.parametrize("width", [430, 1150])
+def test_round_records_present_history_and_session_without_secondary_navigation(app, width):
+    records = RunRecordsPanel(HistoryPanel())
     records.resize(width, 600)
     records.set_session_context("自动 TID")
     records.set_active_round(1)
     records.show()
     app.processEvents()
-
-    header = records.view_header
-    status = records.session_corner
-    assert records.view_tabs.tabBar().isHidden()
-    assert records.view_tabs.cornerWidget() is None
-    for button in records.view_buttons:
-        assert header.rect().contains(button.geometry())
-        assert button.geometry().center().y() == status.geometry().center().y()
-    assert records.view_buttons[1].geometry().right() < status.geometry().left()
-
-    # Mouse navigation, programmatic navigation and unread indicators all
-    # update the same view; replacing the native header must not fork state.
-    buffer.publish("自动 TID", "捕捉失败", level="WARNING")
-    app.processEvents()
-    assert records.view_buttons[records.LOG_TAB].text() == "详细日志 (1)"
-    QTest.mouseClick(records.view_buttons[records.LOG_TAB], Qt.MouseButton.LeftButton)
-    app.processEvents()
-    assert records.view_tabs.currentWidget() is records.log_panel
-    assert records.view_buttons[records.LOG_TAB].isChecked()
-    assert not records.view_buttons[records.ROUND_TAB].isChecked()
-    assert records.view_buttons[records.LOG_TAB].text() == "详细日志"
-    records.show_rounds()
-    assert records.view_tabs.currentWidget() is records.history_panel
-    assert records.view_buttons[records.ROUND_TAB].isChecked()
+    assert not hasattr(records, "view_tabs") and not hasattr(records, "log_panel")
+    assert records.history_panel.isVisible()
+    assert records.live_status_label.text() == "第 1 轮进行中"
+    assert records.live_status_label.toolTip() == "自动 TID"
+    assert records.heading.rect().contains(records.live_status_label.geometry())
+    assert records.heading.rect().contains(records.title_label.geometry())
+    records.set_run_finished()
+    assert records.live_status_label.text() == "运行已结束"
 
 
 def test_run_log_buffer_hard_cap_and_panel_small_capacity_receive_live_entries(app):
@@ -237,25 +221,18 @@ def test_round_history_link_filters_by_run_and_round_and_can_be_cancelled(app):
     buffer.publish("自动定点", "同一次运行但另一轮", run_id="run-a", round_id=9)
     history = HistoryPanel()
     history.cycle_start(8, run_id="run-a", round_id=8, target_label="谢米")
-    records = RunRecordsPanel(history, buffer)
-
+    logs = RunLogWindow(buffer)
+    history.related_logs_requested.connect(lambda run, round_id: logs.show_logs(run_id=run, round_id=round_id))
     assert history.related_logs_button.isEnabled()
+    assert history.related_logs_button.text() == "查看本轮日志"
     history.related_logs_button.click()
     app.processEvents()
-
-    assert records.view_tabs.currentIndex() == records.LOG_TAB
-    assert records.log_panel.correlation_frame.isVisibleTo(records)
-    assert _messages(records.log_panel) == ["本轮日志"]
-
-    records.log_panel.correlation_clear_button.click()
+    assert logs.isVisible() and logs.log_panel.correlation_frame.isVisibleTo(logs)
+    assert _messages(logs.log_panel) == ["本轮日志"]
+    logs.log_panel.correlation_clear_button.click()
     app.processEvents()
-
-    assert not records.log_panel.correlation_frame.isVisibleTo(records)
-    assert set(_messages(records.log_panel)) == {
-        "本轮日志",
-        "同轮次号但另一次运行",
-        "同一次运行但另一轮",
-    }
+    assert not logs.log_panel.correlation_frame.isVisibleTo(logs)
+    assert set(_messages(logs.log_panel)) == {"本轮日志", "同轮次号但另一次运行", "同一次运行但另一轮"}
 
 
 def test_clear_display_does_not_clear_the_session_buffer(app):
@@ -345,10 +322,9 @@ def test_main_window_uses_run_records_as_sixth_tab_and_keeps_history_alias(
 
     assert window.tabs.count() == 7
     assert window.tabs.widget(5) is window.run_records_tab
-    assert window.tabs.tabText(5) == "日志中心"
-    assert window.run_records_tab.view_tabs.count() == 2
-    assert window.run_records_tab.view_tabs.tabText(0) == "轮次记录"
-    assert window.run_records_tab.view_tabs.tabText(1).startswith("详细日志")
+    assert window.tabs.tabText(5) == "轮次记录"
+    assert not hasattr(window.run_records_tab, "view_tabs")
+    assert window.run_log_window.parentWidget() is window
     assert window.run_records_tab.history_panel is window.history_tab
     assert window.records_tab is window.run_records_tab
 
@@ -361,7 +337,7 @@ def test_disabled_disk_logging_still_reaches_the_live_log_page(app, tmp_path):
     window._write_run_log("自动定点", "仅进入实时页", level="WARNING")
     app.processEvents()
 
-    entries = window.run_records_tab.log_panel.visible_entries()
+    entries = window.run_log_window.log_panel.visible_entries()
     assert any(
         (entry.source, entry.level, entry.message) == ("自动定点", "WARNING", "仅进入实时页")
         for entry in entries
@@ -390,9 +366,9 @@ def test_business_page_log_request_opens_logs_with_its_source_selected(
     panel.runLogRequested.emit()
     app.processEvents()
 
-    assert window.tabs.currentWidget() is window.run_records_tab
-    assert window.run_records_tab.view_tabs.currentIndex() == window.run_records_tab.LOG_TAB
-    assert window.run_records_tab.log_panel.source_combo.currentData() == source
+    assert window.tabs.currentWidget() is panel
+    assert window.run_log_window.isVisible()
+    assert window.run_log_window.log_panel.source_combo.currentData() == source
 
 
 def test_auto_rng_round_button_opens_round_records_instead_of_detailed_logs(
@@ -400,34 +376,32 @@ def test_auto_rng_round_button_opens_round_records_instead_of_detailed_logs(
     tmp_path,
 ):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
-    window.run_records_tab.view_tabs.setCurrentIndex(window.run_records_tab.LOG_TAB)
+    window._show_run_logs(None)
     window.tabs.setCurrentWidget(window.auto_rng_tab)
 
     window.auto_rng_tab.runtime_log_button.click()
     app.processEvents()
 
     assert window.tabs.currentWidget() is window.run_records_tab
-    assert window.run_records_tab.view_tabs.currentIndex() == window.run_records_tab.ROUND_TAB
+    assert window.history_tab.parentWidget() is window.run_records_tab
 
 
 def test_auto_rng_round_button_preserves_unread_detailed_log_count(app, tmp_path):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
-    records = window.run_records_tab
     window.show()
-    records.view_tabs.setCurrentIndex(records.LOG_TAB)
-    window.tabs.setCurrentWidget(records)
-    app.processEvents()  # Mark startup device warnings read before this test's error.
+    window._show_run_logs(None)
+    app.processEvents()
+    window.run_log_window.close()
     window.tabs.setCurrentWidget(window.auto_rng_tab)
     window._run_log_buffer.publish("自动定点", "需要查看的错误", level="ERROR")
     app.processEvents()
-    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志 (1)"
-
+    assert window.run_log_window.unread_problem_count == 1
     window.auto_rng_tab.runtime_log_button.click()
     app.processEvents()
-
-    assert window.tabs.currentWidget() is records
-    assert records.view_tabs.currentIndex() == records.ROUND_TAB
-    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志 (1)"
+    assert window.tabs.currentWidget() is window.run_records_tab
+    assert not window.run_log_window.isVisible()
+    assert window.run_log_window.unread_problem_count == 1
+    assert window.view_status_logs_button.text() == "完整日志 (1)"
 
 
 def test_auto_rng_latest_message_uses_only_the_workspace_footer(app, tmp_path):
@@ -449,15 +423,15 @@ def test_auto_rng_latest_message_uses_only_the_workspace_footer(app, tmp_path):
 
 def test_help_menu_opens_unfiltered_detailed_logs(app, tmp_path):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
-    window.run_records_tab.log_panel.set_source_filter("自动定点")
+    window.run_log_window.log_panel.set_source_filter("自动定点")
     window.tabs.setCurrentWidget(window.auto_rng_tab)
 
     window.help_menu_controller.view_run_logs_action.trigger()
     app.processEvents()
 
-    assert window.tabs.currentWidget() is window.run_records_tab
-    assert window.run_records_tab.view_tabs.currentIndex() == window.run_records_tab.LOG_TAB
-    assert window.run_records_tab.log_panel.source_combo.currentData() is None
+    assert window.tabs.currentWidget() is window.auto_rng_tab
+    assert window.run_log_window.isVisible()
+    assert window.run_log_window.log_panel.source_combo.currentData() is None
 
 
 def test_help_menu_and_log_page_save_switches_stay_synchronized(
@@ -474,7 +448,7 @@ def test_help_menu_and_log_page_save_switches_stay_synchronized(
     manager = RunLogManager(tmp_path / "logs")
     window = MainWindow(run_log_manager=manager)
     menu_action = window.help_menu_controller.run_log_save_action
-    page_checkbox = window.run_records_tab.log_panel.save_check
+    page_checkbox = window.run_log_window.log_panel.save_check
 
     assert menu_action.isChecked() is False
     assert page_checkbox.isChecked() is False
@@ -495,34 +469,24 @@ def test_help_menu_and_log_page_save_switches_stay_synchronized(
     assert saved_states == [True, False]
 
 
-def test_hidden_log_page_counts_critical_as_unread_and_clears_when_shown(app):
+def test_closed_log_window_counts_critical_and_clears_unread_when_reopened(app):
     buffer = RunLogBuffer()
-    history = HistoryPanel()
-    records = RunRecordsPanel(history, buffer)
-    host = QTabWidget()
-    other = QWidget()
-    host.addTab(records, "日志区")
-    host.addTab(other, "其他")
-    host.show()
-    app.processEvents()
-
+    logs = RunLogWindow(buffer)
     buffer.publish("应用", "警告", level="WARNING")
     buffer.publish("应用", "严重错误", level="CRITICAL")
     app.processEvents()
-    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志 (2)"
-
-    records.view_tabs.setCurrentIndex(records.LOG_TAB)
+    assert logs.unread_problem_count == 2
+    logs.show_logs()
     app.processEvents()
-    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志"
-
-    host.setCurrentWidget(other)
-    buffer.publish("应用", "隐藏期间发生错误", level="ERROR")
+    assert logs.unread_problem_count == 0
+    logs.close()
+    buffer.publish("应用", "关闭期间发生错误", level="ERROR")
     app.processEvents()
-    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志 (1)"
-
-    host.setCurrentWidget(records)
+    assert logs.unread_problem_count == 1
+    logs.show_logs()
     app.processEvents()
-    assert records.view_tabs.tabText(records.LOG_TAB) == "详细日志"
+    assert logs.unread_problem_count == 0
+    assert _messages(logs.log_panel) == ["警告", "严重错误", "关闭期间发生错误"]
 
 
 def test_history_rows_distinguish_runs_without_painting_duplicate_item_text(app):
@@ -571,7 +535,7 @@ def test_auto_tid_progress_creates_round_records_and_links_exact_round_logs(app,
     assert window.history_tab.detail_status_label.text() == "进行中"
     window.history_tab.related_logs_button.click()
     app.processEvents()
-    assert _messages(window.run_records_tab.log_panel) == ["第二轮开始"]
+    assert _messages(window.run_log_window.log_panel) == ["第二轮开始"]
 
 
 def test_start_auto_tid_prepares_first_round_before_worker_logs(app, tmp_path, monkeypatch):

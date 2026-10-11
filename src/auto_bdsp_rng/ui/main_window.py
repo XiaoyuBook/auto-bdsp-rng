@@ -178,6 +178,7 @@ from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer
+from auto_bdsp_rng.ui.run_log_window import RunLogWindow
 from auto_bdsp_rng.ui.live_log_panel import LiveLogPanel
 from auto_bdsp_rng.ui.run_records_panel import RunRecordsPanel
 from auto_bdsp_rng.ui.workspace_style import configure_workspace_style
@@ -1960,13 +1961,15 @@ class MainWindow(QMainWindow):
             binding.bind_source(source)
             binding.editRequested.connect(lambda path, view=binding: self._edit_automation_config(path, view))
         self.history_tab = HistoryPanel()
-        self.run_records_tab = RunRecordsPanel(
-            self.history_tab,
+        self.run_records_tab = RunRecordsPanel(self.history_tab)
+        self.run_log_window = RunLogWindow(
             self._run_log_buffer,
             save_enabled=self._run_log_manager.enabled,
             set_save_enabled=self._set_run_log_enabled,
             open_log_dir=self._open_run_log_dir,
+            parent=self,
         )
+        self.history_tab.related_logs_requested.connect(self._show_round_logs)
         self.records_tab = self.run_records_tab
         self.id_tab = IdPanel(status_callback=lambda text: self.statusBar().showMessage(text))
         self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
@@ -2015,7 +2018,7 @@ class MainWindow(QMainWindow):
         self.tabs.addToolPage(self.project_xs_tab, "手动测种与校正")
         self.tabs.addTab(self.bdsp_tab, self._text("bdsp_search"))
         self.tabs.addTab(self.easycon_tab, self._text("easycon"))
-        self.tabs.addTab(self.run_records_tab, "日志中心")
+        self.tabs.addTab(self.run_records_tab, "轮次记录")
         self.ocr_tab = LocalViews()
         self.ocr_info_page = QWidget()
         self.ocr_tid_page = QWidget()
@@ -2046,7 +2049,7 @@ class MainWindow(QMainWindow):
         status_bar.setFixedHeight(24)
         self.view_status_logs_button = QToolButton()
         self.view_status_logs_button.setObjectName("StatusLogButton")
-        self.view_status_logs_button.setText("日志中心")
+        self.view_status_logs_button.setText("完整日志")
         self.view_status_logs_button.setIcon(workspace_icon("external", "#087C58"))
         self.view_status_logs_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.view_status_logs_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -2054,6 +2057,8 @@ class MainWindow(QMainWindow):
         self.view_status_logs_button.setToolTip("查看当前页面日志；自动任务会定位当前运行与轮次")
         self.view_status_logs_button.clicked.connect(self._show_current_page_logs)
         status_bar.addPermanentWidget(self.view_status_logs_button)
+        self.run_log_window.unreadProblemsChanged.connect(self._update_log_problem_count)
+        self._update_log_problem_count(self.run_log_window.unread_problem_count)
         self.qq_notification_status = QLabel()
         status_bar.addPermanentWidget(self.qq_notification_status)
         self.qq_notifications.changed.connect(self._refresh_qq_notification_status)
@@ -2091,8 +2096,8 @@ class MainWindow(QMainWindow):
         self.seed_config_editor = SeedConfigEditorController(self)
         self.history_tab.empty_navigation = self.readiness.show
         self.history_tab._refresh_round_list()
-        self.run_records_tab.log_panel.empty_navigation = self.readiness.show
-        self.run_records_tab.log_panel._refresh_view_state()
+        self.run_log_window.log_panel.empty_navigation = self.readiness.show
+        self.run_log_window.log_panel._refresh_view_state()
         self.auto_tid_rng_tab.preparationRequested.connect(lambda: self.readiness.show_for(self.auto_tid_rng_tab))
 
     def reveal_page_configuration(self, page) -> None:
@@ -2143,17 +2148,24 @@ class MainWindow(QMainWindow):
 
         return write
 
-    def _show_run_logs(self, source: str | None = None) -> None:
+    def _show_run_logs(self, source: str | None = None, *, current_run: bool = True) -> None:
         run_id, round_id = None, None
-        if source == "自动定点":
+        if current_run and source == "自动定点":
             run_id, round_id = self._active_auto_rng_run_id, self._active_auto_rng_round_id
-        elif source == "自动 TID":
+        elif current_run and source == "自动 TID":
             run_id, round_id = self._active_auto_tid_run_id, self._active_auto_tid_round_id
-        self.tabs.setCurrentWidget(self.run_records_tab)
-        self.run_records_tab.show_logs(source, run_id=run_id, round_id=round_id)
+        label = (f"{source} · 当前运行" + (f" · 第 {round_id} 轮" if round_id is not None else "")) if run_id else None
+        self.run_log_window.show_logs(source, run_id=run_id, round_id=round_id, label=label)
+
+    def _show_round_logs(self, run_id: object, round_id: object) -> None:
+        # Historical selection is explicit and never falls back to the active run.
+        self.run_log_window.show_logs(run_id=run_id, round_id=round_id)
+
+    def _update_log_problem_count(self, count: int) -> None:
+        self.view_status_logs_button.setText(f"完整日志 ({count})" if count else "完整日志")
+        self.live_log_panel.set_unread_problem_count(count)
 
     def _show_round_records(self) -> None:
-        self.run_records_tab.show_rounds()
         self.tabs.setCurrentWidget(self.run_records_tab)
 
     def _show_auto_rng_target_data(self) -> None:
@@ -2253,9 +2265,9 @@ class MainWindow(QMainWindow):
         controller = getattr(self, "help_menu_controller", None)
         if controller is not None:
             controller.set_run_log_state(enabled)
-        records = getattr(self, "run_records_tab", None)
-        if records is not None:
-            records.set_save_enabled(enabled)
+        log_window = getattr(self, "run_log_window", None)
+        if log_window is not None:
+            log_window.log_panel.set_save_enabled(enabled)
 
     def _handle_silent_update_check_completed(self, plan: object) -> None:
         current_version = str(getattr(plan, "current_version", __version__))
@@ -3208,7 +3220,8 @@ class MainWindow(QMainWindow):
         self.monitor_preview_scroll = scroll_surface(self.monitor_preview)
         self.monitor_preview_scroll.setMinimumHeight(0)
         self.live_log_panel = LiveLogPanel(self._run_log_buffer)
-        self.live_log_panel.expandRequested.connect(self._show_run_logs)
+        self.live_log_panel.expandRequested.connect(lambda source: self._show_run_logs(source, current_run=False))
+        self.live_log_panel.collapsedChanged.connect(lambda _collapsed: self._sync_monitor_preview_layout())
         self.monitor_splitter.addWidget(self.monitor_preview_scroll)
         self.monitor_splitter.addWidget(self.live_log_panel)
         self.monitor_splitter.setStretchFactor(0, 0)
@@ -3227,7 +3240,15 @@ class MainWindow(QMainWindow):
         required = self.preview_aspect_container.height() + chrome
         # The preview follows its width. Logs fill the rest, without a saved
         # vertical split leaving a large blank area below the video.
-        self.monitor_preview_scroll.setFixedHeight(required)
+        if self.live_log_panel.collapsed:
+            self.monitor_preview_scroll.setMaximumHeight(16777215)
+            self.monitor_preview_scroll.setMinimumHeight(required)
+            self.monitor_splitter.setStretchFactor(0, 1)
+            self.monitor_splitter.setStretchFactor(1, 0)
+        else:
+            self.monitor_preview_scroll.setFixedHeight(required)
+            self.monitor_splitter.setStretchFactor(0, 0)
+            self.monitor_splitter.setStretchFactor(1, 1)
         self._refresh_preview_presentation()
 
     def _build_preview_panel(self) -> QWidget:
@@ -4821,7 +4842,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(2, "手动测种与校正")
         self.tabs.setTabText(3, self._text("bdsp_search"))
         self.tabs.setTabText(4, self._text("easycon"))
-        self.tabs.setTabText(5, "日志中心" if self.lang == "zh" else "Log Center")
+        self.tabs.setTabText(5, "轮次记录" if self.lang == "zh" else "Round Records")
         self.video_source_dialog.setWindowTitle(
             "视频源设置" if self.lang == "zh" else "Video Source"
         )

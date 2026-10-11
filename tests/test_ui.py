@@ -282,8 +282,8 @@ def test_main_window_generates_static_results(app, tmp_path):
         "自动定点乱数",
         "自动 TID 乱数",
         "定点数据区",
-        "伊机控",
-        "日志中心",
+        "脚本编辑区",
+        "轮次记录",
         "OCR 设置",
     ]
     assert window.tabs.tabText(window.tabs.currentIndex()) == "自动定点乱数"
@@ -576,7 +576,8 @@ def test_project_xs_configuration_uses_shared_video_sidebar(
     app.processEvents()
     assert window.video_source_dialog.isVisible()
     window.video_source_dialog.hide()
-    QTest.mouseClick(window.easycon_header_button, Qt.MouseButton.LeftButton)
+    assert window.easycon_header_button.menu() is window.easycon_tab.controller_tools_menu
+    window.easycon_tab.controller_tools_menu.actions()[0].trigger()
     app.processEvents()
     assert window.easycon_tab.connection_dialog.isVisible()
     assert window.easycon_tab.connection_presentation()[1] == "disconnected"
@@ -639,7 +640,8 @@ def test_easycon_header_uses_panel_connection_presentation(app):
     assert "已连接 · COM17" in window.easycon_header_button.toolTip()
     assert window.easycon_header_button.isEnabled()
     assert window.easycon_header_button.status_text == "已连接"
-    window.easycon_header_button.click()
+    assert window.easycon_header_button.menu() is window.easycon_tab.controller_tools_menu
+    window.easycon_tab.controller_tools_menu.actions()[0].trigger()
     assert window.easycon_tab.connection_dialog.isVisible()
     window.easycon_tab.connection_dialog.close_button.click()
     assert not window.easycon_tab.connection_dialog.isVisible()
@@ -3052,7 +3054,7 @@ def test_main_window_has_auto_rng_tab(app):
     assert window.tabs.count() == 7
     assert window.tabs.tabText(0) == "自动定点乱数"
     assert window.tabs.tabText(1) == "自动 TID 乱数"
-    assert window.tabs.tabText(5) == "日志中心"
+    assert window.tabs.tabText(5) == "轮次记录"
     assert window.tabs.tabText(6) == "OCR 设置"
     assert hasattr(window, "id_tab")
 
@@ -3433,7 +3435,7 @@ def test_auto_rng_panel_keeps_hidden_message_mirror_and_live_runtime_card(app):
     assert panel.log_view.isHidden()
     assert panel.latest_log_time_label.text() == "—"
     assert panel.latest_log_label.text() == "暂无消息"
-    assert panel.view_log_button.text() == "日志中心"
+    assert panel.view_log_button.text() == "完整日志"
     assert panel.content_grid.itemAtPosition(1, 0).widget() is panel.log_group
     index = panel.content_grid.indexOf(panel.log_group)
     assert index >= 0

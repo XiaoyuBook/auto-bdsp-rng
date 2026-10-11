@@ -276,7 +276,7 @@ def test_check_dialog_uses_original_selected_start_path(window, monkeypatch, mod
 
 def test_log_navigation_uses_current_run_and_round_and_clears_stale_filters(window):
     w = window
-    log = w.run_records_tab.log_panel
+    log = w.run_log_window.log_panel
     w._active_auto_rng_run_id, w._active_auto_rng_round_id = "current", 2
     for run, round_id, message in (("old", 2, "old run"), ("current", 1, "old round"), ("current", 2, "current round")):
         w._run_log_buffer.publish("自动定点", message, run_id=run, round_id=round_id)
@@ -307,7 +307,7 @@ def test_empty_actions_navigate_or_clear_filters_without_changing_data(window):
     w.readiness.dialog.hide()
     w.readiness.navigate("scripts")
     assert w.auto_tid_rng_tab.script_fields.isVisible()
-    log = w.run_records_tab.log_panel
+    log = w.run_log_window.log_panel
     w._show_run_logs(None)
     w._run_log_buffer.publish("测试", "保留的数据")
     QApplication.processEvents()

@@ -701,7 +701,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.latest_log_label.setParent(toolbar)
         self.latest_log_label.hide()
         row.addStretch(1)
-        self.view_log_button = QPushButton("日志中心")
+        self.view_log_button = QPushButton("完整日志")
         self.view_log_button.setObjectName("AutoTidLink")
         self.view_log_button.setFixedSize(76, 32)
         self.view_log_button.clicked.connect(self.runLogRequested.emit)

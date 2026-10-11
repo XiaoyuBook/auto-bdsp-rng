@@ -1144,7 +1144,7 @@ class EasyConPanel(QWidget):
         self.latest_log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         message_layout.addWidget(self.latest_log_label)
         overview_layout.addLayout(message_layout)
-        self.view_log_button = self._easycon_light_button("日志中心")
+        self.view_log_button = self._easycon_light_button("完整日志")
         self.view_log_button.setObjectName("EasyConViewLogButton")
         self.view_log_button.setFixedHeight(30)
         self.view_log_button.setFixedWidth(88)

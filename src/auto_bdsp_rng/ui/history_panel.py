@@ -552,7 +552,7 @@ class HistoryPanel(QWidget):
         self.copy_round_button.setFixedHeight(32)
         self.copy_round_button.setEnabled(False)
         self.copy_round_button.clicked.connect(self.copy_selected_round)
-        self.related_logs_button = QPushButton("查看相关日志", detail_panel)
+        self.related_logs_button = QPushButton("查看本轮日志", detail_panel)
         self.related_logs_button.setObjectName("HistoryRelatedLogs")
         self.related_logs_button.setFixedHeight(32)
         self.related_logs_button.setEnabled(False)

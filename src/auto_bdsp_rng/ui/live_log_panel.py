@@ -2,18 +2,20 @@
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
+    QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer, RunLogEntry
+from auto_bdsp_rng.ui.workspace_controls import configure_disclosure_button, set_disclosure_state
 
 
 class LiveLogPanel(QFrame):
     """A bounded live view; filters never modify the shared session buffer."""
 
     expandRequested = Signal(object)
+    collapsedChanged = Signal(bool)
     DISPLAY_LIMIT = 300
 
     def __init__(self, buffer: RunLogBuffer, parent=None):
@@ -22,6 +24,7 @@ class LiveLogPanel(QFrame):
         self._buffer = buffer
         self._last_seq = 0
         self._visible_count = 0
+        self._collapsed = False
         self._flush_timer = QTimer(self)
         self._flush_timer.setSingleShot(True)
         self._flush_timer.timeout.connect(self._flush)
@@ -30,21 +33,36 @@ class LiveLogPanel(QFrame):
         layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(6)
         heading = QHBoxLayout()
-        title = QLabel("日志中心")
-        title.setObjectName("SectionTitle")
+        self.collapse_button = QToolButton()
+        self.collapse_button.setText("实时日志")
+        self.collapse_button.setCheckable(True)
+        self.collapse_button.setChecked(True)
+        configure_disclosure_button(self.collapse_button, compact=True)
+        set_disclosure_state(self.collapse_button, True)
+        self.collapse_button.setAccessibleName("折叠实时日志")
+        self.collapse_button.setToolTip("折叠实时日志，消息继续收集")
         self.count_label = QLabel("0 条")
         self.count_label.setObjectName("WorkspaceHint")
-        self.expand_button = QPushButton("展开")
+        self.expand_button = QPushButton("查看完整日志")
         self.expand_button.setObjectName("InlineLinkButton")
         self.expand_button.setFixedHeight(24)
         self.expand_button.setStyleSheet("QPushButton { min-height: 22px; max-height: 22px; }")
         self.expand_button.setToolTip("打开完整日志，查看轮次、搜索或导出")
-        heading.addWidget(title)
+        heading.addWidget(self.collapse_button)
         heading.addWidget(self.count_label)
+        self.problem_label = QLabel()
+        self.problem_label.setStyleSheet("color: #AC4B42; font-size: 12px;")
+        self.problem_label.setToolTip("完整日志尚未查看的警告或错误")
+        self.problem_label.hide()
+        heading.addWidget(self.problem_label)
         heading.addStretch(1)
         heading.addWidget(self.expand_button)
         layout.addLayout(heading)
 
+        self.body = QWidget()
+        body_layout = QVBoxLayout(self.body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(6)
         filters = QHBoxLayout()
         self.source_combo = QComboBox()
         self.source_combo.setAccessibleName("监看日志来源")
@@ -58,7 +76,7 @@ class LiveLogPanel(QFrame):
         self.follow_check.setChecked(True)
         filters.addWidget(self.source_combo, 1)
         filters.addWidget(self.follow_check)
-        layout.addLayout(filters)
+        body_layout.addLayout(filters)
 
         self.text = QPlainTextEdit()
         self.text.setObjectName("LiveLogText")
@@ -69,14 +87,44 @@ class LiveLogPanel(QFrame):
         self.text.setFrameShape(QFrame.Shape.NoFrame)
         self.text.setStyleSheet("QPlainTextEdit { padding: 2px 6px; }")
         self.text.setMinimumSize(0, 0)
-        self.text.setToolTip("显示最近 300 行；完整日志可通过“展开”查看。")
+        self.text.setToolTip("显示最近 300 行；可通过“查看完整日志”搜索或导出。")
         self.text.viewport().installEventFilter(self)
-        layout.addWidget(self.text, 1)
+        body_layout.addWidget(self.text, 1)
+        layout.addWidget(self.body, 1)
+        self.collapse_button.toggled.connect(lambda expanded: self.set_collapsed(not expanded))
         self.expand_button.clicked.connect(lambda: self.expandRequested.emit(self.source_combo.currentData()))
         self.source_combo.currentIndexChanged.connect(self._refresh)
         self.follow_check.toggled.connect(self._follow)
         buffer.entryAdded.connect(self._receive, Qt.ConnectionType.QueuedConnection)
         self._refresh()
+
+    @property
+    def collapsed(self) -> bool:
+        return self._collapsed
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        collapsed = bool(collapsed)
+        if collapsed == self._collapsed:
+            return
+        self._collapsed = collapsed
+        self.body.setVisible(not collapsed)
+        self.setMinimumHeight(40 if collapsed else 110)
+        self.setMaximumHeight(40 if collapsed else 16777215)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,
+                           QSizePolicy.Policy.Fixed if collapsed else QSizePolicy.Policy.Expanding)
+        blocked = self.collapse_button.blockSignals(True)
+        self.collapse_button.setChecked(not collapsed)
+        self.collapse_button.blockSignals(blocked)
+        set_disclosure_state(self.collapse_button, not collapsed)
+        self.collapse_button.setAccessibleName("恢复实时日志" if collapsed else "折叠实时日志")
+        self.collapse_button.setToolTip("恢复实时日志" if collapsed else "折叠实时日志，消息继续收集")
+        self.collapsedChanged.emit(collapsed)
+        if not collapsed:
+            self._follow()
+
+    def set_unread_problem_count(self, count: int) -> None:
+        self.problem_label.setText(f"异常 {count}")
+        self.problem_label.setVisible(count > 0)
 
     @staticmethod
     def _line(entry: RunLogEntry) -> str:

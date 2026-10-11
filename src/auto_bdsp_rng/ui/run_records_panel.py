@@ -1,295 +1,62 @@
-"""Unified round history and live diagnostic log workspace."""
+"""Round history workspace; diagnostic logs use a separate window."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtWidgets import (
-    QButtonGroup,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QSizePolicy,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
-from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer, RunLogPanel
-
 from auto_bdsp_rng.ui.workspace_theme import ui_styles
 
 
-_UNREAD_LEVELS = {"WARNING", "ERROR", "CRITICAL"}
-
-
 class RunRecordsPanel(QWidget):
-    """Top-level workspace that keeps round summaries and logs together."""
+    """Present existing round results without nested log navigation."""
 
-    ROUND_TAB = 0
-    LOG_TAB = 1
-
-    def __init__(
-        self,
-        history_panel: HistoryPanel,
-        log_buffer: RunLogBuffer,
-        *,
-        save_enabled: bool = False,
-        set_save_enabled: Callable[[bool], bool] | None = None,
-        open_log_dir: Callable[[], object] | None = None,
-        parent: QWidget | None = None,
-    ) -> None:
+    def __init__(self, history_panel: HistoryPanel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("RunRecordsPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.history_panel = history_panel
-        self._unread_problem_count = sum(
-            entry.level in _UNREAD_LEVELS for entry in log_buffer.snapshot()
-        )
-        self._build_ui(
-            log_buffer,
-            save_enabled=save_enabled,
-            set_save_enabled=set_save_enabled,
-            open_log_dir=open_log_dir,
-        )
-        self.history_panel.related_logs_requested.connect(self.show_round_logs)
-        log_buffer.entryAdded.connect(
-            self._on_log_entry_added,
-            Qt.ConnectionType.QueuedConnection,
-        )
-
-    def _build_ui(
-        self,
-        log_buffer: RunLogBuffer,
-        *,
-        save_enabled: bool,
-        set_save_enabled: Callable[[bool], bool] | None,
-        open_log_dir: Callable[[], object] | None,
-    ) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 14)
         root.setSpacing(10)
-
-        heading = QFrame(self)
-        heading.setObjectName("RunRecordsHeading")
-        self.heading = heading
-        heading.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        heading.setFixedHeight(42)
-        heading_layout = QHBoxLayout(heading)
-        heading_layout.setContentsMargins(2, 0, 2, 0)
-        heading_layout.setSpacing(10)
-
-        self.title_label = QLabel("日志中心", heading)
+        self.heading = QFrame(self)
+        self.heading.setObjectName("RunRecordsHeading")
+        self.heading.setFixedHeight(34)
+        heading = QHBoxLayout(self.heading)
+        heading.setContentsMargins(0, 0, 0, 0)
+        heading.setSpacing(10)
+        self.title_label = QLabel("轮次记录", self.heading)
         self.title_label.setObjectName("RunRecordsTitle")
-        heading_layout.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        divider = QFrame(heading)
-        divider.setObjectName("RunRecordsDivider")
-        divider.setFixedSize(1, 18)
-        heading_layout.addWidget(divider, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.subtitle_label = QLabel("本次会话", heading)
+        self.subtitle_label = QLabel("本次会话", self.heading)
         self.subtitle_label.setObjectName("RunRecordsSubtitle")
-        heading_layout.addWidget(self.subtitle_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        heading_layout.addStretch(1)
-
-        self.live_status_label = QLabel("等待任务", heading)
+        self.live_status_label = QLabel("等待任务", self.heading)
         self.live_status_label.setObjectName("RunRecordsLiveStatus")
-        self.live_status_label.setFixedHeight(28)
-        self.live_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        heading_layout.addWidget(self.live_status_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        heading.hide()
-
-        self.view_tabs = QTabWidget(self)
-        self.view_tabs.setObjectName("RunRecordsTabs")
-        self.view_tabs.setDocumentMode(True)
-        self.view_tabs.setUsesScrollButtons(False)
-        self.view_tabs.tabBar().setDrawBase(False)
-        self.view_tabs.tabBar().hide()
-        self.log_panel = RunLogPanel(
-            log_buffer,
-            save_enabled=save_enabled,
-            set_save_enabled=set_save_enabled,
-            open_log_dir=open_log_dir,
-            parent=self.view_tabs,
-        )
-        self.view_tabs.addTab(self.history_panel, "轮次记录")
-        self.view_tabs.addTab(self.log_panel, "详细日志")
-        # One layout owns the view buttons and status. A native tab bar and
-        # corner widget can draw separate, misaligned baselines on Windows.
-        self.view_header = QWidget(self)
-        self.view_header.setObjectName("RunRecordsViewHeader")
-        view_layout = QHBoxLayout(self.view_header)
-        view_layout.setContentsMargins(0, 0, 0, 0)
-        view_layout.setSpacing(8)
-        self.view_button_group = QButtonGroup(self)
-        self.view_button_group.setExclusive(True)
-        self.view_buttons = []
-        for index, text in enumerate(("轮次记录", "详细日志")):
-            button = QPushButton(text, self.view_header)
-            button.setObjectName("RunRecordsViewButton")
-            button.setCheckable(True)
-            button.setFixedHeight(34)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.view_button_group.addButton(button, index)
-            self.view_buttons.append(button)
-            view_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.view_buttons[self.ROUND_TAB].setChecked(True)
-        self.view_button_group.idClicked.connect(self.view_tabs.setCurrentIndex)
-        view_layout.addStretch(1)
-        session_corner = QWidget(self.view_header)
-        session_corner.setObjectName("RunRecordsSessionCorner")
-        session_layout = QHBoxLayout(session_corner)
-        session_layout.setContentsMargins(0, 0, 6, 0)
-        session_layout.setSpacing(8)
-        self.subtitle_label.setParent(session_corner)
-        self.live_status_label.setParent(session_corner)
-        session_layout.addWidget(self.subtitle_label)
-        session_layout.addWidget(self.live_status_label)
-        self.session_corner = session_corner
-        view_layout.addWidget(session_corner, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.view_tabs.currentChanged.connect(self._on_view_changed)
-        root.addWidget(self.view_header)
-        root.addWidget(self.view_tabs, 1)
-
-        # Keep view navigation separate from native tab frames and metrics.
-        self.setStyleSheet(
-            ui_styles("""
-            QWidget#RunRecordsPanel, QTabWidget#RunRecordsTabs {
-                background: #F2F4F7;
-            }
-            QFrame#RunRecordsHeading {
-                background: transparent;
-                border: 0;
-            }
-            QLabel#RunRecordsTitle {
-                color: #202225;
-                font-size: 18px;
-                font-weight: 500;
-            }
-            QFrame#RunRecordsDivider {
-                background: #D9DEE4;
-                border: 0;
-            }
-            QLabel#RunRecordsSubtitle {
-                color: #687480;
-                font-size: 12px;
-            }
-            QLabel#RunRecordsLiveStatus {
-                color: #087C58;
-                background: transparent;
-                border: 0;
-                border-radius: 4px;
-                padding: 0 9px;
-                font-size: 12px;
-                font-weight: 400;
-            }
-            QTabWidget#RunRecordsTabs::pane {
-                border: 0;
-                background: transparent;
-                top: 0;
-            }
-            QWidget#RunRecordsViewHeader {
-                border: 0;
-                background: transparent;
-            }
-            QPushButton#RunRecordsViewButton {
-                min-width: 76px;
-                padding: 0 10px;
-                border: 1px solid #E3E8ED;
-                border-radius: 6px;
-                color: #52606D;
-                background: #FFFFFF;
-                font-size: 13px;
-                font-weight: 400;
-            }
-            QPushButton#RunRecordsViewButton:checked {
-                color: #087C58;
-                border-color: #EAF7F1;
-                background: #EAF7F1;
-                font-weight: 500;
-            }
-            QPushButton#RunRecordsViewButton:hover:!checked {
-                color: #087C58;
-                background: transparent;
-            }
-            QWidget#RunRecordsSessionCorner {
-                background: transparent;
-            }
-            """)
-        )
-        self._refresh_log_tab_text()
+        heading.addWidget(self.title_label)
+        heading.addWidget(self.subtitle_label)
+        heading.addStretch(1)
+        heading.addWidget(self.live_status_label)
+        root.addWidget(self.heading)
+        root.addWidget(self.history_panel, 1)
+        self.setStyleSheet(ui_styles("""
+            QWidget#RunRecordsPanel { background: #F2F4F7; }
+            QFrame#RunRecordsHeading { background: transparent; border: 0; }
+            QLabel#RunRecordsTitle { color: #202A33; font-size: 15px; font-weight: 500; }
+            QLabel#RunRecordsSubtitle { color: #687480; font-size: 12px; }
+            QLabel#RunRecordsLiveStatus { color: #087C58; background: transparent; font-size: 12px; }
+        """))
 
     def set_session_context(self, source: str, target: str = "") -> None:
-        details = [str(source).strip()]
-        if str(target).strip():
-            details.append(str(target).strip())
+        details = [str(source).strip(), str(target).strip()]
         self.subtitle_label.setText(" · ".join(part for part in details if part) or "本次会话")
+        self.live_status_label.setToolTip(self.subtitle_label.text())
 
     def set_active_round(self, round_id: int | None) -> None:
-        if round_id is None:
-            self.live_status_label.setText("准备中")
-        else:
-            self.live_status_label.setText(f"第 {int(round_id)} 轮进行中")
+        self.live_status_label.setText("准备中" if round_id is None else f"第 {int(round_id)} 轮进行中")
 
     def set_run_finished(self, text: str = "运行已结束") -> None:
         self.live_status_label.setText(str(text) or "运行已结束")
 
-    def show_logs(self, source: str | None = None, *, run_id: str | None = None, round_id: int | None = None) -> None:
-        self.log_panel.clear_filters()
-        self.log_panel.set_source_filter(source)
-        self.log_panel.show_round_logs(run_id, round_id,
-                                      f"{source or '全部模块'} · 当前运行" + (f" · 第 {round_id} 轮" if round_id is not None else ""))
-        self.view_tabs.setCurrentIndex(self.LOG_TAB)
-
-    def show_rounds(self) -> None:
-        self.view_tabs.setCurrentIndex(self.ROUND_TAB)
-
-    @Slot(object, object)
-    def show_round_logs(self, run_id: object, round_id: object) -> None:
-        self.log_panel.clear_filters()
-        self.log_panel.show_round_logs(run_id, round_id)
-        self.view_tabs.setCurrentIndex(self.LOG_TAB)
-
-    def set_save_enabled(self, enabled: bool) -> None:
-        self.log_panel.set_save_enabled(enabled)
-
-    @Slot(int)
-    def _on_view_changed(self, index: int) -> None:
-        if 0 <= index < len(self.view_buttons):
-            self.view_buttons[index].setChecked(True)
-        if index == self.LOG_TAB:
-            self._mark_logs_read_if_visible()
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        if self.view_tabs.currentIndex() == self.LOG_TAB:
-            self._mark_logs_read_if_visible()
-
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.subtitle_label.setVisible(self.width() >= 560)
-        self.live_status_label.setToolTip(self.subtitle_label.text())
-
-    def _mark_logs_read_if_visible(self) -> None:
-        if not self.log_panel.isVisible() or self._unread_problem_count == 0:
-            return
-        self._unread_problem_count = 0
-        self._refresh_log_tab_text()
-
-    @Slot(object)
-    def _on_log_entry_added(self, entry: object) -> None:
-        if (
-            not self.log_panel.isVisible()
-            and str(getattr(entry, "level", "INFO")).upper() in _UNREAD_LEVELS
-        ):
-            self._unread_problem_count += 1
-            self._refresh_log_tab_text()
-
-    def _refresh_log_tab_text(self) -> None:
-        text = "详细日志"
-        if self._unread_problem_count:
-            text += f" ({self._unread_problem_count})"
-        self.view_tabs.setTabText(self.LOG_TAB, text)
-        self.view_buttons[self.LOG_TAB].setText(text)
