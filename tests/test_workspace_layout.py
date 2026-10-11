@@ -260,6 +260,8 @@ def test_temporary_script_tools_keep_draft_and_restore_editor_at_short_height(wi
         settle()
         assert panel.tools_panel.isVisible()
         assert panel.editor_content.isHidden()
+        if section == "control":
+            assert panel.sidebar_scroll.verticalScrollBar().maximum() == 0
         assert panel.close_tools_button.isVisible()
         assert w.monitor_preview_scroll.verticalScrollBar().maximum() == 0
         assert w.live_log_panel.source_combo.isVisible()

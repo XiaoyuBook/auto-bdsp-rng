@@ -269,9 +269,11 @@ class ColumnReflow(QObject):
 class ToolbarReflow(QObject):
     """Wrap toolbar groups when a persistent sidebar reduces page width."""
 
-    def __init__(self, toolbar, layout):
+    def __init__(self, toolbar, layout, *, height=56, padding=16):
         super().__init__(toolbar)
         self.toolbar, self.layout = toolbar, layout
+        self.base_height = height
+        self.padding = padding
         self._pending = False
         toolbar.installEventFilter(self)
         self.refresh()
@@ -285,7 +287,7 @@ class ToolbarReflow(QObject):
         direction = QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
         if self.layout.direction() != direction:
             self.layout.setDirection(direction)
-        height = max(56, self.layout.sizeHint().height() + 16) if stacked else 56
+        height = max(self.base_height, self.layout.sizeHint().height() + self.padding) if stacked else self.base_height
         if self.toolbar.height() != height:
             self.toolbar.setFixedHeight(height)
 

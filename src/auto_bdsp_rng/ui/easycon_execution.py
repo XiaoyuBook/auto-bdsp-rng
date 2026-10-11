@@ -7,11 +7,11 @@ from os.path import normcase
 from time import monotonic
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QStackedWidget,
-    QStyledItemDelegate, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy, QStackedWidget,
+    QStyledItemDelegate, QStyle, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from auto_bdsp_rng.automation.easycon.native.trace import ExecutionSnapshot
@@ -135,13 +135,15 @@ class ExecutionFollower(QObject):
         self.timer.setInterval(80)
         self.timer.timeout.connect(self.poll)
         self.bar = QFrame()
+        self._bar_height_pending = False
+        self.bar.installEventFilter(self)
         self.bar.setObjectName("EasyConExecutionBar")
         self.bar.setStyleSheet(
             "QFrame#EasyConExecutionBar { background: #F4FAF6; border: 1px solid #DCEBE1; border-radius: 7px; }"
             "QLabel { background: transparent; border: 0; }"
         )
         layout = QVBoxLayout(self.bar)
-        layout.setContentsMargins(12, 8, 12, 9)
+        layout.setContentsMargins(8, 3, 8, 3)
         layout.setSpacing(3)
         header = QHBoxLayout()
         self.state_label = QLabel("当前执行")
@@ -154,12 +156,12 @@ class ExecutionFollower(QObject):
         self.follow.setToolTip("运行时自动显示当前执行的脚本与语句，并滚动到执行行")
         self.follow.toggled.connect(self._follow_changed)
         header.addWidget(self.follow)
-        self.locate = QPushButton("定位执行行")
+        self.locate = QPushButton("定位")
         self.locate.setIcon(workspace_icon("locate-fixed", "#18805A"))
         self.locate.setCursor(Qt.CursorShape.PointingHandCursor)
         self.locate.setStyleSheet(
             "QPushButton { background: #FFFFFF; color: #18805A; border: 1px solid #B9D9C8;"
-            " border-radius: 5px; padding: 4px 9px; font-size: 12px; }"
+            " border-radius: 5px; min-height: 22px; max-height: 22px; padding: 0 6px; font-size: 12px; }"
             "QPushButton:hover { background: #E8F6ED; border-color: #18805A; }"
             "QPushButton:pressed { background: #D8EFDF; }"
             "QPushButton:disabled { background: #F3F5F4; color: #96A39B; border-color: #DDE5E0; }"
@@ -167,27 +169,39 @@ class ExecutionFollower(QObject):
         self.locate.setToolTip("跳转到当前或停止前的最后执行位置")
         self.locate.clicked.connect(self.locate_point)
         header.addWidget(self.locate)
+        self.details_toggle = QToolButton()
+        self.details_toggle.setText("详情")
+        self.details_toggle.setCheckable(True)
+        self.details_toggle.setStyleSheet("QToolButton { background: transparent; border: 0; color: #64737D; padding: 2px 4px; }")
+        self.details_toggle.setToolTip("展开最后执行位置、等待及循环信息")
+        self.details_toggle.toggled.connect(self._sync_details)
+        header.addWidget(self.details_toggle)
         layout.addLayout(header)
+        self.details = QWidget()
+        details_layout = QVBoxLayout(self.details)
+        details_layout.setContentsMargins(0, 3, 0, 3)
+        details_layout.setSpacing(2)
+        layout.addWidget(self.details)
         self.action_label = QLabel()
         self.action_label.setWordWrap(True)
         self.action_label.setTextFormat(Qt.TextFormat.PlainText)
         self.action_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.action_label)
+        details_layout.addWidget(self.action_label)
         self.loop_label = QLabel()
         self.loop_label.setTextFormat(Qt.TextFormat.PlainText)
         self.loop_label.setWordWrap(True)
         self.loop_label.setStyleSheet(ui_styles("color: #18805A; font-weight: 500; font-size: 12px;"))
-        layout.addWidget(self.loop_label)
+        details_layout.addWidget(self.loop_label)
         self.location_label = QLabel()
         self.location_label.setTextFormat(Qt.TextFormat.PlainText)
         self.location_label.setWordWrap(True)
         self.location_label.setStyleSheet("font-size: 12px; color: #64737D;")
-        layout.addWidget(self.location_label)
+        details_layout.addWidget(self.location_label)
         self.pause_note = QLabel()
         self.pause_note.setWordWrap(True)
         self.pause_note.setTextFormat(Qt.TextFormat.PlainText)
         self.pause_note.setStyleSheet("font-size: 12px; color: #A6681B;")
-        layout.addWidget(self.pause_note)
+        details_layout.addWidget(self.pause_note)
         self._resume_error = ""
         self._show_idle()
 
@@ -196,6 +210,9 @@ class ExecutionFollower(QObject):
         self.viewer.setReadOnly(True)
         self.viewer.setAcceptDrops(False)
         self.stack = QStackedWidget()
+        self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._follow_pending = False
+        self.stack.installEventFilter(self)
         self.stack.addWidget(panel.editor)
         self.stack.addWidget(self.viewer)
         self.source_header = QLabel()
@@ -228,13 +245,54 @@ class ExecutionFollower(QObject):
         self.locate.setEnabled(False)
         self._resume_error = ""
         self.pause_note.hide()
+        self.details.hide()
+        self.details_toggle.hide()
+        self.details_toggle.setChecked(False)
+
+    def _sync_details(self) -> None:
+        snapshot = self.snapshot
+        required = snapshot.state in {"running", "pausing", "paused", "resuming", "failed"}
+        required = required or bool(snapshot.point and snapshot.point.loops) or bool(self._resume_error)
+        self.details.setVisible(required or self.details_toggle.isChecked())
+        self.details_toggle.setVisible(snapshot.run_id > 0 and not required)
+        self._queue_bar_height()
+
+    def _queue_bar_height(self) -> None:
+        if not self._bar_height_pending:
+            self._bar_height_pending = True
+            QTimer.singleShot(0, self.bar, self._sync_bar_height)
+
+    def _sync_bar_height(self) -> None:
+        self._bar_height_pending = False
+        layout = self.bar.layout()
+        border = self.bar.frameWidth() * 2
+        height = layout.heightForWidth(max(0, self.bar.width() - border))
+        if height < 0:
+            height = layout.sizeHint().height()
+        self.bar.setFixedHeight(height + border)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.bar and event.type() in (QEvent.Type.Show, QEvent.Type.Resize, QEvent.Type.LayoutRequest):
+            self._queue_bar_height()
+        if watched is getattr(self, "stack", None) and event.type() in (QEvent.Type.Show, QEvent.Type.Resize):
+            if not self._follow_pending:
+                self._follow_pending = True
+                QTimer.singleShot(0, self.stack, self._reveal_followed_line)
+        return False
+
+    def _reveal_followed_line(self) -> None:
+        self._follow_pending = False
+        if not self.panel._shutting_down and self.stack.isVisible() and self.follow.isChecked():
+            self._highlight(True)
 
     def show_resume_error(self, message: str) -> None:
         self._resume_error = message
         self.pause_note.setText(f"未继续：{message}" if message else "已暂停，可修改尚未执行的代码，点击“继续运行”应用修改。游戏和 RNG 仍会继续推进。")
         self.pause_note.setVisible(bool(message) or self.panel._native_script_paused())
+        self._sync_details()
 
     def clear(self) -> None:
+        self.panel._clear_script_error()
         trace = self._trace()
         self._trace_instance = trace
         if trace is not None:
@@ -416,6 +474,8 @@ class ExecutionFollower(QObject):
         self.panel.editor.setReadOnly(recording or (busy and not self.panel._native_script_paused()))
         self.panel.open_button.setEnabled(not busy and not recording)
         self.panel.new_button.setEnabled(not busy and not recording)
+        self.panel.open_action.setEnabled(not busy and not recording)
+        self.panel.new_action.setEnabled(not busy and not recording)
         self.panel.save_button.setEnabled(not busy and not recording and not self.viewing_snapshot)
         self.panel.script_sources.setEnabled(not recording)
 
@@ -446,12 +506,14 @@ class ExecutionFollower(QObject):
             self.refresh_sources()
         self.bar.show()
         self.location_label.show()
-        state_text = {"running": "执行中", "completed": "已完成 · 保留最后位置",
-                      "pausing": "正在暂停 · 等待当前动作结束", "paused": "已暂停 · 可修改后续代码",
+        state_text = {"running": "执行中", "completed": "已完成",
+                      "pausing": "正在暂停", "paused": "已暂停",
                       "resuming": "正在继续",
-                      "stopped": "已停止 · 保留最后位置", "failed": "执行失败 · 保留最后位置"}
+                      "stopped": "已停止", "failed": "执行失败"}
         label = state_text.get(snapshot.state, "当前执行")
-        self.state_label.setText(label if snapshot.point else label.split(" · ")[0])
+        terminal = snapshot.state in {"completed", "stopped"}
+        self.state_label.setText(f"{label} · 第 {snapshot.point.location.line} 行" if terminal and snapshot.point else label)
+        self.state_label.setToolTip("保留最后执行位置，可定位或展开详情" if terminal else label)
         if changed_state:
             self.show_resume_error(self._resume_error if snapshot.state == "paused" else "")
             self.pause_note.setVisible(snapshot.state == "paused")
@@ -501,3 +563,4 @@ class ExecutionFollower(QObject):
                 self._mark_source()
         if changed_state or changed_sources:
             self.panel._refresh_script_action_buttons()
+        self._sync_details()

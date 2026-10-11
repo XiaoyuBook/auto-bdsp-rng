@@ -58,7 +58,9 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     # A font with taller lines can schedule a second height-for-width layout.
     QTest.qWait(10)
     assert easycon_panel.overview_panel.isHidden()
-    assert easycon_panel.complete_log_button.isVisible()
+    assert easycon_panel.output_toggle.isVisible()
+    assert easycon_panel.script_error_label.text() == "暂无脚本错误"
+    assert window.live_log_panel.isVisible()
     assert not easycon_panel.tools_panel.isVisible()
     original_editor = easycon_panel.editor
     easycon_panel.control_tools_button.click()

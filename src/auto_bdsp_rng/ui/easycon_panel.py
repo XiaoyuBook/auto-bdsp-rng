@@ -5,7 +5,9 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
+from html import escape
 from pathlib import Path, PureWindowsPath
+import re
 from time import monotonic
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
@@ -70,7 +72,7 @@ from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import NoWheelComboBox as QComboBox
 from auto_bdsp_rng.ui.controller_overlay import ControllerStateOverlay
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
-from auto_bdsp_rng.ui.easycon_execution import ExecutionFollower, ScriptSourceTree
+from auto_bdsp_rng.ui.easycon_execution import ExecutionFollower, ScriptSourceTree, source_key
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
 from auto_bdsp_rng.ui.workspace_controls import (
@@ -946,15 +948,27 @@ class EasyConPanel(QWidget):
         self.sidebar_scroll.setMinimumWidth(240)
         self.tools_panel = QFrame()
         self.tools_panel.setObjectName("EasyConToolsPanel")
-        self.tools_panel.setMaximumHeight(210)
+        self.tools_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         tools_layout = QVBoxLayout(self.tools_panel)
-        tools_layout.setContentsMargins(12, 4, 12, 4)
-        tools_layout.setSpacing(4)
-        close_tools = QPushButton("关闭工具，返回编辑")
+        tools_layout.setContentsMargins(12, 6, 12, 6)
+        tools_layout.setSpacing(6)
+        tools_header = QHBoxLayout()
+        self.tools_title = QLabel("控制与录制")
+        tools_header.addWidget(self.tools_title)
+        tools_header.addStretch(1)
+        tools_header.addWidget(self.keyboard_controller_state_label)
+        tools_header.addWidget(self.recording_state_label)
+        close_tools = QToolButton()
+        close_tools.setText("收起")
+        close_tools.setArrowType(Qt.ArrowType.UpArrow)
+        close_tools.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        close_tools.setToolTip("收起工具，返回编辑；键盘控制与录制状态保持不变")
+        close_tools.setStyleSheet("QToolButton { border: 0; background: transparent; padding: 2px 4px; color: #64707D; }")
         self.close_tools_button = close_tools
         close_tools.clicked.connect(self.hide_tools)
         self.tools_panel.installEventFilter(self)
-        tools_layout.addWidget(close_tools)
+        tools_header.addWidget(close_tools)
+        tools_layout.addLayout(tools_header)
         tools_layout.addWidget(self.sidebar_scroll, 1)
         self.overview_panel.hide()
         self.workspace_splitter.addWidget(editor_panel)
@@ -973,15 +987,19 @@ class EasyConPanel(QWidget):
         self.easycon_status.hide()
 
     def show_tools(self, section="library") -> None:
+        self._tools_section = section
+        self.tools_title.setText("脚本库" if section == "library" else "控制与录制")
+        self.script_sources.setVisible(section == "library")
+        self.source_title.hide()
+        self.keyboard_control_group.setVisible(section != "library")
+        self.keyboard_controller_state_label.setVisible(section != "library")
+        self.recording_state_label.setVisible(section != "library")
         self.tools_panel.show()
         self._sync_tools_layout()
-        self.script_sources.setVisible(section == "library")
-        self.source_title.setVisible(section == "library")
-        self.keyboard_control_group.setVisible(section != "library")
         target = self.record_btn if section == "control" else self.script_sources
         self.tools_panel.layout().activate()
         self.sidebar_scroll.widget().layout().activate()
-        self.sidebar_scroll.ensureWidgetVisible(target, 12, 12)
+        self.sidebar_scroll.ensureWidgetVisible(target, 0, 0)
         target.setFocus()
 
     def hide_tools(self) -> None:
@@ -992,11 +1010,14 @@ class EasyConPanel(QWidget):
     def _sync_tools_layout(self) -> None:
         if not hasattr(self, "editor_content"):
             return
-        # At short window heights the tool is a temporary full-body view.
-        # Reuse the editor so drafts, execution position and undo survive.
+        # Preserve the temporary tool view at very short window heights.
+        # The same editor and document stay mounted in either layout.
+        library = getattr(self, "_tools_section", "control") == "library"
         short = self.height() < 400 and not self.tools_panel.isHidden()
         self.editor_content.setVisible(not short)
-        self.tools_panel.setMaximumHeight(16777215 if short else 210)
+        natural_height = (self.keyboard_control_group.sizeHint().height()
+                          + self.tools_panel.layout().itemAt(0).sizeHint().height() + 18)
+        self.tools_panel.setMaximumHeight(16777215 if short else (260 if library else natural_height))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1082,8 +1103,8 @@ class EasyConPanel(QWidget):
         area.setMinimumWidth(224)
         area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(area)
-        layout.setContentsMargins(16, 18, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         source_title = QLabel("脚本")
         self.source_title = source_title
@@ -1091,7 +1112,6 @@ class EasyConPanel(QWidget):
         layout.addWidget(source_title)
         self.script_sources = ScriptSourceTree()
         layout.addWidget(self.script_sources)
-        layout.addSpacing(6)
 
         log_header = QLabel("运行概览")
         log_header.setStyleSheet(
@@ -1260,7 +1280,7 @@ class EasyConPanel(QWidget):
         # 编辑器标题行
         editor_header = QWidget()
         self.editor_header = editor_header
-        editor_header.setFixedHeight(40)
+        editor_header.setFixedHeight(32)
         editor_header.setStyleSheet(f"background: {self.CLR_WHITE}; border-bottom: 1px solid {self.CLR_BORDER};")
         editor_header_layout = QHBoxLayout(editor_header)
         editor_header_layout.setContentsMargins(0, 0, 0, 0)
@@ -1308,7 +1328,7 @@ class EasyConPanel(QWidget):
 
         output_header = QFrame()
         output_header.setObjectName("EasyConOutputHeader")
-        output_header.setFixedHeight(38)
+        output_header.setFixedHeight(32)
         output_header.setStyleSheet(
             f"QFrame#EasyConOutputHeader {{ background: {self.CLR_WHITE};"
             f" border-top: 1px solid {self.CLR_BORDER}; }}"
@@ -1318,24 +1338,24 @@ class EasyConPanel(QWidget):
         output_title = QToolButton()
         self.output_toggle = output_title
         output_title.setObjectName("EasyConDisclosure")
-        output_title.setText("运行输出")
+        output_title.setText("脚本输出")
+        output_title.setToolTip("展开原始脚本输出；复制、保存和完整历史沿用现有日志缓冲")
         output_title.setCheckable(True)
         configure_disclosure_button(output_title)
         output_title.toggled.connect(self.log_panel.setVisible)
         output_layout.addWidget(output_title)
-        output_layout.addStretch(1)
-        complete_log_button = QPushButton("日志中心")
-        complete_log_button.setObjectName("EasyConCompleteLogButton")
-        complete_log_button.setIcon(workspace_icon("external", "#087C58"))
-        complete_log_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        complete_log_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        complete_log_button.setStyleSheet(
-            "QPushButton { background: transparent; border: 0; color: #087c58;"
-            " min-height: 28px; max-height: 28px; padding: 0 4px; font-size: 12px; }"
-        )
-        complete_log_button.clicked.connect(self.runLogRequested.emit)
-        output_layout.addWidget(complete_log_button)
-        self.complete_log_button = complete_log_button
+        self.script_error_label = QLabel("暂无脚本错误")
+        self.script_error_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.script_error_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.script_error_label.setStyleSheet("color: #64707D; border: 0; background: transparent; font-size: 12px;")
+        output_layout.addWidget(self.script_error_label, 1)
+        self.locate_error_button = QToolButton()
+        self.locate_error_button.setText("定位错误")
+        self.locate_error_button.setStyleSheet("QToolButton { color: #AC4B42; background: transparent; border: 0; padding: 2px 4px; }")
+        self.locate_error_button.clicked.connect(self._locate_script_error)
+        output_layout.addWidget(self.locate_error_button)
+        self._script_error_location: tuple[str, int] | None = None
+        self._clear_script_error()
         layout.addWidget(output_header)
 
         self.log_panel.setMinimumHeight(96)
@@ -1348,127 +1368,96 @@ class EasyConPanel(QWidget):
 
     def _build_right_buttons(self) -> QWidget:
         area = QFrame()
+        self.toolbar = area
         area.setObjectName("EasyConToolbar")
-        area.setFixedHeight(56)
         area.setStyleSheet(
             f"QFrame#EasyConToolbar {{ background: {self.CLR_WHITE};"
             f" border: 0; border-bottom: 1px solid {self.CLR_BORDER}; }}"
         )
         layout = QHBoxLayout(area)
-        layout.setContentsMargins(14, 0, 14, 0)
-        layout.setSpacing(8)
-
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(6)
         btn_style = (
-            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            f" border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 12px; font-size: 12px; }}"
-            f" QPushButton:hover {{ background: {self.CLR_PANEL_BG}; }}"
+            f"QPushButton {{ background: white; border: 1px solid {self.CLR_BORDER};"
+            " border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 7px; font-size: 12px; }"
+            " QPushButton:hover { background: #F7F8FA; }"
+            " QPushButton:disabled { background: #F7F8FA; color: #9aa9a2; }"
         )
-
-        self.open_button = QPushButton("打开")
-        quiet_style = btn_style + " QPushButton { border-color: transparent; color: #687480; }"
-        self.open_button.setStyleSheet(quiet_style)
-        self.open_button.setIcon(workspace_icon("open"))
+        self.script_menu = QMenu(self)
+        self.script_button = QPushButton("脚本")
+        self.script_button.setStyleSheet(btn_style)
+        self.script_button.setMenu(self.script_menu)
+        # Hidden compatibility buttons retain the existing integration API.
+        self.open_button = QPushButton("打开", area)
         self.open_button.clicked.connect(self.open_script_dialog)
-        layout.addWidget(self.open_button)
-
-        self.new_button = QPushButton("新建")
-        self.new_button.setStyleSheet(quiet_style)
-        self.new_button.setIcon(workspace_icon("new"))
+        self.new_button = QPushButton("新建", area)
         self.new_button.clicked.connect(self.new_script)
-        layout.addWidget(self.new_button)
-
+        self.library_button = QPushButton("脚本库", area)
+        self.library_button.clicked.connect(lambda: self.show_tools("library"))
+        self.open_action = self.script_menu.addAction("打开…", self.open_button.click)
+        self.open_action.setShortcut("Ctrl+O")
+        self.new_action = self.script_menu.addAction("新建", self.new_button.click)
+        self.new_action.setShortcut("Ctrl+N")
+        for action in (self.open_action, self.new_action):
+            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            self.addAction(action)
+        self.script_menu.addSeparator()
+        self.library_action = self.script_menu.addAction("脚本库", self.library_button.click)
+        for button in (self.open_button, self.new_button, self.library_button):
+            button.hide()
         self.save_button = QPushButton("保存")
         self.save_button.setStyleSheet(btn_style)
-        self.save_button.setIcon(workspace_icon("save"))
+        self.save_button.setToolTip("保存当前脚本 (Ctrl+S)")
         self.save_button.clicked.connect(self.save_script)
-        layout.addWidget(self.save_button)
+        self.control_tools_button = QPushButton("控制与录制")
+        self.control_tools_button.setStyleSheet(btn_style)
+        self.control_tools_button.clicked.connect(lambda: self.show_tools("control"))
+        file_actions = QHBoxLayout()
+        file_actions.setSpacing(6)
+        for button in (self.script_button, self.save_button, self.control_tools_button):
+            file_actions.addWidget(button)
+        file_actions.addStretch(1)
 
-        shortcut_label = QLabel("Ctrl + S")
-        shortcut_label.setStyleSheet(f"color: {self.CLR_HINT};")
-        layout.addWidget(shortcut_label)
-        layout.addStretch(1)
-
-        # These controls are created with the legacy action row so existing
-        # integrations keep the same attributes.  Detach them explicitly
-        # before moving them into the confirmed top toolbar; leaving a widget
-        # registered with both layouts makes Qt stack the controls at the
-        # toolbar's right edge.
         legacy_action_layout = self.action_row.layout()
-        if legacy_action_layout is not None:
-            legacy_action_layout.removeWidget(self.elapsed_label)
-            legacy_action_layout.removeWidget(self.run_button)
-        self.elapsed_label.setParent(area)
-        self.run_button.setParent(area)
-        self.elapsed_label.show()
-        self.run_button.show()
+        for widget in (self.elapsed_label, self.run_button):
+            legacy_action_layout.removeWidget(widget)
+            widget.setParent(area)
+            widget.show()
         self.action_row.hide()
-        self.elapsed_label.setFixedSize(92, 32)
-        self.elapsed_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.elapsed_label.setStyleSheet(
             f"QLabel {{ background: transparent; color: {self.CLR_HINT}; border: 0;"
-            " font-family: 'Cascadia Mono', 'Consolas'; font-size: 13px; font-weight: 400; }}"
+            " min-height: 32px; max-height: 32px; padding: 0;"
+            " font-family: 'Cascadia Mono', 'Consolas'; font-size: 13px; font-weight: 400; }"
         )
-        self.elapsed_label.setFixedSize(92, 32)
-        layout.addWidget(self.elapsed_label)
-
-        self.run_button.setFixedSize(108, 32)
+        self.elapsed_label.setFixedSize(76, 32)
+        self.run_button.setFixedSize(104, 32)
         self.run_button.setIcon(workspace_icon("play", "#FFFFFF"))
-        self.run_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.run_button.setStyleSheet(
-            ui_styles("QPushButton { background: #087c58; color: white; border: 1px solid #087c58;"
-            " border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 12px;"
-            " font-size: 13px; font-weight: 500; }"
-            " QPushButton:hover { background: #066a4b; border-color: #066a4b; }"
-            " QPushButton:disabled { background: #94c9b7; border-color: #94c9b7; color: white; }")
+            ui_styles("QPushButton { min-height: 30px; max-height: 30px; padding: 0 7px;"
+                      " font-size: 13px; font-weight: 500; }")
+            + primary_button_styles("QPushButton#PrimaryButton")
         )
-        self.run_button.setStyleSheet(self.run_button.styleSheet() + primary_button_styles("QPushButton#PrimaryButton"))
-        layout.addWidget(self.run_button)
-
         self.pause_button = QPushButton("暂停")
-        self.pause_button.setFixedSize(70, 32)
+        self.pause_button.setFixedSize(64, 32)
         self.pause_button.setIcon(workspace_icon("pause", "#087C58"))
         self.pause_button.setStyleSheet(btn_style)
-        self.pause_button.setToolTip("暂停 WAIT 并保留剩余时间；按键或摇杆完成当前动作后暂停")
+        self.pause_button.setToolTip("暂停 WAIT 并保留剩余时间；按键或摇杆完成当前动作后暂停。游戏和 RNG 仍会继续推进。")
         self.pause_button.clicked.connect(self.pause_native_script)
-        layout.addWidget(self.pause_button)
-
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("DangerButton")
-        self.stop_button.setFixedSize(70, 32)
+        self.stop_button.setFixedSize(64, 32)
         self.stop_button.setIcon(workspace_icon("stop", "#AC4B42"))
-        self.stop_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.stop_button.setStyleSheet(
-            "QPushButton { background: white; color: #ac4b42; border: 1px solid #E0E5EB;"
-            " border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 10px; }"
-            " QPushButton:hover { background: #fff7f6; border-color: #d9aaa6; }"
-            " QPushButton:disabled { background: #F7F8FA; color: #9aa9a2; border-color: #E0E5EB; }"
-        )
+        self.stop_button.setStyleSheet(btn_style + "QPushButton { color: #AC4B42; }")
         self.stop_button.clicked.connect(self._stop_active_script)
-        layout.addWidget(self.stop_button)
-        # Keep file actions and execution actions together when the page narrows.
-        while layout.count():
-            layout.takeAt(0)
-        file_actions = QHBoxLayout()
-        file_actions.setSpacing(8)
-        self.library_button = self._easycon_light_button("脚本库")
-        self.library_button.clicked.connect(lambda: self.show_tools("library"))
-        self.control_tools_button = self._easycon_light_button("控制与录制")
-        self.control_tools_button.clicked.connect(lambda: self.show_tools("control"))
-        for button in (self.library_button, self.open_button, self.new_button, self.save_button, self.control_tools_button):
-            file_actions.addWidget(button)
-        shortcut_label.hide()
-        for button in (self.open_button, self.new_button, self.save_button):
-            button.setIcon(QIcon())
-            button.setStyleSheet(btn_style + "QPushButton { padding: 0 7px; }")
-        file_actions.addStretch(1)
         execution_actions = QHBoxLayout()
-        execution_actions.setSpacing(8)
+        execution_actions.setSpacing(6)
         execution_actions.addStretch(1)
         for control in (self.elapsed_label, self.run_button, self.pause_button, self.stop_button):
+            control.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             execution_actions.addWidget(control)
         layout.addLayout(file_actions)
         layout.addLayout(execution_actions)
-        self.toolbar_reflow = ToolbarReflow(area, layout)
+        self.toolbar_reflow = ToolbarReflow(area, layout, height=44, padding=0)
         return area
 
     # ── 连接设置与底部控制区 ──────────────────────────────
@@ -1604,18 +1593,9 @@ class EasyConPanel(QWidget):
             f" QPushButton:disabled {{ background: #F7F8FA; color: #9aa9a2; }}"
         )
 
-        keyboard_header = QHBoxLayout()
-        keyboard_header.setContentsMargins(0, 0, 0, 0)
-        keyboard_title = QLabel("键盘控制")
-        keyboard_title.setStyleSheet(ui_styles(f"font-size: 14px; font-weight: 500; color: {self.CLR_TEXT};"))
         self.keyboard_controller_state_label = QLabel("不可用")
         self.keyboard_controller_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.keyboard_controller_state_label.setMinimumWidth(62)
-        keyboard_header.addWidget(keyboard_title)
-        keyboard_header.addStretch(1)
-        keyboard_header.addWidget(self.keyboard_controller_state_label)
-        layout.addLayout(keyboard_header)
-
+        self.keyboard_controller_state_label.setMinimumWidth(48)
         # 保留旧复选框属性作为内部兼容入口；可见界面使用与真实状态一致的三态切换。
         self.keyboard_controller_check = QCheckBox("启用键盘控制", group)
         self.keyboard_controller_check.hide()
@@ -1626,7 +1606,7 @@ class EasyConPanel(QWidget):
         mode_frame.setFixedHeight(32)
         mode_frame.setStyleSheet(
             ui_styles(f"QFrame#KeyboardControlMode {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            " border-radius: 7px; }}"
+            " border-radius: 7px; }"
             " QFrame#KeyboardControlMode QPushButton { background: transparent; border: 0; border-radius: 0;"
             " min-height: 28px; max-height: 28px; padding: 0 6px; font-size: 12px; color: #687480; }"
             " QFrame#KeyboardControlMode QPushButton:hover:!checked { background: #F7F8FA; }"
@@ -1665,35 +1645,16 @@ class EasyConPanel(QWidget):
         self.controller_off_button = self.controller_mode_buttons["off"]
         self.controller_standby_button = self.controller_mode_buttons["standby"]
         self.controller_active_button = self.controller_mode_buttons["active"]
-        layout.addWidget(mode_frame)
 
         self.mapping_button = QPushButton("按键映射")
         self.mapping_button.setStyleSheet(btn_style)
         self.mapping_button.clicked.connect(self.open_key_mapping)
-        layout.addWidget(self.mapping_button)
-        self.keyboard_shortcut_label = QLabel("Esc 切换控制 / 待机\nCtrl + Esc 关闭")
-        self.keyboard_shortcut_label.setStyleSheet(f"font-size: 12px; color: {self.CLR_HINT};")
-        layout.addWidget(self.keyboard_shortcut_label)
-
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFixedHeight(1)
-        separator.setStyleSheet(f"background: {self.CLR_BORDER}; border: 0;")
-        layout.addSpacing(3)
-        layout.addWidget(separator)
-        layout.addSpacing(3)
-
-        recording_header = QHBoxLayout()
-        recording_header.setContentsMargins(0, 0, 0, 0)
-        recording_title = QLabel("操作录制")
-        recording_title.setStyleSheet(ui_styles(f"font-size: 14px; font-weight: 500; color: {self.CLR_TEXT};"))
+        self.keyboard_shortcut_label = QLabel("Esc 切换 · Ctrl+Esc 关闭")
+        self.keyboard_shortcut_label.setStyleSheet(f"font-size: 11px; color: {self.CLR_HINT};")
+        self.keyboard_shortcut_label.setToolTip("Esc 切换控制 / 待机；Ctrl+Esc 完全关闭键盘捕获")
         self.recording_state_label = QLabel("未录制")
         self.recording_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.recording_state_label.setMinimumWidth(62)
-        recording_header.addWidget(recording_title)
-        recording_header.addStretch(1)
-        recording_header.addWidget(self.recording_state_label)
-        layout.addLayout(recording_header)
+        self.recording_state_label.setMinimumWidth(48)
 
         recording_actions = QHBoxLayout()
         recording_actions.setContentsMargins(0, 0, 0, 0)
@@ -1701,13 +1662,12 @@ class EasyConPanel(QWidget):
         self.record_btn = QPushButton("开始录制")
         self.record_btn.setStyleSheet(btn_style)
         self.record_btn.clicked.connect(self._start_recording)
-        recording_actions.addWidget(self.record_btn, 1)
+        recording_actions.addWidget(self.record_btn)
         self.pause_btn = QPushButton("暂停")
         self.pause_btn.setStyleSheet(btn_style)
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._toggle_pause_recording)
-        recording_actions.addWidget(self.pause_btn, 1)
-        layout.addLayout(recording_actions)
+        recording_actions.addWidget(self.pause_btn)
 
         # 手柄测试按钮（保留原有功能）
         self.controller_duration = QSpinBox()
@@ -1728,23 +1688,16 @@ class EasyConPanel(QWidget):
         self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆")
         self.keyboard_mapping_label.setStyleSheet(f"font-size: 10px; color: {self.CLR_HINT}; background: transparent;")
 
-        # Keep mode and recording actions together inside the temporary panel.
-        while layout.count():
-            item = layout.takeAt(0)
-            if item.widget() and item.widget() not in (mode_frame, self.mapping_button, self.keyboard_shortcut_label):
-                item.widget().hide()
-        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        compact_heading = QHBoxLayout()
-        compact_heading.addWidget(QLabel("控制与录制"))
-        compact_heading.addStretch(1)
-        compact_heading.addWidget(self.keyboard_controller_state_label)
-        compact_heading.addWidget(self.recording_state_label)
-        layout.addLayout(compact_heading)
-        layout.addWidget(mode_frame)
+        mode_actions = QHBoxLayout()
+        mode_actions.setSpacing(6)
+        mode_actions.addWidget(mode_frame, 1)
+        mode_actions.addWidget(self.mapping_button)
+        layout.addLayout(mode_actions)
+        recording_actions.addStretch(1)
+        recording_actions.addWidget(self.keyboard_shortcut_label)
         layout.addLayout(recording_actions)
-        layout.addWidget(self.mapping_button)
-        layout.addWidget(self.keyboard_shortcut_label)
 
         return group
 
@@ -1848,6 +1801,13 @@ class EasyConPanel(QWidget):
             recording_text,
             recording_state,
         )
+        if self._recording:
+            self.control_tools_button.setText(f"{'录制暂停' if self._recording_paused else '录制中'} · {controller_text}")
+        elif controller_mode in {"active", "standby"}:
+            self.control_tools_button.setText("键盘控制中" if controller_mode == "active" else "键盘待机")
+        else:
+            self.control_tools_button.setText("控制与录制")
+        self.control_tools_button.setToolTip(f"键盘：{controller_text}；录制：{recording_text}\n点击展开控制与录制工具")
         self.record_btn.setIcon(workspace_icon("stop" if self._recording else "record"))
 
         can_record = (self.virtual_controller_enabled or self._recording) and not self._shutting_down
@@ -2360,7 +2320,9 @@ class EasyConPanel(QWidget):
                 cursor = QTextCursor(block)
                 self.editor.setTextCursor(cursor)
                 self.editor.setFocus()
-                self._append_log("error", f"第 {parameter.line_index + 1} 行参数 {parameter.name} 需要填写")
+                message = f"参数 {parameter.name} 需要填写"
+                self._set_script_error(message, line=parameter.line_index + 1)
+                self._append_log("error", f"第 {parameter.line_index + 1} 行{message}")
             return False
         return True
 
@@ -2527,6 +2489,8 @@ class EasyConPanel(QWidget):
             return
         stdout = getattr(result, "stdout", "")
         stderr = getattr(result, "stderr", "")
+        if getattr(result, "status", None) == EasyConStatus.FAILED:
+            self._set_script_error(str(stderr) or "脚本执行失败，请展开脚本输出")
         if stdout:
             self._append_log("stdout", str(stdout).rstrip())
         if stderr:
@@ -2555,6 +2519,7 @@ class EasyConPanel(QWidget):
         if self._shutting_down:
             return
         self.stop_requested = False
+        self._set_script_error(error)
         self._append_log("error", f"原生脚本运行失败: {error}")
         self._finish_run(
             "失败",
@@ -2594,10 +2559,13 @@ class EasyConPanel(QWidget):
             location = getattr(exc, "location", None)
             detail = getattr(exc, "message", str(exc))
             message = f"{Path(location.source).name} · 第 {location.line} 行：{detail}" if location is not None else str(exc)
+            self._set_script_error(message, source=location.source if location else None,
+                                   line=location.line if location else None)
             self.execution.show_resume_error(message)
             self._append_log("error", f"仍保持暂停，未应用修改：{message}")
             return
         self.execution.show_resume_error("")
+        self._clear_script_error()
         self.execution.show_current()
         self.execution.poll()
         self._refresh_script_action_buttons()
@@ -2662,6 +2630,8 @@ class EasyConPanel(QWidget):
             self._append_log("stdout", result.stdout.rstrip())
         if result.stderr:
             self._append_log("stderr", result.stderr.rstrip())
+        if result.status == EasyConStatus.FAILED:
+            self._set_script_error(result.stderr or "脚本执行失败，请展开脚本输出")
         status = (
             "已中止"
             if self.stop_requested or result.exit_code == 130
@@ -2690,6 +2660,7 @@ class EasyConPanel(QWidget):
             self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
             return
         self.stop_requested = False
+        self._set_script_error(error)
         self._append_log("error", f"Bridge 运行失败: {error}")
         self.bridge_status = EasyConStatus.FAILED
         self._finish_run(
@@ -2933,9 +2904,11 @@ class EasyConPanel(QWidget):
         if failure_type == "script_compile_failed":
             line = extract_compile_error_line(stdout, stderr)
             if line is None:
+                self._set_script_error(stderr or stdout or "脚本编译失败，请展开脚本输出")
                 self._append_log("error", "脚本编译失败，请查看 stderr/stdout。")
                 return
             self._append_log("error", f"脚本编译失败，疑似行号: {line}")
+            self._set_script_error(stderr or stdout, line=line)
             self.editor.go_to_line(line)
             return
         if failure_type == "device_connection_failed":
@@ -3066,6 +3039,44 @@ class EasyConPanel(QWidget):
         self.log_view.document().setMaximumBlockCount(self.log_keep_lines.value())
         self._save_config_from_ui()
 
+    def _clear_script_error(self) -> None:
+        self._script_error_location = None
+        self.script_error_label.setText("暂无脚本错误")
+        self.script_error_label.setToolTip("")
+        self.script_error_label.setStyleSheet("color: #64707D; border: 0; background: transparent; font-size: 12px;")
+        self.locate_error_button.hide()
+
+    def _set_script_error(self, message: str, *, source: str | None = None, line: int | None = None) -> None:
+        match = re.search(r"^(.+):(\d+):\d+:\s*", message, re.MULTILINE)
+        if match:
+            source = source or match[1].rsplit(": ", 1)[-1]
+            line = int(match[2]) if line is None else line
+        if line is None:
+            line = extract_compile_error_line("", message)
+        source = source or str(self.current_run_script_path or self.execution.current_source())
+        self._script_error_location = (source, line) if line and line > 0 else None
+        summary = next((part.strip() for part in message.splitlines() if part.strip()), "脚本执行失败")
+        if match:
+            summary = next((part.strip() for part in message[match.end():].splitlines() if part.strip()), summary)
+        self.script_error_label.setText(f"第 {line} 行：{summary}" if line else summary)
+        self.script_error_label.setToolTip(message)
+        self.script_error_label.setStyleSheet("color: #AC4B42; border: 0; background: transparent; font-size: 12px;")
+        self.locate_error_button.setVisible(self._script_error_location is not None)
+
+    def _locate_script_error(self) -> None:
+        if self._script_error_location is None:
+            return
+        source, line = self._script_error_location
+        self.execution.follow.setChecked(False)
+        if source_key(source) == source_key(self.execution.current_source()):
+            self.execution.show_current()
+        else:
+            self.execution.show_source(source)
+        if source_key(self.execution.viewed_source) == source_key(source):
+            editor = self.execution.stack.currentWidget()
+            editor.go_to_line(line)
+            editor.setFocus()
+
     def _append_log(self, level: str, message: str) -> None:
         text = str(message)
         sink_level = {
@@ -3087,12 +3098,14 @@ class EasyConPanel(QWidget):
         }.get(level, "#52615A")
         ts = datetime.now().strftime("%H:%M:%S")
         for line in text.splitlines() or [""]:
-            self.log_view.append(f'<span style="color:{color}">[{ts}] {line}</span>')
+            self.log_view.append(f'<span style="color:{color}">[{ts}] {escape(line)}</span>')
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
         latest_line = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), None)
         if latest_line is not None:
             self.latest_log_label.setText(latest_line)
             self.latest_log_label.setToolTip(text)
+        if level == "error" and extract_compile_error_line("", text) is not None:
+            self._set_script_error(text)
 
     def _log_context_menu(self, pos):
         menu = self.log_view.createStandardContextMenu()
