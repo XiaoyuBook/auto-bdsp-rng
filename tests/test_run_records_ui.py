@@ -37,6 +37,58 @@ def _messages(panel: RunLogPanel) -> list[str]:
     return [entry.message for entry in panel.visible_entries()]
 
 
+@pytest.mark.parametrize("invalidate", ["refilter", "no-candidate", "seed"])
+def test_round_candidate_snapshot_clears_when_search_is_invalidated(app, invalidate):
+    from types import SimpleNamespace
+
+    history = HistoryPanel()
+    history.begin_run("run-1", "帝牙卢卡")
+    history.cycle_start(1)
+    history.seed_captured("first-seed", 0, 0, 1000)
+    history.candidates_found([SimpleNamespace(advances=100)], 0)
+    assert history.round_candidate_table.rowCount() == 1
+
+    if invalidate == "refilter":
+        history.candidates_refiltered([], -1)
+    elif invalidate == "no-candidate":
+        history.target_missed(100, 101)
+        history.cycle_no_candidate()
+    else:
+        history.seed_captured("new-seed", 0, 0, 1000)
+    assert history.round_candidate_table.rowCount() == 0
+    assert history.locked_adv_value_label.text() == "-"
+    assert history.candidate_value_label.text() == "0 个"
+
+    history.cycle_start(2)
+    history.candidates_found([SimpleNamespace(advances=200)], 0)
+    assert history.round_candidate_table.rowCount() == 1
+    history.round_list.setCurrentRow(1)
+    assert history.round_candidate_table.rowCount() == 0
+    assert "adv=100" in history.text_view.toPlainText()
+
+
+@pytest.mark.parametrize("after_miss", ["next-round", "finish"])
+def test_starter_missed_round_keeps_its_outcome_and_reason(app, tmp_path, after_miss):
+    window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
+    history = window.history_tab
+    history.begin_run("starter-run", "草苗龟")
+    window._handle_auto_history_event("cycle_start", (1,))
+    window._handle_auto_history_event("target_missed", (100, 101))
+    reason = "已错过选择帧，本轮不选精灵"
+    window._handle_auto_history_event("starter_missed", (reason, 66))
+
+    if after_miss == "next-round":
+        window._handle_auto_history_event("cycle_start", (2,))
+        history.round_list.setCurrentRow(1)
+    else:
+        history.finish_run("starter-run", "已完成", round_id=1)
+    assert history.detail_status_label.text() == "错过目标"
+    assert "御三家选择未执行" in history.detail_title_label.text()
+    assert reason in history.warning_label.text()
+    assert f"使用 delay: 66  原因: {reason}" in history.text_view.toPlainText()
+    assert any(reason in entry.message for entry in window._run_log_buffer.snapshot())
+
+
 def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_path):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
     window.resize(1150, 900)

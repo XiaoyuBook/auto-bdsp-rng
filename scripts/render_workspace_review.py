@@ -98,6 +98,7 @@ def populate(w):
 
 
 def capture(w, name, page, state, width, height, out):
+    w.run_log_window.hide()
     w.tabs.setCurrentWidget(page)
     w.easycon_tab.hide_tools()
     w.easycon_tab.output_toggle.setChecked(name == "script-output")
@@ -126,9 +127,8 @@ def capture(w, name, page, state, width, height, out):
         w.size_filter_toggle.setChecked(name == "data-filter")
         w.bdsp_config_scroll.verticalScrollBar().setValue(0)
     elif name == "details":
-        w.run_records_tab.show_logs(None)
+        w.run_log_window.show_logs()
     elif name.startswith("records"):
-        w.run_records_tab.show_rounds()
         w.history_tab.round_picker_button.setChecked(name == "records-list")
         w.history_tab.detail_scroll.verticalScrollBar().setValue(0)
     elif name in ("script-control", "script-library"):
@@ -138,8 +138,8 @@ def capture(w, name, page, state, width, height, out):
         target = w.bdsp_seed64_inputs[0] if name == "data-rng" else w.iv_min[0]
         w.bdsp_config_scroll.ensureWidgetVisible(target, 0, 8)
         settle(w)
-    if name in ("seed-advanced", "seed-auto"):
-        target = w.reidentify_1_pk_npc if name == "seed-advanced" else w.status_group
+    if name in ("seed-advanced", "seed-recognition"):
+        target = w.reidentify_1_pk_npc if name == "seed-advanced" else w.capture_recognition_group
         w.project_xs_config_scroll.ensureWidgetVisible(target, 0, 8)
         settle(w)
     if args.task_settings_only or (args.task_groups_only and page in (w.auto_rng_tab, w.auto_tid_rng_tab)):
@@ -166,7 +166,8 @@ def capture(w, name, page, state, width, height, out):
         w.history_tab.detail_scroll.ensureWidgetVisible(target, 8, 8)
         settle(w)
     filename = f"{state}-{name}-{width}x{height}-{args.dpi}.png"
-    surface = w.auto_rng_tab.runtime_dialog if name == "auto-details" else w
+    surface = (w.auto_rng_tab.runtime_dialog if name == "auto-details" else
+               w.run_log_window if name == "details" else w)
     surface.grab().save(str(out / filename))
     scrolls = []
     for area in page.findChildren(QScrollArea):
@@ -238,7 +239,7 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
             ("records", w.run_records_tab), ("details", w.run_records_tab),
             ("script-control", w.easycon_tab), ("script-library", w.easycon_tab), ("script-output", w.easycon_tab),
             ("records-list", w.run_records_tab), ("records-meta", w.run_records_tab), ("records-feed", w.run_records_tab),
-            ("seed-auto", w.project_xs_tab), ("seed-advanced", w.project_xs_tab),
+            ("seed-recognition", w.project_xs_tab), ("seed-advanced", w.project_xs_tab),
             ("auto-strategies", w.auto_rng_tab), ("auto-scripts", w.auto_rng_tab), ("auto-details", w.auto_rng_tab),
             ("tid-details", w.auto_tid_rng_tab), ("tid-seed", w.auto_tid_rng_tab)]
         if args.tid_columns_only:
@@ -256,7 +257,7 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
             pages = [("tid-runtime", tid), ("tid-runtime-time", tid)]
         elif args.seed_only:
             pages = [("seed", w.project_xs_tab), ("seed-advanced", w.project_xs_tab),
-                     ("seed-auto", w.project_xs_tab)]
+                     ("seed-recognition", w.project_xs_tab)]
         elif args.data_only:
             pages = [(name, w.bdsp_tab) for name in (
                 "data-encounter", "data-rng", "data-filter", "data-results")]
@@ -268,7 +269,7 @@ with tempfile.TemporaryDirectory(prefix="bdsp-workspace-review-") as temp, Monke
                      ("tid-settings", w.auto_tid_rng_tab)]
         elif args.task_groups_only:
             pages = [("auto-" + key, w.auto_rng_tab) for key in ("basic", "shiny", "transition", "continuation")]
-            pages += [("tid-settings", w.auto_tid_rng_tab), ("seed-auto", w.project_xs_tab)]
+            pages += [("tid-settings", w.auto_tid_rng_tab), ("seed-recognition", w.project_xs_tab)]
         for width, height in sizes:
             w.resize(width, height)
             for name, page in pages:

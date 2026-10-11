@@ -277,6 +277,7 @@ class _RoundRecord:
     seed_text: str | None = None
     locked_advances: int | None = None
     candidate_count: int = 0
+    candidate_snapshot: _FeedEntry | None = None
     warnings: list[str] = field(default_factory=list)
     entries: list[_FeedEntry] = field(default_factory=list)
     plain_lines: list[str] = field(default_factory=list)
@@ -1080,8 +1081,12 @@ class HistoryPanel(QWidget):
         self._scroll_top_timer.start(0)
 
     def _refresh_candidate_snapshot(self, record) -> None:
-        latest = next((entry for entry in reversed(record.entries) if entry.kind == "table" and not entry.reverse), None)
-        self._fill_candidate_table(self.round_candidate_table, latest or _FeedEntry(kind="table"))
+        self._fill_candidate_table(self.round_candidate_table, record.candidate_snapshot or _FeedEntry(kind="table"))
+
+    def _set_candidate_snapshot(self, record: _RoundRecord, entry: _FeedEntry | None) -> None:
+        record.candidate_snapshot = entry
+        if record.uid == self._selected_uid:
+            self._refresh_candidate_snapshot(record)
 
     def _scroll_selected_record_to_top(self) -> None:
         self.detail_scroll.verticalScrollBar().setValue(0)
@@ -1115,8 +1120,6 @@ class HistoryPanel(QWidget):
         record.updated_at = datetime.now()
         if record.uid == self._selected_uid:
             self._render_entry(entry)
-            if entry.kind == "table":
-                self._refresh_candidate_snapshot(record)
 
     def _touch_record(self, record: _RoundRecord | None = None) -> None:
         record = record or self._active_record()
@@ -1362,8 +1365,6 @@ class HistoryPanel(QWidget):
         *,
         reverse: bool = False,
     ) -> None:
-        if not rows:
-            return
         snapshots = tuple(_snapshot_candidate(state) for state in states)
         entry = _FeedEntry(
             kind="table",
@@ -1373,6 +1374,10 @@ class HistoryPanel(QWidget):
             reverse=reverse,
         )
         record = self._ensure_record()
+        if not reverse:
+            self._set_candidate_snapshot(record, entry)
+        if not rows:
+            return
         record.candidate_count = len(rows)
         self._candidate_count += len(rows)
         self._update_summary()
@@ -1510,6 +1515,7 @@ class HistoryPanel(QWidget):
         else:
             record.locked_advances = None
             record.candidate_count = 0
+            self._set_candidate_snapshot(record, None)
             record.detail_title = "Seed 已重新捕获"
             self._sep_thin()
             self._ts(f"重新测种，当前 Seed: {seed_text}  初始帧: {initial_advances}  (原始 Seed: {self._original_seed_text})")
@@ -1530,6 +1536,8 @@ class HistoryPanel(QWidget):
         record.detail_title = "候选搜索完成"
         if 0 <= locked_index < len(candidates):
             record.locked_advances = _get_int(candidates[locked_index], "advances")
+        else:
+            record.locked_advances = None
         record.candidate_count = len(candidates)
         self._pid_ec_seen.clear()
         self._ts(f"搜索到 {len(candidates)} 个候选")
@@ -1551,6 +1559,8 @@ class HistoryPanel(QWidget):
         record.detail_title = "候选重新筛选完成"
         if 0 <= locked_index < len(candidates):
             record.locked_advances = _get_int(candidates[locked_index], "advances")
+        else:
+            record.locked_advances = None
         record.candidate_count = len(candidates)
         self._pid_ec_seen.clear()
         self._ts(f"剩余 {len(candidates)} 个候选")
@@ -1587,6 +1597,8 @@ class HistoryPanel(QWidget):
         record.outcome = "无候选"
         record.detail_title = "本轮搜索结束"
         record.candidate_count = 0
+        record.locked_advances = None
+        self._set_candidate_snapshot(record, None)
         self._sep_thin()
         self._w(_ts("本轮结果: 无候选"), CLR_TS)
         self._sep_thin()
@@ -1600,6 +1612,15 @@ class HistoryPanel(QWidget):
         self._w(_ts(f"错过 目标 (目标帧: {missed_advances} ≤ 目前帧数: {current_advances})"), CLR_ERROR)
         self._ts("重新搜索，排除已过帧…")
         self._sep_thin()
+        self._touch_record(record)
+
+    def starter_missed(self, reason: str, used_delay: int | None = None) -> None:
+        record = self._ensure_record(target_label="自动定点")
+        record.outcome = "错过目标"
+        record.detail_title = "御三家选择未执行"
+        self._add_warning(record, str(reason))
+        delay_text = str(used_delay) if used_delay is not None else "-"
+        self._w(_ts(f"本轮结果: 错过目标  使用 delay: {delay_text}  原因: {reason}"), CLR_ERROR)
         self._touch_record(record)
 
     def cycle_result(

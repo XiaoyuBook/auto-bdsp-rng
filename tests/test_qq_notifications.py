@@ -394,6 +394,7 @@ def test_main_window_notifies_only_once_per_finished_run(task):
         auto_tid_rng_tab=SimpleNamespace(status_badge=SimpleNamespace(text=lambda: "状态：失败"), _last_progress=SimpleNamespace(target_tid=12345)),
         history_tab=SimpleNamespace(finish_run=lambda *a, **kw: None, current_target_label="草苗龟"),
         run_records_tab=SimpleNamespace(set_run_finished=lambda *a: None),
+        video_overlay=SimpleNamespace(set_automatic=lambda *a: None, finish_capture=lambda: None),
         _update_auto_rng_header=lambda **kw: None,
         _run_outcome_from_status=MainWindow._run_outcome_from_status,
         _notify_qq_task=lambda *args: notifications.append(args),

@@ -8047,6 +8047,15 @@ class MainWindow(QMainWindow):
                 f"错过目标；目标 Adv {target_adv}；当前 Adv {current_adv}",
                 level="WARNING",
             )
+        elif event == "starter_missed" and len(values) >= 1:
+            reason = str(values[0])
+            used_delay = int(values[1]) if len(values) >= 2 and values[1] is not None else None
+            h.starter_missed(reason, used_delay)
+            self._write_run_log(
+                "历史记录",
+                f"本轮结果：错过目标；{reason}；delay {used_delay if used_delay is not None else '-'}",
+                level="WARNING",
+            )
         elif event == "cycle_no_candidate":
             self.auto_rng_tab.clear_candidate_targets("本轮未找到可达候选")
             h.cycle_no_candidate()
