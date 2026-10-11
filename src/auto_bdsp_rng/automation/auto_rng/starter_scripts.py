@@ -1,10 +1,28 @@
-"""Bundled scripts for starter automation, independent of manual selections."""
+"""Fixed configuration and bundled scripts for starter automation."""
 from dataclasses import replace
 from pathlib import Path
 
+from auto_bdsp_rng.blink_detection import ProjectXsTrackingConfig
+from auto_bdsp_rng.resources import resource_path
+
 from .models import AutoRngConfig, AutoRngPhase
 from .scripts import AutoScriptError
-from .starter_flow import STARTER_SLOTS, validate_starter_delay
+from .starter_flow import STARTER_SLOTS, STARTER_TIMING, validate_starter_delay
+
+
+def starter_seed_config_path() -> Path:
+    return resource_path("third_party", "Project_Xs_CHN", "configs", "config_starter.json")
+
+
+def bind_starter_tracking_config(config: ProjectXsTrackingConfig) -> ProjectXsTrackingConfig:
+    """Fix the clock parameters while retaining the calibrated eye ROI/threshold."""
+    return replace(
+        config, white_delay=STARTER_TIMING["timeDelay"],
+        advance_delay=STARTER_TIMING["advanceDelay"],
+        advance_delay_2=STARTER_TIMING["advanceDelay2"],
+        npc=STARTER_TIMING["npc"], timeline_npc=STARTER_TIMING["timelineNpc"],
+        pokemon_npc=STARTER_TIMING["pokemonNpc"], reidentify_1_pk_npc=False,
+    )
 
 
 def starter_script_paths() -> tuple[Path, Path]:
@@ -33,7 +51,7 @@ def validate_starter_config(config: AutoRngConfig) -> None:
 
 def bind_starter_config(config: AutoRngConfig) -> AutoRngConfig:
     seed, reverse = starter_script_paths()
-    result = replace(config, starter_automation=True, seed_script_path=seed,
+    result = replace(config, starter_automation=True, seed_config_path=str(starter_seed_config_path()), seed_script_path=seed,
                      reverse_script_path=reverse, advance_script_path=None,
                      hit_script_path=None, exit_script_path=None, escape_script_path=None,
                      auto_reverse=True, escape_continue=False, sync_mode=0, sync_nature="")

@@ -63,7 +63,7 @@ from auto_bdsp_rng.automation.auto_rng.delay_profiles import (
 )
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_rng.starter_flow import STARTER_SLOTS
-from auto_bdsp_rng.automation.auto_rng.starter_scripts import bind_starter_config, validate_starter_config
+from auto_bdsp_rng.automation.auto_rng.starter_scripts import bind_starter_config, starter_seed_config_path, validate_starter_config
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     DEFAULT_ADVANCE_SCRIPT_NAME,
     DEFAULT_RECORD_SCRIPT_NAME,
@@ -1321,7 +1321,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.starter_automation_check = QCheckBox("御三家全自动")
         self.starter_automation_check.setVisible(False)
         self.starter_automation_check.setToolTip(
-            "保证放大模式下 config_starter 配置能够正常捕捉 Seed 即可。"
+            "请停留在“怎么回事？刚才那两人……”对话界面，在放大模式下确认眼睛识别正常、能够捕捉 Seed。"
+            "固定使用 config_starter.json，仅可调整匹配阈值和眼睛 ROI。"
         )
         layout.addWidget(self.starter_automation_check)
         self.starter_script_description = QLabel(self.starter_automation_check.toolTip())
@@ -1458,7 +1459,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if not hasattr(self, "starter_automation_check") or not hasattr(self, "script_labels"):
             return
         valid = self._starter_targets_valid()
-        busy = self._preparing or self._runner_thread is not None
+        busy = self._preparing or self._runner_thread is not None or not self._start_available
         # The option only belongs to a single, supported starter target.  Keep
         # it out of the normal script workflow until the target selection
         # makes the mode meaningful; a busy valid target remains visible but
@@ -1468,6 +1469,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if not valid and self.starter_automation_check.isChecked():
             self.starter_automation_check.setChecked(False)
         active = self.starter_automation_check.isChecked()
+        if hasattr(self, "seed_config_binding"):
+            self.seed_config_binding.set_fixed_path(starter_seed_config_path() if active else None)
         if active and self._starter_manual_strategy_values is None:
             self._starter_manual_strategy_values = (
                 self.auto_reverse_combo.currentIndex(), self.sync_combo.currentIndex(),

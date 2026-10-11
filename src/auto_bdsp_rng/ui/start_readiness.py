@@ -236,7 +236,7 @@ class StartReadinessController(QObject):
         else:
             controller = ("blocked", "尚未选择可用串口，请打开连接设置。")
         items.append(ReadinessItem("controller", "伊机控", *controller, "controller", "连接设置"))
-        paths = [w._selected_auto_seed_config_path()]
+        paths = [w._selected_auto_seed_config_path() if tid else w._selected_auto_rng_seed_config_path()]
         if not tid:
             paths.append(w._selected_auto_reidentify_config_path())
         error = self._validate_files("seed", paths, tid, lambda: [

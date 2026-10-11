@@ -5,6 +5,7 @@ from PySide6.QtCore import QObject, QPoint, QSignalBlocker, QTimer, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout
 
 from auto_bdsp_rng.blink_detection import ProjectXsIntegrationError, load_project_xs_config
+from auto_bdsp_rng.automation.auto_rng.starter_scripts import bind_starter_tracking_config, starter_seed_config_path
 from auto_bdsp_rng.ui.workspace_controls import configure_disclosure_button
 from auto_bdsp_rng.ui.workspace_theme import ui_styles
 
@@ -19,6 +20,7 @@ class SeedConfigEditorController(QObject):
         self.previous_selection = None
         self.eye_drafts = set()
         self.testing = False
+        self.starter_locked = False
         self.start_tooltips = []
         self.editor = QFrame(window)
         self.editor.setObjectName("SeedConfigEditor")
@@ -31,7 +33,7 @@ class SeedConfigEditorController(QObject):
         self.title.setWordWrap(True)
         self.title.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.title)
-        note = QLabel("保存后影响所有使用此配置的任务；取消会放弃本次参数和框选修改。")
+        note = self.note = QLabel("保存后影响所有使用此配置的任务；取消会放弃本次参数和框选修改。")
         note.setObjectName("SeedEditorNote")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -100,6 +102,10 @@ class SeedConfigEditorController(QObject):
         ):
             w.statusBar().showMessage("请先结束捕捉、框选或自动任务，再编辑配置。")
             return
+        starter_locked = (binding is w.auto_rng_tab.seed_config_binding
+                          and w.auto_rng_tab.starter_automation_check.isChecked())
+        if starter_locked:
+            path = str(starter_seed_config_path())
         try:
             target = load_project_xs_config(path)
             self.previous_config = w._config_from_form()
@@ -107,6 +113,7 @@ class SeedConfigEditorController(QObject):
             w._show_error("打开配置失败", exc)
             return
         self.binding = binding
+        self.starter_locked = starter_locked
         self.previous_selection = (w.config_combo.currentData(), w.config_combo.currentText())
         self.panel = w.auto_tid_rng_tab if binding is w.auto_tid_rng_tab.seed_config_binding else w.auto_rng_tab
         self.testing = False
@@ -117,9 +124,14 @@ class SeedConfigEditorController(QObject):
             index = w.config_combo.count() - 1
         with QSignalBlocker(w.config_combo):
             w.config_combo.setCurrentIndex(index)
-        w._apply_capture_config_to_form(target)
+        w._apply_capture_config_to_form(bind_starter_tracking_config(target) if starter_locked else target)
         self.title.setText(f"配置编辑 · {Path(path).name}")
         self.title.setToolTip(str(path))
+        self.note.setText(
+            "御三家固定配置：仅可调整右侧视频的匹配阈值和眼睛 ROI；其他参数只读。"
+            "请在“怎么回事？刚才那两人……”对话界面的放大模式下测试眼睛捕捉。"
+            if starter_locked else "保存后影响所有使用此配置的任务；取消会放弃本次参数和框选修改。"
+        )
         self.status.setText("使用当前参数测试捕捉；参数在点击保存后写入配置文件。")
         binding.layout().addWidget(self.editor)
         self.form_layout.insertWidget(0, w.capture_recognition_group)
@@ -165,7 +177,9 @@ class SeedConfigEditorController(QObject):
         self.save_button.setEnabled(not capturing and not selecting)
         self.cancel_button.setEnabled(not capturing)
         w.capture_recognition_group.setEnabled(not capturing)
-        w.capture_timing_group.setEnabled(not capturing)
+        w.capture_timing_group.setEnabled(not capturing and not self.starter_locked)
+        w.raw_screenshot_button.setEnabled(not capturing and not self.starter_locked)
+        w.calibrate_shiny_threshold_button.setVisible(not self.starter_locked)
         w.video_overlay.set_configuration_mode(
             self.editor.isVisible() or w.tabs.currentWidget() is w.project_xs_tab
         )
@@ -216,6 +230,8 @@ class SeedConfigEditorController(QObject):
 
     def close(self, *, saved):
         w = self.window
+        if saved and self.starter_locked:
+            w._apply_capture_config_to_form(load_project_xs_config(w._selected_config_path()))
         self.editor.hide()
         for index, group in enumerate((w.capture_recognition_group, w.capture_timing_group)):
             w.project_xs_config_scroll.widget().layout().insertWidget(index, group)
@@ -243,6 +259,9 @@ class SeedConfigEditorController(QObject):
                     w.config_combo.setEditText(text)
             w._apply_capture_config_to_form(previous)
         self.binding = self.panel = self.previous_config = None
+        self.starter_locked = False
+        w.raw_screenshot_button.setEnabled(True)
+        w.calibrate_shiny_threshold_button.show()
         self.previous_selection = None
         for view in self._bindings():
             view.selector.setEnabled(True)

@@ -1,4 +1,6 @@
 """Shared presentation for automation parameters and script assignments."""
+from pathlib import Path
+
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -173,6 +175,7 @@ class TaskConfigBinding(QWidget):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self._source = None
+        self._fixed_path = None
         self._refresh_pending = False
         self.combo = ChevronComboBox()
         self.combo.setAccessibleName(title)
@@ -210,6 +213,12 @@ class TaskConfigBinding(QWidget):
             signal.connect(self._schedule_refresh)
         self.refresh()
 
+    def set_fixed_path(self, path):
+        fixed = str(path) if path is not None else None
+        if fixed != self._fixed_path:
+            self._fixed_path = fixed
+            self.refresh()
+
     def _schedule_refresh(self, *_args):
         if self._refresh_pending:
             return
@@ -222,19 +231,27 @@ class TaskConfigBinding(QWidget):
 
     def refresh(self, *_args):
         source = self._source
-        if source is None:
+        if source is None and self._fixed_path is None:
+            with QSignalBlocker(self.combo):
+                self.combo.clear()
+            self.combo.setEnabled(False)
+            self.edit_button.setEnabled(False)
             return
         with QSignalBlocker(self.combo):
             self.combo.clear()
-            for index in range(source.count()):
-                self.combo.addItem(source.itemText(index), source.itemData(index))
-            self.combo.setCurrentIndex(source.currentIndex())
-        self.combo.setEnabled(source.count() > 0)
+            if self._fixed_path is not None:
+                self.combo.addItem(Path(self._fixed_path).name, self._fixed_path)
+                self.combo.setCurrentIndex(0)
+            else:
+                for index in range(source.count()):
+                    self.combo.addItem(source.itemText(index), source.itemData(index))
+                self.combo.setCurrentIndex(source.currentIndex())
+        self.combo.setEnabled(self._fixed_path is None and self.combo.count() > 0)
         self.edit_button.setEnabled(bool(self.combo.currentData()))
-        self.combo.setToolTip(str(self.combo.currentData() or source.toolTip()))
+        self.combo.setToolTip(str(self.combo.currentData() or (source.toolTip() if source else "")))
 
     def _selection_changed(self, index):
-        if self._source is not None and index >= 0:
+        if self._fixed_path is None and self._source is not None and index >= 0:
             self._source.setCurrentIndex(self._source.findData(self.combo.currentData()))
             self.refresh()
 

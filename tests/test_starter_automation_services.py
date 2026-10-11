@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -6,7 +7,8 @@ import pytest
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 
-from auto_bdsp_rng.automation.auto_rng import starter_flow
+from auto_bdsp_rng.automation.auto_rng import starter_flow, starter_scripts
+from auto_bdsp_rng.blink_detection import load_project_xs_config, save_project_xs_config
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngSeedResult, AutoRngTarget, ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.dialog_timing import DialogTimingEvent, DialogTimingResult
 from auto_bdsp_rng.blink_detection.models import BlinkObservation
@@ -23,9 +25,16 @@ def starter_config(window, species, tmp_path):
 
 
 def test_starter_capture_preset_is_in_memory_and_baseline_matches_clock(window, monkeypatch, tmp_path):
+    fixed_path = tmp_path / "config_starter.json"
+    original = load_project_xs_config(window._selected_auto_seed_config_path())
+    original = replace(original, source_path=fixed_path, capture=replace(original.capture, threshold=.83, roi=(10, 20, 80, 100)))
+    save_project_xs_config(original, fixed_path)
+    monkeypatch.setattr(starter_scripts, "resource_path", lambda *_parts: fixed_path)
     config = starter_config(window, 390, tmp_path)
-    saved = window._selected_auto_seed_config_path()
+    saved = fixed_path
     before = Path(saved).read_bytes()
+    # A stale/manual path supplied by a caller cannot override the starter file.
+    config = replace(config, seed_config_path=window._selected_auto_seed_config_path())
     state = SeedState32(1, 2, 3, 4)
     capture_configs, npcs = [], []
     observation = BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=100.0)
@@ -38,7 +47,8 @@ def test_starter_capture_preset_is_in_memory_and_baseline_matches_clock(window, 
     actual = window.auto_rng_tab.runtime_insights.pending_inputs["实际采集配置"]
     assert (actual.white_delay, actual.advance_delay, actual.advance_delay_2) == (0, 41, 48)
     assert (actual.npc, actual.timeline_npc, actual.pokemon_npc) == (1, -1, 2)
-    assert capture_configs[0].threshold == .7
+    assert actual.source_path == fixed_path
+    assert capture_configs[0].threshold == .83 and capture_configs[0].roi == (10, 20, 80, 100)
     assert capture_configs[0].blink_count == 40 and npcs == [1]
     assert result.current_advances == 1 and result.seed == state and result.npc == 1
     assert Path(saved).read_bytes() == before

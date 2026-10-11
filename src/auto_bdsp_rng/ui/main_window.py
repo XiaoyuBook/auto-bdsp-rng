@@ -136,6 +136,7 @@ from auto_bdsp_rng.automation.auto_rng.pokemon_info_ocr import (
 )
 from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner, AutoRngServices, ProjectXsAdvanceCounter
 from auto_bdsp_rng.automation.auto_rng.scripts import ROAMER_SPECIES, STARTER_SPECIES
+from auto_bdsp_rng.automation.auto_rng.starter_scripts import bind_starter_tracking_config, starter_seed_config_path
 from auto_bdsp_rng.automation.auto_rng.search import (
     StaticSearchCriteria,
     StaticSearchTarget,
@@ -5118,6 +5119,11 @@ class MainWindow(QMainWindow):
         data = self.seed_config_combo.currentData()
         return str(data or self.seed_config_combo.currentText())
 
+    def _selected_auto_rng_seed_config_path(self) -> str:
+        if self.auto_rng_tab.starter_automation_check.isChecked():
+            return str(starter_seed_config_path())
+        return self._selected_auto_seed_config_path()
+
     def _selected_auto_reidentify_config_path(self) -> str:
         data = self.reidentify_config_combo.currentData()
         return str(data or self.reidentify_config_combo.currentText())
@@ -5153,6 +5159,13 @@ class MainWindow(QMainWindow):
 
     def _config_from_form(self) -> ProjectXsTrackingConfig:
         loaded = load_project_xs_config(self._selected_config_path(), blink_count=DEFAULT_BLINK_COUNT)
+        editor = getattr(self, "seed_config_editor", None)
+        if editor is not None and editor.active and editor.starter_locked:
+            capture = replace(
+                loaded.capture, threshold=self.threshold.value(),
+                roi=(int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0)),
+            )
+            return bind_starter_tracking_config(replace(loaded, capture=self._shared_capture_config(capture)))
         capture = BlinkCaptureConfig(
             eye_image_path=self._eye_image_path or loaded.capture.eye_image_path,
             roi=(int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0)),
@@ -5216,6 +5229,11 @@ class MainWindow(QMainWindow):
     def save_current_config(self) -> None:
         try:
             config = self._config_from_form()
+            if self.seed_config_editor.active and self.seed_config_editor.starter_locked:
+                original = load_project_xs_config(config.source_path)
+                config = replace(original, capture=replace(
+                    original.capture, roi=config.capture.roi, threshold=config.capture.threshold,
+                ))
             save_project_xs_config(config, config.source_path)
         except (ProjectXsIntegrationError, OSError, ValueError) as exc:
             self._show_error("Save config failed", exc)
@@ -6194,6 +6212,9 @@ class MainWindow(QMainWindow):
     def start_eye_capture_selection(self) -> None:
         if self._is_capturing():
             return
+        if self.seed_config_editor.active and self.seed_config_editor.starter_locked:
+            self.statusBar().showMessage("御三家固定眼睛模板，仅可调整 ROI 和匹配阈值。")
+            return
         self._begin_preview_selection("eye")
         self.statusBar().showMessage(self._text("eye_selecting"))
 
@@ -6366,6 +6387,9 @@ class MainWindow(QMainWindow):
         self.captureSelectionFinished.emit("roi", True)
 
     def apply_selected_eye(self, roi: object, *, preserve_roi: bool = False) -> None:
+        if self.seed_config_editor.active and self.seed_config_editor.starter_locked:
+            self.statusBar().showMessage("御三家固定眼睛模板，仅可调整 ROI 和匹配阈值。")
+            return
         x, y, width, height = (int(value) for value in roi)  # type: ignore[union-attr]
         try:
             import cv2
@@ -7578,7 +7602,7 @@ class MainWindow(QMainWindow):
                 return
             config = replace(
                 config,
-                seed_config_path=self._selected_auto_seed_config_path(),
+                seed_config_path=str(starter_seed_config_path()) if config.starter_automation else self._selected_auto_seed_config_path(),
                 reidentify_config_path=self._selected_auto_reidentify_config_path(),
             )
             self._active_auto_rng_run_id = uuid.uuid4().hex
@@ -8226,7 +8250,7 @@ class MainWindow(QMainWindow):
             DialogObserver, STARTER_SLOTS, STARTER_TIMING, StarterFlow,
             crop_starter_dialog,
         )
-        seed_config_path = config.seed_config_path or self._selected_auto_seed_config_path()
+        seed_config_path = str(starter_seed_config_path()) if config.starter_automation else (config.seed_config_path or self._selected_auto_seed_config_path())
         reidentify_config_path = config.reidentify_config_path or self._selected_auto_reidentify_config_path()
         tracking_config = load_project_xs_config(seed_config_path, blink_count=DEFAULT_BLINK_COUNT)
         exit_tracking_config = load_project_xs_config(reidentify_config_path, blink_count=NOISY_REIDENTIFY_BLINK_COUNT)
@@ -8235,14 +8259,7 @@ class MainWindow(QMainWindow):
             capture=self._shared_capture_config(tracking_config.capture),
         )
         if config.starter_automation:
-            tracking_config = replace(
-                tracking_config, white_delay=STARTER_TIMING["timeDelay"],
-                advance_delay=STARTER_TIMING["advanceDelay"],
-                advance_delay_2=STARTER_TIMING["advanceDelay2"],
-                npc=STARTER_TIMING["npc"], timeline_npc=STARTER_TIMING["timelineNpc"],
-                pokemon_npc=STARTER_TIMING["pokemonNpc"], reidentify_1_pk_npc=False,
-                capture=replace(tracking_config.capture, threshold=STARTER_TIMING["threshold"]),
-            )
+            tracking_config = bind_starter_tracking_config(tracking_config)
         exit_tracking_config = replace(
             exit_tracking_config,
             capture=self._shared_capture_config(exit_tracking_config.capture),
