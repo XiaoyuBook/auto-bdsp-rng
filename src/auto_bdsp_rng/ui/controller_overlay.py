@@ -122,6 +122,7 @@ class ControllerStateOverlay(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self.setWindowOpacity(0.5)
+        self.setToolTip("左键：控制 / 待机；右键拖动，单击复位；中键或 Ctrl+Esc 关闭；Esc 切换控制 / 待机")
 
         self._report_provider = report_provider
         self._connected_provider = connected_provider

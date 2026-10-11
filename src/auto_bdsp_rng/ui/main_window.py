@@ -925,7 +925,7 @@ TEXT = {
         "preview": "Preview",
         "project_xs": "Seed 捕捉",
         "bdsp_search": "定点数据区",
-        "easycon": "EasyCon",
+        "easycon": "Script Editor",
         "auto_rng": "Auto Static RNG",
         "auto_tid_rng": "Auto TID RNG",
         "status": "Status",
@@ -985,7 +985,7 @@ TEXT = {
         "preview": "捕获预览",
         "project_xs": "Seed 捕捉",
         "bdsp_search": "定点数据区",
-        "easycon": "伊机控",
+        "easycon": "脚本编辑区",
         "auto_rng": "自动定点乱数",
         "auto_tid_rng": "自动 TID 乱数",
         "status": "状态",
@@ -1857,7 +1857,7 @@ class MainWindow(QMainWindow):
         self.easycon_header_button = DeviceStatusButton("伊机控", "controller")
         self.easycon_header_button.setObjectName("EasyConHeaderButton")
         self.easycon_header_button.setText("伊机控 未连接")
-        self.easycon_header_button.setToolTip("打开伊机控连接设置")
+        self.easycon_header_button.setToolTip("连接设置、虚拟手柄、按键映射")
         self.easycon_header_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.help_button = QToolButton()
         self.help_button.setObjectName("HelpMenuButton")
@@ -1937,8 +1937,10 @@ class MainWindow(QMainWindow):
         )
         self.easycon_tab.workspace_splitter.settings = self._profile_settings
         self.easycon_tab.workspace_splitter.restore_sizes()
-        self.easycon_header_button.clicked.connect(
-            self.easycon_tab.show_connection_dialog
+        self.easycon_header_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.easycon_header_button.setMenu(self.easycon_tab.controller_tools_menu)
+        self.easycon_tab.controllerToolsChanged.connect(
+            lambda: self._update_easycon_header(*self.easycon_tab.connection_presentation())
         )
         self.easycon_tab.connectionPresentationChanged.connect(
             self._update_easycon_header
@@ -2099,7 +2101,8 @@ class MainWindow(QMainWindow):
         elif page is self.bdsp_tab:
             self.query_toggle.setChecked(True)
         elif page is self.easycon_tab:
-            page.show_tools("control")
+            page.show_connection_dialog()
+            return
         configuration = {
             self.auto_rng_tab: self.auto_rng_tab.config_panel,
             self.auto_tid_rng_tab: self.auto_tid_rng_tab.config_scroll,
@@ -5350,7 +5353,11 @@ class MainWindow(QMainWindow):
         if button is None:
             return
         button.set_status(summary, state)
-        button.setToolTip(f"{summary}\n{detail}\n点击打开伊机控连接设置")
+        panel = self.easycon_tab
+        button.setToolTip(
+            f"{summary}\n{detail}\n键盘：{panel.keyboard_controller_state_label.text()}；"
+            f"录制：{panel.recording_state_label.text()}\n连接设置、虚拟手柄、按键映射"
+        )
         button.setEnabled(enabled)
 
     def _set_video_source_config_enabled(self, enabled: bool) -> None:

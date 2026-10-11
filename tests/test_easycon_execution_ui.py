@@ -267,7 +267,7 @@ def test_follow_reveals_line_after_temporary_tools_and_showing_page(easycon_pane
     panel.load_script(path)
     trace = publish(panel, path, text, 70)
     QTest.qWait(100)
-    panel.show_tools("control")
+    panel.show_tools("library")
     panel.hide_tools()
     panel.editor.verticalScrollBar().setValue(panel.editor.verticalScrollBar().maximum())
     trace.record(ExecutionPoint(SourceLocation(str(path), 1), "等待", monotonic()))

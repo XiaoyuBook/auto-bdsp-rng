@@ -15,6 +15,8 @@ from auto_bdsp_rng.ui.workspace_theme import primary_button_styles, ui_font, ui_
 
 
 _SYMBOLS = {
+    "plug": '<path d="M7 2v5m10-5v5M6 7h12v5a6 6 0 0 1-12 0ZM12 18v4"/>',
+    "keyboard": '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M5 9h1m3 0h1m3 0h1m3 0h1M5 12h1m3 0h1m3 0h1m3 0h1M6 16h12"/>',
     "video": '<rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-4v12l-6-4"/>',
     "controller": '<path d="M7 7h10c2 0 3 2 3.5 4l1 6c.4 2-1.5 3-3 1l-2-2h-9l-2 2c-1.5 2-3.4 1-3-1l1-6C4 9 5 7 7 7Z"/><path d="M6 11h4m-2-2v4m8-3h.01M18 13h.01"/>',
     "help": '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/>',

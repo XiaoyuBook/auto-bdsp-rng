@@ -13,7 +13,6 @@ from time import monotonic
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -747,6 +746,7 @@ class EasyConPanel(QWidget):
     bridge_log = Signal(str, str)
     capture_keep_awake_finished = Signal(int, str, str, int, str, bool)
     connectionPresentationChanged = Signal(str, str, str, bool)
+    controllerToolsChanged = Signal()
     virtualControllerKeyEvent = Signal(int, bool, bool, int)
     virtualControllerHookStopped = Signal(object, int)
     virtualControllerAction = Signal(object, bool)
@@ -827,6 +827,7 @@ class EasyConPanel(QWidget):
         self._keyboard_hook_factory = keyboard_hook_factory or WindowsKeyboardHook
         self._keyboard_hook: WindowsKeyboardHook | None = None
         self._vpad_input_source: str | None = None
+        self._controller_menu_input_suspended = False
         self._vpad_generation = 0
         self._qt_passthrough_pressed_keys: set[int] = set()
         self._controller_overlay: ControllerStateOverlay | None = None
@@ -930,6 +931,7 @@ class EasyConPanel(QWidget):
         layout.setSpacing(0)
         self.setStyleSheet(f"QWidget {{ background: {self.CLR_BG}; color: {self.CLR_TEXT}; font-size: 13px; }}")
 
+        self._build_controller_tools()
         side_panel = self._build_log_area()
         editor_panel = self._build_editor_area()
         layout.addWidget(self._build_right_buttons())
@@ -953,16 +955,14 @@ class EasyConPanel(QWidget):
         tools_layout.setContentsMargins(12, 6, 12, 6)
         tools_layout.setSpacing(6)
         tools_header = QHBoxLayout()
-        self.tools_title = QLabel("控制与录制")
+        self.tools_title = QLabel("脚本库")
         tools_header.addWidget(self.tools_title)
         tools_header.addStretch(1)
-        tools_header.addWidget(self.keyboard_controller_state_label)
-        tools_header.addWidget(self.recording_state_label)
         close_tools = QToolButton()
         close_tools.setText("收起")
         close_tools.setArrowType(Qt.ArrowType.UpArrow)
         close_tools.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        close_tools.setToolTip("收起工具，返回编辑；键盘控制与录制状态保持不变")
+        close_tools.setToolTip("收起脚本库，返回编辑")
         close_tools.setStyleSheet("QToolButton { border: 0; background: transparent; padding: 2px 4px; color: #64707D; }")
         self.close_tools_button = close_tools
         close_tools.clicked.connect(self.hide_tools)
@@ -987,20 +987,17 @@ class EasyConPanel(QWidget):
         self.easycon_status.hide()
 
     def show_tools(self, section="library") -> None:
-        self._tools_section = section
-        self.tools_title.setText("脚本库" if section == "library" else "控制与录制")
-        self.script_sources.setVisible(section == "library")
+        if section == "control":
+            self.show_virtual_controller()
+            return
+        self.script_sources.show()
         self.source_title.hide()
-        self.keyboard_control_group.setVisible(section != "library")
-        self.keyboard_controller_state_label.setVisible(section != "library")
-        self.recording_state_label.setVisible(section != "library")
         self.tools_panel.show()
         self._sync_tools_layout()
-        target = self.record_btn if section == "control" else self.script_sources
         self.tools_panel.layout().activate()
         self.sidebar_scroll.widget().layout().activate()
-        self.sidebar_scroll.ensureWidgetVisible(target, 0, 0)
-        target.setFocus()
+        self.sidebar_scroll.ensureWidgetVisible(self.script_sources, 0, 0)
+        self.script_sources.setFocus()
 
     def hide_tools(self) -> None:
         self.tools_panel.hide()
@@ -1012,12 +1009,9 @@ class EasyConPanel(QWidget):
             return
         # Preserve the temporary tool view at very short window heights.
         # The same editor and document stay mounted in either layout.
-        library = getattr(self, "_tools_section", "control") == "library"
         short = self.height() < 400 and not self.tools_panel.isHidden()
         self.editor_content.setVisible(not short)
-        natural_height = (self.keyboard_control_group.sizeHint().height()
-                          + self.tools_panel.layout().itemAt(0).sizeHint().height() + 18)
-        self.tools_panel.setMaximumHeight(16777215 if short else (260 if library else natural_height))
+        self.tools_panel.setMaximumHeight(16777215 if short else 260)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1263,7 +1257,6 @@ class EasyConPanel(QWidget):
         self.run_button.clicked.connect(self.toggle_run)
 
         layout.addWidget(action_row)
-        layout.addWidget(self._build_keyboard_control_group())
         layout.addStretch(1)
         return area
 
@@ -1409,12 +1402,16 @@ class EasyConPanel(QWidget):
         self.save_button.setStyleSheet(btn_style)
         self.save_button.setToolTip("保存当前脚本 (Ctrl+S)")
         self.save_button.clicked.connect(self.save_script)
-        self.control_tools_button = QPushButton("控制与录制")
-        self.control_tools_button.setStyleSheet(btn_style)
-        self.control_tools_button.clicked.connect(lambda: self.show_tools("control"))
+        self.record_btn = QPushButton("开始录制")
+        self.record_btn.setStyleSheet(btn_style)
+        self.record_btn.clicked.connect(self._start_recording)
+        self.pause_btn = QPushButton("暂停录制")
+        self.pause_btn.setStyleSheet(btn_style)
+        self.pause_btn.clicked.connect(self._toggle_pause_recording)
+        self.pause_btn.hide()
         file_actions = QHBoxLayout()
         file_actions.setSpacing(6)
-        for button in (self.script_button, self.save_button, self.control_tools_button):
+        for button in (self.script_button, self.save_button, self.record_btn, self.pause_btn):
             file_actions.addWidget(button)
         file_actions.addStretch(1)
 
@@ -1573,133 +1570,81 @@ class EasyConPanel(QWidget):
         self.script_list.itemDoubleClicked.connect(self._load_script_item)
 
 
-    def _build_keyboard_control_group(self) -> QWidget:
-        group = QWidget()
-        group.setObjectName("KeyboardControlGroup")
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        group.setStyleSheet(
-            f"QWidget#KeyboardControlGroup {{ background: transparent; border: 0; }}"
-            f" QWidget#KeyboardControlGroup QLabel {{ border: 0; background: transparent; }}"
-        )
-        self.keyboard_control_group = group
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(0, 12, 0, 0)
-        layout.setSpacing(10)
-
-        btn_style = (
-            f"QPushButton {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            f" border-radius: 7px; min-height: 30px; max-height: 30px; padding: 0 10px; font-size: 12px; }}"
-            f" QPushButton:hover {{ background: #F7F8FA; }}"
-            f" QPushButton:disabled {{ background: #F7F8FA; color: #9aa9a2; }}"
-        )
-
-        self.keyboard_controller_state_label = QLabel("不可用")
-        self.keyboard_controller_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.keyboard_controller_state_label.setMinimumWidth(48)
-        # 保留旧复选框属性作为内部兼容入口；可见界面使用与真实状态一致的三态切换。
-        self.keyboard_controller_check = QCheckBox("启用键盘控制", group)
-        self.keyboard_controller_check.hide()
+    def _build_controller_tools(self) -> None:
+        # Keep the existing capture/recording state surfaces and test commands;
+        # visible controller actions live in the global device menu.
+        self.keyboard_controller_check = QCheckBox("启用键盘控制", self)
         self.keyboard_controller_check.toggled.connect(self.set_keyboard_controller_enabled)
-
-        mode_frame = QFrame()
-        mode_frame.setObjectName("KeyboardControlMode")
-        mode_frame.setFixedHeight(32)
-        mode_frame.setStyleSheet(
-            ui_styles(f"QFrame#KeyboardControlMode {{ background: {self.CLR_WHITE}; border: 1px solid {self.CLR_BORDER};"
-            " border-radius: 7px; }"
-            " QFrame#KeyboardControlMode QPushButton { background: transparent; border: 0; border-radius: 0;"
-            " min-height: 28px; max-height: 28px; padding: 0 6px; font-size: 12px; color: #687480; }"
-            " QFrame#KeyboardControlMode QPushButton:hover:!checked { background: #F7F8FA; }"
-            " QFrame#KeyboardControlMode QPushButton:checked { background: #EAF7F1; color: #087c58; font-weight: 400; }"
-            " QFrame#KeyboardControlMode QPushButton:disabled { color: #9aa9a2; background: #F7F8FA; }")
-        )
-        mode_layout = QHBoxLayout(mode_frame)
-        mode_layout.setContentsMargins(1, 1, 1, 1)
-        mode_layout.setSpacing(0)
-        self.controller_mode_group = QButtonGroup(group)
-        self.controller_mode_group.setExclusive(True)
-        mode_specs = (
-            ("off", "关闭", "完全关闭键盘捕获并隐藏手柄状态悬浮窗"),
-            ("standby", "待机", "保留快捷切换，映射按键不发送到手柄"),
-            ("active", "控制", "捕获映射按键并发送到手柄"),
-        )
-        self.controller_mode_buttons: dict[str, QPushButton] = {}
-        for index, (mode, text, tooltip) in enumerate(mode_specs):
-            button = QPushButton(text)
-            button.setCheckable(True)
-            button.setToolTip(tooltip)
-            button.clicked.connect(
-                lambda _checked=False, selected_mode=mode: self._set_keyboard_controller_mode(
-                    selected_mode
-                )
-            )
-            self.controller_mode_group.addButton(button)
-            self.controller_mode_buttons[mode] = button
-            mode_layout.addWidget(button, 1)
-            if index < len(mode_specs) - 1:
-                divider = QFrame()
-                divider.setFrameShape(QFrame.Shape.VLine)
-                divider.setStyleSheet(f"background: {self.CLR_BORDER}; border: 0;")
-                divider.setFixedWidth(1)
-                mode_layout.addWidget(divider)
-        self.controller_off_button = self.controller_mode_buttons["off"]
-        self.controller_standby_button = self.controller_mode_buttons["standby"]
-        self.controller_active_button = self.controller_mode_buttons["active"]
-
-        self.mapping_button = QPushButton("按键映射")
-        self.mapping_button.setStyleSheet(btn_style)
+        self.keyboard_controller_state_label = QLabel("不可用", self)
+        self.recording_state_label = QLabel("等待连接", self)
+        self.mapping_button = QPushButton("按键映射", self)
         self.mapping_button.clicked.connect(self.open_key_mapping)
-        self.keyboard_shortcut_label = QLabel("Esc 切换 · Ctrl+Esc 关闭")
-        self.keyboard_shortcut_label.setStyleSheet(f"font-size: 11px; color: {self.CLR_HINT};")
-        self.keyboard_shortcut_label.setToolTip("Esc 切换控制 / 待机；Ctrl+Esc 完全关闭键盘捕获")
-        self.recording_state_label = QLabel("未录制")
-        self.recording_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.recording_state_label.setMinimumWidth(48)
-
-        recording_actions = QHBoxLayout()
-        recording_actions.setContentsMargins(0, 0, 0, 0)
-        recording_actions.setSpacing(8)
-        self.record_btn = QPushButton("开始录制")
-        self.record_btn.setStyleSheet(btn_style)
-        self.record_btn.clicked.connect(self._start_recording)
-        recording_actions.addWidget(self.record_btn)
-        self.pause_btn = QPushButton("暂停")
-        self.pause_btn.setStyleSheet(btn_style)
-        self.pause_btn.setEnabled(False)
-        self.pause_btn.clicked.connect(self._toggle_pause_recording)
-        recording_actions.addWidget(self.pause_btn)
-
-        # 手柄测试按钮（保留原有功能）
-        self.controller_duration = QSpinBox()
+        self.controller_duration = QSpinBox(self)
         self.controller_duration.setRange(20, 5000)
         self.controller_duration.setValue(100)
         set_c_locale(self.controller_duration)
-        self.test_a_button = QPushButton("A")
+        self.test_a_button = QPushButton("A", self)
         self.test_a_button.clicked.connect(lambda: self.send_controller_press("A"))
-        self.test_b_button = QPushButton("B")
+        self.test_b_button = QPushButton("B", self)
         self.test_b_button.clicked.connect(lambda: self.send_controller_press("B"))
-        self.test_home_button = QPushButton("HOME")
+        self.test_home_button = QPushButton("HOME", self)
         self.test_home_button.clicked.connect(lambda: self.send_controller_press("HOME"))
-        self.test_ls_reset_button = QPushButton("LS RESET")
+        self.test_ls_reset_button = QPushButton("LS RESET", self)
         self.test_ls_reset_button.clicked.connect(lambda: self.send_controller_stick("left", "RESET"))
-        self.test_rs_reset_button = QPushButton("RS RESET")
+        self.test_rs_reset_button = QPushButton("RS RESET", self)
         self.test_rs_reset_button.clicked.connect(lambda: self.send_controller_stick("right", "RESET"))
+        self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆", self)
+        for widget in (self.keyboard_controller_check, self.keyboard_controller_state_label,
+                       self.recording_state_label, self.mapping_button, self.controller_duration,
+                       self.test_a_button, self.test_b_button, self.test_home_button,
+                       self.test_ls_reset_button, self.test_rs_reset_button, self.keyboard_mapping_label):
+            widget.hide()
 
-        self.keyboard_mapping_label = QLabel("L/K/I/J=A/B/X/Y，WASD=左摇杆，方向键=右摇杆")
-        self.keyboard_mapping_label.setStyleSheet(f"font-size: 10px; color: {self.CLR_HINT}; background: transparent;")
+        self.controller_tools_menu = QMenu(self)
+        self.controller_tools_menu.setObjectName("EasyConToolsMenu")
+        self.controller_tools_menu.setStyleSheet(ui_styles("""
+            QMenu { background: white; color: #202A33; border: 1px solid #E0E5EB; padding: 4px; }
+            QMenu::item { padding: 8px 28px 8px 12px; }
+            QMenu::item:selected { background: #EAF7F1; color: #087C58; }
+            QMenu::item:disabled { color: #97A1AB; }
+            QMenu::separator { height: 1px; background: #E0E5EB; margin: 4px 8px; }
+        """))
+        self.connection_settings_action = self.controller_tools_menu.addAction(
+            workspace_icon("plug"), "连接设置", self.show_connection_dialog)
+        self.virtual_controller_action = self.controller_tools_menu.addAction(
+            workspace_icon("controller"), "打开虚拟手柄", self.toggle_virtual_controller)
+        self.mapping_action = self.controller_tools_menu.addAction(
+            workspace_icon("keyboard"), "按键映射", self.mapping_button.click)
+        self.recording_menu_separator = self.controller_tools_menu.addSeparator()
+        self.pause_recording_action = self.controller_tools_menu.addAction(
+            workspace_icon("pause"), "暂停录制", self._toggle_pause_recording)
+        self.stop_recording_action = self.controller_tools_menu.addAction(
+            workspace_icon("stop", "#AC4B42"), "停止录制", self._stop_recording)
+        self.controller_tools_menu.aboutToShow.connect(self._suspend_controller_input_for_menu)
+        self.controller_tools_menu.aboutToShow.connect(self._update_keyboard_control_presentation)
+        self.controller_tools_menu.aboutToHide.connect(self._resume_controller_input_after_menu)
 
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        mode_actions = QHBoxLayout()
-        mode_actions.setSpacing(6)
-        mode_actions.addWidget(mode_frame, 1)
-        mode_actions.addWidget(self.mapping_button)
-        layout.addLayout(mode_actions)
-        recording_actions.addStretch(1)
-        recording_actions.addWidget(self.keyboard_shortcut_label)
-        layout.addLayout(recording_actions)
+    def _suspend_controller_input_for_menu(self) -> None:
+        self._controller_menu_input_suspended = True
+        self._qt_passthrough_pressed_keys.update(self.virtual_controller_keys)
+        self._release_virtual_controller_keys()
+        hook = self._keyboard_hook if self._vpad_input_source == "hook" else None
+        if hook is not None:
+            try:
+                hook.set_mapped_keys_enabled(False)
+            except Exception as exc:
+                self._append_log("error", f"暂停菜单中的键盘捕获失败: {exc}")
+                self._deactivate_virtual_controller(hide_overlay=True, log=False)
 
-        return group
+    def _resume_controller_input_after_menu(self) -> None:
+        self._controller_menu_input_suspended = False
+        hook = self._keyboard_hook if self._vpad_input_source == "hook" else None
+        if hook is not None:
+            try:
+                hook.set_mapped_keys_enabled(self.virtual_controller_enabled)
+            except Exception as exc:
+                self._append_log("error", f"恢复菜单后的键盘捕获失败: {exc}")
+                self._deactivate_virtual_controller(hide_overlay=True, log=False)
 
     # ── 底部状态栏 ──────────────────────────────────────
 
@@ -1753,34 +1698,32 @@ class EasyConPanel(QWidget):
             return
         if self._shutting_down:
             controller_text, controller_state = "已关闭", "idle"
-            controller_mode = "off"
         elif self._controller_script_running():
             controller_text, controller_state = "脚本占用", "standby"
-            controller_mode = "off"
         elif self.virtual_controller_enabled:
             controller_text, controller_state = "控制中", "active"
-            controller_mode = "active"
         elif self._vpad_input_source in {"hook", "qt"}:
             controller_text, controller_state = "待机", "standby"
-            controller_mode = "standby"
         elif not self._controller_connection_active():
             controller_text, controller_state = "不可用", "unavailable"
-            controller_mode = "off"
         else:
             controller_text, controller_state = "已关闭", "idle"
-            controller_mode = "off"
         self._set_compact_status(
             self.keyboard_controller_state_label,
             controller_text,
             controller_state,
         )
-        for mode, button in self.controller_mode_buttons.items():
-            button.setChecked(mode == controller_mode)
         controls_available = self.keyboard_controller_check.isEnabled() and not self._shutting_down
-        self.controller_off_button.setEnabled(not self._shutting_down)
-        self.controller_standby_button.setEnabled(controls_available)
-        self.controller_active_button.setEnabled(controls_available)
         self.mapping_button.setEnabled(not self._shutting_down)
+        self.mapping_action.setEnabled(not self._shutting_down)
+        self.connection_settings_action.setEnabled(not self._shutting_down)
+        controller_open = self.virtual_controller_open()
+        self.virtual_controller_action.setText("关闭虚拟手柄" if controller_open else "打开虚拟手柄")
+        self.virtual_controller_action.setEnabled(
+            not self._shutting_down and (controller_open or (
+                controls_available and self._controller_connection_active()
+            ))
+        )
 
         if self._recording_paused:
             recording_text, recording_state = "已暂停", "standby"
@@ -1801,18 +1744,28 @@ class EasyConPanel(QWidget):
             recording_text,
             recording_state,
         )
-        if self._recording:
-            self.control_tools_button.setText(f"{'录制暂停' if self._recording_paused else '录制中'} · {controller_text}")
-        elif controller_mode in {"active", "standby"}:
-            self.control_tools_button.setText("键盘控制中" if controller_mode == "active" else "键盘待机")
-        else:
-            self.control_tools_button.setText("控制与录制")
-        self.control_tools_button.setToolTip(f"键盘：{controller_text}；录制：{recording_text}\n点击展开控制与录制工具")
-        self.record_btn.setIcon(workspace_icon("stop" if self._recording else "record"))
+        self.record_btn.setIcon(workspace_icon(
+            "stop" if self._recording else "record", "#AC4B42" if self._recording else "#687480"))
+        self.pause_btn.setText("继续录制" if self._recording_paused else "暂停录制")
+        self.pause_btn.setIcon(workspace_icon("play" if self._recording_paused else "pause"))
+        self.pause_btn.setEnabled(self._recording and not self._shutting_down)
+        self.pause_btn.setVisible(self._recording)
+        self.pause_btn.setToolTip("恢复记录后续输入" if self._recording_paused else "暂停记录；仍可用手柄控制游戏")
+        self.pause_recording_action.setText(self.pause_btn.text())
+        self.pause_recording_action.setIcon(self.pause_btn.icon())
+        for action in (self.recording_menu_separator, self.pause_recording_action, self.stop_recording_action):
+            action.setVisible(self._recording)
+            action.setEnabled(not self._shutting_down)
 
         can_record = (self.virtual_controller_enabled or self._recording) and not self._shutting_down
         self.record_btn.setEnabled(can_record)
-        self.record_btn.setToolTip("" if can_record else "请先启用键盘控制")
+        self.record_btn.setToolTip(
+            f"{recording_text}；操作命令实时追加到当前脚本末尾" if can_record
+            else "请先从右上角“伊机控”菜单打开虚拟手柄并启用控制")
+        presentation = (controller_text, recording_text, controller_open)
+        if presentation != getattr(self, "_last_controller_tools_presentation", None):
+            self._last_controller_tools_presentation = presentation
+            self.controllerToolsChanged.emit()
 
     def show_connection_dialog(self) -> None:
         if self._shutting_down:
@@ -2977,7 +2930,9 @@ class EasyConPanel(QWidget):
             # exclusive ownership of the script slot.
             self.run_button.setText("继续运行" if paused else "运行脚本")
             viewing_snapshot = hasattr(self, "execution") and self.execution.viewing_snapshot
-            self.run_button.setEnabled(paused or (not running and not viewing_snapshot and self._can_run()))
+            self.run_button.setEnabled(not self._recording and (
+                paused or (not running and not viewing_snapshot and self._can_run())
+            ))
         if hasattr(self, "pause_button"):
             self.pause_button.setVisible(self._is_native_mode())
             self.pause_button.setEnabled(bool(running and self.native_run_thread is not None
@@ -3843,7 +3798,23 @@ class EasyConPanel(QWidget):
         overlay.toggleRequested.connect(self._toggle_virtual_controller_from_overlay)
         overlay.hideRequested.connect(self._hide_controller_overlay)
         self._controller_overlay = overlay
+        overlay.installEventFilter(self)
         return overlay
+
+    def virtual_controller_open(self) -> bool:
+        return self._vpad_input_source in {"hook", "qt"} or (
+            self._controller_overlay is not None and self._controller_overlay.isVisible()
+        )
+
+    def show_virtual_controller(self) -> None:
+        if not self._shutting_down:
+            self._activate_virtual_controller()
+
+    def toggle_virtual_controller(self) -> None:
+        if self.virtual_controller_open():
+            self._deactivate_virtual_controller(hide_overlay=True)
+        else:
+            self.show_virtual_controller()
 
     def show_controller_overlay(self) -> None:
         if self._shutting_down:
@@ -4136,12 +4107,26 @@ class EasyConPanel(QWidget):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is getattr(self, "tools_panel", None) and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
             self._sync_tools_layout()
+        if watched is self._controller_overlay and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
+            self._update_keyboard_control_presentation()
         if self._vpad_input_source != "qt":
             return super().eventFilter(watched, event)
         if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             key = event.key()  # type: ignore[attr-defined]
             down = event.type() == QEvent.Type.KeyPress
             auto_repeat = event.isAutoRepeat()  # type: ignore[attr-defined]
+            if self._controller_menu_input_suspended:
+                if key == Qt.Key.Key_Escape:
+                    return self._handle_virtual_controller_key(
+                        key, down=down, control_down=bool(
+                            event.modifiers() & Qt.KeyboardModifier.ControlModifier  # type: ignore[attr-defined]
+                        ))
+                if _resolve_vpad_button(key, self.key_mapping) is not None and not auto_repeat:
+                    if down:
+                        self._qt_passthrough_pressed_keys.add(key)
+                    else:
+                        self._qt_passthrough_pressed_keys.discard(key)
+                return super().eventFilter(watched, event)
             if key == Qt.Key.Key_Escape:
                 if auto_repeat:
                     return True
@@ -4184,6 +4169,13 @@ class EasyConPanel(QWidget):
         action = _resolve_vpad_button(key, self.key_mapping)
         captured = key == Qt.Key.Key_Escape or action is not None
         if generation is not None and generation != self._vpad_generation:
+            return captured
+        if self._controller_menu_input_suspended:
+            if key == Qt.Key.Key_Escape and down:
+                self._escape_pressed = True
+                if control_down:
+                    self._deactivate_virtual_controller(hide_overlay=True)
+                self.controller_tools_menu.hide()
             return captured
         if key == Qt.Key.Key_Escape:
             return self._handle_escape_key(down, control_down=control_down)
@@ -4354,7 +4346,7 @@ class EasyConPanel(QWidget):
         self._recording_paused = False
         self.record_btn.setText("开始录制")
         self.pause_btn.setEnabled(False)
-        self.pause_btn.setText("暂停")
+        self.pause_btn.setText("暂停录制")
         self._update_keyboard_control_presentation()
         self._refresh_script_action_buttons()
         if self._recorded_lines:
@@ -4371,7 +4363,7 @@ class EasyConPanel(QWidget):
             return
         self._release_virtual_controller_keys()
         self._recording_paused = True
-        self.pause_btn.setText("继续")
+        self.pause_btn.setText("继续录制")
         self._update_keyboard_control_presentation()
         self._append_log("info", "录制已暂停")
 
@@ -4381,7 +4373,7 @@ class EasyConPanel(QWidget):
         self._release_virtual_controller_keys()
         self._recording_paused = False
         self._last_record_ts = 0.0
-        self.pause_btn.setText("暂停")
+        self.pause_btn.setText("暂停录制")
         self.pause_btn.setEnabled(True)
         self._update_keyboard_control_presentation()
         self._append_log("info", "录制已恢复")

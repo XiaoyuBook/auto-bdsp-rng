@@ -63,13 +63,10 @@ def test_compact_log_controls_remain_centered_and_inside_their_panels(app, tmp_p
     assert window.live_log_panel.isVisible()
     assert not easycon_panel.tools_panel.isVisible()
     original_editor = easycon_panel.editor
-    easycon_panel.control_tools_button.click()
-    app.processEvents()
     assert easycon_panel.record_btn.isVisible()
+    assert easycon_panel.pause_btn.isHidden()
     assert easycon_panel.editor is original_editor
-    side_panel = easycon_panel.overview_panel.parentWidget()
-    assert easycon_panel.keyboard_control_group.parentWidget() is side_panel
-    assert easycon_panel.sidebar_scroll.isAncestorOf(easycon_panel.keyboard_control_group)
+    assert window.easycon_header_button.menu() is easycon_panel.controller_tools_menu
     assert easycon_panel.action_row.isHidden()
     assert easycon_panel.findChild(QWidget, "EasyConControlPanel") is None
     toolbar = easycon_panel.findChild(QWidget, "EasyConToolbar")

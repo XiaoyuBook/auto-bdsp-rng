@@ -241,7 +241,7 @@ def process_events_until(predicate, timeout_ms=1000):
     assert predicate()
 
 
-def test_easycon_panel_uses_connection_dialog_and_keyboard_control_group(
+def test_easycon_panel_uses_connection_dialog_and_global_controller_menu(
     easycon_panel,
     app,
 ):
@@ -267,27 +267,20 @@ def test_easycon_panel_uses_connection_dialog_and_keyboard_control_group(
 
     side_panel = easycon_panel.findChild(QWidget, "EasyConSidePanel")
     assert side_panel is not None
-    assert easycon_panel.keyboard_control_group.parentWidget() is side_panel
     assert easycon_panel.findChild(QWidget, "EasyConControlPanel") is None
     assert easycon_panel.keyboard_controller_check.text() == "启用键盘控制"
     assert easycon_panel.keyboard_controller_check.isHidden()
-    assert [
-        easycon_panel.controller_mode_buttons[mode].text()
-        for mode in ("off", "standby", "active")
-    ] == ["关闭", "待机", "控制"]
-    assert easycon_panel.controller_off_button.isChecked()
+    assert [action.text() for action in easycon_panel.controller_tools_menu.actions()
+            if action.isVisible() and not action.isSeparator()] == ["连接设置", "打开虚拟手柄", "按键映射"]
+    assert not easycon_panel.virtual_controller_action.isEnabled()
     assert easycon_panel.mapping_button.text() == "按键映射"
     assert easycon_panel.record_btn.text() == "开始录制"
-    assert easycon_panel.pause_btn.text() == "暂停"
+    assert easycon_panel.pause_btn.text() == "暂停录制"
+    assert easycon_panel.pause_btn.isHidden()
     assert easycon_panel.keyboard_controller_state_label.text() == "不可用"
     assert easycon_panel.recording_state_label.text() == "等待连接"
     assert easycon_panel.record_btn.isEnabled() is False
-    assert easycon_panel.keyboard_control_group.findChildren(type(easycon_panel.port_combo)) == []
-    assert not hasattr(easycon_panel, "controller_overlay_button")
-    assert "状态窗口" not in {
-        button.text()
-        for button in easycon_panel.keyboard_control_group.findChildren(QPushButton)
-    }
+    assert not hasattr(easycon_panel, "keyboard_control_group")
 
     easycon_panel.show_connection_dialog()
     app.processEvents()
@@ -346,32 +339,35 @@ def test_editor_save_state_tracks_edit_undo_and_save(easycon_panel, tmp_path, ap
     assert script.read_text(encoding="utf-8") == "' 保存备注\nA 100\n"
 
 
-def test_keyboard_control_mode_buttons_switch_active_standby_and_off(
+def test_global_menu_and_overlay_switch_active_standby_and_off(
     easycon_panel_factory,
 ):
     hook_factory = FakeKeyboardHookFactory()
     panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
     assert panel.connect_native()
 
-    panel.controller_active_button.click()
+    panel.virtual_controller_action.trigger()
 
     assert panel.virtual_controller_enabled is True
-    assert panel.controller_active_button.isChecked()
+    assert panel._controller_overlay.isVisible()
+    assert panel.virtual_controller_action.text() == "关闭虚拟手柄"
     assert panel.keyboard_controller_state_label.text() == "控制中"
     assert panel.recording_state_label.text() == "可录制"
 
-    panel.controller_standby_button.click()
+    panel._controller_overlay.toggleRequested.emit()
 
     assert panel.virtual_controller_enabled is False
     assert panel._vpad_input_source == "hook"
-    assert panel.controller_standby_button.isChecked()
+    assert panel._controller_overlay.isVisible()
+    assert not panel._controller_overlay.active
     assert panel.keyboard_controller_state_label.text() == "待机"
     assert panel.recording_state_label.text() == "等待控制"
 
-    panel.controller_off_button.click()
+    panel.virtual_controller_action.trigger()
 
     assert panel._vpad_input_source is None
-    assert panel.controller_off_button.isChecked()
+    assert not panel._controller_overlay.isVisible()
+    assert panel.virtual_controller_action.text() == "打开虚拟手柄"
     assert panel.keyboard_controller_state_label.text() == "已关闭"
     assert panel.shutdown()
 
@@ -2251,7 +2247,7 @@ def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monke
 
     assert easycon_panel.record_btn.text() == "开始录制"
     assert easycon_panel.recording_state_label.text() == "可录制"
-    assert easycon_panel.pause_btn.text() == "暂停"
+    assert easycon_panel.pause_btn.text() == "暂停录制"
     assert easycon_panel.pause_btn.isEnabled() is False
     assert easycon_panel.editor.toPlainText() == (
         "RIGHT DOWN\n"
@@ -2452,12 +2448,12 @@ def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypat
     easycon_panel._toggle_pause_recording()
     assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 1000\nLS RESET\n"
     assert easycon_panel.recording_state_label.text() == "已暂停"
-    assert easycon_panel.pause_btn.text() == "继续"
+    assert easycon_panel.pause_btn.text() == "继续录制"
     easycon_panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
     assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 1000\nLS RESET\n"
     easycon_panel._resume_recording()
     assert easycon_panel.recording_state_label.text() == "录制中"
-    assert easycon_panel.pause_btn.text() == "暂停"
+    assert easycon_panel.pause_btn.text() == "暂停录制"
 
     assert easycon_panel.virtual_controller_keys == {}
 
@@ -3087,7 +3083,7 @@ def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel)
             return False
 
     assert easycon_panel.connect_native()
-    assert easycon_panel.controller_active_button.isEnabled()
+    assert easycon_panel.virtual_controller_action.isEnabled()
     easycon_panel.process = StuckProcess()  # type: ignore[assignment]
     easycon_panel.bridge_run_thread = StuckThread()  # type: ignore[assignment]
 
@@ -3099,9 +3095,9 @@ def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel)
         "thread-quit",
         ("thread-wait", 25),
     ]
-    assert not easycon_panel.controller_off_button.isEnabled()
-    assert not easycon_panel.controller_standby_button.isEnabled()
-    assert not easycon_panel.controller_active_button.isEnabled()
+    assert not easycon_panel.connection_settings_action.isEnabled()
+    assert not easycon_panel.virtual_controller_action.isEnabled()
+    assert not easycon_panel.mapping_action.isEnabled()
     assert not easycon_panel.mapping_button.isEnabled()
     assert not easycon_panel.record_btn.isEnabled()
 
