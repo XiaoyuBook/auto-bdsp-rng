@@ -38,7 +38,8 @@ def run_flow(species=387, delay=40, *, missing_second=False, missing_balls=False
              ocr_reads=None, timing_log=None, stall_dialogue=False, cursor_log=None,
              cursor_seconds=.44, cursor_failure=False, stop_in_cursor=False,
              cursor_finish_at_trigger=False, stall_before_cursor=False,
-             target_advances=401, start_seconds=0.0, ocr_seconds=0.0):
+             target_advances=401, start_seconds=0.0, ocr_seconds=0.0,
+             on_stop=None):
     clock, observations = Clock(), []
     clock.now = start_seconds
     scripts = [] if script_log is None else script_log
@@ -115,11 +116,16 @@ def run_flow(species=387, delay=40, *, missing_second=False, missing_balls=False
             clock.sleep(10)
         if stall_before_cursor and stage == 'position':
             advance_to_trigger()
+    def should_stop():
+        requested = stopped or (stop_at is not None and clock.time() >= stop_at)
+        if requested and on_stop is not None:
+            on_stop()
+        return requested
     flow = StarterFlow(seed,target,delay,species,{"menuClose":True},latest_text=text,run_script=press,
                        monotonic=monotonic,sleep=clock.sleep,observe_dialog=observe,
                        on_press=lambda timing: timing_log.append(timing) if timing_log is not None else None,
                        progress=progress,position_cursor=position_cursor,
-                       should_stop=lambda:stopped or (stop_at is not None and clock.time()>=stop_at))
+                       should_stop=should_stop)
     result = flow.run()
     return result, scripts, observations, flow, seed
 
@@ -435,6 +441,64 @@ def test_shiny_and_unknown_results_keep_existing_stop_rules(tmp_path):
             run_starter_flow=lambda *_:result,run_reverse_lookup=lambda *_:reverse.append(True)))
         assert runner.run().phase == phase
         assert not reverse
+
+
+@pytest.mark.parametrize("stop_during", ["dialogue", "countdown", "service", "missed"])
+def test_starter_stop_finishes_worker_in_idle_without_failure_or_miss(tmp_path, stop_during):
+    from auto_bdsp_rng.ui.auto_rng_panel import AutoRngWorker
+
+    seed = AutoRngSeedResult(SeedState32(1, 2, 3, 4), 1, 1, measured_at=0)
+    finished, failed, history = [], [], []
+    def execute(*_):
+        if stop_during in {"service", "missed"}:
+            runner.stop()
+            error = StarterTargetMissed if stop_during == "missed" else RuntimeError
+            raise error("御三家自动接管已停止")
+        run_flow(stop_at=6.5 if stop_during == "dialogue" else 105, on_stop=runner.stop)
+        pytest.fail("A stopped flow must not reach final selection")
+
+    runner = AutoRngRunner(AutoRngConfig(
+        script_dir=tmp_path, start_phase=AutoRngPhase.CAPTURE_SEED,
+        starter_automation=True, target_species=387, auto_reverse=True, fixed_delay=40,
+    ), services=AutoRngServices(
+        capture_seed=lambda: seed, monotonic=lambda: 0,
+        search_candidates=lambda _: [SimpleNamespace(advances=401, pid=1, ec=2)],
+        run_starter_flow=execute,
+    ), history_callback=lambda event, args: history.append(event))
+    worker = AutoRngWorker(runner)
+    worker.finished.connect(finished.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert runner.should_stop()
+    assert runner.progress.phase == AutoRngPhase.IDLE
+    assert finished == [runner.progress]
+    assert failed == []
+    assert not {"starter_missed", "target_missed", "cycle_result"}.intersection(history)
+
+
+def test_genuine_starter_service_error_still_fails_worker(tmp_path):
+    from auto_bdsp_rng.ui.auto_rng_panel import AutoRngWorker
+
+    seed = AutoRngSeedResult(SeedState32(1, 2, 3, 4), 1, 1, measured_at=0)
+    def execute(*_):
+        raise RuntimeError("对话识别失败")
+    runner = AutoRngRunner(AutoRngConfig(
+        script_dir=tmp_path, start_phase=AutoRngPhase.CAPTURE_SEED,
+        starter_automation=True, target_species=387, fixed_delay=40,
+    ), services=AutoRngServices(
+        capture_seed=lambda: seed, monotonic=lambda: 0,
+        search_candidates=lambda _: [SimpleNamespace(advances=401, pid=1, ec=2)],
+        run_starter_flow=execute,
+    ))
+    finished, failed = [], []
+    worker = AutoRngWorker(runner)
+    worker.finished.connect(finished.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+    assert not runner.should_stop()
+    assert finished == []
+    assert failed == ["对话识别失败"]
 
 
 def test_missed_timing_never_runs_reverse_or_reports_a_normal_encounter(tmp_path):

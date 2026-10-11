@@ -841,10 +841,11 @@ class HistoryPanel(QWidget):
                 record.cycle_index = cycle_index
                 record.implicit = False
         self._active_uid = record.uid
+        preferred_uid = self._selected_uid
         if self._select_next_record or (created and was_following_active):
-            self._selected_uid = record.uid
+            preferred_uid = record.uid
         self._select_next_record = False
-        self._refresh_round_list()
+        self._refresh_round_list(preferred_uid=preferred_uid)
         return record, created
 
     def _ensure_record(self, *, target_label: str | None = None, namespace: str = "session") -> _RoundRecord:
@@ -910,10 +911,12 @@ class HistoryPanel(QWidget):
         ).casefold()
         return keyword in searchable
 
-    def _refresh_round_list(self, *_args: object) -> None:
+    def _refresh_round_list(self, *_args: object, preferred_uid: int | None = None) -> None:
         if not hasattr(self, "round_list"):
             return
         previous_uid = self._selected_uid
+        if preferred_uid is None:
+            preferred_uid = previous_uid
         blocker = QSignalBlocker(self.round_list)
         self.round_list.clear()
         visible_uids: list[int] = []
@@ -937,8 +940,8 @@ class HistoryPanel(QWidget):
             visible_uids.append(record.uid)
 
         selected_uid: int | None = None
-        if previous_uid in visible_uids:
-            selected_uid = previous_uid
+        if preferred_uid in visible_uids:
+            selected_uid = preferred_uid
         elif self._active_uid in visible_uids:
             selected_uid = self._active_uid
         elif visible_uids:

@@ -67,6 +67,59 @@ def test_round_candidate_snapshot_clears_when_search_is_invalidated(app, invalid
     assert "adv=100" in history.text_view.toPlainText()
 
 
+@pytest.mark.parametrize("transition", ["next-round", "new-rng-run", "new-tid-run", "clear"])
+def test_auto_follow_new_round_renders_only_its_snapshot_and_events(app, transition):
+    from types import SimpleNamespace
+
+    history = HistoryPanel()
+    history.begin_run("old-run", "帝牙卢卡")
+    history.cycle_start(1)
+    history.seed_captured("old-seed", 0, 0, 1000)
+    history.candidates_found([SimpleNamespace(advances=100)], 0)
+    assert history.round_candidate_table.rowCount() == 1
+
+    if transition == "next-round":
+        history.cycle_start(2)
+    else:
+        if transition == "clear":
+            history.clear()
+        target = "自动 TID" if transition == "new-tid-run" else "帝牙卢卡"
+        history.begin_run("new-run", target)
+        history.cycle_start(1)
+    record = history._selected_record()
+    assert record is not None and record.uid == history._active_uid
+    assert record.candidate_snapshot is None
+    assert history.round_candidate_table.rowCount() == 0
+    assert history._feed_layout.count() == len(record.entries)
+    assert history.locked_adv_value_label.text() == "-"
+    history.seed_captured("new-seed", 0, 0, 1000)
+    assert history.round_candidate_table.rowCount() == 0
+    assert history._feed_layout.count() == len(record.entries)
+
+
+def test_new_round_does_not_replace_a_selected_historical_round(app):
+    from types import SimpleNamespace
+
+    history = HistoryPanel()
+    history.begin_run("run-a", "帝牙卢卡")
+    history.cycle_start(1)
+    history.candidates_found([SimpleNamespace(advances=100)], 0)
+    history.cycle_start(2)
+    history.candidates_found([SimpleNamespace(advances=200)], 0)
+    history.round_list.setCurrentRow(1)
+    selected = history._selected_record()
+    entries_before = history._feed_layout.count()
+
+    history.cycle_start(3)
+    history.candidates_found([SimpleNamespace(advances=300)], 0)
+
+    assert history._selected_record() is selected
+    assert selected.cycle_index == 1
+    assert history.round_candidate_table.rowCount() == 1
+    assert history.round_candidate_table.item(0, 2).text() == "100"
+    assert history._feed_layout.count() == entries_before == len(selected.entries)
+
+
 @pytest.mark.parametrize("after_miss", ["next-round", "finish"])
 def test_starter_missed_round_keeps_its_outcome_and_reason(app, tmp_path, after_miss):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))

@@ -1341,6 +1341,8 @@ class AutoRngRunner:
             try:
                 result = self.services.run_starter_flow(seed, target, self._target_delay(target))
             except StarterTargetMissed as error:
+                if self.should_stop():
+                    return
                 self._history("target_missed", target.raw_target_advances, self.progress.current_advances)
                 self._history("starter_missed", str(error), self._target_delay(target))
                 self._cycle_started = False
@@ -1348,6 +1350,10 @@ class AutoRngRunner:
                 self._set_progress(AutoRngPhase.LOOP_CHECK, str(error),
                                    result_kind="missed", starter_stage=None)
                 return
+            except Exception:
+                if self.should_stop():
+                    return
+                raise
             if not self.should_stop():
                 self._handle_shiny_check_result(result, "御三家全自动")
             return
