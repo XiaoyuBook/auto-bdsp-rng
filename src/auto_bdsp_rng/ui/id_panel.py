@@ -28,6 +28,9 @@ from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui.main_window import PokeFinderTableWidget
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
+from auto_bdsp_rng.ui.background_search import BackgroundSearch
+from auto_bdsp_rng.ui.result_paging import numeric_sort_key
+from auto_bdsp_rng.ui.table_workbench import ResultItem
 
 
 ID_HEADERS = ("Adv", "TID", "SID", "TSV", "Display TID")
@@ -40,6 +43,7 @@ class IdPanel(QWidget):
         super().__init__(parent)
         self._states: list[IDState8] = []
         self._status_callback = status_callback
+        self._search = BackgroundSearch(self)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -121,6 +125,7 @@ class IdPanel(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.table.pager.controls)
 
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
@@ -131,6 +136,7 @@ class IdPanel(QWidget):
         return spin
 
     def set_seed_pair(self, seed: SeedPair64) -> None:
+        self.cancel_search()
         for box, text in zip(self.seed_inputs, seed.format_seeds()):
             box.blockSignals(True)
             box.setText(text)
@@ -140,6 +146,7 @@ class IdPanel(QWidget):
         return SeedPair64.from_hex_words([box.text() for box in self.seed_inputs])
 
     def _emit_seed_changed(self) -> None:
+        self.cancel_search()
         try:
             seed = self._seed_pair()
         except ValueError as exc:
@@ -167,24 +174,42 @@ class IdPanel(QWidget):
     def generate_results(self) -> None:
         try:
             seed = self._seed_pair()
-            states = generate_ids(
-                seed,
-                initial_advances=self.initial_advances.value(),
-                max_advances=self.max_advances.value(),
-                state_filter=self._current_filter(),
-            )
+            initial, maximum, state_filter = self.initial_advances.value(), self.max_advances.value(), self._current_filter()
         except Exception as exc:
+            self.cancel_search()
             self._set_status(str(exc))
             return
+        self._search.submit(lambda token: generate_ids(seed, initial_advances=initial, max_advances=maximum,
+                                                       state_filter=state_filter, cancellation=token),
+                            self._finish_generation, lambda error: self._set_status(str(error)))
+        self._set_status("正在生成 ID 数据...")
+
+    def _finish_generation(self, states):
         self._states = states
         self._populate_table(states)
         self._set_status(f"{len(states)} 条结果")
 
+    def cancel_search(self) -> None:
+        self._search.cancel()
+
+    def close_search(self) -> None:
+        self._search.close()
+        self.table.pager.close()
+
+    def closeEvent(self, event) -> None:
+        self.close_search()
+        super().closeEvent(event)
+
     def _populate_table(self, states: list[IDState8]) -> None:
-        self.table.setRowCount(len(states))
-        for row, state in enumerate(states):
-            for column, value in enumerate(self._state_row(state)):
-                self.table.setItem(row, column, QTableWidgetItem(value))
+        def text(source, column):
+            state = states[source]
+            return (str(state.advances), str(state.tid), str(state.sid), str(state.tsv), f"{state.display_tid:06d}")[column]
+
+        self.table.pager.set_source(
+            len(states), lambda source: [ResultItem(value) for value in self._state_row(states[source])],
+            lambda source, column: numeric_sort_key(text(source, column)),
+            text, lambda source: states[source].advances,
+        )
         self.result_count.setText(f"{len(states)} 条结果")
 
     def _state_row(self, state: IDState8) -> list[str]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -355,6 +356,19 @@ class QtWindowCapture:
         self._last_read_serial = self._frame_serial
         return True, self._latest_frame.copy()
 
+    def try_read(self) -> tuple[bool, np.ndarray | None]:
+        """Take a fresh frame without entering a nested Qt event loop."""
+        self._check_thread()
+        if self._released:
+            return False, None
+        _ensure_window_available(self._target.hwnd)
+        if self._error:
+            raise RuntimeError(self._error)
+        if self._latest_frame is None or self._frame_serial <= self._last_read_serial:
+            return False, None
+        self._last_read_serial = self._frame_serial
+        return True, self._latest_frame.copy()
+
     def release(self) -> None:
         self._check_thread()
         if self._released:
@@ -392,14 +406,41 @@ class QtWindowCaptureProxy:
     def __init__(self, target: WindowTarget, crop: list[int] | None = None) -> None:
         self._capture = _call_on_qt_app_thread(lambda: QtWindowCapture(target, crop))
         self._released = False
+        self._stop_read = threading.Event()
+        self._has_read_frame = False
+        self._read_lock = threading.Lock()
 
     def read(self) -> tuple[bool, np.ndarray | None]:
         if self._released:
             return False, None
-        capture = self._capture
-        return _call_on_qt_app_thread(capture.read)
+        from PySide6.QtCore import QThread
+        from PySide6.QtGui import QGuiApplication
+
+        app = QGuiApplication.instance()
+        worker = QThread.currentThread()
+        on_app_thread = app is not None and worker == app.thread()
+        with self._read_lock:
+            if self._released:
+                return False, None
+            capture = self._capture
+            deadline = time.monotonic() + (0.25 if self._has_read_frame else 1.0)
+            while not self._stop_read.is_set() and not worker.isInterruptionRequested():
+                # Exactly one owner-thread call is outstanding. Qt only checks
+                # its latest frame; all waiting belongs to the caller worker.
+                ok, frame = _call_on_qt_app_thread(capture.try_read)
+                if self._stop_read.is_set() or worker.isInterruptionRequested():
+                    break
+                if ok:
+                    self._has_read_frame = True
+                    return ok, frame
+                remaining = deadline - time.monotonic()
+                if on_app_thread or remaining <= 0:
+                    break
+                self._stop_read.wait(min(0.01, remaining))
+        return False, None
 
     def release(self) -> None:
+        self._stop_read.set()
         if self._released:
             return
         capture = self._capture

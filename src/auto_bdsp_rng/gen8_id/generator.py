@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from auto_bdsp_rng.gen8_id.models import IDFilter, IDState8
 from auto_bdsp_rng.rng_core.generators import BDSPXorshift, RNGList
 from auto_bdsp_rng.rng_core.seed import SeedPair64, U32_MAX
+from auto_bdsp_rng.rng_core.cancellation import SearchCancellation
 
 
 def _gen_sidtid(rng: BDSPXorshift) -> int:
@@ -23,7 +24,7 @@ class IDGenerator8:
         if self.max_advances < 0:
             raise ValueError("max_advances must be non-negative")
 
-    def generate(self, seed0: int | SeedPair64, seed1: int | None = None) -> list[IDState8]:
+    def generate(self, seed0: int | SeedPair64, seed1: int | None = None, *, cancellation: SearchCancellation | None = None) -> list[IDState8]:
         if isinstance(seed0, SeedPair64):
             if seed1 is not None:
                 raise ValueError("seed1 must be omitted when seed0 is a SeedPair64")
@@ -32,11 +33,13 @@ class IDGenerator8:
             raise ValueError("seed1 is required")
 
         rng = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
-        rng.advance(self.initial_advances)
+        rng.jump(self.initial_advances)
         rng_list: RNGList[int] = RNGList(rng, size=2, generate=_gen_sidtid)
 
         states: list[IDState8] = []
         for count in range(self.max_advances):
+            if cancellation is not None and count % 64 == 0:
+                cancellation.check()
             sidtid = rng_list.next()
             while sidtid == 0:
                 sidtid = rng_list.next()
@@ -53,6 +56,8 @@ class IDGenerator8:
             if self.state_filter.compare_state(state):
                 states.append(state)
             rng_list.advance_state()
+        if cancellation is not None:
+            cancellation.check()
         return states
 
 
@@ -63,9 +68,10 @@ def generate_ids(
     initial_advances: int = 0,
     max_advances: int = 100_000,
     state_filter: IDFilter | None = None,
+    cancellation: SearchCancellation | None = None,
 ) -> list[IDState8]:
     return IDGenerator8(
         initial_advances=initial_advances,
         max_advances=max_advances,
         state_filter=state_filter or IDFilter(),
-    ).generate(seed0, seed1)
+    ).generate(seed0, seed1, cancellation=cancellation)

@@ -95,8 +95,10 @@ std::vector<StateResult> generate_non_roamer(
     int lead, ShinyTemplate shiny_template, bool fateful,
     u8 iv_count, u8 ability_template, u8 gender_ratio, u8 ability_count,
     u16 tid, u16 sid, u8 level,
-    const FilterParams& filter)
+    const FilterParams& filter, const SearchCancellation* cancellation,
+    const std::vector<FilterParams>* filters)
 {
+    check_cancelled(cancellation);
     u16 tsv = tid ^ sid;
 
     Xorshift rng(seed0, seed1);
@@ -104,7 +106,8 @@ std::vector<StateResult> generate_non_roamer(
     RNGList<u32, Xorshift, 32, gen_ec> rng_list(rng);
 
     std::vector<StateResult> results;
-    for (u32 cnt = 0; cnt <= max_advances; cnt++, rng_list.advanceState()) {
+    for (u64 cnt = 0; cnt <= max_advances; cnt++, rng_list.advanceState()) {
+        if ((cnt & 1023) == 0) check_cancelled(cancellation);
         u32 ec = rng_list.next();
         u32 sidtid = rng_list.next();
         u32 pid = rng_list.next();
@@ -178,7 +181,7 @@ std::vector<StateResult> generate_non_roamer(
         r.nature = nature; r.shiny = shiny;
         r.height = height; r.weight = weight;
 
-        if (pass_filter(r, filter)) {
+        if (filters ? pass_any_filter(r, *filters) : pass_filter(r, filter)) {
             results.push_back(r);
         }
     }
@@ -191,39 +194,35 @@ std::vector<StateResult> generate_non_roamer_multi(
     int lead, ShinyTemplate shiny_template, bool fateful,
     u8 iv_count, u8 ability_template, u8 gender_ratio, u8 ability_count,
     u16 tid, u16 sid, u8 level,
-    const std::vector<FilterParams>& filters)
+    const std::vector<FilterParams>& filters, const SearchCancellation* cancellation)
 {
     if (filters.empty()) return {};
     FilterParams all_states;
     all_states.skip = true;
-    auto states = generate_non_roamer(
+    return generate_non_roamer(
         seed0, seed1, initial_advances, max_advances, offset,
         lead, shiny_template, fateful, iv_count, ability_template,
-        gender_ratio, ability_count, tid, sid, level, all_states);
-    std::vector<StateResult> results;
-    for (const auto& state : states) {
-        if (pass_any_filter(state, filters)) {
-            results.push_back(state);
-        }
-    }
-    return results;
+        gender_ratio, ability_count, tid, sid, level, all_states, cancellation, &filters);
 }
 
 std::vector<StateResult> generate_roamer(
     u64 seed0, u64 seed1,
     u32 initial_advances, u32 max_advances, u32 offset,
     int lead, u16 tid, u16 sid, u16 species, u8 level,
-    const FilterParams& filter)
+    const FilterParams& filter, const SearchCancellation* cancellation,
+    const std::vector<FilterParams>* filters)
 {
+    check_cancelled(cancellation);
     u16 tsv = tid ^ sid;
-    bool need_shiny = filter.shiny_mask != 255;
+    bool need_shiny = !filter.skip && filter.shiny_mask != 255;
     u8 gender = (species == 488) ? GENDER_FEMALE : GENDER_GENDERLESS;
 
     Xorshift roamer(seed0, seed1);
     roamer.jump(initial_advances + offset);
 
     std::vector<StateResult> results;
-    for (u32 cnt = 0; cnt <= max_advances; cnt++) {
+    for (u64 cnt = 0; cnt <= max_advances; cnt++) {
+        if ((cnt & 1023) == 0) check_cancelled(cancellation);
         u32 ec = gen_ec(roamer);
         XoroshiroBDSP rng(ec);
 
@@ -238,7 +237,7 @@ std::vector<StateResult> generate_roamer(
             pid = force_non_shiny(pid, tsv);
         }
 
-        if (need_shiny && !(filter.shiny_mask & shiny)) continue;
+        if (need_shiny && (filter.shiny_mask == 0 ? shiny != 0 : !(filter.shiny_mask & shiny))) continue;
 
         // 3 fixed 31 IVs
         u8 ivs[6] = {255, 255, 255, 255, 255, 255};
@@ -280,7 +279,7 @@ std::vector<StateResult> generate_roamer(
         r.ability = ability; r.gender = gender; r.level = level;
         r.nature = nature; r.shiny = shiny;
         r.height = height; r.weight = weight;
-        results.push_back(r);
+        if (!filters || pass_any_filter(r, *filters)) results.push_back(r);
     }
     return results;
 }
@@ -289,19 +288,12 @@ std::vector<StateResult> generate_roamer_multi(
     u64 seed0, u64 seed1,
     u32 initial_advances, u32 max_advances, u32 offset,
     int lead, u16 tid, u16 sid, u16 species, u8 level,
-    const std::vector<FilterParams>& filters)
+    const std::vector<FilterParams>& filters, const SearchCancellation* cancellation)
 {
     if (filters.empty()) return {};
     FilterParams all_states;
     all_states.skip = true;
-    auto states = generate_roamer(
+    return generate_roamer(
         seed0, seed1, initial_advances, max_advances, offset,
-        lead, tid, sid, species, level, all_states);
-    std::vector<StateResult> results;
-    for (const auto& state : states) {
-        if (pass_any_filter(state, filters)) {
-            results.push_back(state);
-        }
-    }
-    return results;
+        lead, tid, sid, species, level, all_states, cancellation, &filters);
 }

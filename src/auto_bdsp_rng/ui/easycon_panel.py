@@ -8,7 +8,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path, PureWindowsPath
 import re
-from time import monotonic
+from time import monotonic, perf_counter
 
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QProcess, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QTextCursor, QTextFormat
@@ -72,6 +72,9 @@ from auto_bdsp_rng.ui.combo_box import NoWheelComboBox as QComboBox
 from auto_bdsp_rng.ui.controller_overlay import ControllerStateOverlay
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.easycon_execution import ExecutionFollower, ScriptSourceTree, source_key
+from auto_bdsp_rng.ui.easycon_lifecycle import (
+    BackendCloseResult, BackendOperation, close_backends, connect_backend, disconnect_backend,
+)
 from auto_bdsp_rng.ui.spin_box import ChevronSpinBox as QSpinBox
 from auto_bdsp_rng.ui.windows_keyboard_hook import KeyboardHookError, WindowsKeyboardHook
 from auto_bdsp_rng.ui.workspace_controls import (
@@ -751,6 +754,9 @@ class EasyConPanel(QWidget):
     virtualControllerHookStopped = Signal(object, int)
     virtualControllerAction = Signal(object, bool)
     nativeScriptStarted = Signal()
+    nativeConnectionFinished = Signal(bool)
+    nativeShutdownFinished = Signal(bool)
+    closePreparationFinished = Signal(bool)
     runLogRequested = Signal()
 
     def __init__(
@@ -769,6 +775,9 @@ class EasyConPanel(QWidget):
         self.setFont(ui_font())
         self._run_log_sink = run_log_sink
         self.native_backend = native_backend
+        self._native_log_sink: Callable[[str, str], None] | None = None
+        self._native_result_log_sink: Callable[[str, str], None] | None = None
+        self._native_streaming_backend: object | None = None
         self._video_source_connected = video_source_connected
         self._frame_client_factory = frame_client_factory
         self._dev_mock_devices = bool(dev_mock_devices)
@@ -778,7 +787,13 @@ class EasyConPanel(QWidget):
         self.native_run_worker: NativeScriptWorker | None = None
         self._native_run_reserved = False
         self.native_connecting = False
+        self.native_disconnecting = False
+        self._native_connection_cancelled = False
+        self._native_disconnect_requested = False
+        self._native_lifecycle_thread: BackendOperation | None = None
+        self._native_connection_callbacks: list[Callable[[bool], None]] = []
         self._native_connection_failed = False
+        self._close_preparation_thread: BackendOperation | None = None
         self._last_native_display_status: tuple[EasyConStatus, bool, bool] | None = None
         loaded_config = EasyConConfig() if isolated_demo else load_config()
         self.config = _migrate_script_config(loaded_config, SCRIPT_DIR)
@@ -811,6 +826,15 @@ class EasyConPanel(QWidget):
         self._capture_keep_awake_cli_cancelled = False
         self._capture_keep_awake_cli_script_path: Path | None = None
         self._shutting_down = False
+        self._shutdown_in_progress = False
+        self._shutdown_complete = False
+        self._shutdown_backend_started = False
+        self._shutdown_backend_errors: tuple[str, ...] = ()
+        self._shutdown_deadline = 0.0
+        self._shutdown_wait_ms = 2000
+        self._shutdown_keep_awake: Future[None] | None = None
+        self._shutdown_controller_cleanup: tuple[Callable[[], object], ...] = ()
+        self._shutdown_keyboard_hook: object | None = None
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self.bridge_connecting = False
         self.current_script_path: Path | None = None
@@ -855,6 +879,9 @@ class EasyConPanel(QWidget):
         self._native_status_timer = QTimer(self)
         self._native_status_timer.setInterval(1000)
         self._native_status_timer.timeout.connect(self._poll_native_connection_status)
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setInterval(20)
+        self._shutdown_timer.timeout.connect(self._poll_shutdown)
         self._capture_keep_awake_cli_timer = QTimer(self)
         self._capture_keep_awake_cli_timer.setSingleShot(True)
         self._capture_keep_awake_cli_timer.timeout.connect(self._capture_keep_awake_cli_timeout)
@@ -1569,6 +1596,20 @@ class EasyConPanel(QWidget):
         self.script_list = QListWidget()
         self.script_list.itemDoubleClicked.connect(self._load_script_item)
 
+        # Hidden compatibility controls must live until panel cleanup finishes.
+        for widget in (
+            self.backend_mode, self.ezcon_path, self.bridge_path,
+            self.browse_ezcon_button, self.browse_bridge_button,
+            self.version_label, self.backend_label, self.task_state_label,
+            self.refresh_ports_button, self.auto_select_port_button,
+            self.mock_check, self.cli_test_button, self.detect_button,
+            self.toolbar_connect_button, self.clear_log_button,
+            self.copy_log_button, self.save_log_button, self.log_keep_lines,
+            self.script_list,
+        ):
+            widget.setParent(self)
+            widget.hide()
+
 
     def _build_controller_tools(self) -> None:
         # Keep the existing capture/recording state surfaces and test commands;
@@ -1795,12 +1836,16 @@ class EasyConPanel(QWidget):
             )
             backend = self.bridge_backend
 
-        if connected:
-            state = "connected"
-        elif connection_text == "正在连接":
+        if connection_text == "正在连接":
             state = "connecting"
+        elif connection_text in ("正在断开", "正在取消", "正在关闭"):
+            state = "disconnecting"
+        elif connected:
+            state = "connected"
         elif connection_text == "连接失败":
             state = "failed"
+        elif connection_text == "已取消连接":
+            state = "cancelled"
         else:
             state = "disconnected"
 
@@ -1819,6 +1864,10 @@ class EasyConPanel(QWidget):
             detail = f"已连接 · {visible_port}" if visible_port else "已连接"
         elif state == "connecting":
             summary, detail = "伊机控 连接中", connection_text
+        elif state == "disconnecting":
+            summary, detail = "伊机控 断开中", connection_text
+        elif state == "cancelled":
+            summary, detail = "伊机控 未连接", connection_text
         elif state == "failed":
             summary, detail = "伊机控 故障", connection_text
         else:
@@ -1854,6 +1903,32 @@ class EasyConPanel(QWidget):
     def script_library_directory(self) -> Path:
         return SCRIPT_DIR
 
+    def set_native_log_sink(
+        self,
+        sink: Callable[[str, str], None] | None,
+        *,
+        result_sink: Callable[[str, str], None] | None = None,
+    ) -> None:
+        """Set a thread-safe stream sink; it must not touch Qt widgets.
+
+        Use the stream for disk logging. The optional result_sink is called
+        on the UI thread with the final output tail, for shared log views
+        that must not persist that output a second time.
+        """
+
+        self._native_log_sink = sink
+        self._native_result_log_sink = result_sink
+        self._native_streaming_backend = None
+        setter = getattr(self.native_backend, "set_log_callback", None)
+        if callable(setter):
+            setter(sink)
+            if sink is not None:
+                self._native_streaming_backend = self.native_backend
+
+    @property
+    def native_output_streamed(self) -> bool:
+        return self._native_log_sink is not None and self._native_streaming_backend is self.native_backend
+
     def _ensure_native_backend(self) -> object:
         if self._shutting_down:
             raise RuntimeError("伊机控页面正在关闭")
@@ -1861,9 +1936,13 @@ class EasyConPanel(QWidget):
             from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
 
             kwargs = {}
+            if self._native_log_sink is not None:
+                kwargs["log_callback"] = self._native_log_sink
             if self._frame_client_factory is not None:
                 kwargs["frame_client_factory"] = self._frame_client_factory
             self.native_backend = NativeEasyConBackend(**kwargs)
+            if self._native_log_sink is not None:
+                self._native_streaming_backend = self.native_backend
         return self.native_backend
 
     def _native_status(self) -> EasyConStatus:
@@ -1880,6 +1959,10 @@ class EasyConPanel(QWidget):
         except ValueError:
             return EasyConStatus.FAILED
 
+    def _native_connection_busy(self) -> bool:
+        return bool(self._native_lifecycle_thread is not None or self._shutting_down
+                    or self._close_preparation_thread is not None)
+
     def _native_connection_active(self, status: EasyConStatus | None = None) -> bool:
         backend = self.native_backend
         if backend is not None:
@@ -1894,7 +1977,7 @@ class EasyConPanel(QWidget):
         return effective_status in (EasyConStatus.BRIDGE_CONNECTED, EasyConStatus.RUNNING)
 
     def _poll_native_connection_status(self) -> None:
-        if self._shutting_down:
+        if self._shutting_down or self._native_connection_busy():
             return
         if self._keyboard_hook is not None and (
             self._vpad_input_source != "hook" or not self._keyboard_hook.is_running
@@ -1903,7 +1986,7 @@ class EasyConPanel(QWidget):
                 hide_overlay=not self._controller_connection_active(),
                 log=False,
             )
-        if not self._is_native_mode() or self.native_connecting:
+        if not self._is_native_mode() or self._native_connection_busy():
             return
         status = self._native_status()
         connected = self._native_connection_active(status)
@@ -1924,7 +2007,7 @@ class EasyConPanel(QWidget):
     def reserve_native_script_run(self) -> bool:
         """Atomically reserve the shared native backend from the UI thread."""
 
-        if self._shutting_down or self._native_run_reserved:
+        if self._native_connection_busy() or self._native_run_reserved:
             return False
         if self.native_run_thread is not None:
             return False
@@ -1943,7 +2026,9 @@ class EasyConPanel(QWidget):
         self._update_run_enabled()
 
     def _native_is_connected(self) -> bool:
-        return self._native_status() in (EasyConStatus.BRIDGE_CONNECTED, EasyConStatus.RUNNING)
+        return not self._native_connection_busy() and self._native_status() in (
+            EasyConStatus.BRIDGE_CONNECTED, EasyConStatus.RUNNING,
+        )
 
     def video_source_state_changed(self) -> None:
         """Refresh script controls after MainWindow connects or disconnects Broker."""
@@ -2386,6 +2471,7 @@ class EasyConPanel(QWidget):
             self._append_log("warn", "已有伊机控脚本正在运行")
             self._update_run_enabled()
             return
+        self._native_disconnect_requested = False
         thread: QThread | None = None
         try:
             started_at = datetime.now()
@@ -2445,7 +2531,7 @@ class EasyConPanel(QWidget):
         if getattr(result, "status", None) == EasyConStatus.FAILED:
             self._set_script_error(str(stderr) or "脚本执行失败，请展开脚本输出")
         if stdout:
-            self._append_log("stdout", str(stdout).rstrip())
+            self._append_log("stdout", str(stdout).rstrip(), persist=not self.native_output_streamed)
         if stderr:
             self._append_log("stderr", str(stderr).rstrip())
         status = getattr(result, "status", None)
@@ -2468,6 +2554,10 @@ class EasyConPanel(QWidget):
         )
         self._update_native_controls()
 
+        if self.native_disconnecting:
+            self.task_state_text = "正在断开"
+            self._update_status_labels()
+
     def _native_run_failed(self, error: str) -> None:
         if self._shutting_down:
             return
@@ -2482,6 +2572,9 @@ class EasyConPanel(QWidget):
             port=self.current_run_port,
         )
         self._update_native_controls()
+        if self.native_disconnecting:
+            self.task_state_text = "正在断开"
+            self._update_status_labels()
 
     def _native_run_thread_finished(self) -> None:
         thread = self.native_run_thread
@@ -2490,6 +2583,8 @@ class EasyConPanel(QWidget):
         self.release_native_script_run()
         if thread is not None:
             thread.deleteLater()
+        if self._shutdown_in_progress:
+            self._poll_shutdown()
 
     def _native_script_paused(self) -> bool:
         return bool(self._is_native_mode() and self.native_run_thread is not None
@@ -2644,6 +2739,7 @@ class EasyConPanel(QWidget):
         self._update_status_labels()
 
     def begin_external_native_script(self, name: str) -> None:
+        self._native_disconnect_requested = False
         # Do not dismiss a trace that has already started on the worker thread.
         self.execution.set_busy(True)
         started_at = datetime.now()
@@ -2665,7 +2761,7 @@ class EasyConPanel(QWidget):
         stdout = getattr(result, "stdout", "")
         stderr = getattr(result, "stderr", "")
         if stdout:
-            self._append_log("stdout", str(stdout).rstrip())
+            self._append_log("stdout", str(stdout).rstrip(), persist=not self.native_output_streamed)
         if stderr:
             self._append_log("stderr", str(stderr).rstrip())
         result_status = getattr(result, "status", None)
@@ -2830,6 +2926,12 @@ class EasyConPanel(QWidget):
         self.run_button.setText("运行脚本")
         self.easycon_status.showMessage(status, 5000)
         self.task_state_text = "已完成" if status.startswith("已完成") else status
+        if self._is_native_mode() and self._native_disconnect_requested:
+            if self.native_disconnecting:
+                self.task_state_text = "正在断开"
+            elif not self._native_connection_active():
+                self.task_state_text = "未运行"
+            self.easycon_status.showMessage(self.task_state_text, 3000)
         log_level = "error" if status.startswith("失败") else "warn" if status.startswith("已中止") else "info"
         self._append_log(log_level, status)
         self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
@@ -2876,7 +2978,11 @@ class EasyConPanel(QWidget):
         self.elapsed_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
     def _can_run(self) -> bool:
+        if self._shutting_down:
+            return False
         if self._is_native_mode():
+            if self._native_connection_busy():
+                return False
             status = self._native_status()
             if status == EasyConStatus.RUNNING:
                 return True
@@ -2910,10 +3016,38 @@ class EasyConPanel(QWidget):
     def has_unsaved_script_changes(self) -> bool:
         return self.editor.toPlainText() != self._saved_editor_text
 
-    def prepare_for_close_confirmation(self) -> None:
-        """Stop keyboard capture and flush an active recording before prompting."""
+    def prepare_for_close_confirmation(self) -> bool:
+        """Freeze input/recording now; finish hook and device I/O before prompting."""
+        if self._close_preparation_thread is not None:
+            return False
+        cleanup: list[Callable[[], object]] = []
+        hook = self._keyboard_hook
+        self._deactivate_virtual_controller(log=False, deferred_cleanup=cleanup)
+        if not cleanup:
+            return True
+        operation = BackendOperation(
+            "prepare_close", lambda: None, parent=self,
+            cleanup=tuple(cleanup), keyboard_hook=hook,
+        )
+        self._close_preparation_thread = operation
+        operation.finished.connect(self._finish_close_preparation)
+        self._update_run_enabled()
+        operation.start()
+        return False
 
-        self._deactivate_virtual_controller(log=False)
+    def _finish_close_preparation(self) -> None:
+        operation = self._close_preparation_thread
+        if operation is None:
+            return
+        self._close_preparation_thread = None
+        if (operation.hook_stopped or operation.cleanup_completed) and self._keyboard_hook is operation.keyboard_hook:
+            self._keyboard_hook = None
+        success = operation.error is None
+        if not success:
+            self._append_log("error", f"关闭确认前释放键盘控制失败: {operation.error}")
+        operation.deleteLater()
+        self._update_run_enabled()
+        self.closePreparationFinished.emit(success)
 
     def _update_dirty_indicator(self) -> None:
         if not hasattr(self, "script_name_label"):
@@ -3032,16 +3166,17 @@ class EasyConPanel(QWidget):
             editor.go_to_line(line)
             editor.setFocus()
 
-    def _append_log(self, level: str, message: str) -> None:
+    def _append_log(self, level: str, message: str, *, persist: bool = True) -> None:
         text = str(message)
         sink_level = {
             "warn": "WARNING",
             "error": "ERROR",
             "stderr": "ERROR",
         }.get(level, "INFO")
-        if self._run_log_sink is not None:
+        sink = self._run_log_sink if persist else self._native_result_log_sink
+        if sink is not None:
             try:
-                self._run_log_sink(sink_level, text)
+                sink(sink_level, text)
             except Exception:
                 pass
         color = {
@@ -3052,13 +3187,58 @@ class EasyConPanel(QWidget):
             "stderr": "#AC4B42",
         }.get(level, "#52615A")
         ts = datetime.now().strftime("%H:%M:%S")
-        for line in text.splitlines() or [""]:
-            self.log_view.append(f'<span style="color:{color}">[{ts}] {escape(line)}</span>')
+        document = self.log_view.document()
+        char_limit = 256 * 1024
+        visible = text[-char_limit:]
+        truncated = len(visible) != len(text)
+        lines = visible.splitlines() or [""]
+        if any(len(line) > 4096 for line in lines):
+            lines = [line[-4096:] for line in lines]
+            truncated = True
+        line_limit = document.maximumBlockCount()
+        if line_limit > 0 and len(lines) > line_limit:
+            lines = lines[-line_limit:]
+            truncated = True
+        prefix = f"[{ts}] "
+        # Include timestamps and the truncation hint in the same character
+        # budget, so repeated output batches also remain bounded.
+        hint = "[显示已截断，仅保留最新输出；全文需开启运行日志]"
+        budget = char_limit - len(hint) - len(prefix) - 1
+        length = sum(len(line) + len(prefix) + 1 for line in lines)
+        first = 0
+        while len(lines) - first > 1 and length > budget:
+            length -= len(lines[first]) + len(prefix) + 1
+            first += 1
+            truncated = True
+        lines = lines[first:]
+        if length > budget:
+            lines[0] = lines[0][-(budget - len(prefix) - 1):]
+            truncated = True
+        if truncated:
+            if line_limit == 1:
+                lines[0] = hint + " " + lines[0]
+            else:
+                if line_limit > 0 and len(lines) >= line_limit:
+                    lines = lines[-(line_limit - 1):]
+                lines.insert(0, hint)
+        # Paragraphs, rather than <br>, preserve maximumBlockCount's line
+        # retention. One append avoids repeated rich-text layouts per line.
+        markup = "".join(
+            f'<p style="margin:0;color:{color}">{escape(prefix + line)}</p>'
+            for line in lines
+        )
+        self.log_view.append(markup)
+        overflow = document.characterCount() - 1 - char_limit
+        if overflow > 0:
+            cursor = QTextCursor(document)
+            cursor.setPosition(0)
+            cursor.setPosition(overflow, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
-        latest_line = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), None)
+        latest_line = next((line.strip() for line in reversed(visible.splitlines()) if line.strip()), None)
         if latest_line is not None:
-            self.latest_log_label.setText(latest_line)
-            self.latest_log_label.setToolTip(text)
+            self.latest_log_label.setText(latest_line[-512:])
+            self.latest_log_label.setToolTip(latest_line[-4096:])
         if level == "error" and extract_compile_error_line("", text) is not None:
             self._set_script_error(text)
 
@@ -3114,67 +3294,190 @@ class EasyConPanel(QWidget):
             self._append_log("info", f"串口: {self._display_port(port)}")
 
     def toggle_native_connection(self) -> None:
+        if self.native_connecting:
+            self.disconnect_native()
+            return
+        if self._native_connection_busy():
+            return
         if self._native_is_connected():
             self.disconnect_native()
             return
         self.connect_native()
 
-    def connect_native(self) -> bool:
+    def connect_native(self, *, on_finished: Callable[[bool], None] | None = None) -> bool:
+        """Accept a background handshake; report its outcome through a callback/signal."""
+
+        if self._shutting_down:
+            return False
+        port = self._connection_port()
+        active = self._native_lifecycle_thread
+        if active is not None:
+            if active.operation == "connect" and active.port == port and not active.cancel_event.is_set():
+                if on_finished is not None:
+                    self._native_connection_callbacks.append(on_finished)
+                return True
+            return False
         if self._native_status() == EasyConStatus.RUNNING:
             self._append_log("warn", "脚本正在运行，不能切换串口连接")
             return False
-        port = self._connection_port()
         if not port:
             self._append_log("warn", "请先选择串口")
             return False
+        if (not self._native_connection_failed and self._native_status() == EasyConStatus.BRIDGE_CONNECTED
+                and self._native_connection_active() and getattr(self.native_backend, "connected_port", None) == port):
+            if on_finished is not None:
+                QTimer.singleShot(0, lambda: on_finished(not self._native_connection_busy()))
+            return True
+        try:
+            backend = self._ensure_native_backend()
+        except Exception as exc:
+            self._append_log("error", f"原生伊机控后端不可用: {exc}")
+            return False
         self.easycon_status.clearMessage()
         self._native_connection_failed = False
+        self._native_connection_cancelled = False
+        self._native_disconnect_requested = False
         self.native_connecting = True
         self.task_state_text = "正在连接"
-        self._update_native_controls()
-        try:
-            self._ensure_native_backend().connect(port)  # type: ignore[attr-defined]
-        except Exception as exc:
-            self.native_connecting = False
-            self._native_connection_failed = True
-            self.task_state_text = "连接失败"
-            self._append_log("error", f"连接伊机控失败: {exc}")
-            self.easycon_status.showMessage("连接失败", 5000)
-            self._show_failure_toast(str(exc))
-            self._update_native_controls()
-            return False
-        self.native_connecting = False
-        self._native_connection_failed = False
-        self.task_state_text = "已完成"
-        self._preferred_last_port = port
-        self._save_config_from_ui()
-        self._append_log("info", f"Python 原生伊机控已连接: {self._display_port(port)}")
-        self.easycon_status.showMessage("已连接", 3000)
-        self._show_connection_toast(self._display_port(port))
-        self._update_native_controls()
-        self._update_run_enabled()
-        self.connection_dialog.hide()
+        if on_finished is not None:
+            self._native_connection_callbacks.append(on_finished)
+        operation = BackendOperation("connect", lambda: None, parent=self, port=port)
+        cancel_event = operation.cancel_event
+        keep_awake = self._capture_keep_awake_future
+        operation.action = lambda: connect_backend(backend, port, cancel_event, keep_awake)
+        self._start_native_lifecycle(operation)
         return True
 
     def disconnect_native(self) -> bool:
-        self._deactivate_virtual_controller(hide_overlay=True)
-        try:
-            self._ensure_native_backend().disconnect()  # type: ignore[attr-defined]
-        except Exception as exc:
-            self.task_state_text = "断开失败"
-            self._append_log("error", f"断开伊机控失败: {exc}")
-            self.easycon_status.showMessage("断开失败", 5000)
-            self._show_failure_toast(str(exc))
-            self._update_run_enabled()
+        if self._shutting_down:
             return False
-        self._native_connection_failed = False
-        self.stop_requested = False
-        self.task_state_text = "未运行"
-        self._append_log("info", "已断开伊机控")
-        self.easycon_status.showMessage("已断开", 3000)
-        self._update_native_controls()
-        self._update_run_enabled()
+        active = self._native_lifecycle_thread
+        if active is not None:
+            if active.operation == "connect":
+                active.cancel_event.set()
+                self.native_disconnecting = True
+                self.task_state_text = "正在取消"
+                self._update_run_enabled()
+                return True
+            return active.operation == "disconnect"
+        cleanup: list[Callable[[], object]] = []
+        hook = self._keyboard_hook
+        self._deactivate_virtual_controller(hide_overlay=True, deferred_cleanup=cleanup)
+        try:
+            backend = self._ensure_native_backend()
+        except Exception as exc:
+            self._append_log("error", f"原生伊机控后端不可用: {exc}")
+            return False
+        self.native_disconnecting = True
+        self._native_disconnect_requested = True
+        self.task_state_text = "正在断开"
+        keep_awake = self._capture_keep_awake_future
+        self._start_native_lifecycle(BackendOperation(
+            "disconnect", lambda: disconnect_backend(backend, keep_awake), parent=self,
+            cleanup=tuple(cleanup), keyboard_hook=hook,
+        ))
         return True
+
+    def _start_native_lifecycle(self, operation: BackendOperation) -> None:
+        self._native_lifecycle_thread = operation
+        operation.finished.connect(self._native_lifecycle_finished)
+        self._update_run_enabled()
+        try:
+            operation.start()
+        except Exception as exc:
+            operation.error = exc
+            self._native_lifecycle_finished()
+
+    def _notify_native_connection_finished(self, success: bool) -> None:
+        callbacks, self._native_connection_callbacks = self._native_connection_callbacks, []
+        self.nativeConnectionFinished.emit(success)
+        for callback in callbacks:
+            try:
+                callback(success)
+            except Exception as exc:
+                self._append_log("error", f"处理伊机控连接结果失败: {exc}")
+
+    def _native_lifecycle_finished(self) -> None:
+        operation = self._native_lifecycle_thread
+        if operation is None:
+            return
+        self._native_lifecycle_thread = None
+        if (operation.hook_stopped or operation.cleanup_completed) and self._keyboard_hook is operation.keyboard_hook:
+            self._keyboard_hook = None
+        error = operation.error
+        self.native_connecting = False
+        self.native_disconnecting = False
+        if operation.operation == "connect" and operation.cancel_event.is_set() and operation.result is True:
+            # Cancellation may arrive after the worker's final cancellation
+            # check but before Qt delivers finished. Keep serial ownership and
+            # callbacks until a background disconnect confirms cleanup.
+            backend = self.native_backend
+            keep_awake = self._capture_keep_awake_future
+            self.native_disconnecting = True
+            self.task_state_text = "正在取消"
+            cleanup = BackendOperation(
+                "cancel_connect", lambda: disconnect_backend(backend, keep_awake),
+                parent=self, port=operation.port,
+            )
+            operation.deleteLater()
+            self._start_native_lifecycle(cleanup)
+            return
+        if operation.operation == "close":
+            result = operation.result
+            if isinstance(result, BackendCloseResult):
+                if result.native_closed:
+                    self.native_backend = None
+                    self._native_streaming_backend = None
+                if result.bridge_closed:
+                    self.bridge_backend = None
+                self._shutdown_backend_errors = result.errors + ((str(error),) if error is not None else ())
+            else:
+                self._shutdown_backend_errors = (str(error or "伊机控后台清理失败"),)
+        elif operation.operation in ("connect", "cancel_connect"):
+            cancelled = operation.operation == "cancel_connect" or operation.cancel_event.is_set() or operation.result is False
+            success = error is None and not cancelled and not self._shutting_down
+            self._native_connection_failed = error is not None
+            self._native_connection_cancelled = cancelled and error is None
+            if not self._shutting_down:
+                if error is not None:
+                    self.task_state_text = "连接失败"
+                    self._append_log("error", f"连接伊机控失败: {error}")
+                    self.easycon_status.showMessage("连接失败", 5000)
+                    self._show_failure_toast(str(error))
+                elif cancelled:
+                    self.task_state_text = "已取消连接"
+                    self.easycon_status.showMessage("已取消连接", 3000)
+                    self._append_log("info", "已取消伊机控连接")
+                else:
+                    self.task_state_text = "已完成"
+                    self._preferred_last_port = operation.port
+                    try:
+                        self._save_config_from_ui()
+                    except OSError as exc:
+                        self._append_log("warn", f"串口已连接，但无法保存配置: {exc}")
+                    self._append_log("info", f"Python 原生伊机控已连接: {self._display_port(operation.port)}")
+                    self.easycon_status.showMessage("已连接", 3000)
+                    self._show_connection_toast(self._display_port(operation.port))
+                    self.connection_dialog.hide()
+                self._update_run_enabled()
+            self._notify_native_connection_finished(success)
+        elif not self._shutting_down:
+            if error is not None:
+                self.task_state_text = "断开失败"
+                self._append_log("error", f"断开伊机控失败: {error}")
+                self.easycon_status.showMessage("断开失败", 5000)
+                self._show_failure_toast(str(error))
+            else:
+                self._native_connection_failed = False
+                self._native_connection_cancelled = False
+                self.stop_requested = False
+                self.task_state_text = "未运行"
+                self._append_log("info", "已断开伊机控")
+                self.easycon_status.showMessage("已断开", 3000)
+            self._update_run_enabled()
+        operation.deleteLater()
+        if self._shutdown_in_progress:
+            self._poll_shutdown()
 
     def toggle_bridge_connection(self) -> None:
         if self.bridge_status == EasyConStatus.BRIDGE_CONNECTED:
@@ -3341,7 +3644,7 @@ class EasyConPanel(QWidget):
         if not self._is_native_mode() and not self._is_bridge_mode():
             return self._start_capture_keep_awake_cli(log_label, duration)
         if self._is_native_mode():
-            if self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
+            if self._native_connection_busy() or self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
                 self._append_log("warn", f"请先连接伊机控，无法执行{log_label}")
                 return False
             backend = self._ensure_native_backend()
@@ -3472,21 +3775,50 @@ class EasyConPanel(QWidget):
         return cli_stopped
 
     def shutdown(self, *, wait_ms: int = 2000) -> bool:
+        """Start cleanup without waiting on the UI; return True only once quiescent.
+
+        A False return can mean cleanup is pending. nativeShutdownFinished
+        distinguishes its eventual success from a failure that can be retried.
+        """
+
+        if self._shutdown_complete:
+            return True
+        if self._shutdown_in_progress:
+            return False
+        self._shutdown_in_progress = True
+        self._shutdown_backend_started = False
+        self._shutdown_backend_errors = ()
+        self._shutdown_wait_ms = max(0, int(wait_ms))
+        self._shutdown_deadline = perf_counter() + self._shutdown_wait_ms / 1000
         self.execution.timer.stop()
-        if not self._shutting_down:
-            self._shutting_down = True
-            self.run_timer.stop()
-            self._native_status_timer.stop()
+        self._shutting_down = True
+        self.run_timer.stop()
+        self._native_status_timer.stop()
         self.connection_dialog.hide()
         self._publish_connection_presentation(force=True)
-        vpad_stopped = self._deactivate_virtual_controller(hide_overlay=True, log=False)
+        cleanup: list[Callable[[], object]] = []
+        self._shutdown_keyboard_hook = self._keyboard_hook
+        vpad_stopped = self._deactivate_virtual_controller(
+            hide_overlay=True, log=False, deferred_cleanup=cleanup,
+        )
+        self._shutdown_controller_cleanup = tuple(cleanup)
         overlay = self._controller_overlay
         if not vpad_stopped:
+            self._complete_shutdown(False)
             return False
         if overlay is not None:
             overlay.shutdown()
         self.release_native_script_run()
-        stopped = self.shutdown_capture_keep_awake()
+        self._shutdown_keep_awake = self._capture_keep_awake_future
+        self._capture_keep_awake_shutting_down = True
+        executor, self._capture_keep_awake_executor = self._capture_keep_awake_executor, None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+        self._capture_keep_awake_cli_timer.stop()
+        keep_awake_process = self._capture_keep_awake_cli_process
+        if keep_awake_process is not None and keep_awake_process.state() != QProcess.ProcessState.NotRunning:
+            self._capture_keep_awake_cli_cancelled = True
+            keep_awake_process.kill()
 
         native_backend = self.native_backend
         native_thread = self.native_run_thread
@@ -3497,44 +3829,88 @@ class EasyConPanel(QWidget):
                 self._append_log("warn", f"停止原生伊机控脚本失败: {exc}")
             native_thread.requestInterruption()
             native_thread.quit()
-            if not native_thread.wait(wait_ms):
-                stopped = False
-        if native_backend is not None and not (native_thread is not None and native_thread.isRunning()):
-            try:
-                native_backend.close()  # type: ignore[attr-defined]
-            except Exception as exc:
-                stopped = False
-                self._append_log("warn", f"关闭原生伊机控连接失败: {exc}")
-            else:
-                self.native_backend = None
 
         process = self.process
         if process is not None and process.state() != QProcess.ProcessState.NotRunning:
             process.kill()
-            if not process.waitForFinished(wait_ms):
-                stopped = False
-        if process is None or process.state() == QProcess.ProcessState.NotRunning:
-            self._cleanup_cli_script()
-
-        backend = self.bridge_backend
-        if backend is not None:
-            try:
-                backend.close()
-            except Exception as exc:
-                stopped = False
-                self._append_log("warn", f"关闭 Bridge 进程失败: {exc}")
-            else:
-                self.bridge_backend = None
 
         thread = self.bridge_run_thread
         if thread is not None and thread.isRunning():
             thread.requestInterruption()
             thread.quit()
-            if not thread.wait(wait_ms):
-                stopped = False
+        lifecycle = self._native_lifecycle_thread
+        if lifecycle is not None and lifecycle.operation == "connect":
+            lifecycle.cancel_event.set()
         self._update_keyboard_control_presentation()
+        self._update_run_enabled()
+        self._shutdown_timer.start()
+        self._poll_shutdown()
+        return self._shutdown_complete
+
+    def _poll_shutdown(self) -> None:
+        if not self._shutdown_in_progress or self._native_lifecycle_thread is not None:
+            return
+        if not self._shutdown_backend_started:
+            self._shutdown_backend_started = True
+            native, bridge = self.native_backend, self.bridge_backend
+            keep_awake = self._shutdown_keep_awake
+            close_if_idle = getattr(native, "close_if_idle", None)
+            if not self._shutdown_controller_cleanup and bridge is None and (keep_awake is None or keep_awake.done()) and (
+                native is None or (callable(close_if_idle) and close_if_idle())
+            ):
+                self.native_backend = None
+                self._native_streaming_backend = None
+                self._poll_shutdown()
+                return
+            timeout = self._shutdown_wait_ms / 1000
+            self._start_native_lifecycle(BackendOperation(
+                "close", lambda: close_backends(native, bridge, keep_awake, timeout), parent=self,
+                cleanup=self._shutdown_controller_cleanup, keyboard_hook=self._shutdown_keyboard_hook,
+            ))
+            return
+        if self._shutdown_backend_errors:
+            for error in self._shutdown_backend_errors:
+                self._append_log("warn", error)
+            self._complete_shutdown(False)
+            return
+        pending_threads = any(
+            thread is not None and thread.isRunning()
+            for thread in (self.native_run_thread, self.bridge_run_thread)
+        )
+        pending_processes = any(
+            process is not None and process.state() != QProcess.ProcessState.NotRunning
+            for process in (self.process, self._capture_keep_awake_cli_process)
+        )
+        if pending_threads or pending_processes:
+            if perf_counter() >= self._shutdown_deadline:
+                self._append_log("warn", "伊机控或 CLI 任务尚未退出，可稍后重试关闭")
+                self._complete_shutdown(False)
+            return
+        if self._capture_keep_awake_cli_process is not None:
+            self._clear_capture_keep_awake_cli(self._capture_keep_awake_cli_process)
+        self._cleanup_cli_script()
+        self._capture_keep_awake_future = None
+        self._shutdown_keep_awake = None
+        self._complete_shutdown(True)
+
+    def _complete_shutdown(self, success: bool) -> None:
+        self._shutdown_timer.stop()
+        self._shutdown_in_progress = False
+        self._shutdown_complete = success
+        self._shutdown_controller_cleanup = ()
+        self._shutdown_keyboard_hook = None
+        if not success:
+            # A failed attempt leaves the page usable and preserves backends
+            # that still own resources, so a later close can retry cleanup.
+            self._shutting_down = False
+            self._capture_keep_awake_shutting_down = False
+            self._native_status_timer.start()
+            self.execution.timer.start()
+            if self._controller_script_running():
+                self.run_timer.start()
+        self._update_run_enabled()
         self._publish_connection_presentation(force=True)
-        return stopped
+        self.nativeShutdownFinished.emit(success)
 
     def _start_capture_keep_awake_cli(self, log_label: str, duration_ms: int) -> bool:
         if self.bridge_status == EasyConStatus.RUNNING:
@@ -3661,7 +4037,7 @@ class EasyConPanel(QWidget):
         duration = self.controller_duration.value()
         label = f"{side.upper()} {direction}"
         if self._is_native_mode():
-            if self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
+            if self._native_connection_busy() or self._native_status() != EasyConStatus.BRIDGE_CONNECTED:
                 self._append_log("warn", "请先连接伊机控，再测试摇杆")
                 return
             try:
@@ -3742,6 +4118,8 @@ class EasyConPanel(QWidget):
 
     def _controller_connection_active(self) -> bool:
         if self._is_native_mode():
+            if self._native_connection_busy():
+                return False
             backend = self.native_backend
             if backend is None:
                 return False
@@ -4025,6 +4403,7 @@ class EasyConPanel(QWidget):
         *,
         hide_overlay: bool = False,
         log: bool = True,
+        deferred_cleanup: list[Callable[[], object]] | None = None,
     ) -> bool:
         had_controller = (
             self.virtual_controller_enabled
@@ -4047,18 +4426,21 @@ class EasyConPanel(QWidget):
         stopped = True
         hook = self._keyboard_hook
         if hook is not None:
-            try:
-                hook.stop()
-            except Exception as exc:
-                stopped = False
-                self._append_log("error", f"停止系统级键盘捕获失败: {exc}")
+            if deferred_cleanup is not None:
+                deferred_cleanup.append(hook.stop)
             else:
-                self._keyboard_hook = None
+                try:
+                    hook.stop()
+                except Exception as exc:
+                    stopped = False
+                    self._append_log("error", f"停止系统级键盘捕获失败: {exc}")
+                else:
+                    self._keyboard_hook = None
 
         if self._recording:
-            self._stop_recording()
+            self._stop_recording(deferred_cleanup=deferred_cleanup)
         else:
-            self._release_virtual_controller_keys()
+            self._release_virtual_controller_keys(deferred_cleanup=deferred_cleanup)
 
         overlay = self._controller_overlay
         if overlay is not None:
@@ -4340,8 +4722,8 @@ class EasyConPanel(QWidget):
         self._update_keyboard_control_presentation()
         self._append_log("info", "开始录制，操作命令将实时追加到当前脚本末尾")
 
-    def _stop_recording(self) -> None:
-        self._release_virtual_controller_keys()
+    def _stop_recording(self, *, deferred_cleanup: list[Callable[[], object]] | None = None) -> None:
+        self._release_virtual_controller_keys(deferred_cleanup=deferred_cleanup)
         self._recording = False
         self._recording_paused = False
         self.record_btn.setText("开始录制")
@@ -4378,26 +4760,35 @@ class EasyConPanel(QWidget):
         self._update_keyboard_control_presentation()
         self._append_log("info", "录制已恢复")
 
-    def _release_virtual_controller_keys(self) -> None:
+    def _release_virtual_controller_keys(
+        self, *, deferred_cleanup: list[Callable[[], object]] | None = None,
+    ) -> None:
         if not self.virtual_controller_keys:
             return
         backend = self.native_backend if self._is_native_mode() else self.bridge_backend
         actions = list(self.virtual_controller_keys.items())
         record_releases = self._recording and not self._recording_paused
         observed_at = self._recording_clock() if record_releases else 0.0
-        for key, action in actions:
-            kind, value, direction = action
-            try:
-                if backend is None:
-                    pass
-                elif kind == "button":
-                    backend.key_up(value)  # type: ignore[attr-defined]
-                elif direction is not None:
-                    backend.stick_direction(value, direction, False)  # type: ignore[attr-defined]
-            except Exception as exc:
-                self._append_log("error", f"释放键盘控制按键失败: {exc}")
-            finally:
-                self.virtual_controller_keys.pop(key, None)
+        log = self.bridge_log.emit if deferred_cleanup is not None else self._append_log
+
+        def release() -> None:
+            for _key, action in actions:
+                kind, value, direction = action
+                try:
+                    if backend is None:
+                        pass
+                    elif kind == "button":
+                        backend.key_up(value)  # type: ignore[attr-defined]
+                    elif direction is not None:
+                        backend.stick_direction(value, direction, False)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    log("error", f"释放键盘控制按键失败: {exc}")
+
+        if deferred_cleanup is None:
+            release()
+        else:
+            deferred_cleanup.append(release)
+        self.virtual_controller_keys.clear()
         if record_releases:
             self._append_recorded_forced_releases(
                 [action for _key, action in actions],
@@ -4499,16 +4890,25 @@ class EasyConPanel(QWidget):
         connected = self._native_connection_active(status)
         self._last_native_display_status = (status, connected, self._native_connection_failed)
         running = status == EasyConStatus.RUNNING
-        self.connect_button.setEnabled(not self.native_connecting and not running)
-        self.toolbar_connect_button.setEnabled(not self.native_connecting and not running)
-        self.port_combo.setEnabled(not self.native_connecting and not connected and not running)
-        self.disconnect_button.setEnabled(not self.native_connecting and not connected and not running)
+        busy = self._native_connection_busy()
+        cancellable = self.native_connecting and not self.native_disconnecting and not self._shutting_down
+        self.connect_button.setEnabled(cancellable or (not busy and not running))
+        self.toolbar_connect_button.setEnabled(cancellable or (not busy and not running))
+        self.port_combo.setEnabled(not busy and not connected and not running)
+        self.disconnect_button.setEnabled(cancellable or (not busy and not connected and not running))
         self.bridge_path.setEnabled(False)
         self.browse_bridge_button.setEnabled(False)
         self.mock_check.setEnabled(False)
-        self.auto_select_port_button.setEnabled(bool(self.port_combo.count()) and not connected and not running)
-        if self.native_connecting:
-            button_text = "正在连接"
+        self.auto_select_port_button.setEnabled(bool(self.port_combo.count()) and not busy and not connected and not running)
+        self.port_refresh_button.setEnabled(not busy)
+        if self._shutting_down:
+            button_text = "正在关闭"
+            backend_text = "连接: 正在关闭"
+        elif self.native_disconnecting:
+            button_text = "正在取消" if self.native_connecting else "正在断开"
+            backend_text = f"连接: {button_text}"
+        elif self.native_connecting:
+            button_text = "取消连接"
             backend_text = "连接: 正在连接"
         elif running and connected:
             button_text = "断开连接"
@@ -4582,7 +4982,7 @@ class EasyConPanel(QWidget):
     def _update_controller_controls(self) -> None:
         if self._is_native_mode():
             native_status = self._native_status()
-            enabled = native_status == EasyConStatus.BRIDGE_CONNECTED
+            enabled = not self._native_connection_busy() and native_status == EasyConStatus.BRIDGE_CONNECTED
         else:
             enabled = self.bridge_status != EasyConStatus.RUNNING and (
                 (self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED)
@@ -4597,7 +4997,7 @@ class EasyConPanel(QWidget):
         ):
             button.setEnabled(enabled)
         self.keyboard_controller_check.setEnabled(
-            self._native_status() == EasyConStatus.BRIDGE_CONNECTED
+            not self._native_connection_busy() and self._native_status() == EasyConStatus.BRIDGE_CONNECTED
             if self._is_native_mode()
             else self._is_bridge_mode() and self.bridge_status == EasyConStatus.BRIDGE_CONNECTED
         )
@@ -4660,6 +5060,10 @@ class EasyConPanel(QWidget):
         native_connected: bool | None = None,
     ) -> str:
         if self._is_native_mode():
+            if self._shutting_down:
+                return "正在关闭"
+            if self.native_disconnecting:
+                return "正在取消" if self.native_connecting else "正在断开"
             if self.native_connecting:
                 return "正在连接"
             status = native_status if native_status is not None else self._native_status()
@@ -4672,6 +5076,8 @@ class EasyConPanel(QWidget):
                 return "已连接"
             if self._native_connection_failed or status == EasyConStatus.FAILED:
                 return "连接失败"
+            if self._native_connection_cancelled:
+                return "已取消连接"
             if not self._connection_port():
                 return "未选择串口"
             return "未连接"

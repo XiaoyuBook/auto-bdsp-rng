@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
-from tests.test_easycon_panel import app, easycon_panel_factory, process_events_until
+from tests.test_easycon_panel import app, easycon_panel_factory, process_events_until, shutdown_panel
 
 
 def test_pause_edit_validation_and_continue_use_current_editor_in_same_run(easycon_panel_factory, tmp_path):
@@ -52,7 +52,7 @@ def test_pause_edit_validation_and_continue_use_current_editor_in_same_run(easyc
         assert panel.run_button.text() == "运行脚本"
         assert panel.execution.pause_note.isHidden()
     finally:
-        panel.shutdown()
+        shutdown_panel(panel)
 
 
 def test_stopping_paused_script_restores_editing_and_run_controls(easycon_panel_factory, tmp_path):
@@ -78,4 +78,4 @@ def test_stopping_paused_script_restores_editing_and_run_controls(easycon_panel_
         assert not panel.stop_button.isEnabled() and not panel.pause_button.isEnabled()
         assert not panel.editor.isReadOnly()
     finally:
-        panel.shutdown()
+        shutdown_panel(panel)

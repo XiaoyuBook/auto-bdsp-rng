@@ -860,6 +860,35 @@ def test_preview_frame_capture_release_is_idempotent(monkeypatch, tmp_path):
         capture.read()
 
 
+def test_real_adapter_preview_release_retries_failed_backend_then_stays_idempotent(monkeypatch, tmp_path):
+    class FailingReleaseCapture:
+        attempts = 0
+        fail_release = True
+
+        def read(self):
+            return True, "preview-frame"
+
+        def release(self):
+            self.attempts += 1
+            if self.fail_release:
+                raise OSError("backend release failed")
+
+    video = FailingReleaseCapture()
+    monkeypatch.setattr(project_xs_module, "_open_capture_source", lambda _config: video)
+    capture = PreviewFrameCapture(BlinkCaptureConfig(tmp_path / "eye.png", (1, 2, 3, 4)))
+
+    with pytest.raises(OSError, match="backend release failed"):
+        capture.release()
+    assert video.attempts == 1
+    assert capture.read() == "preview-frame"
+    video.fail_release = False
+    capture.release()
+    capture.release()
+    assert video.attempts == 2
+    with pytest.raises(ProjectXsIntegrationError, match="已经关闭"):
+        capture.read()
+
+
 def test_capture_preview_frame_releases_source_when_read_fails(monkeypatch, tmp_path):
     class FailingCapture:
         def __init__(self):

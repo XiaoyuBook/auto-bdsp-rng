@@ -1,5 +1,6 @@
 from dataclasses import replace
 from types import SimpleNamespace
+import threading
 import time
 
 import cv2
@@ -12,9 +13,11 @@ from auto_bdsp_rng.blink_detection import load_project_xs_config, save_project_x
 from auto_bdsp_rng.blink_detection.models import BlinkObservation
 from auto_bdsp_rng.rng_core import SeedState32
 from auto_bdsp_rng.ui import main_window as mw
+import auto_bdsp_rng.blink_detection.project_xs as project_xs_module
 from auto_bdsp_rng.automation.auto_rng import starter_scripts
 from tests.test_starter_automation_ui import select
 from tests.test_start_readiness import window
+from tests.ui_wait import wait_until
 
 
 @pytest.fixture
@@ -150,25 +153,448 @@ def test_capture_test_uses_unsaved_config_through_existing_pipeline(window, conf
     state = SeedState32(1, 2, 3, 4)
     for field, word in zip(window.seed32_inputs, state.format_words()):
         field.setText(word)
+    draft = window._config_from_form()
+    assert draft.source_path == second and draft.npc == 3
+    source = window._synchronize_preview_source(draft.capture)
+    window._latest_preview_frame = np.zeros((40, 40, 3), dtype=np.uint8)
+    window._latest_preview_source = source
     captures = []
+    recovery_npcs = []
+    completed = []
+    window.manualCaptureFinished.connect(lambda *args: completed.append(args))
+
     def capture(config, **_kwargs):
         captures.append(config)
         return BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=time.perf_counter())
+
+    def recover(_observation, *, npc):
+        recovery_npcs.append(npc)
+        return SimpleNamespace(state=state)
+
+    def reidentify(*_args, npc, **_kwargs):
+        recovery_npcs.append(npc)
+        return SimpleNamespace(state=state, advances=25)
+
     monkeypatch.setattr(mw, "capture_player_blinks", capture)
     monkeypatch.setattr(mw, "capture_pokemon_blinks", capture)
-    monkeypatch.setattr(mw, "recover_seed_from_observation", lambda *_args, **_kw: SimpleNamespace(state=state))
+    monkeypatch.setattr(mw, "recover_seed_from_observation", recover)
     monkeypatch.setattr(mw, "recover_tidsid_seed_from_observation", lambda *_args: SimpleNamespace(state=state))
-    monkeypatch.setattr(window, "_reidentify_from_observation", lambda *_args, **_kw: SimpleNamespace(state=state, advances=25))
-    monkeypatch.setattr(window, "_ensure_preview_frame_before_capture", lambda: True)
+    monkeypatch.setattr(window, "_reidentify_from_observation", reidentify)
     editor.test_button.click()
-    window._capture_thread.join(timeout=2)
-    assert not window._capture_thread.is_alive()
-    window._poll_capture_thread()
+    thread = window._capture_thread
+    assert thread is not None
+    wait_until(lambda: window._capture_thread is None)
+    assert not thread.is_alive() and window._capture_error is None
+    assert completed == [("tidsid" if kind == "tid" else kind, thread, True, "")]
+    assert captures == [replace(draft.capture, blink_count={"seed": 40, "tid": 64, "reidentify": 7}[kind])]
     assert captures[0].threshold == .67
     assert captures[0].blink_count == {"seed": 40, "tid": 64, "reidentify": 7}[kind]
+    assert recovery_npcs == ([] if kind == "tid" else [3])
+    assert window._latest_preview_source == source
     assert "成功" in editor.status.text()
     assert editor.active and editor.save_button.isEnabled()
     assert second.read_bytes() == before
+
+
+@pytest.fixture
+def deferred_editor_capture(window, configs, monkeypatch):
+    first, second, _template = configs
+    state = SeedState32(1, 2, 3, 4)
+    probe = SimpleNamespace(
+        entered=threading.Event(), release=threading.Event(), released=threading.Event(),
+        release_entered=threading.Event(), close_gate=threading.Event(),
+        capture_entered=threading.Event(), capture_gate=threading.Event(),
+        captures=[], recovery_npcs=[], completed=[], errors=[], read_error=None, close_error=None,
+        release_attempts=[], backends=[],
+        before=second.read_bytes(), first_before=first.read_bytes(), first=first, second=second,
+    )
+    probe.close_gate.set()
+    probe.capture_gate.set()
+    frame = np.full((40, 40, 3), 128, dtype=np.uint8)
+
+    class Preview:
+        keep_open_for_preview = True
+
+        def __init__(self, config):
+            self.config = config
+            self.read_count = 0
+
+        def read(self):
+            self.read_count += 1
+            probe.entered.set()
+            assert probe.release.wait(3)
+            if probe.read_error is not None:
+                raise probe.read_error
+            return frame
+
+        def release(self):
+            probe.release_attempts.append(threading.get_ident())
+            probe.release_entered.set()
+            assert probe.close_gate.wait(3)
+            if probe.close_error is not None:
+                raise probe.close_error
+            probe.released.set()
+
+    def capture(config, **_kwargs):
+        assert probe.released.is_set()
+        probe.capture_entered.set()
+        assert probe.capture_gate.wait(3)
+        probe.captures.append(config)
+        return BlinkObservation.from_sequences([1, 0], [12, 24], offset_time=time.perf_counter())
+
+    def recover(_observation, **kwargs):
+        if "npc" in kwargs:
+            probe.recovery_npcs.append(kwargs["npc"])
+        return SimpleNamespace(state=state)
+
+    def reidentify(*_args, npc, **_kwargs):
+        probe.recovery_npcs.append(npc)
+        return SimpleNamespace(state=state, advances=25)
+
+    monkeypatch.setattr(mw, "PreviewFrameCapture", Preview)
+    monkeypatch.setattr(mw, "render_eye_preview", lambda _config, raw: (raw.copy(), SimpleNamespace(match_score=.8)))
+    monkeypatch.setattr(mw, "capture_player_blinks", capture)
+    monkeypatch.setattr(mw, "capture_pokemon_blinks", capture)
+    monkeypatch.setattr(mw, "recover_seed_from_observation", recover)
+    monkeypatch.setattr(mw, "recover_tidsid_seed_from_observation", recover)
+    monkeypatch.setattr(window, "_reidentify_from_observation", reidentify)
+    monkeypatch.setattr(window, "_show_error", lambda _title, error, **_kwargs: probe.errors.append(str(error)))
+    window.manualCaptureFinished.connect(lambda *args: probe.completed.append(args))
+
+    def start(kind="seed", *, cached_preview=False, real_adapter=False, gated_capture=False):
+        if gated_capture:
+            probe.capture_gate.clear()
+        if real_adapter:
+            class PreviewBackend(Preview):
+                def read(self):
+                    return True, super().read()
+
+            def open_backend(config):
+                backend = PreviewBackend(config)
+                probe.backends.append(backend)
+                return backend
+
+            monkeypatch.setattr(project_xs_module, "_open_capture_source", open_backend)
+            monkeypatch.setattr(mw, "PreviewFrameCapture", project_xs_module.PreviewFrameCapture)
+        # Keep the manual draft on the same physical source. Restoring it on
+        # cancel must invalidate the pending operation even without a source
+        # change, rather than relying on incidental camera changes to stop it.
+        window.monitor_window.setChecked(False)
+        window.camera.setText("0")
+        _panel, _binding, probe.editor = open_editor(window, kind, second)
+        window.threshold.setValue(.67)
+        window.npc_count.setText("3")
+        window.monitor_window.setChecked(False)
+        window.camera.setText("0")
+        for field, word in zip(window.seed32_inputs, state.format_words()):
+            field.setText(word)
+        probe.draft = window._config_from_form()
+        if cached_preview:
+            probe.close_gate.clear()
+            window._preview_timer.start()
+            window._update_preview_frame()
+            wait_until(probe.entered.is_set)
+            probe.release.set()
+            wait_until(lambda: window._latest_preview_frame is frame)
+            assert window._preview_thread is not None and not probe.released.is_set()
+        probe.editor.test_button.click()
+        wait_until(probe.entered.is_set)
+        return probe
+
+    yield start
+    probe.close_error = None
+    probe.release.set()
+    probe.close_gate.set()
+    probe.capture_gate.set()
+    window._cancel_preview_interaction(restore_preview=False)
+    window._cancel_capture()
+    window._preview_timer.stop()
+    window._release_preview_capture()
+    wait_until(lambda: window._preview_thread is None and not window._preview_cleanup_threads
+               and window._capture_thread is None)
+
+
+@pytest.mark.parametrize("kind", ["seed", "tid", "reidentify"])
+def test_editor_capture_waits_for_first_frame_and_keeps_unsaved_configuration(window, deferred_editor_capture, kind, monkeypatch, capsys):
+    probe = deferred_editor_capture(kind)
+    editor = probe.editor
+    assert editor.testing and editor.active and window._capture_thread is None
+    assert not editor.save_button.isEnabled() and editor.cancel_button.isEnabled()
+    assert not window.capture_recognition_group.isEnabled()
+    assert not window.capture_timing_group.isEnabled()
+    assert not window.video_overlay.threshold.isEnabled()
+    assert not window.raw_screenshot_button.isEnabled()
+    editor.refresh()
+    assert editor.testing and not editor.save_button.isEnabled()
+    # A later form read must not replace the configuration accepted by this
+    # test request, even when only annotation/NPC fields have changed.
+    monkeypatch.setattr(window, "_config_from_form", lambda: replace(
+        probe.draft, capture=replace(probe.draft.capture, threshold=.91), npc=19,
+    ))
+    editor.save_button.click()
+    window.save_current_config()
+    assert editor.active and probe.second.read_bytes() == probe.before
+    probe.release.set()
+    wait_until(lambda: bool(probe.completed))
+    assert window._capture_thread is None and probe.released.is_set()
+    assert probe.completed[0][0] == ("tidsid" if kind == "tid" else kind)
+    assert probe.completed[0][2:] == (True, "")
+    assert probe.captures == [replace(probe.draft.capture, blink_count={"seed": 40, "tid": 64, "reidentify": 7}[kind])]
+    assert probe.recovery_npcs == ([] if kind == "tid" else [3])
+    assert not probe.errors and not editor.testing
+    assert editor.active and editor.save_button.isEnabled()
+    assert "成功" in editor.status.text()
+    assert window._selected_config_path() == str(probe.second)
+    assert window.npc_count.text() == "3" and window.threshold.value() == .67
+    assert probe.first.read_bytes() == probe.first_before and probe.second.read_bytes() == probe.before
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+
+
+@pytest.mark.parametrize("action", ["stop", "cancel", "close", "source", "timeout", "read-error"])
+def test_editor_capture_cancelled_before_first_frame_never_starts_late_capture(window, deferred_editor_capture, action, capsys):
+    probe = deferred_editor_capture()
+    editor = probe.editor
+    assert window._capture_thread is None and not probe.captures
+    if action == "stop":
+        editor.test_button.click()
+    elif action == "cancel":
+        editor.cancel_button.click()
+    elif action == "close":
+        assert window.close() is False
+    elif action == "source":
+        window.camera.setText("1")
+    elif action == "timeout":
+        assert window._preview_action is not None
+        window._preview_action.deadline = time.monotonic() - 1
+        window._poll_preview_action()
+    else:
+        probe.read_error = OSError("camera removed")
+    probe.release.set()
+    wait_until(lambda: window._preview_thread is None and not window._preview_cleanup_threads
+               and window._capture_thread is None)
+    if action == "close":
+        wait_until(lambda: window._close_accepted)
+        assert window.easycon_tab._shutdown_complete
+    # Drain the poll and any already queued continuation after the late frame.
+    window._poll_first_preview_frame()
+    QApplication.processEvents()
+    wait_until(lambda: window._capture_thread is None)
+    assert not probe.captures and not probe.completed
+    assert window._preview_action is None and not window._first_preview_pending
+    assert not editor.testing
+    if action in {"cancel", "close"}:
+        assert not editor.active and window._selected_config_path() == str(probe.first)
+    else:
+        assert editor.active and editor.save_button.isEnabled() and editor.cancel_button.isEnabled()
+        assert window.capture_recognition_group.isEnabled()
+    assert probe.first.read_bytes() == probe.first_before and probe.second.read_bytes() == probe.before
+    assert probe.errors == (["camera removed"] if action == "read-error" else [])
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+
+
+def test_editor_capture_waits_for_cached_preview_owner_to_release(window, deferred_editor_capture, capsys):
+    probe = deferred_editor_capture(cached_preview=True)
+    owner = window._preview_capture
+    wait_until(probe.release_entered.is_set)
+    assert probe.editor.testing and window._capture_thread is None
+    assert not probe.editor.save_button.isEnabled() and not probe.released.is_set()
+    assert not probe.captures and not probe.completed
+    probe.close_gate.set()
+    wait_until(lambda: bool(probe.completed))
+    assert probe.released.is_set() and window._capture_thread is None
+    assert window._preview_capture is not owner and window._preview_timer.isActive()
+    assert probe.captures == [probe.draft.capture] and probe.recovery_npcs == [3]
+    assert probe.completed[0][2:] == (True, "")
+    assert probe.editor.active and not probe.editor.testing and probe.editor.save_button.isEnabled()
+    assert probe.second.read_bytes() == probe.before and not probe.errors
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+
+
+@pytest.mark.parametrize("kind", ["seed", "tid", "reidentify"])
+@pytest.mark.parametrize("preview_running", [True, False], ids=["running", "stopped"])
+def test_editor_real_adapter_capture_restores_only_the_previous_preview_state(window, deferred_editor_capture, kind, preview_running, capsys):
+    probe = deferred_editor_capture(kind, cached_preview=preview_running, real_adapter=True)
+    owner = window._preview_capture
+    assert type(owner) is project_xs_module.PreviewFrameCapture
+    assert owner._video is probe.backends[0] and not owner._released
+    assert window._preview_action.started_preview is (not preview_running)
+    assert window._capture_thread is None and not probe.captures
+    probe.release.set()
+    probe.close_gate.set()
+    wait_until(lambda: bool(probe.completed))
+    assert probe.completed[0][0] == ("tidsid" if kind == "tid" else kind)
+    assert probe.completed[0][2:] == (True, "")
+    assert owner._released and probe.released.is_set()
+    assert probe.editor.active and not probe.editor.testing
+    assert probe.editor.save_button.isEnabled() and not probe.errors
+    assert probe.captures == [replace(probe.draft.capture, blink_count={"seed": 40, "tid": 64, "reidentify": 7}[kind])]
+    assert probe.recovery_npcs == ([] if kind == "tid" else [3])
+    assert window._preview_timer.isActive() is preview_running
+    assert not window._resume_preview_after_capture
+    if preview_running:
+        window._update_preview_frame()
+        wait_until(lambda: len(probe.backends) == 2 and probe.backends[1].read_count > 0
+                   and window._preview_capture is not None
+                   and window._latest_preview_source == window._preview_source)
+        assert window._preview_capture._video is probe.backends[1]
+        assert probe.backends[1].config == probe.draft.capture
+    else:
+        assert len(probe.backends) == 1 and window._preview_capture is None
+        assert window._preview_thread is None
+    assert window.threshold.value() == .67 and window.npc_count.text() == "3"
+    assert probe.first.read_bytes() == probe.first_before and probe.second.read_bytes() == probe.before
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+
+
+@pytest.mark.parametrize("action", ["stop", "cancel", "source", "close"])
+@pytest.mark.parametrize("real_adapter", [False, True], ids=["fake_adapter", "real_adapter"])
+def test_editor_capture_cancelled_during_preview_release_never_starts_late_capture(window, deferred_editor_capture, action, real_adapter, capsys):
+    probe = deferred_editor_capture(cached_preview=True, real_adapter=real_adapter)
+    owner = window._preview_capture
+    wait_until(probe.release_entered.is_set)
+    assert window._capture_thread is None and not probe.released.is_set()
+    if action == "stop":
+        probe.editor.test_button.click()
+    elif action == "cancel":
+        probe.editor.cancel_button.click()
+    elif action == "source":
+        window.camera.setText("1")
+    else:
+        assert window.close() is False
+    probe.close_gate.set()
+    wait_until(lambda: window._preview_thread is None and not window._preview_cleanup_threads)
+    QApplication.processEvents()
+    if action == "close":
+        wait_until(lambda: window._close_accepted)
+        assert window.easycon_tab._shutdown_complete
+    assert window._capture_thread is None and not probe.captures and not probe.completed
+    assert not window._preview_timer.isActive() and not window._resume_preview_after_capture
+    if real_adapter:
+        assert owner._released and len(probe.backends) == 1
+    assert window._preview_action is None and not window._first_preview_pending
+    assert not probe.editor.testing and not probe.errors
+    assert probe.editor.active == (action in {"stop", "source"})
+    assert probe.first.read_bytes() == probe.first_before and probe.second.read_bytes() == probe.before
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+
+
+@pytest.mark.parametrize("action", ["source", "source-stop", "close"])
+def test_editor_real_adapter_capture_never_resumes_preview_after_source_change_or_close(window, deferred_editor_capture, action, capsys):
+    probe = deferred_editor_capture(cached_preview=True, real_adapter=True, gated_capture=True)
+    probe.close_gate.set()
+    wait_until(probe.capture_entered.is_set)
+    thread = window._capture_thread
+    assert thread is not None and window._resume_preview_after_capture
+    assert not window._preview_timer.isActive() and window._preview_capture is None
+    if action == "close":
+        assert window.close() is False
+    else:
+        window.camera.setText("1")
+        if action == "source-stop":
+            probe.editor.test_button.click()
+    probe.capture_gate.set()
+    wait_until(lambda: not thread.is_alive())
+    window._poll_capture_thread()
+    if action == "close":
+        wait_until(lambda: window._close_accepted)
+        assert not probe.editor.active and window.easycon_tab._shutdown_complete
+    else:
+        assert probe.editor.active and not probe.editor.testing
+        assert window.camera.text() == "1"
+    assert window._capture_thread is None and not window._resume_preview_after_capture
+    assert not window._preview_timer.isActive() and window._preview_capture is None
+    assert window._preview_thread is None and len(probe.backends) == 1
+    assert probe.completed[0][2] is (action == "source")
+    assert not probe.errors
+    assert probe.first.read_bytes() == probe.first_before and probe.second.read_bytes() == probe.before
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+
+
+@pytest.mark.parametrize("cached_preview", [False, True])
+@pytest.mark.parametrize("real_adapter", [False, True], ids=["fake_adapter", "real_adapter"])
+def test_editor_capture_release_failure_restores_controls_and_retry_uses_retained_owner(window, deferred_editor_capture, cached_preview, real_adapter, capsys):
+    probe = deferred_editor_capture(cached_preview=cached_preview, real_adapter=real_adapter)
+    owner = window._preview_capture
+    if real_adapter:
+        assert type(owner) is project_xs_module.PreviewFrameCapture
+        assert owner._video is probe.backends[0] and len(probe.backends) == 1
+    probe.close_error = OSError("release failed")
+    probe.release.set()
+    probe.close_gate.set()
+    wait_until(lambda: not probe.editor.testing)
+    assert not probe.captures and not probe.completed and not probe.errors
+    assert not probe.released.is_set() and window._preview_capture is owner
+    if real_adapter:
+        assert not owner._released
+    assert window._preview_thread is None and not window._preview_cleanup_threads
+    assert probe.editor.active and probe.editor.save_button.isEnabled() and probe.editor.cancel_button.isEnabled()
+    assert window.capture_recognition_group.isEnabled() and window.video_overlay.threshold.isEnabled()
+    assert "release failed" in probe.editor.status.text()
+    assert probe.second.read_bytes() == probe.before
+    probe.close_error = None
+    probe.editor.test_button.click()
+    wait_until(lambda: bool(probe.completed))
+    assert probe.completed[0][2:] == (True, "")
+    assert probe.captures == [probe.draft.capture] and probe.recovery_npcs == [3]
+    assert probe.released.is_set() and window._preview_capture is None
+    assert window._preview_thread is None and not window._preview_cleanup_threads
+    assert len(probe.release_attempts) == 2
+    if real_adapter:
+        assert owner._released and len(probe.backends) == 1
+        owner.release()
+        assert len(probe.release_attempts) == 2
+    assert all(thread_id != threading.get_ident() for thread_id in probe.release_attempts)
+    assert not probe.editor.testing and probe.editor.active and not probe.errors
+    assert probe.first.read_bytes() == probe.first_before and probe.second.read_bytes() == probe.before
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+
+
+@pytest.mark.parametrize("real_adapter", [False, True], ids=["fake_adapter", "real_adapter"])
+def test_editor_capture_failed_preview_release_refuses_close_then_user_can_retry_close(window, deferred_editor_capture, monkeypatch, real_adapter, capsys):
+    from PySide6.QtWidgets import QMessageBox
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, title, message: warnings.append((title, message)))
+    probe = deferred_editor_capture(real_adapter=real_adapter)
+    owner = window._preview_capture
+    if real_adapter:
+        assert type(owner) is project_xs_module.PreviewFrameCapture
+        assert owner._video is probe.backends[0] and len(probe.backends) == 1
+    probe.close_error = OSError("release failed")
+    probe.release.set()
+    wait_until(lambda: not probe.editor.testing)
+    assert window._preview_capture is not None
+    assert window.close() is False
+    wait_until(lambda: bool(warnings))
+    assert not window._close_accepted and not window._is_closing
+    assert window.isVisible() and window._preview_capture is owner
+    if real_adapter:
+        assert not owner._released
+    assert window._preview_thread is None and not window._preview_cleanup_threads
+    assert "预览" in warnings[0][0] and "重试" in warnings[0][1]
+    assert probe.editor.active and probe.editor.save_button.isEnabled() and not probe.editor.testing
+    assert not probe.captures and not probe.completed and not probe.errors
+    probe.close_error = None
+    window.close()
+    wait_until(lambda: window._close_accepted)
+    assert window.easycon_tab._shutdown_complete and window._preview_capture is None
+    assert window._preview_thread is None and not window._preview_cleanup_threads
+    assert not probe.editor.active and not probe.captures and not probe.completed
+    assert len(probe.release_attempts) == 3
+    if real_adapter:
+        assert owner._released and len(probe.backends) == 1
+        owner.release()
+        assert len(probe.release_attempts) == 3
+    assert probe.first.read_bytes() == probe.first_before and probe.second.read_bytes() == probe.before
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
 
 
 def test_tools_entry_opens_manual_capture_without_primary_navigation(window):

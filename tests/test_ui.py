@@ -52,6 +52,7 @@ from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel, AutoRngWorker
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.spin_box import ChevronDoubleSpinBox
+from tests.ui_wait import close_all_widgets, close_widget, wait_search, wait_until
 
 
 @pytest.fixture(autouse=True)
@@ -133,12 +134,24 @@ def app(monkeypatch):
     monkeypatch.setattr(MainWindow, "_start_ocr_warmup", lambda self: None)
     application = QApplication.instance() or QApplication([])
     yield application
-    for widget in application.topLevelWidgets():
-        for timer in widget.findChildren(QTimer):
-            timer.stop()
-        widget.close()
-        widget.deleteLater()
-    application.processEvents()
+    close_all_widgets(application)
+
+
+def _wait_video_cleanup(window: MainWindow) -> None:
+    wait_until(
+        lambda: window._capture_broker_start_thread is None
+        and window._capture_broker_stop_thread is None
+        and window._preview_thread is None
+        and not window._preview_cleanup_threads
+    )
+
+
+def _wait_preview_frame(window: MainWindow, expected: object) -> None:
+    def presented() -> bool:
+        window._update_preview_frame()
+        return window._latest_preview_frame is expected
+
+    wait_until(presented)
 
 
 def _set_bdsp_seed(window: MainWindow) -> None:
@@ -188,9 +201,11 @@ def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_pa
     from auto_bdsp_rng import app_settings
 
     monkeypatch.setattr(app_settings, "SETTINGS_PATH", tmp_path / "mock-devices.json")
+    monkeypatch.setattr(main_window_module, "_enumerate_capture_devices", lambda _api: [])
     window = MainWindow(dev_mock_devices=True)
     window.show()
-    QTest.qWait(30)
+    app.processEvents()
+    wait_until(lambda: window._capture_device_enumeration_thread is None)
     video_index = window.capture_device_combo.findData("mock_video")
     port_index = window.easycon_tab.port_combo.findData("mock")
     assert video_index >= 0 and port_index >= 0
@@ -202,7 +217,8 @@ def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_pa
     assert window._selection_mode == "roi" and window.preview_label.selection_enabled()
     window._cancel_preview_selection()
     window.easycon_tab.port_combo.setCurrentIndex(port_index)
-    assert window.easycon_tab.connect_native()
+    from tests.test_easycon_panel import connect_native, disconnect_native
+    connect_native(window.easycon_tab)
     assert window.easycon_tab._native_is_connected()
     # Exercise the development entry points, not a separately injected frame client.
     def unexpected_broker():
@@ -232,7 +248,7 @@ def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_pa
     panel.execution.poll()
     assert panel.execution.snapshot.state == "completed"
     assert panel.editor.execution_line == 2
-    window.easycon_tab.disconnect_native()
+    disconnect_native(window.easycon_tab)
     window.disconnect_video_source(force=True)
     with pytest.raises(RuntimeError, match="Mock"):
         client.read_array()
@@ -249,7 +265,12 @@ def test_dev_mock_devices_are_available_and_connect_without_hardware(app, tmp_pa
     real_client = object()
     monkeypatch.setattr(window, "_new_broker_client", lambda: real_client)
     assert window._new_easycon_frame_client() is real_client
-    window.close()
+    close_widget(window)
+    assert window._close_accepted and window._static_search._closed
+    assert window.easycon_tab._shutdown_complete
+    assert window.easycon_tab._native_lifecycle_thread is None
+    assert window._capture_device_enumeration_thread is None
+    assert not window._video_source_connected and window._mock_video_frame is None
 
 
 
@@ -293,6 +314,7 @@ def test_main_window_generates_static_results(app, tmp_path):
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
     window.generate_results()
+    wait_search(window._static_search)
 
     assert window.table.rowCount() == 3
     assert window.result_count.text() == "3 条结果"
@@ -378,7 +400,7 @@ def test_bdsp_generation_uses_selected_synchronize_nature(app, monkeypatch):
     window.lead_combo.setCurrentIndex(window.lead_combo.findData(13))
     received = []
 
-    def capture_criteria(criteria):
+    def capture_criteria(criteria, **_kwargs):
         received.append(criteria)
         return []
 
@@ -386,6 +408,7 @@ def test_bdsp_generation_uses_selected_synchronize_nature(app, monkeypatch):
 
     window.generate_results()
 
+    wait_search(window._static_search)
     assert len(received) == 1
     assert received[0].lead == 13
 
@@ -408,7 +431,7 @@ def test_static_generation_runs_in_background(app, monkeypatch):
     _set_bdsp_seed(window)
     window.max_advances.setText("10000000")
 
-    def slow_generate(_criteria):
+    def slow_generate(_criteria, **_kwargs):
         time.sleep(0.2)
         return []
 
@@ -419,11 +442,8 @@ def test_static_generation_runs_in_background(app, monkeypatch):
     elapsed = time.perf_counter() - started
 
     assert elapsed < 0.1
-    assert not window.generate_button.isEnabled()
-    deadline = time.perf_counter() + 2
-    while not window.generate_button.isEnabled() and time.perf_counter() < deadline:
-        app.processEvents()
-        QTest.qWait(10)
+    assert window.generate_button.isEnabled()
+    wait_search(window._static_search)
     assert window.generate_button.isEnabled()
 
 
@@ -441,13 +461,14 @@ def test_background_generation_respects_refresh_intent_and_live_query_state(
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
     window.generate_results()
+    wait_search(window._static_search)
     states = list(window._states)
     assert states
     errors = []
     monkeypatch.setattr(window, "_show_error", lambda title, error: errors.append(error))
     gate, entered = threading.Event(), threading.Event()
 
-    def deferred_generation(_criteria):
+    def deferred_generation(_criteria, **_kwargs):
         entered.set()
         assert gate.wait(5), "The test must release the background search"
         return states
@@ -463,8 +484,8 @@ def test_background_generation_respects_refresh_intent_and_live_query_state(
         else:
             window.generate_button.click()
         assert entered.wait(2)
-        assert window._static_generation_thread.is_alive()
-        assert not window.generate_button.isEnabled()
+        assert window._static_search.worker_thread.is_alive()
+        assert window.generate_button.isEnabled()
         assert window.query_toggle.isChecked() == initial_open
         if waiting_open is not None:
             window.query_toggle.setChecked(waiting_open)
@@ -478,10 +499,11 @@ def test_background_generation_respects_refresh_intent_and_live_query_state(
             control.blockSignals(False)
         gate.set()
         deadline = time.monotonic() + 3
-        while window._static_generation_thread is not None and time.monotonic() < deadline:
+        while window._static_search.worker_thread is not None and time.monotonic() < deadline:
             app.processEvents()
             QTest.qWait(10)
-        assert window._static_generation_thread is None
+        window._poll_static_generation_thread()
+        assert window._static_search.worker_thread is None
         assert window.generate_button.isEnabled()
         assert window.query_toggle.isChecked() == expected_open
         if automatic:
@@ -493,7 +515,7 @@ def test_background_generation_respects_refresh_intent_and_live_query_state(
         assert not errors
     finally:
         gate.set()
-        worker = window._static_generation_thread
+        worker = window._static_search.worker_thread
         if worker is not None:
             worker.join(timeout=2)
             window._poll_static_generation_thread()
@@ -505,10 +527,12 @@ def test_synchronous_auto_refresh_does_not_toggle_query_panel(app, expanded):
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
     window.generate_results()
+    wait_search(window._static_search)
     window.query_toggle.setChecked(expanded)
     changes = []
     window.query_toggle.toggled.connect(changes.append)
     window._auto_refresh_results()
+    wait_search(window._static_search)
     assert window.query_toggle.isChecked() == expanded
     assert changes == []
     assert window.table.rowCount() == 3
@@ -527,6 +551,7 @@ def test_auto_seed_capture_preserves_query_panel_state(app, expanded):
         seed=SeedPair64(0x123456789ABCDEF0, 0x1111111122222222),
         current_advances=1, npc=0,
     ))
+    wait_search(window._static_search)
 
     assert window.query_toggle.isChecked() == expanded
     assert changes == []
@@ -737,7 +762,8 @@ def test_ui_scale_restart_decline_keeps_current_process_running(app, monkeypatch
         "question",
         lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
     )
-    monkeypatch.setattr(window, "close", lambda: close_calls.append(True) or True)
+    original_close = window.close
+    monkeypatch.setattr(window, "close", lambda: close_calls.append(True) or original_close())
     monkeypatch.setattr(
         main_window_module,
         "_start_detached_gui_process",
@@ -759,7 +785,7 @@ def test_ui_scale_restart_waits_for_safe_window_close(app, monkeypatch):
         "question",
         lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
     )
-    monkeypatch.setattr(window, "close", lambda: False)
+    monkeypatch.setattr(window, "_confirm_unsaved_easycon_script", lambda: False)
     monkeypatch.setattr(
         main_window_module,
         "_start_detached_gui_process",
@@ -772,6 +798,7 @@ def test_ui_scale_restart_waits_for_safe_window_close(app, monkeypatch):
     assert window.statusBar().currentMessage() == (
         "后台任务尚未完全退出，界面缩放将在下次启动时生效"
     )
+    monkeypatch.setattr(window, "_confirm_unsaved_easycon_script", lambda: True)
 
 
 @pytest.mark.parametrize("started", [False, True])
@@ -793,12 +820,11 @@ def test_ui_scale_restart_reports_start_failure_or_quits_old_process(
         "warning",
         lambda _parent, title, message: warnings.append((title, message)),
     )
-    monkeypatch.setattr(window, "close", lambda: True)
     monkeypatch.setattr(main_window_module, "_start_detached_gui_process", lambda: started)
     monkeypatch.setattr(
-        main_window_module,
-        "QApplication",
-        SimpleNamespace(quit=lambda: quit_calls.append(True)),
+        main_window_module.QApplication,
+        "quit",
+        lambda: quit_calls.append(True),
     )
 
     window._request_ui_scale_restart(70)
@@ -923,7 +949,8 @@ def test_shared_video_source_keeps_preview_running_and_injects_broker_capture(ap
     window._pause_preview_for_capture()
     assert window._preview_timer.isActive()
 
-    assert window.disconnect_video_source(force=True)
+    assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
     assert process.stopped
     assert not window._preview_timer.isActive()
     assert window.video_source_status_dot.property("state") == "disconnected"
@@ -965,7 +992,8 @@ def test_shared_video_source_connection_does_not_block_ui(app):
         QTest.qWait(5)
     assert window._video_source_connected
     assert window._capture_broker_start_thread is None
-    assert window.disconnect_video_source(force=True)
+    assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
 
 
 def test_shared_video_source_start_failure_preserves_broker_reason(app, monkeypatch):
@@ -993,10 +1021,7 @@ def test_shared_video_source_start_failure_preserves_broker_reason(app, monkeypa
     monkeypatch.setattr(window, "_write_run_log", lambda source, message, **kwargs: logged.append(str(message)))
 
     assert window.connect_video_source()
-    deadline = time.perf_counter() + 2
-    while window._capture_broker_start_thread is not None and time.perf_counter() < deadline:
-        app.processEvents()
-        QTest.qWait(5)
+    _wait_video_cleanup(window)
 
     assert dialogs == [("视频源连接失败", expected)]
     assert any(
@@ -1051,7 +1076,8 @@ def test_non_running_broker_start_attempt_disconnect_rejects_late_success(app):
     window.video_source_button.setEnabled(False)
     window._preview_timer.start()
 
-    assert window.disconnect_video_source(force=True) is True
+    assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
     generation = window._video_source_generation
     status = window.video_source_status.text()
 
@@ -1112,13 +1138,11 @@ def test_running_broker_start_cancel_finally_stops_owner_created_after_initial_s
     assert window.connect_video_source()
     assert process.start_entered.wait(1)
     assert window.disconnect_video_source(force=True) is False
+    wait_until(lambda: bool(process.stop_calls))
     assert process.stop_calls == [False]
 
     process.allow_start.set()
-    deadline = time.perf_counter() + 2
-    while window._capture_broker_start_thread is not None and time.perf_counter() < deadline:
-        app.processEvents()
-        QTest.qWait(5)
+    _wait_video_cleanup(window)
 
     assert window._capture_broker_start_thread is None
     assert process.stop_calls == [False, True]
@@ -1153,6 +1177,7 @@ def test_non_running_broker_start_stop_failure_requires_retry_and_rejects_late_s
     window.video_source_button.setEnabled(False)
 
     assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
 
     assert window._capture_broker_start_thread is None
     assert not window._video_source_connected
@@ -1179,7 +1204,8 @@ def test_non_running_broker_start_stop_failure_requires_retry_and_rejects_late_s
     assert window._video_source_stop_pending
 
     process.stopped = True
-    assert window.disconnect_video_source(force=True) is True
+    assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
     assert not window._video_source_stop_pending
     assert window.video_source_button.text() == "连接"
 
@@ -1213,7 +1239,8 @@ def test_close_stops_non_running_broker_start_attempt_before_queued_success(app,
     monkeypatch.setattr(window.easycon_tab, "shutdown", lambda: True)
     window.show()
 
-    assert window.close() is True
+    assert window.close() is False
+    wait_until(lambda: window._static_search._closed)
     generation = window._video_source_generation
 
     assert process.stop_calls == 2
@@ -1272,6 +1299,7 @@ def test_broker_start_finish_while_closing_restores_controls_after_shutdown_time
     thread.running = False
     window._capture_broker_start_finished(thread, 9)  # type: ignore[arg-type]
     window._is_closing = False
+    _wait_video_cleanup(window)
 
     assert window._capture_broker_start_thread is None
     assert not window._video_source_connecting
@@ -1344,6 +1372,7 @@ def test_video_source_stop_failure_requires_an_explicit_retry(app):
     window._preview_timer.start()
 
     assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
     assert not window._video_source_connected
     assert window._video_source_stop_pending
     assert window.video_source_button.text() == "重试断开"
@@ -1355,7 +1384,8 @@ def test_video_source_stop_failure_requires_an_explicit_retry(app):
     assert not window.capture_api_combo.isEnabled()
 
     process.stopped = True
-    assert window.disconnect_video_source(force=True) is True
+    assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
     assert not window._video_source_stop_pending
     assert window.video_source_button.text() == "连接"
     assert window.capture_device_combo.isEnabled()
@@ -1370,6 +1400,7 @@ def test_video_source_stop_exception_keeps_retry_state(app):
     window._video_source_connected = True
 
     assert window.disconnect_video_source(force=True) is False
+    _wait_video_cleanup(window)
     assert window._video_source_stop_pending
     assert window._video_source_stop_error == "device owner is still running"
     assert window.video_source_button.text() == "重试断开"
@@ -1404,6 +1435,7 @@ def test_main_window_refuses_close_until_video_source_stop_is_confirmed(app, mon
     )
 
     assert window.close() is False
+    wait_until(lambda: bool(warnings))
     assert window.isVisible()
     assert window._video_source_stop_pending
     assert warnings[-1][0] == "视频源未能停止"
@@ -1412,7 +1444,8 @@ def test_main_window_refuses_close_until_video_source_stop_is_confirmed(app, mon
     assert window.easycon_header_button.isEnabled()
 
     process.stopped = True
-    assert window.close() is True
+    assert window.close() is False
+    wait_until(lambda: window._static_search._closed)
     assert easycon_shutdown_calls == [True]
     assert window.easycon_tab._shutting_down is True
 
@@ -1438,18 +1471,21 @@ def test_capture_devices_use_selected_backend_and_real_indices(app, monkeypatch)
     window.capture_device_combo.setCurrentIndex(1)
 
     window.refresh_capture_devices()
+    wait_until(lambda: window._capture_device_enumeration_thread is None)
 
     assert window.capture_device_combo.itemText(0) == "0 - USB Video"
     assert window.capture_device_combo.itemText(1) == "1 - OBS Virtual Camera"
     assert window._capture_device_index() == 1
 
     window.capture_api_combo.setCurrentIndex(window.capture_api_combo.findData(1400))
+    wait_until(lambda: window._capture_device_enumeration_thread is None)
 
     assert window.capture_device_combo.count() == 1
     assert window.capture_device_combo.itemText(0) == "0 - USB Video"
     assert window._capture_device_index() == 0
 
     window.capture_api_combo.setCurrentIndex(window.capture_api_combo.findData(0))
+    wait_until(lambda: window._capture_device_enumeration_thread is None)
 
     assert [window.capture_device_combo.itemData(row) for row in range(3)] == [1400, 700, 701]
     assert window._capture_device_index() == 1400
@@ -1468,6 +1504,7 @@ def test_capture_device_restores_saved_backend_domain_index(app, monkeypatch, tm
 
     window = MainWindow(profile_settings=settings)
     window.refresh_capture_devices()
+    wait_until(lambda: window._capture_device_enumeration_thread is None)
 
     assert window.capture_api_combo.currentData() == 0
     assert window._capture_device_index() == 1400
@@ -1524,6 +1561,8 @@ def test_capture_api_migration_preserves_non_directshow_choices(app, tmp_path, s
 def test_video_source_combo_uses_opaque_menu_popup(app):
     window = MainWindow()
     window.show()
+    app.processEvents()
+    wait_until(lambda: window._capture_device_enumeration_thread is None)
     window.show_video_source_dialog()
     app.processEvents()
 
@@ -1556,6 +1595,53 @@ def test_video_source_combo_uses_opaque_menu_popup(app):
         combo.hidePopup()
         app.processEvents()
         assert combo._popup_menu is None
+
+
+def test_device_refresh_dismisses_old_popup_before_selecting_a_new_device(app, monkeypatch, capsys):
+    from shiboken6 import isValid
+
+    monkeypatch.setattr(main_window_module, "_enumerate_capture_devices", lambda _api: [(4, "USB A"), (8, "USB B")])
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    wait_until(lambda: window._capture_device_enumeration_thread is None)
+    combo = window.capture_device_combo
+    combo.setCurrentIndex(combo.findData(4))
+    window.show_video_source_dialog()
+    combo.showPopup()
+    old_menu = combo._popup_menu
+    assert old_menu is not None and old_menu.isVisible()
+    assert [action.text() for action in old_menu.actions()][:2] == ["4 - USB A", "8 - USB B"]
+    entered, release = threading.Event(), threading.Event()
+
+    def enumerate_devices(_api):
+        entered.set()
+        assert release.wait(3)
+        return [(90, "USB B"), (91, "USB A")]
+
+    monkeypatch.setattr(main_window_module, "_enumerate_capture_devices", enumerate_devices)
+    window.refresh_capture_devices()
+    try:
+        wait_until(entered.is_set)
+        assert combo._popup_menu is old_menu and old_menu.isVisible()
+        release.set()
+        wait_until(lambda: window._capture_device_enumeration_thread is None)
+        assert combo._popup_menu is None
+        assert not isValid(old_menu) or not old_menu.isVisible()
+        assert combo.currentData() == 91 and window._capture_device_index() == 91
+        combo.showPopup()
+        menu = combo._popup_menu
+        assert menu is not None and menu.isVisible()
+        assert [action.text() for action in menu.actions()] == ["90 - USB B", "91 - USB A"]
+        action = menu.actions()[0]
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.actionGeometry(action).center())
+        app.processEvents()
+        assert combo._popup_menu is None
+        assert combo.currentText() == "90 - USB B" and window._capture_device_index() == 90
+        stderr = capsys.readouterr().err
+        assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+    finally:
+        release.set()
 
 
 def test_enumerate_capture_devices_uses_library_indices(monkeypatch):
@@ -1612,10 +1698,10 @@ def test_preview_annotation_failure_keeps_broker_and_raw_frame(app, monkeypatch)
     )
 
     window._update_preview_frame()
-    window._update_preview_frame()
+    _wait_preview_frame(window, frame)
 
     assert window._video_source_connected
-    assert window._latest_preview_frame is not frame
+    assert window._latest_preview_frame is frame
     assert np.array_equal(window._latest_preview_frame, frame)
     assert np.array_equal(window._latest_annotated_preview_frame, frame)
     assert len(warnings) == 1
@@ -1648,7 +1734,7 @@ def test_invalid_preview_config_keeps_broker_raw_frames_updating(app, monkeypatc
     )
 
     def read_frame(_config):
-        frame = frames[len(reads)]
+        frame = frames[min(len(reads), len(frames) - 1)]
         reads.append(frame)
         return frame
 
@@ -1664,17 +1750,16 @@ def test_invalid_preview_config_keeps_broker_raw_frames_updating(app, monkeypatc
         lambda _source, message, **_kwargs: warnings.append(str(message)),
     )
 
-    window._update_preview_frame()
-    window._update_preview_frame()
+    _wait_preview_frame(window, frames[1])
 
-    assert len(reads) == 2
+    assert len(reads) >= 2
     assert np.array_equal(window._latest_preview_frame, frames[1])
-    assert window._latest_preview_frame is not frames[1]
+    assert window._latest_preview_frame is frames[1]
     assert np.array_equal(window._latest_annotated_preview_frame, frames[1])
-    assert window._latest_annotated_preview_frame is not window._latest_preview_frame
+    assert window._latest_annotated_preview_frame is window._latest_preview_frame
     assert window._preview_timer.isActive()
     assert window._video_source_connected
-    assert len(picture_in_picture_frames) == 2
+    assert len(picture_in_picture_frames) >= 2
     assert np.array_equal(picture_in_picture_frames[-1][0], frames[1])
     assert np.array_equal(picture_in_picture_frames[-1][1], frames[1])
     assert stops == []
@@ -1704,6 +1789,14 @@ def test_preview_frame_read_failure_disconnects_broker(app, monkeypatch):
     monkeypatch.setattr(window, "_show_error", lambda *_args, **_kwargs: None)
 
     window._update_preview_frame()
+
+    def disconnected() -> bool:
+        if window._video_source_connected:
+            window._update_preview_frame()
+        return not window._video_source_connected
+
+    wait_until(disconnected)
+    _wait_video_cleanup(window)
 
     assert stopped == [True]
     assert not window._video_source_connected
@@ -1927,6 +2020,41 @@ def test_picture_in_picture_preview_controls_are_independent(app):
     assert picture_in_picture.frame_label.overlay_enabled()
 
 
+@pytest.mark.parametrize("preview_first", [True, False])
+def test_widget_cleanup_keeps_independent_preview_alive_until_main_window_closes(app, monkeypatch, capsys, preview_first):
+    from shiboken6 import isValid
+
+    entered, release = threading.Event(), threading.Event()
+
+    def enumerate_devices(_api):
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    monkeypatch.setattr(main_window_module, "_enumerate_capture_devices", enumerate_devices)
+    window = MainWindow()
+    window.show()
+    window.show_picture_in_picture()
+    preview = window._picture_in_picture
+    assert preview is not None and preview.parentWidget() is None
+    wait_until(entered.is_set)
+    assert window._capture_device_enumeration_thread is not None
+    roots = app.topLevelWidgets()
+    first = [preview, window] if preview_first else [window, preview]
+    monkeypatch.setattr(app, "topLevelWidgets", lambda: first + [root for root in roots if root not in first])
+    QTimer.singleShot(50, window, release.set)
+    try:
+        close_all_widgets(app)
+        assert window._close_accepted and window._static_search._closed
+        assert window.easycon_tab._shutdown_complete
+        assert window._capture_device_enumeration_thread is None
+        assert not isValid(window) and not isValid(preview)
+        stderr = capsys.readouterr().err
+        assert "RuntimeError" not in stderr and "already deleted" not in stderr, stderr
+    finally:
+        release.set()
+
+
 def test_picture_in_picture_right_drag_emits_source_frame_roi(app):
     picture_in_picture = PictureInPicturePreview()
     selected = []
@@ -2087,8 +2215,8 @@ def test_picture_in_picture_topmost_toggle_keeps_independent_window_visible(app)
     assert not (picture_in_picture.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
     assert picture_in_picture.geometry() == original_geometry
 
-    assert window.close()
-    app.processEvents()
+    close_widget(window)
+    assert window._close_accepted and window._static_search._closed
     assert not picture_in_picture.isVisible()
 
 
@@ -2120,12 +2248,22 @@ def test_tidsid_capture_updates_seed_inputs(app, monkeypatch):
     window.capture_tidsid_seed()
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
+    wait_search(window.auto_tid_rng_tab._manual_search)
 
     assert calls == [(64, False, True, True)]
     assert [box.text() for box in window.seed32_inputs] == ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]
     assert window.seed64_outputs[0].text() == "AAAAAAAABBBBBBBB"
     assert [box.text() for box in window.auto_tid_rng_tab.tid_seed_inputs] == list(seed_state.format_seed64_pair())
-    assert window.auto_tid_rng_tab.id_table.rowCount() == window.auto_tid_rng_tab.frame_threshold.value() + 1
+    panel = window.auto_tid_rng_tab
+    table = panel.id_table
+    expected_count = panel.frame_threshold.value() + 1
+    assert len(panel._id_states) == table.pager.total == expected_count
+    assert table.rowCount() == table.pager.page_size
+    advances = [int(table.item(row, 0).text()) for row in range(table.rowCount())]
+    table.pager.next_button.click()
+    assert table.rowCount() == expected_count - table.pager.page_size
+    advances.extend(int(table.item(row, 0).text()) for row in range(table.rowCount()))
+    assert sorted(advances) == list(range(expected_count))
     assert window.tidsid_button.isEnabled()
 
 
@@ -2307,7 +2445,6 @@ def test_tidsid_tracking_timer_schedules_next_munchlax_blink(app, monkeypatch):
     window = MainWindow()
     seed_state = SeedState32(0x01020304, 0x11121314, 0x21222324, 0x31323334)
     now_values = iter([100.0, 100.0, 100.0])
-    monkeypatch.setattr(main_window_module.time, "monotonic", lambda: next(now_values))
     monkeypatch.setattr(
         main_window_module,
         "capture_pokemon_blinks",
@@ -2320,12 +2457,15 @@ def test_tidsid_tracking_timer_schedules_next_munchlax_blink(app, monkeypatch):
     )
     window._latest_preview_frame = object()
 
-    window.capture_tidsid_seed()
-    window._capture_thread.join(timeout=2)
-    window._poll_capture_thread()
+    # Restore the real clock before the app fixture's asynchronous close.
+    with monkeypatch.context() as clock_patch:
+        clock_patch.setattr(main_window_module.time, "monotonic", lambda: next(now_values))
+        window.capture_tidsid_seed()
+        window._capture_thread.join(timeout=2)
+        window._poll_capture_thread()
 
-    expected_ms = round(_project_xs_munchlax_interval(seed_state) * 1000)
-    assert window._advance_timer.interval() == expected_ms
+        expected_ms = round(_project_xs_munchlax_interval(seed_state) * 1000)
+        assert window._advance_timer.interval() == expected_ms
 
 
 def test_munchlax_advance_tick_reschedules_to_following_blink(app, monkeypatch):
@@ -2375,6 +2515,7 @@ def test_bdsp_table_uses_pokefinder_cell_interactions(app):
     iv_header_count = len(window._result_headers())
     window.show_stats_check.setChecked(True)
     window.generate_results()
+    wait_search(window._static_search)
 
     height_column = window._result_headers().index("身高")
     window.table.item(5, height_column).setText("208")
@@ -2755,6 +2896,7 @@ def test_main_window_exports_txt_from_results(app, monkeypatch, tmp_path):
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
     window.generate_results()
+    wait_search(window._static_search)
     output = tmp_path / "results.txt"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args, **_kwargs: (str(output), "Text files (*.txt)"))
 
@@ -2778,12 +2920,14 @@ def test_seed_update_auto_refreshes_existing_results(app):
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
     window.generate_results()
+    wait_search(window._static_search)
     first_ec = window.table.item(0, 1).text()
 
     window.bdsp_seed64_inputs[0].setText("0000000000000001")
     window.bdsp_seed64_inputs[1].setText("0000000000000002")
     window._sync_state32_from_bdsp_seed64()
 
+    wait_search(window._static_search)
     assert window.table.rowCount() == 3
     assert window.table.item(0, 1).text() != first_ec
 
@@ -2794,6 +2938,7 @@ def test_reidentify_updates_advances_and_keeps_seed(app, monkeypatch):
     _set_bdsp_seed(window)
     window.max_advances.setText("2")
     window.generate_results()
+    wait_search(window._static_search)
     observation = BlinkObservation.from_sequences([0, 1, 0], [0, 12, 24])
     state = SeedState32(0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD)
 
@@ -2937,11 +3082,19 @@ def test_capture_seed_initializes_preview_when_no_frame_was_seen(app, monkeypatc
 
     def fake_update_preview() -> None:
         preview_updates.append("updated")
-        window._latest_preview_frame = object()
+
+        def publish_frame() -> None:
+            window._latest_preview_frame = object()
+            window._latest_preview_source = window._preview_source
+
+        QTimer.singleShot(10, window, publish_frame)
 
     monkeypatch.setattr(window, "_update_preview_frame", fake_update_preview)
+    window._preview_timer.setInterval(100_000)
 
     window.capture_seed()
+    assert window._capture_thread is None
+    wait_until(lambda: window._capture_thread is not None)
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
 
@@ -2992,11 +3145,19 @@ def test_reidentify_initializes_preview_when_no_frame_was_seen(app, monkeypatch)
 
     def fake_update_preview() -> None:
         preview_updates.append("updated")
-        window._latest_preview_frame = object()
+
+        def publish_frame() -> None:
+            window._latest_preview_frame = object()
+            window._latest_preview_source = window._preview_source
+
+        QTimer.singleShot(10, window, publish_frame)
 
     monkeypatch.setattr(window, "_update_preview_frame", fake_update_preview)
+    window._preview_timer.setInterval(100_000)
 
     window.reidentify_seed()
+    assert window._capture_thread is None
+    wait_until(lambda: window._capture_thread is not None)
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
 
@@ -3095,6 +3256,7 @@ def test_id_panel_syncs_seed_pair_and_generates_results(app):
 
     window.id_tab.max_advances.setValue(3)
     window.id_tab.generate_results()
+    wait_search(window.id_tab._search)
 
     assert window.id_tab.table.rowCount() == 3
     assert window.id_tab.table.columnCount() == 5
@@ -4670,7 +4832,7 @@ def test_main_window_starts_auto_rng_runner_from_panel_signal(app, tmp_path, mon
     )
     started: list[AutoRngRunner] = []
     window._latest_preview_frame = object()
-    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
     monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_rng(config)
@@ -4696,13 +4858,21 @@ def test_main_window_auto_rng_start_prepares_preview_frame_when_inactive(app, tm
 
     def fake_update_preview() -> None:
         preview_updates.append("updated")
-        window._latest_preview_frame = object()
+
+        def publish_frame() -> None:
+            window._latest_preview_frame = object()
+            window._latest_preview_source = window._preview_source
+
+        QTimer.singleShot(10, window, publish_frame)
 
     monkeypatch.setattr(window, "_update_preview_frame", fake_update_preview)
-    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    window._preview_timer.setInterval(100_000)
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
     monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_rng(config)
+    assert started == []
+    wait_until(lambda: bool(started))
 
     assert not window._preview_timer.isActive()
     assert preview_updates == ["updated"]
@@ -4716,7 +4886,7 @@ def test_main_window_auto_rng_waits_for_lazy_ocr_warmup_then_starts(app, tmp_pat
     warmups: list[bool] = []
     window._latest_preview_frame = object()
     monkeypatch.setattr(window, "_start_ocr_warmup", lambda: warmups.append(True))
-    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
     monkeypatch.setattr(window.auto_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_rng(config)
@@ -4777,11 +4947,12 @@ def test_live_preview_only_keeps_wgc_capture_open(app, monkeypatch):
     assert window._preview_capture is FakePreviewCapture.instances[2]
 
     window._release_preview_capture()
+    _wait_video_cleanup(window)
 
     assert FakePreviewCapture.instances[2].release_count == 1
 
 
-def test_active_preview_frame_request_reuses_live_capture(app, monkeypatch):
+def test_active_preview_frame_request_reuses_cached_raw_frame(app, monkeypatch):
     config = BlinkCaptureConfig(
         Path("eye.png"),
         (0, 0, 1, 1),
@@ -4811,11 +4982,12 @@ def test_active_preview_frame_request_reuses_live_capture(app, monkeypatch):
     )
     window = MainWindow()
     monkeypatch.setattr(window, "_config_from_form", lambda: SimpleNamespace(capture=config))
+    window._latest_preview_frame = window._read_live_preview_frame(config)
     window._preview_timer.start()
 
     assert window._capture_preview_frame_for_config(config) == "shared-frame"
     assert window._capture_preview_frame_for_config(config) == "shared-frame"
-    assert window._preview_capture.read_count == 2
+    assert window._preview_capture.read_count == 1
 
 
 def test_main_window_close_stops_manual_capture_thread(app):
@@ -4832,6 +5004,7 @@ def test_main_window_close_stops_manual_capture_thread(app):
     assert started.wait(1.0)
 
     window.close()
+    wait_until(lambda: window._static_search._closed)
 
     assert window._capture_cancel.is_set()
     assert not thread.is_alive()
@@ -4850,7 +5023,7 @@ def test_main_window_cancelled_close_keeps_update_task_running(app, monkeypatch)
     monkeypatch.setattr(
         window.update_controller,
         "shutdown",
-        lambda: shutdown_calls.append(True) or True,
+        lambda **_kwargs: shutdown_calls.append(True) or True,
     )
 
     assert window.close() is False
@@ -4897,7 +5070,7 @@ def test_main_window_refuses_close_while_easycon_thread_is_still_running(app, mo
     assert window.close() is True
 
 
-def test_shutdown_automation_runner_stops_and_waits(app):
+def test_shutdown_automation_runner_requests_stop_and_polls_without_wait(app):
     window = MainWindow()
     calls = []
 
@@ -4912,18 +5085,19 @@ def test_shutdown_automation_runner_stops_and_waits(app):
             return self.running
 
         def wait(self, milliseconds):
-            calls.append(("wait", milliseconds))
-            self.running = False
-            return True
+            pytest.fail(f"GUI shutdown must not wait: {milliseconds}")
 
     panel = SimpleNamespace(
         _runner_worker=SimpleNamespace(stop=lambda: calls.append("stop")),
         _runner_thread=FakeThread(),
     )
 
-    assert window._shutdown_automation_runner(panel, "测试流程") is True
+    assert window._shutdown_automation_runner(panel, "测试流程") is False
+    assert calls == ["stop", "quit"]
 
-    assert calls == ["stop", "quit", ("wait", 50)]
+    panel._runner_thread.running = False
+    assert window._shutdown_automation_runner(panel, "测试流程", request_stop=False) is True
+    assert calls == ["stop", "quit", "quit"]
 
 
 def test_shutdown_worker_thread_reports_timeout(app):
@@ -4983,15 +5157,16 @@ def test_shutdown_ocr_warmup_is_bounded_and_never_terminates_thread(app):
             return self.running
 
         def wait(self, milliseconds):
-            calls.append(("wait", milliseconds))
-            self.running = False
-            return True
+            pytest.fail(f"GUI shutdown must not wait: {milliseconds}")
 
     window._ocr_warmup_running = True
     window._ocr_warmup_thread = FakeWarmupThread()  # type: ignore[assignment]
 
+    assert window._shutdown_ocr_warmup_thread() is False
+    assert calls == ["interrupt"]
+    window._ocr_warmup_thread.running = False
     assert window._shutdown_ocr_warmup_thread() is True
-    assert calls == ["interrupt", ("wait", 50), "disconnect"]
+    assert calls == ["interrupt", "interrupt", "disconnect"]
     assert window._ocr_warmup_running is False
     window._ocr_warmup_thread = None
 
@@ -5026,10 +5201,21 @@ def test_main_window_notifies_automation_before_easycon_and_refuses_live_runner(
 
     assert window.close() is False
     assert window.isVisible()
+    assert window._is_closing is True
+    assert shutdown_order == [
+        "notify:自动定点",
+        "notify:自动 TID",
+        "wait:自动定点",
+        "wait:自动 TID",
+    ]
+    window._close_deadline = 0
+    window._poll_confirmed_close()
     assert window._is_closing is False
     assert shutdown_order == [
         "notify:自动定点",
         "notify:自动 TID",
+        "wait:自动定点",
+        "wait:自动 TID",
         "wait:自动定点",
         "wait:自动 TID",
     ]
@@ -5060,9 +5246,9 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
         lambda: easycon_shutdown_calls.append(True) or True,
     )
     monkeypatch.setattr(window, "_shutdown_worker_thread", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(window, "_shutdown_capture_thread", lambda: False)
-    monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: False)
-    monkeypatch.setattr(window, "_shutdown_ocr_task_thread", lambda: False)
+    monkeypatch.setattr(window, "_shutdown_capture_thread", lambda **_kwargs: False)
+    monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda **_kwargs: False)
+    monkeypatch.setattr(window, "_shutdown_ocr_task_thread", lambda **_kwargs: False)
     monkeypatch.setattr(
         main_window_module.QMessageBox,
         "warning",
@@ -5071,6 +5257,9 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
 
     assert window.close() is False
     assert window.isVisible()
+    assert window._is_closing is True
+    window._close_deadline = 0
+    window._poll_confirmed_close()
     assert window._is_closing is False
     assert easycon_shutdown_calls == []
     assert window.easycon_header_button.isEnabled()
@@ -5082,9 +5271,9 @@ def test_main_window_refuses_close_while_local_background_threads_are_running(ap
     ]
 
     monkeypatch.setattr(window, "_shutdown_worker_thread", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(window, "_shutdown_capture_thread", lambda: True)
-    monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda: True)
-    monkeypatch.setattr(window, "_shutdown_ocr_task_thread", lambda: True)
+    monkeypatch.setattr(window, "_shutdown_capture_thread", lambda **_kwargs: True)
+    monkeypatch.setattr(window, "_shutdown_ocr_warmup_thread", lambda **_kwargs: True)
+    monkeypatch.setattr(window, "_shutdown_ocr_task_thread", lambda **_kwargs: True)
     assert window.close() is True
     assert easycon_shutdown_calls == [True]
 
@@ -5261,7 +5450,7 @@ def test_main_window_auto_rng_services_search_uses_multi_targets(app, tmp_path, 
         window.auto_rng_tab._targets = [(records[0], sf, "square")]
     captured = []
 
-    def fake_generate(criteria, targets):
+    def fake_generate(criteria, targets, *, cancellation=None):
         captured.append((criteria, targets))
         return []
 
@@ -5324,7 +5513,7 @@ def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_p
         kwargs["frame_callback"]("frame-1")
         return observation
 
-    def fake_generate(criteria):
+    def fake_generate(criteria, **_kwargs):
         generated.append(criteria)
         return []
 
@@ -5341,6 +5530,7 @@ def test_main_window_auto_rng_capture_syncs_seed_tab_and_bdsp_results(app, tmp_p
 
     result = services.capture_seed()
     QApplication.processEvents()
+    wait_search(window._static_search)
 
     assert result.seed == seed_state
     assert displayed_frames == ["frame-1"]
@@ -5384,6 +5574,7 @@ def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp
     observation = SimpleNamespace(offset_time=100.0)
     ui_thread = window.thread()
     touched: list[str] = []
+    generation_errors: list[object] = []
 
     def assert_ui_thread(name: str) -> None:
         assert QThread.currentThread() == ui_thread
@@ -5416,7 +5607,10 @@ def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp
         "recover_seed_from_observation",
         lambda actual_observation, npc: SimpleNamespace(state=seed_state, advances=0),
     )
-    monkeypatch.setattr(main_window_module, "generate_static_candidates", lambda _criteria: [])
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", lambda _criteria, *, cancellation=None: [])
+    monkeypatch.setattr(
+        window, "_show_error", lambda _title, error, **_kwargs: generation_errors.append(error),
+    )
     services = window._build_auto_rng_services(AutoRngConfig(script_dir=tmp_path))
 
     class CaptureRunner:
@@ -5433,8 +5627,10 @@ def test_main_window_auto_rng_capture_preview_controls_run_on_ui_thread(app, tmp
         QApplication.processEvents()
         time.sleep(0.01)
     QApplication.processEvents()
+    wait_search(window._static_search)
 
     assert window.auto_rng_tab._runner_thread is None
+    assert generation_errors == []
     assert "stop_preview" in touched
     assert "start_preview" in touched
     window._preview_timer.stop()
@@ -5935,8 +6131,8 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
     assert iv_range_calls == [[20, 11, 10, 11, 9, 11]] * 3
     assert len(generated) == 1
     assert history_events[-1][0] == "reverse_lookup_results"
-    assert history_events[-1][1][0] == [candidate]
-    assert history_events[-1][1][2] == [1452]
+    assert history_events[-1][1][0] == (candidate,)
+    assert history_events[-1][1][2] == (1452,)
     assert observed_delays == (1452,)
 
     expansion_levels.clear()
@@ -6037,7 +6233,7 @@ def test_auto_reverse_lookup_falls_back_to_full_frame_and_continues_without_char
     assert full_frame_calls == [frame]
     assert page_turns == [True]
     assert len(generated) == 1
-    assert history_events[-1][1][0] == [candidate]
+    assert history_events[-1][1][0] == (candidate,)
     assert history_events[-1][1][1] == "对声音敏感"
     assert "全图个性匹配成功: 对声音敏感" in window.auto_rng_tab.log_view.toPlainText()
 
@@ -6058,7 +6254,7 @@ def test_auto_reverse_lookup_falls_back_to_full_frame_and_continues_without_char
     assert page_turns == [True, True]
     assert len(generated) == 2
     assert history_events[-1][0] == "reverse_lookup_results"
-    assert history_events[-1][1][0] == [candidate, other_candidate]
+    assert history_events[-1][1][0] == (candidate, other_candidate)
     assert history_events[-1][1][1] is None
     assert history_events[-1][1][3]["characteristic_match_failed"] is True
     log_text = window.auto_rng_tab.log_view.toPlainText()

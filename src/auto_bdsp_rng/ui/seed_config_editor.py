@@ -171,14 +171,16 @@ class SeedConfigEditorController(QObject):
             return
         w = self.window
         capturing = w._capture_thread is not None
+        busy = capturing or self.testing
         selecting = w._selection_mode is not None
-        self.test_button.setText("停止捕捉" if capturing else "测试捕捉")
+        self.test_button.setText("停止捕捉" if busy else "测试捕捉")
         self.test_button.setEnabled(not selecting)
-        self.save_button.setEnabled(not capturing and not selecting)
+        self.save_button.setEnabled(not busy and not selecting)
         self.cancel_button.setEnabled(not capturing)
-        w.capture_recognition_group.setEnabled(not capturing)
-        w.capture_timing_group.setEnabled(not capturing and not self.starter_locked)
-        w.raw_screenshot_button.setEnabled(not capturing and not self.starter_locked)
+        w.capture_recognition_group.setEnabled(not busy)
+        w.capture_timing_group.setEnabled(not busy and not self.starter_locked)
+        w.threshold.setEnabled(not busy)
+        w.raw_screenshot_button.setEnabled(not busy and not self.starter_locked)
         w.calibrate_shiny_threshold_button.setVisible(not self.starter_locked)
         w.video_overlay.set_configuration_mode(
             self.editor.isVisible() or w.tabs.currentWidget() is w.project_xs_tab
@@ -190,23 +192,64 @@ class SeedConfigEditorController(QObject):
             w._capture_cancel.set()
             self.status.setText("正在停止测试捕捉…")
             return
+        if self.testing:
+            self._cancel_test_preparation()
+            return
         if not self.active or w._selection_mode is not None:
             return
         if w._automation_script_busy():
             self.status.setText("请等待伊机控脚本结束后再测试捕捉。")
             return
+        try:
+            config = w._config_from_form()
+            source_identity = w._synchronize_preview_source(config.capture)
+        except (ProjectXsIntegrationError, OSError, ValueError) as exc:
+            self.status.setText(f"捕捉未启动：{exc}")
+            return
+        binding = self.binding
+        resume_preview = w._preview_timer.isActive()
         self.testing = True
-        self.status.setText("正在测试捕捉，进度和结果显示在右侧视频。")
-        if self.binding is w.auto_tid_rng_tab.seed_config_binding:
-            w.capture_tidsid_seed()
-        elif self.binding is w.auto_rng_tab.reidentify_config_binding:
-            w.reidentify_seed()
-        else:
-            w.capture_seed()
-        if w._capture_thread is None:
-            self.testing = False
-            self.status.setText("捕捉未启动，请检查视频源和配置。")
+        self.status.setText("正在等待视频画面，收到后开始测试捕捉。")
         self.refresh()
+
+        def capture_ready(_frame):
+            if not self.active or self.binding is not binding or not self.testing or w._is_closing:
+                return
+            self.status.setText("正在测试捕捉，进度和结果显示在右侧视频。")
+            if binding is w.auto_tid_rng_tab.seed_config_binding:
+                w.capture_tidsid_seed(config=config)
+            elif binding is w.auto_rng_tab.reidentify_config_binding:
+                w.reidentify_seed(config=config)
+            else:
+                w.capture_seed(config=config)
+            if w._capture_thread is None:
+                self._capture_preparation_failed("捕捉未启动，请检查视频源和配置。")
+            else:
+                # The owned preview action already stopped its timer while
+                # releasing the source; retain the state from the user's click.
+                w._resume_preview_after_capture = resume_preview and w._preview_source == source_identity
+            self.refresh()
+
+        # Use the same owned frame/read/release boundary as ROI and OCR actions.
+        # Its cancellation removes the continuation before restoring a draft.
+        w._request_preview_action(
+            "测试捕捉", capture_ready, key="seed_config_test", pause_legacy=True,
+            failed=self._capture_preparation_failed,
+        )
+        self.refresh()
+
+    def _capture_preparation_failed(self, message):
+        if self.active and self.testing:
+            self.testing = False
+            self.status.setText(f"测试捕捉未完成：{message}")
+            self.refresh()
+
+    def _cancel_test_preparation(self):
+        action = self.window._preview_action
+        if action is not None and action.key == "seed_config_test":
+            self.window._cancel_preview_action("测试捕捉准备已取消")
+        else:
+            self._capture_preparation_failed("测试捕捉准备已取消")
 
     def _capture_finished(self, _mode, _thread, success, message):
         if self.active and self.testing:
@@ -230,6 +273,9 @@ class SeedConfigEditorController(QObject):
 
     def close(self, *, saved):
         w = self.window
+        if self.testing and w._capture_thread is None:
+            self._cancel_test_preparation()
+        self.testing = False
         if saved and self.starter_locked:
             w._apply_capture_config_to_form(load_project_xs_config(w._selected_config_path()))
         self.editor.hide()
@@ -260,6 +306,7 @@ class SeedConfigEditorController(QObject):
             w._apply_capture_config_to_form(previous)
         self.binding = self.panel = self.previous_config = None
         self.starter_locked = False
+        w.threshold.setEnabled(True)
         w.raw_screenshot_button.setEnabled(True)
         w.calibrate_shiny_threshold_button.show()
         self.previous_selection = None

@@ -5,7 +5,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QBoxLayout
 
 from tests.test_easycon_execution_ui import publish
-from tests.test_easycon_panel import FakeKeyboardHookFactory, app, easycon_panel, easycon_panel_factory
+from tests.test_easycon_panel import (
+    FakeKeyboardHookFactory, app, connect_native, easycon_panel, easycon_panel_factory, shutdown_panel,
+)
 from tests.test_start_readiness import window
 from tests.test_workspace_layout import settle
 
@@ -30,7 +32,7 @@ def test_full_window_compact_controls_preserve_monitor_and_editor(window, monkey
     assert all(not a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:])
     monitor = window.monitor_sidebar.geometry()
     editor_geometry = panel.editor.geometry()
-    assert panel.connect_native()
+    assert connect_native(panel)
     panel.show_tools("control")
     settle()
     assert panel._controller_overlay.isVisible()
@@ -69,7 +71,7 @@ def test_tools_keep_draft_undo_execution_position_and_menu_locks(easycon_panel, 
     assert panel.current_script_path == path
     panel.execution.set_busy(False)
     assert panel.open_action.isEnabled() and panel.new_action.isEnabled()
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_terminal_details_can_expand_without_losing_last_line(easycon_panel, tmp_path):
@@ -90,7 +92,7 @@ def test_terminal_details_can_expand_without_losing_last_line(easycon_panel, tmp
     assert "第 1 行" in panel.execution.location_label.text()
     panel.execution.clear()
     assert panel.execution.details.isHidden() and panel.execution.details_toggle.isHidden()
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_narrow_pause_explanation_fits_complete_lines(window, monkeypatch, tmp_path):
@@ -119,7 +121,7 @@ def test_narrow_pause_explanation_fits_complete_lines(window, monkeypatch, tmp_p
 def test_toolbar_and_device_menu_show_real_recording_and_keyboard_state(easycon_panel):
     panel = easycon_panel
     panel.show()
-    assert panel.connect_native() and panel._activate_virtual_controller()
+    assert connect_native(panel) and panel._activate_virtual_controller()
     panel._start_recording()
     panel.hide_tools()
     assert panel._recording and panel.virtual_controller_enabled
@@ -138,7 +140,7 @@ def test_toolbar_and_device_menu_show_real_recording_and_keyboard_state(easycon_
     assert panel.pause_btn.isHidden() and not panel.stop_recording_action.isVisible()
     assert panel.virtual_controller_action.text() == "关闭虚拟手柄"
     assert panel.new_action.isEnabled() and panel.open_action.isEnabled()
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_global_device_menu_works_across_pages_and_keeps_editor_draft(window):
@@ -151,7 +153,7 @@ def test_global_device_menu_works_across_pages_and_keeps_editor_draft(window):
     panel.connection_settings_action.trigger()
     assert panel.connection_dialog.isVisible()
     panel.connection_dialog_close_button.click()
-    assert panel.connect_native()
+    assert connect_native(panel)
     w.tabs.setCurrentWidget(w.auto_rng_tab)
     panel.virtual_controller_action.trigger()
     settle()
@@ -188,7 +190,7 @@ def test_virtual_controller_does_not_hide_short_editor(window, monkeypatch):
     w.tabs.setCurrentWidget(panel)
     settle()
     geometry = panel.editor.geometry()
-    assert panel.connect_native()
+    assert connect_native(panel)
     panel.virtual_controller_action.trigger()
     settle()
     assert panel.editor.isVisible() and panel.editor.geometry() == geometry
@@ -202,7 +204,7 @@ def test_virtual_controller_does_not_hide_short_editor(window, monkeypatch):
 def test_device_menu_navigation_does_not_send_controller_input(easycon_panel):
     panel = easycon_panel
     panel.show()
-    assert panel.connect_native() and panel._activate_virtual_controller()
+    assert connect_native(panel) and panel._activate_virtual_controller()
     panel._start_recording()
     panel.controller_tools_menu.popup(panel.mapToGlobal(QPoint(0, 32)))
     QTest.keyClick(panel.controller_tools_menu, Qt.Key.Key_Down)
@@ -214,14 +216,14 @@ def test_device_menu_navigation_does_not_send_controller_input(easycon_panel):
     panel._handle_virtual_controller_key(int(Qt.Key.Key_Down), True)
     panel._handle_virtual_controller_key(int(Qt.Key.Key_Down), False)
     assert panel.native_backend.stick_events == [("right", "Down", True), ("right", "Down", False)]
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_device_menu_suspends_global_mapped_keys_and_restores_real_mode(easycon_panel_factory):
     factory = FakeKeyboardHookFactory()
     panel = easycon_panel_factory(keyboard_hook_factory=factory)
     panel.show()
-    assert panel.connect_native() and panel._activate_virtual_controller()
+    assert connect_native(panel) and panel._activate_virtual_controller()
     hook = factory.instances[-1]
     panel._start_recording()
     hook.emit_key(panel.key_mapping["A"], True)
@@ -249,7 +251,7 @@ def test_device_menu_suspends_global_mapped_keys_and_restores_real_mode(easycon_
     settle()
     assert panel._vpad_input_source is None and not hook.is_running
     assert panel.controller_tools_menu.isHidden() and not panel._controller_overlay.isVisible()
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_script_error_locates_main_and_library_and_keeps_literal_output(easycon_panel, tmp_path):
@@ -278,4 +280,4 @@ def test_script_error_locates_main_and_library_and_keeps_literal_output(easycon_
     panel.execution.clear()
     assert panel.script_error_label.text() == "暂无脚本错误"
     assert "<错误>" in panel.log_view.toPlainText()
-    panel.shutdown()
+    shutdown_panel(panel)

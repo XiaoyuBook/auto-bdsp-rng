@@ -3,15 +3,19 @@ from __future__ import annotations
 import importlib
 import json
 import heapq
+import os
 import sys
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Iterator
 
 from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.rng_core.cancellation import SearchCancellation, SearchCancelled
 from auto_bdsp_rng.image_io import read_image, write_image
 from auto_bdsp_rng.blink_detection.models import (
     AdvanceEvent,
@@ -454,10 +458,10 @@ class PreviewFrameCapture:
     def release(self) -> None:
         if self._released:
             return
-        self._released = True
         release = getattr(self._video, "release", None)
         if callable(release):
             release()
+        self._released = True
 
 
 def _coerce_int_tuple(value: object, *, field_name: str, length: int) -> tuple[int, ...]:
@@ -932,8 +936,105 @@ def save_preview_frame(config: BlinkCaptureConfig, output_path: str | Path) -> P
     return output
 
 
+_EyeTemplateKey = tuple[str, int, int, int, int, int]
+
+
+class _EyeTemplateCache:
+    """Bounded preview cache; disk reads never hold the shared index lock."""
+
+    def __init__(self, max_entries: int = 8) -> None:
+        if max_entries < 1:
+            raise ValueError("Eye template cache must have at least one entry")
+        self._max_entries = max_entries
+        self._images: OrderedDict[_EyeTemplateKey, Any] = OrderedDict()
+        self._lock = Lock()
+        # Fixed stripes serialize concurrent loads of one path without an
+        # ever-growing table of locks. Hits bypass these loading locks.
+        self._load_locks = tuple(Lock() for _ in range(16))
+
+    @staticmethod
+    def _key(path: Path, normalized_path: str) -> _EyeTemplateKey:
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise ProjectXsCaptureConfigError(
+                f"Cannot read eye template image: {path}；请先在预览中框选并保存眼睛模板"
+            ) from exc
+        # Identity also detects atomic replacement with the same size/mtime,
+        # which is how the eye-selection editor publishes a saved template.
+        return (
+            normalized_path,
+            stat.st_mtime_ns,
+            stat.st_size,
+            stat.st_ctime_ns,
+            stat.st_dev,
+            stat.st_ino,
+        )
+
+    def _lookup(self, key: _EyeTemplateKey) -> Any | None:
+        with self._lock:
+            image = self._images.get(key)
+            if image is not None:
+                self._images.move_to_end(key)
+            return image
+
+    def _publish(self, key: _EyeTemplateKey, image: Any) -> None:
+        with self._lock:
+            # Retain only the latest loaded revision of each path.
+            for old_key in tuple(self._images):
+                if old_key[0] == key[0]:
+                    del self._images[old_key]
+            self._images[key] = image
+            while len(self._images) > self._max_entries:
+                self._images.popitem(last=False)
+
+    def load(self, path: Path) -> Any:
+        path = Path(os.path.abspath(path))
+        normalized_path = os.path.normcase(str(path))
+        key = self._key(path, normalized_path)
+        image = self._lookup(key)
+        if image is not None:
+            return image.view()
+
+        with self._load_locks[hash(normalized_path) % len(self._load_locks)]:
+            # Re-stat after acquiring the loading lock: another caller or a
+            # template save may have completed while this caller waited.
+            for _ in range(3):
+                key = self._key(path, normalized_path)
+                image = self._lookup(key)
+                if image is not None:
+                    return image.view()
+                try:
+                    image = _read_grayscale_image(path)
+                except ProjectXsCaptureConfigError:
+                    if self._key(path, normalized_path) == key:
+                        raise
+                    continue
+                if self._key(path, normalized_path) != key:
+                    continue
+
+                import numpy as np
+
+                if not isinstance(image, np.ndarray):
+                    # Preserve lightweight legacy image adapters without
+                    # sharing potentially mutable non-NumPy objects.
+                    return image
+                # A writeable=False owning array can be made writeable again.
+                # Bytes-backed storage cannot, and a fresh view isolates each
+                # caller's shape/dtype metadata without copying every frame.
+                frozen = np.frombuffer(image.tobytes(), dtype=image.dtype).reshape(image.shape)
+                self._publish(key, frozen)
+                return frozen.view()
+        raise ProjectXsCaptureConfigError(
+            f"Cannot read eye template image: {path}；模板正在更新，请稍后重试或重新保存眼睛模板"
+        )
+
+
+_EYE_TEMPLATE_CACHE = _EyeTemplateCache()
+
+
 def _load_eye_template(config: BlinkCaptureConfig) -> Any:
-    return _read_grayscale_image(config.eye_image_path)
+    return _EYE_TEMPLATE_CACHE.load(config.eye_image_path)
 
 
 def render_eye_preview(config: BlinkCaptureConfig, frame: Any) -> tuple[Any, EyePreviewResult]:
@@ -1037,9 +1138,14 @@ def _try_native_reidentify_by_intervals(
     npc: int = 0,
     search_min: int = 0,
     search_max: int = 1_000_000,
+    cancellation: SearchCancellation | None = None,
 ) -> tuple[SeedState32, int] | None:
+    if cancellation is not None:
+        cancellation.check()
     try:
         native = importlib.import_module("auto_bdsp_rng.rng_core._native")
+        if cancellation is not None and cancellation.native is None:
+            return None
         seed0, seed1 = state.seed64_pair
         result = native.reidentify_by_intervals(
             seed0,
@@ -1048,9 +1154,18 @@ def _try_native_reidentify_by_intervals(
             int(npc),
             int(search_min),
             int(search_max),
+            **({"cancel_token": cancellation.native} if cancellation is not None else {}),
         )
+    except SearchCancelled:
+        raise
     except Exception:
+        # Older extensions reject cancel_token. Use the cancellable Python
+        # fallback instead of retrying an uninterruptible legacy native call.
+        if cancellation is not None:
+            cancellation.check()
         return None
+    if cancellation is not None:
+        cancellation.check()
     if result is None:
         return None
     try:
@@ -1066,9 +1181,14 @@ def _try_native_reidentify_by_intervals_noisy(
     *,
     search_min: int = 0,
     search_max: int = 100_000,
+    cancellation: SearchCancellation | None = None,
 ) -> tuple[SeedState32, int] | None:
+    if cancellation is not None:
+        cancellation.check()
     try:
         native = importlib.import_module("auto_bdsp_rng.rng_core._native")
+        if cancellation is not None and cancellation.native is None:
+            return None
         seed0, seed1 = state.seed64_pair
         result = native.reidentify_by_intervals_noisy(
             seed0,
@@ -1076,9 +1196,16 @@ def _try_native_reidentify_by_intervals_noisy(
             list(observation.intervals),
             int(search_min),
             int(search_max),
+            **({"cancel_token": cancellation.native} if cancellation is not None else {}),
         )
+    except SearchCancelled:
+        raise
     except Exception:
+        if cancellation is not None:
+            cancellation.check()
         return None
+    if cancellation is not None:
+        cancellation.check()
     if result is None:
         return None
     try:
@@ -1088,6 +1215,51 @@ def _try_native_reidentify_by_intervals_noisy(
         raise ProjectXsIntegrationError("原生抗干扰校正返回了无效结果") from exc
 
 
+def _cancellable_project_xs_call(function, cancellation, *args, **kwargs):
+    """Interrupt the original Python loops without patching vendor modules.
+
+    Project_Xs has no cancellation parameter and spends substantial time in
+    matching loops after RNG generation. A thread-local trace adds bounded
+    checks to those Python lines, retaining its exact algorithms and API. Any
+    existing debugger/coverage trace is forwarded and restored afterwards.
+    """
+    if cancellation is None:
+        return function(*args, **kwargs)
+    cancellation.check()
+    previous = sys.gettrace()
+    code = getattr(function, "__code__", None)
+    vendor_root = str(PROJECT_XS_SRC).replace("\\", "/").lower().rstrip("/") + "/"
+    lines = 0
+
+    def trace(frame, event, arg):
+        previous_local = previous(frame, event, arg) if previous is not None else None
+        filename = frame.f_code.co_filename.replace("\\", "/").lower()
+        if frame.f_code is not code and not filename.startswith(vendor_root):
+            return previous_local
+
+        def local(frame, event, arg):
+            nonlocal lines, previous_local
+            if previous_local is not None:
+                previous_local = previous_local(frame, event, arg)
+            if event == "line":
+                lines += 1
+                if lines % 64 == 0:
+                    cancellation.check()
+                if lines % 2048 == 0:
+                    time.sleep(0.001)
+            return local
+
+        return local
+
+    sys.settrace(trace)
+    try:
+        result = function(*args, **kwargs)
+        cancellation.check()
+        return result
+    finally:
+        sys.settrace(previous)
+
+
 def reidentify_seed_from_observation(
     state: SeedState32,
     observation: BlinkObservation,
@@ -1095,6 +1267,7 @@ def reidentify_seed_from_observation(
     npc: int = 0,
     search_min: int = 0,
     search_max: int = 1_000_000,
+    cancellation: SearchCancellation | None = None,
 ) -> ProjectXsReidentifyResult:
     """Reidentify Project_Xs Xorshift state from later blink intervals."""
 
@@ -1104,6 +1277,7 @@ def reidentify_seed_from_observation(
         npc=npc,
         search_min=search_min,
         search_max=search_max,
+        **({"cancellation": cancellation} if cancellation is not None else {}),
     )
     if native_result is not None:
         reidentified_state, advances = native_result
@@ -1118,7 +1292,8 @@ def reidentify_seed_from_observation(
     xorshift = _load_module("xorshift")
     try:
         rng = xorshift.Xorshift(*state.words)
-        reidentified_rng, advances = rngtool.reidentiy_by_intervals(
+        reidentified_rng, advances = _cancellable_project_xs_call(
+            rngtool.reidentiy_by_intervals, cancellation,
             rng,
             list(observation.intervals),
             npc=npc,
@@ -1126,6 +1301,8 @@ def reidentify_seed_from_observation(
             search_max=search_max,
             return_advance=True,
         )
+    except SearchCancelled:
+        raise
     except Exception as exc:
         raise ProjectXsIntegrationError("Project_Xs 校正失败") from exc
 
@@ -1151,6 +1328,7 @@ def reidentify_seed_from_observation_noisy(
     *,
     search_min: int = 0,
     search_max: int = 100_000,
+    cancellation: SearchCancellation | None = None,
 ) -> ProjectXsReidentifyResult:
     """Reidentify Project_Xs Xorshift state with the 1 Pokemon NPC noisy flow."""
 
@@ -1159,6 +1337,7 @@ def reidentify_seed_from_observation_noisy(
         observation,
         search_min=search_min,
         search_max=search_max,
+        **({"cancellation": cancellation} if cancellation is not None else {}),
     )
     if native_result is not None:
         reidentified_state, advances = native_result
@@ -1173,12 +1352,15 @@ def reidentify_seed_from_observation_noisy(
     xorshift = _load_module("xorshift")
     try:
         rng = xorshift.Xorshift(*state.words)
-        reidentified_rng, advances = rngtool.reidentiy_by_intervals_noisy(
+        reidentified_rng, advances = _cancellable_project_xs_call(
+            rngtool.reidentiy_by_intervals_noisy, cancellation,
             rng,
             list(observation.intervals),
             search_min=search_min,
             search_max=search_max,
         )
+    except SearchCancelled:
+        raise
     except Exception as exc:
         raise ProjectXsIntegrationError("Project_Xs 抗干扰校正失败") from exc
 

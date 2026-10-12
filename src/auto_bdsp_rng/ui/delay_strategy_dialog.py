@@ -1704,12 +1704,12 @@ class DelayStrategyDialog(QDialog):
     def _show_clear_confirmation(self) -> None:
         if self._sample_rounds:
             self.clear_confirm_frame.show()
-            QTimer.singleShot(0, self._resize_for_current_page)
+            QTimer.singleShot(0, self, self._resize_for_current_page)
 
     @Slot()
     def _hide_clear_confirmation(self) -> None:
         self.clear_confirm_frame.hide()
-        QTimer.singleShot(0, self._resize_for_current_page)
+        QTimer.singleShot(0, self, self._resize_for_current_page)
 
     @Slot()
     def _confirm_clear_samples(self) -> None:

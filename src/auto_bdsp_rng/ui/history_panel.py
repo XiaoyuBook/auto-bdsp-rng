@@ -5,8 +5,14 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
+from collections import OrderedDict
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
+import tempfile
+import time
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor
@@ -37,6 +43,12 @@ from PySide6.QtWidgets import (
 )
 
 from auto_bdsp_rng.ui.workspace_theme import ui_styles
+from auto_bdsp_rng.ui.history_archive import CandidateReservation, HistoryArchive, PlainSnapshot
+from auto_bdsp_rng.ui.background_search import BackgroundSearch
+from auto_bdsp_rng.ui.result_transfer import PreparedExport, ResultTransfer
+from auto_bdsp_rng.rng_core.cancellation import SearchCancellation, SearchCancelled
+from auto_bdsp_rng.gen8_static.models import State8
+from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.workspace_controls import (
     EmptyIllustration,
@@ -57,6 +69,10 @@ CLR_SYNC_BG = "#CFFAFE"   # 同步状态背景
 CLR_SYNC_FG = "#155E75"   # 同步状态文字
 CLR_SHINY_BG = "#FEF3C7"   # 异色单元格背景
 CLR_SHINY_FG = "#92400E"   # 异色单元格文字
+
+ROUND_PAGE_SIZE = 100
+CANDIDATE_PAGE_SIZE = 100
+FEED_PAGE_SIZE = 100
 
 
 class _CandidateRowDelegate(QStyledItemDelegate):
@@ -92,6 +108,11 @@ class _CopyableTextEdit(QPlainTextEdit):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.setUndoRedoEnabled(False)
         self.setObjectName("LogView")
+        self.document().setMaximumBlockCount(MAX_LOG_ENTRIES)
+        self.full_text = None
+
+    def toPlainText(self) -> str:
+        return self.full_text() if self.full_text is not None else super().toPlainText()
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu()
@@ -208,7 +229,7 @@ def _shiny_text(state: object) -> str:
     return SHINY_MAP.get(s, str(s))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _CandidateSnapshot:
     advances: int
     ec: int | None
@@ -249,6 +270,90 @@ def _snapshot_candidate(state: object) -> _CandidateSnapshot:
     )
 
 
+class _CandidateRows:
+    """Frozen source with direct page reads and pre-indexed duplicate tags."""
+
+    def __init__(self, candidates, locked_index, flags, delays, *, reverse, characteristic, cancelled=None):
+        # Mutable integrations are copied at admission. Production State8
+        # values are frozen and need only a bounded conversion when viewed.
+        self.flags, self.delays = tuple(flags or ()), tuple(delays or ())
+        self.locked_index, self.reverse, self.characteristic = locked_index, reverse, characteristic
+        seen = {}
+        states, duplicates = [], []
+        for index, source in enumerate(candidates):
+            if cancelled is not None and index % 1024 == 0:
+                if cancelled():
+                    raise SearchCancelled("History candidate preparation stopped")
+                # Preparation runs on the producer; allow Qt to run while
+                # leaving GC enabled, including on a cold 100k batch.
+                time.sleep(0.001)
+            state = (source if type(source) is State8 and isinstance(source.ivs, tuple)
+                     else _snapshot_candidate(source))
+            states.append(state)
+            pid, ec = state.pid, state.ec
+            # A valid PID/EC pair fits in one integer. This avoids retaining
+            # 100k GC-tracked key tuples during admission. Unknown integration
+            # values retain the original tuple identity without truncation.
+            key = ((pid << 32) | ec if pid is not None and ec is not None
+                   and 0 <= pid <= 0xFFFFFFFF and 0 <= ec <= 0xFFFFFFFF else (pid, ec))
+            duplicates.append(seen.get(key, 0))
+            seen[key] = index + 1
+        if cancelled is not None and cancelled():
+            raise SearchCancelled("History candidate preparation stopped")
+        self.states = tuple(states)
+        self.duplicates = tuple(duplicates)
+
+    def __call__(self):
+        return self.read_page(0, len(self.states))
+
+    def read_page(self, start: int, stop: int):
+        for index in range(start, min(stop, len(self.states))):
+            source = self.states[index]
+            state = source if isinstance(source, _CandidateSnapshot) else _snapshot_candidate(source)
+            duplicate = self.duplicates[index]
+            if self.reverse:
+                status = f"匹配 · 同候选{duplicate}" if duplicate else "匹配"
+            else:
+                tags = []
+                if index == self.locked_index:
+                    tags.append("锁定")
+                if index < len(self.flags) and self.flags[index] == "sync":
+                    tags.append("同步")
+                if duplicate:
+                    tags.append(f"同候选{duplicate}")
+                status = " · ".join(tags) if tags else "普通"
+            delay = self.delays[index] if index < len(self.delays) else state.advances
+            characteristic = _state_characteristic(state, self.characteristic) if self.reverse else "-"
+            yield state, status, delay, characteristic
+
+
+def _prepare_history_candidates(event, values, *, cancelled):
+    """Freeze a bounded producer payload without touching any Qt object."""
+    if cancelled():
+        raise SearchCancelled("History candidate preparation stopped")
+    candidates = tuple(values[0])
+    frozen = list(values)
+    frozen[0] = candidates
+    if event == "reverse_lookup_results":
+        characteristic = str(values[1]) if len(values) > 1 and values[1] is not None else None
+        delays = tuple(values[2]) if len(values) > 2 and values[2] is not None else None
+        rows = _CandidateRows(candidates, -1, None, delays, reverse=True,
+                              characteristic=characteristic, cancelled=cancelled)
+        if len(values) > 1:
+            frozen[1] = characteristic
+        if len(values) > 2:
+            frozen[2] = delays
+    else:
+        locked_index = int(values[1])
+        flags = tuple(values[2]) if len(values) > 2 and values[2] is not None else None
+        rows = _CandidateRows(candidates, locked_index, flags, None, reverse=False,
+                              characteristic=None, cancelled=cancelled)
+        frozen[1] = locked_index
+        if len(values) > 2:
+            frozen[2] = flags
+    return tuple(frozen), rows
+
+
 @dataclass(frozen=True)
 class _FeedEntry:
     kind: str
@@ -256,10 +361,132 @@ class _FeedEntry:
     color: str = CLR_BODY
     bold: bool = False
     strong: bool = False
-    rows: tuple[tuple[str, ...], ...] = ()
-    states: tuple[_CandidateSnapshot, ...] = ()
-    statuses: tuple[str, ...] = ()
+    rows: Sequence[tuple[str, ...]] = ()
+    states: Sequence[_CandidateSnapshot] = ()
+    statuses: Sequence[str] = ()
     reverse: bool = False
+    archive_batch: int | None = None
+
+
+class _CandidateColumn(Sequence):
+    def __init__(self, archive: HistoryArchive, batch: int, count: int, column: str, reverse: bool) -> None:
+        self.archive, self.batch, self.count = archive, batch, count
+        self.column, self.reverse = column, reverse
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(self[i] for i in range(*index.indices(self.count)))
+        if index < 0:
+            index += self.count
+        if not 0 <= index < self.count:
+            raise IndexError(index)
+        state, status, delay, characteristic = self.archive.candidate(self.batch, index)
+        if self.column == "state":
+            return state
+        if self.column == "status":
+            return status
+        values = (HistoryPanel._reverse_row(index, state, status, delay, characteristic)
+                  if self.reverse else HistoryPanel._candidate_row(index, state, status))
+        return tuple(values)
+
+
+def _candidate_entry(archive: HistoryArchive, batch: int, count: int, reverse: bool) -> _FeedEntry:
+    return _FeedEntry(
+        kind="table", reverse=reverse, archive_batch=batch,
+        rows=_CandidateColumn(archive, batch, count, "row", reverse),
+        states=_CandidateColumn(archive, batch, count, "state", reverse),
+        statuses=_CandidateColumn(archive, batch, count, "status", reverse),
+    )
+
+
+def _candidate_plain_text(index: int, state, status: str, delay: int, characteristic: str, reverse: bool) -> str:
+    if reverse:
+        chara = f" 个性={characteristic}" if characteristic != "-" else ""
+        return (
+            f"反查候选{index + 1}: adv={state.advances} delay={delay} EC={_state_ec(state)} PID={_state_pid(state)} "
+            f"{_state_iv_text(state.ivs)} 性格={_nature_text(state)}{chara} 特性={state.ability} "
+            f"性别={_gender_text(state)} 异色={_shiny_text(state)} 身高={state.height} 体重={state.weight}"
+        )
+    return (
+        f"  候选{index + 1} ({status}) adv={state.advances} EC={_state_ec(state)} PID={_state_pid(state)} "
+        f"{_state_iv_text(state.ivs)} 性格={_nature_text(state)} 异色={_shiny_text(state)} "
+        f"特性={state.ability} 性别={_gender_text(state)} 身高={state.height} 体重={state.weight}"
+    )
+
+
+def _plain_lines(
+    archive: HistoryArchive, uid: int | None, *, snapshot: PlainSnapshot | None = None,
+    cancellation: SearchCancellation | None = None, after_seq: int = 0,
+) -> Iterator[str]:
+    """Format frozen Python payloads; workers never read a widget or record."""
+    for value in archive.values("plain", uid, snapshot=snapshot, after_seq=after_seq):
+        if cancellation is not None:
+            cancellation.check()
+        if value[0] == "text":
+            yield value[1]
+        else:
+            _, batch, reverse = value
+            for index, (state, status, delay, characteristic) in enumerate(archive.candidate_rows(batch)):
+                if cancellation is not None and index % 128 == 0:
+                    cancellation.check()
+                    # Formatting is Python work. Yield the GIL regularly so a
+                    # large search/copy does not starve the GUI heartbeat.
+                    time.sleep(0)
+                yield _candidate_plain_text(index, state, status, delay, characteristic, reverse)
+
+
+class _PlainLines:
+    def __init__(self, archive: HistoryArchive, uid: int | None) -> None:
+        self.archive, self.uid, self.count = archive, uid, 0
+
+    def __len__(self) -> int:
+        return self.count
+
+    def append(self, text: str) -> None:
+        self.archive.append("plain", self.uid, ("text", text))
+        self.count += 1
+
+    def append_candidates(self, batch: int, count: int, reverse: bool) -> None:
+        self.archive.append("plain", self.uid, ("candidate", batch, reverse))
+        self.count += count
+
+    def __iter__(self) -> Iterator[str]:
+        return _plain_lines(self.archive, self.uid)
+
+
+class _FeedEntries(Sequence):
+    def __init__(self, archive: HistoryArchive, uid: int) -> None:
+        self.archive, self.uid, self.count = archive, uid, 0
+
+    def __len__(self) -> int:
+        return self.count
+
+    def append(self, entry: _FeedEntry) -> None:
+        value = (entry.kind, entry.text, entry.color, entry.bold, entry.strong,
+                 entry.archive_batch, len(entry.rows), entry.reverse)
+        self.archive.append("feed", self.uid, value)
+        self.count += 1
+
+    def _decode(self, value) -> _FeedEntry:
+        kind, text, color, bold, strong, batch, count, reverse = value
+        if batch is not None:
+            return _candidate_entry(self.archive, batch, count, reverse)
+        return _FeedEntry(kind=kind, text=text, color=color, bold=bold, strong=strong, reverse=reverse)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self.count)
+            if step != 1:
+                return tuple(self[i] for i in range(start, stop, step))
+            return tuple(self._decode(value) for value in self.archive.values("feed", self.uid, offset=start, limit=stop-start))
+        if index < 0:
+            index += self.count
+        if not 0 <= index < self.count:
+            raise IndexError(index)
+        return self._decode(next(self.archive.values("feed", self.uid, offset=index, limit=1)))
 
 
 @dataclass
@@ -279,9 +506,126 @@ class _RoundRecord:
     candidate_count: int = 0
     candidate_snapshot: _FeedEntry | None = None
     warnings: list[str] = field(default_factory=list)
-    entries: list[_FeedEntry] = field(default_factory=list)
-    plain_lines: list[str] = field(default_factory=list)
+    entries: _FeedEntries | list[_FeedEntry] = field(default_factory=list)
+    plain_lines: _PlainLines | list[str] = field(default_factory=list)
     implicit: bool = False
+
+
+@dataclass(frozen=True)
+class _RoundSearchSummary:
+    uid: int
+    revision: int
+    status: str
+    has_warnings: bool
+    searchable: str
+
+    def matches_result(self, result: str) -> bool:
+        return (
+            result == "all"
+            or result == "warning" and self.has_warnings
+            or result == "active" and self.status in {"进行中", "记录中"}
+            or result == "shiny" and self.status == "疑似出闪"
+            or result == "not-shiny" and self.status == "未出闪"
+            or result == "no-candidate" and self.status == "无候选"
+        )
+
+
+class _RoundRecords:
+    """Keep identity indexes in memory and only 64 loaded round summaries."""
+
+    def __init__(self, archive: HistoryArchive) -> None:
+        self.archive = archive
+        self.keys: dict[tuple[object, object], int] = {}
+        self.identities: dict[int, tuple[object, object]] = {}
+        self.cache: OrderedDict[int, _RoundRecord] = OrderedDict()
+        self.search_summaries: dict[int, _RoundSearchSummary] = {}
+
+    def __len__(self) -> int:
+        return len(self.keys)
+
+    def __getitem__(self, key) -> _RoundRecord:
+        return self.by_uid(self.keys[key])
+
+    def get(self, key, default=None):
+        uid = self.keys.get(key)
+        return default if uid is None else self.by_uid(uid)
+
+    def __setitem__(self, key, record: _RoundRecord) -> None:
+        self.keys[key] = record.uid
+        self.identities[record.uid] = (record.run_id, record.round_id)
+        self.store(record)
+
+    def store(self, record: _RoundRecord) -> None:
+        snapshot = record.candidate_snapshot
+        fields = {name: getattr(record, name) for name in (
+            "uid", "run_index", "cycle_index", "target_label", "started_at", "updated_at",
+            "detail_title", "outcome", "seed_text", "locked_advances", "candidate_count", "warnings", "implicit",
+        )}
+        fields["plain_count"] = len(record.plain_lines)
+        fields["entry_count"] = len(record.entries)
+        fields["snapshot"] = None if snapshot is None else (snapshot.archive_batch, len(snapshot.rows), snapshot.reverse)
+        self.archive.store_record(record.uid, fields)
+        self.remember_summary(record)
+        self._remember(record)
+
+    def remember_summary(self, record: _RoundRecord) -> _RoundSearchSummary:
+        previous = self.search_summaries.get(record.uid)
+        status = _record_status(record)
+        summary = _RoundSearchSummary(
+            record.uid, 1 if previous is None else previous.revision + 1,
+            status, bool(record.warnings),
+            " ".join((str(record.run_id), str(record.round_id), f"运行 {record.run_index}",
+                      str(record.cycle_index or ""), record.target_label, record.seed_text or "",
+                      str(record.locked_advances or ""), status, record.detail_title, *record.warnings)).casefold(),
+        )
+        self.search_summaries[record.uid] = summary
+        return summary
+
+    def _remember(self, record: _RoundRecord) -> None:
+        self.cache[record.uid] = record
+        self.cache.move_to_end(record.uid)
+        while len(self.cache) > 64:
+            self.cache.popitem(last=False)
+
+    def by_uid(self, uid: int) -> _RoundRecord:
+        if uid in self.cache:
+            self.cache.move_to_end(uid)
+            return self.cache[uid]
+        fields = self.archive.record(uid)
+        entries = _FeedEntries(self.archive, uid)
+        entries.count = fields.pop("entry_count")
+        lines = _PlainLines(self.archive, uid)
+        lines.count = fields.pop("plain_count")
+        snapshot = fields.pop("snapshot")
+        run_id, round_id = self.identities[uid]
+        record = _RoundRecord(**fields, run_id=run_id, round_id=round_id, entries=entries, plain_lines=lines)
+        if snapshot is not None:
+            record.candidate_snapshot = _candidate_entry(self.archive, *snapshot)
+        self._remember(record)
+        return record
+
+    def clear(self) -> None:
+        self.keys.clear()
+        self.identities.clear()
+        self.cache.clear()
+        self.search_summaries.clear()
+
+
+class _RecordsByUid(Mapping):
+    def __init__(self, records: _RoundRecords) -> None:
+        self.records = records
+
+    def __getitem__(self, uid: int) -> _RoundRecord:
+        return self.records.by_uid(uid)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __iter__(self):
+        return iter(self.records.identities)
+
+    def clear(self) -> None:
+        self.records.clear()
 
 
 class _RoundListRow(QWidget):
@@ -345,6 +689,7 @@ def _record_status(record: _RoundRecord) -> str:
 
 class HistoryPanel(QWidget):
     related_logs_requested = Signal(object, object)
+    archiveWarning = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -361,8 +706,6 @@ class HistoryPanel(QWidget):
         self._round_uid_counter = 0
         self._run_index_counter = 0
         self._run_indexes: dict[object, int] = {}
-        self._round_records: dict[tuple[object, object], _RoundRecord] = {}
-        self._record_by_uid: dict[int, _RoundRecord] = {}
         self._round_order: list[tuple[object, object]] = []
         self._active_uid: int | None = None
         self._selected_uid: int | None = None
@@ -370,13 +713,60 @@ class HistoryPanel(QWidget):
         self._current_target_label = "自动定点"
         self._select_next_record = False
         self._compact = None
+        self._round_page = 0
+        self._visible_uids: list[int] = []
+        self._visible_uid_set: set[int] = set()
+        self._round_items: dict[int, QListWidgetItem] = {}
+        self._feed_start = 0
+        self._feed_at_end = True
+        self._keyword = ""
+        self._query_generation = 0
+        self._keyword_matches: set[int] = set()
+        self._searched_through_seq: dict[int, int] = {}
+        self._search_dirty: set[int] = set()
+        self._search_inflight = False
+        self._search_preferred_uid: int | None = None
+        self._copy_busy = False
+        self._export_busy = False
+        self._closing_requested = False
+        self._archive = HistoryArchive(self.archiveWarning.emit, prepare_candidates=_prepare_history_candidates)
+        self._round_records = _RoundRecords(self._archive)
+        self._record_by_uid = _RecordsByUid(self._round_records)
+        archive = self._archive
+        self._all_plain_lines = _PlainLines(archive, None)
         self._build_ui()
+        self._history_search = BackgroundSearch(self)
+        self._copy_work = BackgroundSearch(self)
+        self._export_transfer = ResultTransfer(
+            self, changed=self._export_changed, copied=lambda *_args: None,
+            exported=self._export_finished, failed=self._export_failed,
+        )
+        # Keep the existing worker diagnostics available; export cancellation
+        # and close must go through the transfer's accepted-commit protocol.
+        self._export_work = self._export_transfer._search
+        history_search, copy_work, export_transfer = self._history_search, self._copy_work, self._export_transfer
+        def close_history() -> None:
+            history_search.close()
+            copy_work.close()
+            export_transfer.close()
+            archive.close(wait=False)
+        self.destroyed.connect(close_history)
+        self._filter_start_timer = QTimer(self)
+        self._filter_start_timer.setSingleShot(True)
+        self._filter_start_timer.setInterval(30)
+        self._filter_start_timer.timeout.connect(self._start_keyword_search)
+        self.archiveWarning.connect(self._show_archive_notice)
+        if archive.in_memory_fallback:
+            self._show_archive_notice("历史临时存储不可用，完整记录将保存在内存；请在退出前导出。")
         self._scroll_top_timer = QTimer(self)
         self._scroll_top_timer.setSingleShot(True)
         self._scroll_top_timer.timeout.connect(self._scroll_selected_record_to_top)
         self._follow_timer = QTimer(self)
         self._follow_timer.setSingleShot(True)
         self._follow_timer.timeout.connect(self._finish_auto_follow)
+        self._archive_start_timer = QTimer(self)
+        self._archive_start_timer.setSingleShot(True)
+        self._archive_start_timer.timeout.connect(self._archive.start_worker)
 
     def _build_ui(self) -> None:
         self.setObjectName("HistoryPanel")
@@ -419,6 +809,11 @@ class HistoryPanel(QWidget):
         more.setMenu(menu)
         toolbar.addWidget(more)
         layout.addLayout(toolbar)
+        self.archive_notice = QLabel(self)
+        self.archive_notice.setWordWrap(True)
+        self.archive_notice.setStyleSheet("color: #74400A; background: #FFF7E8; padding: 6px;")
+        self.archive_notice.hide()
+        layout.addWidget(self.archive_notice)
 
         filters = QGridLayout()
         filters.setContentsMargins(0, 0, 0, 0)
@@ -518,6 +913,17 @@ class HistoryPanel(QWidget):
         self.round_list.currentItemChanged.connect(self._on_round_selected)
         list_layout.addWidget(self.round_list_heading)
         list_layout.addWidget(self.round_list, 1)
+        round_pager = QHBoxLayout()
+        self.round_previous_button = QPushButton("上一页", list_panel)
+        self.round_next_button = QPushButton("下一页", list_panel)
+        self.round_page_label = QLabel("1 / 1", list_panel)
+        self.round_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.round_previous_button.clicked.connect(lambda: self._change_round_page(-1))
+        self.round_next_button.clicked.connect(lambda: self._change_round_page(1))
+        round_pager.addWidget(self.round_previous_button)
+        round_pager.addWidget(self.round_page_label, 1)
+        round_pager.addWidget(self.round_next_button)
+        list_layout.addLayout(round_pager)
 
         detail_panel = QWidget()
         detail_panel.setObjectName("HistoryRoundDetail")
@@ -684,7 +1090,7 @@ class HistoryPanel(QWidget):
         self.round_candidate_table.setMaximumHeight(16777215)
         self.round_candidate_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         detail_layout.removeWidget(self.history_scroll)
-        detail_layout.addWidget(self.round_candidate_table, 1)
+        detail_layout.addWidget(self.round_candidate_table._container, 1)
         self.feed_toggle = QToolButton()
         self.feed_toggle.setObjectName("HistoryDisclosure")
         self.feed_toggle.setText("处理详情")
@@ -694,6 +1100,20 @@ class HistoryPanel(QWidget):
         detail_layout.addWidget(self.feed_toggle)
         self.history_scroll.setMaximumHeight(180)
         self.history_scroll.hide()
+        feed_pager = QHBoxLayout()
+        self.feed_previous_button = QPushButton("较早详情", detail_panel)
+        self.feed_next_button = QPushButton("较新详情", detail_panel)
+        self.feed_page_label = QLabel(detail_panel)
+        self.feed_previous_button.clicked.connect(lambda: self._change_feed_page(-1))
+        self.feed_next_button.clicked.connect(lambda: self._change_feed_page(1))
+        feed_pager.addWidget(self.feed_previous_button)
+        feed_pager.addWidget(self.feed_page_label, 1)
+        feed_pager.addWidget(self.feed_next_button)
+        self.feed_pager = QWidget(detail_panel)
+        self.feed_pager.setLayout(feed_pager)
+        self.feed_pager.hide()
+        self.feed_toggle.toggled.connect(lambda show: self.feed_pager.setVisible(show and self._selected_record() is not None and len(self._selected_record().entries) > FEED_PAGE_SIZE))
+        detail_layout.addWidget(self.feed_pager)
         detail_layout.addWidget(self.history_scroll)
         for i in range(feed_heading.count()):
             if feed_heading.itemAt(i).widget():
@@ -706,8 +1126,16 @@ class HistoryPanel(QWidget):
         # Plain-text mirror kept for exports and callers that use text_view.toPlainText().
         self.text_view = _CopyableTextEdit(self)
         self.text_view.setFont(QFont("Consolas", 10))
+        self.text_view.full_text = self._complete_plain_text
         self.text_view.hide()
         self.view = self.text_view
+
+    def _show_archive_notice(self, message: str) -> None:
+        self.archive_notice.setText(message)
+        self.archive_notice.show()
+
+    def _complete_plain_text(self) -> str:
+        return "".join(line + "\n" for line in self._all_plain_lines)
 
     def _show_round_picker(self, show):
         if self._compact:
@@ -831,9 +1259,10 @@ class HistoryPanel(QWidget):
                 target_label=target_label,
                 detail_title="运行消息" if implicit else "轮次进行中",
                 implicit=implicit,
+                entries=_FeedEntries(self._archive, self._round_uid_counter),
+                plain_lines=_PlainLines(self._archive, self._round_uid_counter),
             )
             self._round_records[key] = record
-            self._record_by_uid[record.uid] = record
             self._round_order.append(key)
         else:
             record.target_label = target_label or record.target_label
@@ -845,7 +1274,7 @@ class HistoryPanel(QWidget):
         if self._select_next_record or (created and was_following_active):
             preferred_uid = record.uid
         self._select_next_record = False
-        self._refresh_round_list(preferred_uid=preferred_uid)
+        self._sync_round_record(record, preferred_uid=preferred_uid)
         return record, created
 
     def _ensure_record(self, *, target_label: str | None = None, namespace: str = "session") -> _RoundRecord:
@@ -879,89 +1308,197 @@ class HistoryPanel(QWidget):
         return record
 
     def _record_matches_filter(self, record: _RoundRecord) -> bool:
-        result_filter = self.result_filter.currentData() or "all"
-        status = _record_status(record)
-        if result_filter == "warning" and not record.warnings:
-            return False
-        if result_filter == "active" and status not in {"进行中", "记录中"}:
-            return False
-        if result_filter == "shiny" and status != "疑似出闪":
-            return False
-        if result_filter == "not-shiny" and status != "未出闪":
-            return False
-        if result_filter == "no-candidate" and status != "无候选":
-            return False
-        keyword = self.search_edit.text().strip().casefold()
-        if not keyword:
-            return True
-        searchable = " ".join(
-            (
-                str(record.run_id),
-                str(record.round_id),
-                f"运行 {record.run_index}",
-                str(record.cycle_index or ""),
-                record.target_label,
-                record.seed_text or "",
-                str(record.locked_advances or ""),
-                status,
-                record.detail_title,
-                *record.warnings,
-                *record.plain_lines,
-            )
-        ).casefold()
-        return keyword in searchable
+        summary = self._round_records.search_summaries[record.uid]
+        return summary.matches_result(self.result_filter.currentData() or "all") and (
+            not self._keyword or self._keyword in summary.searchable or record.uid in self._keyword_matches
+        )
 
     def _refresh_round_list(self, *_args: object, preferred_uid: int | None = None) -> None:
         if not hasattr(self, "round_list"):
             return
+        keyword = self.search_edit.text().strip().casefold()
+        if keyword != self._keyword:
+            self._history_search.cancel()
+            self._filter_start_timer.stop()
+            self._query_generation += 1
+            self._keyword = keyword
+            self._keyword_matches.clear()
+            self._searched_through_seq.clear()
+            self._search_dirty = set(self._round_records.search_summaries) if keyword else set()
+            self._search_inflight = False
+            if self._selected_uid is not None:
+                self._search_preferred_uid = self._selected_uid
+            if keyword and self._search_dirty:
+                self._filter_start_timer.start()
+        self._apply_round_filter(preferred_uid)
+
+    def _apply_round_filter(self, preferred_uid: int | None = None) -> None:
+        result = self.result_filter.currentData() or "all"
+        self._visible_uids = [
+            uid for uid, summary in reversed(self._round_records.search_summaries.items())
+            if summary.matches_result(result) and (
+                not self._keyword or self._keyword in summary.searchable or uid in self._keyword_matches
+            )
+        ]
+        self._visible_uid_set = set(self._visible_uids)
+        self._select_visible_round(preferred_uid if preferred_uid is not None else self._selected_uid or self._search_preferred_uid)
+
+    def _start_keyword_search(self) -> None:
+        if not self._keyword or not self._search_dirty:
+            return
+        summaries = tuple(self._round_records.search_summaries[uid] for uid in sorted(self._search_dirty)
+                          if uid in self._round_records.search_summaries)
+        self._search_dirty.clear()
+        keyword, generation = self._keyword, self._query_generation
+        archive, snapshot = self._archive, self._archive.plain_snapshot()
+        search_inputs = tuple((summary, self._searched_through_seq.get(summary.uid, 0)) for summary in summaries
+                              if summary.uid not in self._keyword_matches)
+        self._search_inflight = True
+        self._update_search_heading()
+
+        def search(cancellation: SearchCancellation):
+            scanned = {}
+            for summary, after_seq in search_inputs:
+                cancellation.check()
+                if keyword in summary.searchable:
+                    continue
+                scanned[summary.uid] = any(
+                    keyword in line.casefold() for line in _plain_lines(
+                        archive, summary.uid, snapshot=snapshot, cancellation=cancellation, after_seq=after_seq,
+                    )
+                )
+            return generation, snapshot.through_seq, scanned
+
+        self._history_search.submit(search, self._keyword_search_finished, self._keyword_search_failed)
+
+    def _keyword_search_finished(self, result) -> None:
+        generation, through_seq, scanned = result
+        if generation != self._query_generation:
+            return
+        self._search_inflight = False
+        for uid, matched in scanned.items():
+            if uid in self._round_records.search_summaries:
+                self._searched_through_seq[uid] = through_seq
+                if matched:
+                    self._keyword_matches.add(uid)
+        self._apply_round_filter()
+        if self._search_dirty:
+            self._filter_start_timer.start()
+        self._update_search_heading()
+
+    def _keyword_search_failed(self, error: Exception) -> None:
+        self._search_inflight = False
+        self._update_search_heading()
+        self._show_archive_notice(f"历史搜索未完成，请重试：{error}")
+
+    def _update_search_heading(self) -> None:
+        pending = self._keyword and (self._search_inflight or self._filter_start_timer.isActive())
+        self.round_list_heading.setText(f"本次会话 · {len(self._round_order)} 条记录" + (" · 搜索中…" if pending else ""))
+
+    def _sync_round_record(self, record: _RoundRecord, *, preferred_uid: int | None = None) -> None:
+        self._round_records.remember_summary(record)
+        if self._keyword:
+            self._search_dirty.add(record.uid)
+            if not self._search_inflight:
+                self._filter_start_timer.start()
+            self._update_search_heading()
+        visible = self._record_matches_filter(record)
+        was_visible = record.uid in self._visible_uid_set
+        if visible != was_visible:
+            position = bisect_left(self._visible_uids, -record.uid, key=lambda uid: -uid)
+            if visible:
+                self._visible_uids.insert(position, record.uid)
+                self._visible_uid_set.add(record.uid)
+            else:
+                self._visible_uids.pop(position)
+                self._visible_uid_set.remove(record.uid)
+            self._select_visible_round(preferred_uid)
+            return
+        item = self._round_items.get(record.uid)
+        if item is not None:
+            row = self.round_list.itemWidget(item)
+            row.update_record(record)
+            self._update_round_accessibility(item, record)
+            row.setAccessibleName(item.toolTip())
+        if preferred_uid is not None and preferred_uid != self._selected_uid:
+            self._select_visible_round(preferred_uid)
+        else:
+            self._update_detail_header()
+
+    def _select_visible_round(self, preferred_uid: int | None = None) -> None:
         previous_uid = self._selected_uid
         if preferred_uid is None:
             preferred_uid = previous_uid
-        blocker = QSignalBlocker(self.round_list)
-        self.round_list.clear()
-        visible_uids: list[int] = []
-        for key in reversed(self._round_order):
-            record = self._round_records[key]
-            if not self._record_matches_filter(record):
-                continue
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, record.uid)
-            row = _RoundListRow(record, self.round_list)
-            accessible_text = (
-                f"运行 {record.run_index}，"
-                f"{'会话记录' if record.cycle_index is None else f'第 {record.cycle_index} 轮'}，"
-                f"{record.target_label}，{_record_status(record)}"
-            )
-            row.setAccessibleName(accessible_text)
-            item.setToolTip(accessible_text)
-            item.setSizeHint(row.sizeHint())
-            self.round_list.addItem(item)
-            self.round_list.setItemWidget(item, row)
-            visible_uids.append(record.uid)
-
-        selected_uid: int | None = None
-        if preferred_uid in visible_uids:
-            selected_uid = preferred_uid
-        elif self._active_uid in visible_uids:
-            selected_uid = self._active_uid
-        elif visible_uids:
-            selected_uid = visible_uids[0]
+        selected_uid = next((uid for uid in (preferred_uid, self._active_uid) if uid in self._visible_uid_set), None)
+        if selected_uid is None and self._visible_uids:
+            selected_uid = self._visible_uids[0]
         if selected_uid is not None:
-            for row_index in range(self.round_list.count()):
-                item = self.round_list.item(row_index)
-                if item.data(Qt.ItemDataRole.UserRole) == selected_uid:
-                    self.round_list.setCurrentItem(item)
-                    break
-        del blocker
-        self.round_list_heading.setText(f"本次会话 · {len(self._round_order)} 条记录")
-        self.clear_button.setEnabled(bool(self._round_records))
-        self.export_button.setEnabled(bool(self.text_view.toPlainText()))
-        self._set_empty_state(not visible_uids, filtered=bool(self._round_order))
+            position = bisect_left(self._visible_uids, -selected_uid, key=lambda uid: -uid)
+            self._round_page = position // ROUND_PAGE_SIZE
+        else:
+            self._round_page = 0
         self._selected_uid = selected_uid
+        self._refresh_round_page()
+        self._update_search_heading()
+        self.clear_button.setEnabled(bool(self._round_records))
+        self.export_button.setEnabled(bool(self._all_plain_lines) and not self._export_busy and not self._closing_requested)
+        self._set_empty_state(not self._visible_uids, filtered=bool(self._round_order))
         if selected_uid != previous_uid:
             self._render_selected_record()
         else:
             self._update_detail_header()
+
+    @staticmethod
+    def _update_round_accessibility(item: QListWidgetItem, record: _RoundRecord) -> None:
+        text = (f"运行 {record.run_index}，"
+                f"{'会话记录' if record.cycle_index is None else f'第 {record.cycle_index} 轮'}，"
+                f"{record.target_label}，{_record_status(record)}")
+        item.setToolTip(text)
+        item.setData(Qt.ItemDataRole.AccessibleTextRole, text)
+
+    def _refresh_round_page(self) -> None:
+        page_count = max(1, (len(self._visible_uids) + ROUND_PAGE_SIZE - 1) // ROUND_PAGE_SIZE)
+        self._round_page = min(self._round_page, page_count - 1)
+        start = self._round_page * ROUND_PAGE_SIZE
+        page_uids = self._visible_uids[start:start + ROUND_PAGE_SIZE]
+        page_set = set(page_uids)
+        blocker = QSignalBlocker(self.round_list)
+        for uid in tuple(self._round_items):
+            if uid not in page_set:
+                item = self._round_items.pop(uid)
+                widget = self.round_list.itemWidget(item)
+                self.round_list.removeItemWidget(item)
+                self.round_list.takeItem(self.round_list.row(item))
+                if widget is not None:
+                    widget.deleteLater()
+        for index, uid in enumerate(page_uids):
+            if uid not in self._round_items:
+                record = self._record_by_uid[uid]
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, uid)
+                row = _RoundListRow(record, self.round_list)
+                self._update_round_accessibility(item, record)
+                row.setAccessibleName(item.toolTip())
+                item.setSizeHint(row.sizeHint())
+                self.round_list.insertItem(index, item)
+                self.round_list.setItemWidget(item, row)
+                self._round_items[uid] = item
+        if self._selected_uid in self._round_items:
+            self.round_list.setCurrentItem(self._round_items[self._selected_uid])
+        del blocker
+        self.round_page_label.setText(f"{self._round_page + 1} / {page_count}")
+        self.round_previous_button.setEnabled(self._round_page > 0)
+        self.round_next_button.setEnabled(self._round_page + 1 < page_count)
+
+    def _change_round_page(self, delta: int) -> None:
+        page_count = max(1, (len(self._visible_uids) + ROUND_PAGE_SIZE - 1) // ROUND_PAGE_SIZE)
+        page = max(0, min(page_count - 1, self._round_page + delta))
+        if page == self._round_page:
+            return
+        self._round_page = page
+        self._selected_uid = self._visible_uids[page * ROUND_PAGE_SIZE]
+        self._refresh_round_page()
+        self._render_selected_record()
 
     def _set_empty_state(self, empty: bool, *, filtered: bool = False) -> None:
         if empty:
@@ -995,6 +1532,8 @@ class HistoryPanel(QWidget):
         if selected_uid == self._selected_uid:
             return
         self._selected_uid = selected_uid
+        if selected_uid is not None:
+            self._search_preferred_uid = selected_uid
         self._render_selected_record()
         if current is not None and self._compact:
             self.round_picker_button.setChecked(False)
@@ -1002,7 +1541,8 @@ class HistoryPanel(QWidget):
     def _update_detail_header(self) -> None:
         record = self._selected_record()
         enabled = record is not None
-        self.copy_round_button.setEnabled(enabled and bool(record and record.plain_lines))
+        self.copy_round_button.setEnabled(enabled and bool(record and record.plain_lines) and not self._copy_busy
+                                          and not self._closing_requested and not self._export_transfer.committing)
         can_correlate = bool(record and (not record.implicit or record.run_id is not None))
         self.related_logs_button.setEnabled(can_correlate)
         if record is None:
@@ -1072,16 +1612,41 @@ class HistoryPanel(QWidget):
         self._update_detail_header()
         record = self._selected_record()
         if record is None:
-            self.round_candidate_table.setRowCount(0)
+            self._fill_candidate_table(self.round_candidate_table, _FeedEntry(kind="table"))
+            self.feed_pager.hide()
             return
         self._refresh_candidate_snapshot(record)
+        self._feed_start = max(0, len(record.entries) - FEED_PAGE_SIZE)
+        self._feed_at_end = True
+        self._render_feed_page(record)
+        self._scroll_top_timer.start(0)
+
+    def _render_feed_page(self, record: _RoundRecord) -> None:
+        self._clear_feed_widgets()
         self._rendering_record = True
         try:
-            for entry in record.entries:
+            for entry in record.entries[self._feed_start:self._feed_start + FEED_PAGE_SIZE]:
                 self._render_entry(entry)
         finally:
             self._rendering_record = False
-        self._scroll_top_timer.start(0)
+        self._update_feed_pager(record)
+
+    def _update_feed_pager(self, record: _RoundRecord) -> None:
+        count = len(record.entries)
+        self.feed_previous_button.setEnabled(self._feed_start > 0)
+        self.feed_next_button.setEnabled(self._feed_start + FEED_PAGE_SIZE < count)
+        self.feed_page_label.setText(f"{self._feed_start + 1}–{min(count, self._feed_start + FEED_PAGE_SIZE)} / {count}")
+        self.feed_pager.setVisible(self.feed_toggle.isChecked() and count > FEED_PAGE_SIZE)
+
+    def _change_feed_page(self, delta: int) -> None:
+        record = self._selected_record()
+        if record is None:
+            return
+        self._cancel_auto_follow()
+        self._feed_start = max(0, min(max(0, len(record.entries) - FEED_PAGE_SIZE), self._feed_start + delta * FEED_PAGE_SIZE))
+        self._feed_at_end = self._feed_start + FEED_PAGE_SIZE >= len(record.entries)
+        self._render_feed_page(record)
+        self.history_scroll.verticalScrollBar().setValue(0)
 
     def _refresh_candidate_snapshot(self, record) -> None:
         self._fill_candidate_table(self.round_candidate_table, record.candidate_snapshot or _FeedEntry(kind="table"))
@@ -1115,21 +1680,36 @@ class HistoryPanel(QWidget):
             spacer.setFixedHeight(3)
             self._append_widget(spacer)
         elif entry.kind == "table":
-            self._append_widget(self._create_candidate_table(entry))
+            self._append_widget(self._create_candidate_table(entry)._container)
 
     def _record_entry(self, entry: _FeedEntry) -> None:
         record = self._ensure_record()
         record.entries.append(entry)
         record.updated_at = datetime.now()
         if record.uid == self._selected_uid:
-            self._render_entry(entry)
+            scroll_bar = self.history_scroll.verticalScrollBar()
+            if self._feed_layout.count() >= FEED_PAGE_SIZE:
+                following = self._follow_pending or scroll_bar.maximum() - scroll_bar.value() <= 4
+                if not following:
+                    self._feed_at_end = False
+                if self._feed_at_end:
+                    item = self._feed_layout.takeAt(0)
+                    widget = item.widget()
+                    if widget is not None:
+                        widget.setParent(None)
+                        widget.deleteLater()
+                    self._feed_start += 1
+            if self._feed_at_end:
+                self._render_entry(entry)
+            self._update_feed_pager(record)
 
     def _touch_record(self, record: _RoundRecord | None = None) -> None:
         record = record or self._active_record()
         if record is None:
             return
         record.updated_at = datetime.now()
-        self._refresh_round_list()
+        self._round_records.store(record)
+        self._sync_round_record(record)
 
     def _add_warning(self, record: _RoundRecord, message: str) -> None:
         if message not in record.warnings:
@@ -1139,12 +1719,14 @@ class HistoryPanel(QWidget):
     def _append_plain(self, text: str = "", color: str = CLR_BODY) -> None:
         record = self._ensure_record()
         record.plain_lines.append(text)
+        self._all_plain_lines.count += 1
         record.updated_at = datetime.now()
         self.text_view.w(text, color)
-        self.copy_button.setEnabled(bool(self.text_view.toPlainText()))
-        self.export_button.setEnabled(bool(self.text_view.toPlainText()))
+        copying_allowed = not self._copy_busy and not self._closing_requested and not self._export_transfer.committing
+        self.copy_button.setEnabled(copying_allowed)
+        self.export_button.setEnabled(not self._export_busy and not self._closing_requested)
         if record.uid == self._selected_uid:
-            self.copy_round_button.setEnabled(bool(record.plain_lines))
+            self.copy_round_button.setEnabled(bool(record.plain_lines) and copying_allowed)
 
     def _append_widget(self, widget: QWidget) -> None:
         if self._rendering_record:
@@ -1207,12 +1789,44 @@ class HistoryPanel(QWidget):
         self.summary_label.setText(f"{self._cycle_count} 轮 · {self._candidate_count} 条候选")
 
     def clear(self) -> None:
+        self._history_search.cancel()
+        self._copy_work.cancel()
+        self._export_transfer.cancel(preserve_commit_notice=True)
+        self._filter_start_timer.stop()
+        self._search_inflight = False
+        self._query_generation += 1
+        self._keyword_matches.clear()
+        self._searched_through_seq.clear()
+        self._search_dirty.clear()
+        self._search_preferred_uid = None
+        self._copy_busy = False
+        self._export_busy = self._export_transfer.committing
+        self.copy_button.setText("复制全部")
+        self.copy_round_button.setText("复制本轮")
+        self.export_button.setText("正在保存…" if self._export_busy else "导出")
+        self._archive_start_timer.stop()
+        try:
+            self._archive.clear()
+        except TimeoutError as error:
+            self._show_archive_notice(str(error))
+            self.copy_button.setEnabled(bool(self._all_plain_lines) and not self._export_transfer.committing
+                                        and not self._closing_requested)
+            self.export_button.setEnabled(bool(self._all_plain_lines) and not self._export_busy and not self._closing_requested)
+            self._update_detail_header()
+            if self._keyword:
+                self._search_dirty.update(self._round_records.search_summaries)
+                self._filter_start_timer.start()
+            return
         self._cancel_auto_follow()
         self._scroll_top_timer.stop()
         self._follow_timer.stop()
         self.text_view.clear()
         self._clear_feed_widgets()
         self.round_list.clear()
+        self._round_items.clear()
+        self._visible_uids.clear()
+        self._visible_uid_set.clear()
+        self._round_page = 0
         self._round_records.clear()
         self._record_by_uid.clear()
         self._round_order.clear()
@@ -1229,6 +1843,10 @@ class HistoryPanel(QWidget):
         self._is_first_seed = True
         self._original_seed_text = ""
         self._original_seed_advances = 0
+        self._all_plain_lines.count = 0
+        self._fill_candidate_table(self.round_candidate_table, _FeedEntry(kind="table"))
+        self.feed_pager.hide()
+        self._refresh_round_page()
         self.copy_button.setEnabled(False)
         self.clear_button.setEnabled(False)
         self.export_button.setEnabled(False)
@@ -1278,14 +1896,48 @@ class HistoryPanel(QWidget):
         self._touch_record(record)
 
     def copy_all(self) -> None:
-        text = self.text_view.toPlainText()
-        if text:
-            QGuiApplication.clipboard().setText(text)
+        self._copy_history(None, len(self._all_plain_lines))
 
     def copy_selected_round(self) -> None:
         record = self._selected_record()
         if record is not None and record.plain_lines:
-            QGuiApplication.clipboard().setText("\n".join(record.plain_lines) + "\n")
+            self._copy_history(record.uid, len(record.plain_lines))
+
+    def _copy_history(self, uid: int | None, count: int) -> None:
+        if not count or self._copy_busy or self._closing_requested or self._export_transfer.committing:
+            return
+        # Small histories have a hard work bound and retain the existing
+        # immediate-copy API. Full candidate histories are prepared off-thread.
+        if count <= 1000:
+            text = "".join(line + "\n" for line in _plain_lines(self._archive, uid))
+            QGuiApplication.clipboard().setText(text)
+            return
+        archive, snapshot = self._archive, self._archive.plain_snapshot()
+        self._copy_busy = True
+        self.copy_button.setEnabled(False)
+        self.copy_round_button.setEnabled(False)
+        (self.copy_button if uid is None else self.copy_round_button).setText("准备复制…")
+        self._copy_work.submit(
+            lambda cancellation: "".join(line + "\n" for line in _plain_lines(
+                archive, uid, snapshot=snapshot, cancellation=cancellation,
+            )), self._copy_finished, self._copy_failed,
+        )
+
+    def _copy_finished(self, text: str) -> None:
+        QGuiApplication.clipboard().setText(text)
+        self._finish_copy()
+
+    def _copy_failed(self, error: Exception) -> None:
+        self._finish_copy()
+        self._show_archive_notice(f"历史复制未完成，请重试：{error}")
+
+    def _finish_copy(self) -> None:
+        self._copy_busy = False
+        self.copy_button.setText("复制全部")
+        self.copy_round_button.setText("复制本轮")
+        self.copy_button.setEnabled(bool(self._all_plain_lines) and not self._closing_requested
+                                    and not self._export_transfer.committing)
+        self._update_detail_header()
 
     def _request_related_logs(self) -> None:
         record = self._selected_record()
@@ -1294,10 +1946,83 @@ class HistoryPanel(QWidget):
             self.related_logs_requested.emit(record.run_id, round_id)
 
     def export_to_file(self) -> None:
+        if self._export_busy or self._closing_requested:
+            return
+        transfer = self._export_transfer
+        generation = transfer.generation
+        archive, snapshot, count = self._archive, self._archive.plain_snapshot(), len(self._all_plain_lines)
         path, _ = QFileDialog.getSaveFileName(self, "导出历史记录", "history.txt", "文本文件 (*.txt)")
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(self.text_view.toPlainText())
+        if path and not transfer._closed and transfer.generation == generation:
+            destination = Path(path)
+
+            def export(cancellation: SearchCancellation):
+                staged = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent,
+                                                     prefix=".history-export-", suffix=".tmp", delete=False) as output:
+                        staged = PreparedExport(output.name, destination)
+                        for line in _plain_lines(archive, None, snapshot=snapshot, cancellation=cancellation):
+                            output.write(line + "\n")
+                    cancellation.check()
+                    return staged
+                except BaseException:
+                    if staged is not None:
+                        staged.discard()
+                    raise
+
+            transfer.prepare_export(export, count)
+
+    def _export_changed(self) -> None:
+        self._export_busy = self._export_transfer.kind is not None
+        committing = self._export_transfer.committing
+        self.export_button.setText("正在保存…" if committing else "正在导出…" if self._export_busy else "导出")
+        self.export_button.setEnabled(bool(self._all_plain_lines) and not self._export_busy and not self._closing_requested)
+        self.copy_button.setEnabled(bool(self._all_plain_lines) and not self._copy_busy
+                                    and not committing and not self._closing_requested)
+        self._update_detail_header()
+
+    def _export_finished(self, destination) -> None:
+        self._show_archive_notice(f"历史已导出：{destination}")
+
+    def _export_failed(self, error: Exception) -> None:
+        self._show_archive_notice(f"历史导出未完成，请重试：{error}")
+
+    def result_save_pending(self) -> bool:
+        return self._export_transfer.committing
+
+    def prepare_for_close(self) -> None:
+        """Cancel preparation while retaining any file commit accepted by Qt."""
+        self._closing_requested = True
+        self._archive.stop_accepting()
+        self._filter_start_timer.stop()
+        self._history_search.cancel()
+        self._copy_work.cancel()
+        self._search_inflight = False
+        self._copy_busy = False
+        self.copy_button.setText("复制全部")
+        self.copy_round_button.setText("复制本轮")
+        self._export_transfer.cancel(preserve_commit_notice=True)
+
+    def resume_after_close(self) -> None:
+        self._closing_requested = False
+        self._archive.resume_accepting()
+        self._export_changed()
+        if self._keyword:
+            self._search_dirty.update(self._round_records.search_summaries)
+            self._filter_start_timer.start()
+
+    def shutdown(self) -> bool:
+        """Close accepted history tasks without waiting on the GUI thread."""
+        if self.result_save_pending():
+            return False
+        self._closing_requested = True
+        self._filter_start_timer.stop()
+        self._archive_start_timer.stop()
+        self._history_search.close()
+        self._copy_work.close()
+        self._export_transfer.close()
+        self._archive.close(wait=False)
+        return True
 
     def _candidate_status(
         self,
@@ -1362,34 +2087,69 @@ class HistoryPanel(QWidget):
 
     def _append_candidate_table(
         self,
-        rows: list[list[str]],
-        states: list[object],
-        statuses: list[str],
+        candidates: Sequence[object],
+        locked_index: int = -1,
+        sync_flags: list[str] | None = None,
         *,
         reverse: bool = False,
+        delays: list[int] | None = None,
+        characteristic: str | None = None,
+        reservation: CandidateReservation | None = None,
     ) -> None:
-        snapshots = tuple(_snapshot_candidate(state) for state in states)
-        entry = _FeedEntry(
-            kind="table",
-            rows=tuple(tuple(row) for row in rows),
-            states=snapshots,
-            statuses=tuple(statuses),
-            reverse=reverse,
-        )
+        archived_rows = reservation.prepared_rows if reservation is not None else None
+        if archived_rows is None:
+            archived_rows = _CandidateRows(candidates, locked_index, sync_flags, delays,
+                                           reverse=reverse, characteristic=characteristic)
+        count = len(archived_rows.states)
+        if count:
+            batch, count = self._archive.create_candidate_batch(archived_rows, count, reservation=reservation)
+            entry = _candidate_entry(self._archive, batch, count, reverse)
+        else:
+            entry = _FeedEntry(kind="table", reverse=reverse)
         record = self._ensure_record()
+        if count:
+            record.plain_lines.append_candidates(batch, count, reverse)
+            self._all_plain_lines.count += count
+            copying_allowed = not self._copy_busy and not self._closing_requested and not self._export_transfer.committing
+            self.copy_button.setEnabled(copying_allowed)
+            self.export_button.setEnabled(not self._export_busy and not self._closing_requested)
+            if record.uid == self._selected_uid:
+                self.copy_round_button.setEnabled(copying_allowed)
         if not reverse:
-            record.candidate_count = len(rows)
+            record.candidate_count = count
             self._set_candidate_snapshot(record, entry)
-        if not rows:
+        if not count:
             return
-        self._candidate_count += len(rows)
+        self._candidate_count += count
         self._update_summary()
         self._record_entry(entry)
+        self._archive_start_timer.start(0)
 
     def _create_candidate_table(self, entry: _FeedEntry) -> QTableWidget:
         headers = REVERSE_HEADERS if entry.reverse else CANDIDATE_HEADERS
         widths = REVERSE_WIDTHS if entry.reverse else CANDIDATE_WIDTHS
-        table = QTableWidget(len(entry.rows), len(headers), self._feed_body)
+        container = QWidget(self._feed_body)
+        container.setMinimumWidth(0)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        table = QTableWidget(0, len(headers), container)
+        table._container = container
+        layout.addWidget(table, 1)
+        pager = QWidget(container)
+        page_layout = QHBoxLayout(pager)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        table._previous_button = QPushButton("上一页", pager)
+        table._next_button = QPushButton("下一页", pager)
+        table._page_label = QLabel(pager)
+        table._page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        table._pager = pager
+        table._previous_button.clicked.connect(lambda: self._show_candidate_page(table, table._page - 1))
+        table._next_button.clicked.connect(lambda: self._show_candidate_page(table, table._page + 1))
+        page_layout.addWidget(table._previous_button)
+        page_layout.addWidget(table._page_label, 1)
+        page_layout.addWidget(table._next_button)
+        layout.addWidget(pager)
         table.setObjectName("HistoryCandidateTable")
         table.setAccessibleName("反查候选表" if entry.reverse else "候选结果表")
         table.setHorizontalHeaderLabels(headers)
@@ -1433,14 +2193,30 @@ class HistoryPanel(QWidget):
 
     @staticmethod
     def _fill_candidate_table(table: QTableWidget, entry: _FeedEntry) -> None:
-        table.setRowCount(len(entry.rows))
+        table._entry = entry
+        HistoryPanel._show_candidate_page(table, 0)
+
+    @staticmethod
+    def _show_candidate_page(table: QTableWidget, page: int) -> None:
+        entry = table._entry
+        count = len(entry.rows)
+        pages = max(1, (count + CANDIDATE_PAGE_SIZE - 1) // CANDIDATE_PAGE_SIZE)
+        page = max(0, min(pages - 1, page))
+        table._page = page
+        start = page * CANDIDATE_PAGE_SIZE
+        stop = min(count, start + CANDIDATE_PAGE_SIZE)
+        table.setUpdatesEnabled(False)
+        blocker = QSignalBlocker(table)
+        table.clearContents()
+        table.setRowCount(stop - start)
         headers = REVERSE_HEADERS if entry.reverse else CANDIDATE_HEADERS
         shiny_column = headers.index("异色")
         status_column = headers.index("状态")
-        for row_index, values in enumerate(entry.rows):
-            locked = "锁定" in entry.statuses[row_index].split(" · ")
-            synchronized = "同步" in entry.statuses[row_index].split(" · ")
-            shiny = _get_int(entry.states[row_index], "shiny") > 0
+        for row_index, source_index in enumerate(range(start, stop)):
+            values = entry.rows[source_index]
+            locked = "锁定" in entry.statuses[source_index].split(" · ")
+            synchronized = "同步" in entry.statuses[source_index].split(" · ")
+            shiny = _get_int(entry.states[source_index], "shiny") > 0
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 alignment = Qt.AlignmentFlag.AlignVCenter
@@ -1463,6 +2239,13 @@ class HistoryPanel(QWidget):
                     font.setBold(True)
                     item.setFont(font)
                 table.setItem(row_index, column, item)
+        del blocker
+        table.setUpdatesEnabled(True)
+        table._page_label.setText(f"{page + 1} / {pages} · {count} 条")
+        table._previous_button.setEnabled(page > 0)
+        table._next_button.setEnabled(page + 1 < pages)
+        table._pager.setVisible(count > CANDIDATE_PAGE_SIZE)
+        table.verticalScrollBar().setValue(0)
 
     # ── 事件方法 ───────────────────────────────────────────────
 
@@ -1534,48 +2317,58 @@ class HistoryPanel(QWidget):
     def candidates_found(
         self, candidates: list[object], locked_index: int,
         sync_flags: list[str] | None = None,
-    ) -> None:
-        record = self._ensure_record(target_label="自动定点")
-        record.detail_title = "候选搜索完成"
-        if 0 <= locked_index < len(candidates):
-            record.locked_advances = _get_int(candidates[locked_index], "advances")
-        else:
-            record.locked_advances = None
-        record.candidate_count = len(candidates)
-        self._pid_ec_seen.clear()
-        self._ts(f"搜索到 {len(candidates)} 个候选")
-        statuses: list[str] = []
-        rows: list[list[str]] = []
-        for i, state in enumerate(candidates):
-            status = self._candidate_status(i, state, locked_index, sync_flags)
-            statuses.append(status)
-            rows.append(self._candidate_row(i, state, status))
-            self._write_candidate(i, state, status, i == locked_index)
-        self._append_candidate_table(rows, candidates, statuses)
-        self._touch_record(record)
+        *, reservation: CandidateReservation | None = None,
+    ) -> bool:
+        return self._record_candidates(candidates, locked_index, sync_flags, reservation,
+                                       "候选搜索完成", f"搜索到 {len(candidates)} 个候选")
 
     def candidates_refiltered(
         self, candidates: list[object], locked_index: int,
         sync_flags: list[str] | None = None,
-    ) -> None:
-        record = self._ensure_record(target_label="自动定点")
-        record.detail_title = "候选重新筛选完成"
-        if 0 <= locked_index < len(candidates):
-            record.locked_advances = _get_int(candidates[locked_index], "advances")
-        else:
-            record.locked_advances = None
-        record.candidate_count = len(candidates)
-        self._pid_ec_seen.clear()
-        self._ts(f"剩余 {len(candidates)} 个候选")
-        statuses: list[str] = []
-        rows: list[list[str]] = []
-        for i, state in enumerate(candidates):
-            status = self._candidate_status(i, state, locked_index, sync_flags)
-            statuses.append(status)
-            rows.append(self._candidate_row(i, state, status))
-            self._write_candidate(i, state, status, i == locked_index)
-        self._append_candidate_table(rows, candidates, statuses)
-        self._touch_record(record)
+        *, reservation: CandidateReservation | None = None,
+    ) -> bool:
+        return self._record_candidates(candidates, locked_index, sync_flags, reservation,
+                                       "候选重新筛选完成", f"剩余 {len(candidates)} 个候选")
+
+    def _admit_candidates(self, count: int, reservation: CandidateReservation | None):
+        if not count:
+            if reservation is not None:
+                reservation.release_unclaimed()
+            return None
+        try:
+            if reservation is None:
+                reservation = self._archive.reserve_candidate_batch(wait=False)
+            elif not reservation.valid_for(self._archive):
+                reservation.release_unclaimed()
+                self._show_archive_notice("候选记录预留已失效，本次未受理；请重新提交。")
+                return False
+        except SearchCancelled:
+            self._show_archive_notice("历史正在关闭，本次候选记录未受理。")
+            return False
+        if reservation is None:
+            self._show_archive_notice("历史候选正在归档（最多 3 批），本次未受理；请归档完成后重试。")
+            return False
+        return reservation
+
+    def _record_candidates(self, candidates, locked_index, sync_flags, reservation, title: str, message: str) -> bool:
+        reservation = self._admit_candidates(len(candidates), reservation)
+        if reservation is False:
+            return False
+        try:
+            record = self._ensure_record(target_label="自动定点")
+            record.detail_title = title
+            prepared = reservation.prepared_rows if reservation is not None else None
+            locked_states = prepared.states if prepared is not None else candidates
+            record.locked_advances = _get_int(locked_states[locked_index], "advances") if 0 <= locked_index < len(locked_states) else None
+            record.candidate_count = len(candidates)
+            self._pid_ec_seen.clear()
+            self._ts(message)
+            self._append_candidate_table(candidates, locked_index, sync_flags, reservation=reservation)
+            self._touch_record(record)
+            return True
+        finally:
+            if reservation is not None:
+                reservation.release_unclaimed()
 
     def _write_candidate(
         self,
@@ -1677,7 +2470,19 @@ class HistoryPanel(QWidget):
     def reverse_lookup_results(
         self, candidates: list[object], characteristic: str | None = None,
         delays: list[int] | None = None, ocr_stats: dict | None = None,
-    ) -> None:
+        *, reservation: CandidateReservation | None = None,
+    ) -> bool:
+        reservation = self._admit_candidates(len(candidates), reservation)
+        if reservation is False:
+            return False
+        try:
+            self._record_reverse_lookup_results(candidates, characteristic, delays, ocr_stats, reservation)
+            return True
+        finally:
+            if reservation is not None:
+                reservation.release_unclaimed()
+
+    def _record_reverse_lookup_results(self, candidates, characteristic, delays, ocr_stats, reservation) -> None:
         record = self._ensure_record(target_label="自动定点")
         count = len(candidates)
         record.detail_title = "自动反查完成"
@@ -1714,26 +2519,6 @@ class HistoryPanel(QWidget):
         else:
             self._ts(f"反查结果 ({count} 个匹配):")
             self._pid_ec_seen.clear()
-            statuses: list[str] = []
-            rows: list[list[str]] = []
-            for i, state in enumerate(candidates):
-                adv = _get_int(state, "advances")
-                delay = delays[i] if delays is not None and i < len(delays) else adv
-                candidate_characteristic = _state_characteristic(state, characteristic)
-                key = _pid_ec_key(state)
-                duplicate = self._pid_ec_seen.get(key)
-                self._pid_ec_seen[key] = i + 1
-                status = f"匹配 · 同候选{duplicate}" if duplicate else "匹配"
-                statuses.append(status)
-                rows.append(self._reverse_row(i, state, status, delay, candidate_characteristic))
-                chara_text = f" 个性={candidate_characteristic}" if candidate_characteristic != "-" else ""
-                self._append_plain(
-                    f"反查候选{i + 1}: adv={adv} delay={delay} EC={_state_ec(state)} PID={_state_pid(state)} "
-                    f"{_state_iv_text(getattr(state, 'ivs', None))} "
-                    f"性格={_nature_text(state)}{chara_text} 特性={_get_int(state, 'ability')} "
-                    f"性别={_gender_text(state)} 异色={_shiny_text(state)} "
-                    f"身高={_get_int(state, 'height')} 体重={_get_int(state, 'weight')}"
-                )
-            self._append_candidate_table(rows, candidates, statuses, reverse=True)
+            self._append_candidate_table(candidates, reverse=True, delays=delays, characteristic=characteristic, reservation=reservation)
         self._sep_end()
         self._touch_record(record)

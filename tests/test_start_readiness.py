@@ -13,6 +13,7 @@ from auto_bdsp_rng.rng_core import SeedState32
 from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConStatus
 from auto_bdsp_rng.ui import main_window as mw, auto_rng_panel, auto_tid_rng_panel, easycon_panel
 from tests.test_easycon_panel import FakeNativeBackend, UnsupportedKeyboardHookFactory
+from tests.ui_wait import close_all_widgets, wait_search
 
 
 @pytest.fixture
@@ -35,12 +36,7 @@ def window(monkeypatch, tmp_path):
     w.readiness.timer.stop()
     w.easycon_tab._native_status_timer.stop()
     yield w
-    for widget in app.topLevelWidgets():
-        for timer in widget.findChildren(QTimer):
-            timer.stop()
-        widget.close()
-        widget.deleteLater()
-    app.processEvents()
+    close_all_widgets(app)
 
 
 def checks(window):
@@ -129,6 +125,7 @@ def test_tid_manual_capture_replace_target_and_save_can_start(window, tmp_path, 
     w._capture_thread.join(timeout=2)
     assert not w._capture_thread.is_alive()
     w._poll_capture_thread()
+    wait_search(panel._manual_search)
     w.tabs.setCurrentWidget(panel)
     QApplication.processEvents()
     panel.id_table.setCurrentCell(1, 4)
@@ -159,7 +156,7 @@ def test_tid_manual_capture_replace_target_and_save_can_start(window, tmp_path, 
     assert w.auto_rng_tab.start_button.isEnabled()
     started = []
     monkeypatch.setattr(w, "_ensure_preview_for_auto_rng", lambda: True)
-    monkeypatch.setattr(w, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(w.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
     monkeypatch.setattr(w, "_build_auto_tid_rng_services", lambda config: AutoTidRngServices())
     monkeypatch.setattr(panel, "run_with_runner", started.append)
     QTest.mouseClick(panel.start_button, Qt.MouseButton.LeftButton,

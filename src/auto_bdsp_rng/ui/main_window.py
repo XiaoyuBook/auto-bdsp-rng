@@ -1,21 +1,25 @@
 from __future__ import annotations
 from auto_bdsp_rng.ui.table_workbench import ResultItem, TableWorkbench
 from auto_bdsp_rng.ui.static_result_items import StatDisplayMode, StatResultItem
+from auto_bdsp_rng.ui.background_search import BackgroundSearch
+from auto_bdsp_rng.ui.result_transfer import ResultTransfer
+from auto_bdsp_rng.rng_core.cancellation import SearchCancellation, SearchCancelled
+from auto_bdsp_rng.ui.result_paging import PagedResultTable, numeric_sort_key
 from auto_bdsp_rng.ui.filter_presets import FilterPresetButton
 from auto_bdsp_rng.ui.terminology import TERMS, show_terminology
 from auto_bdsp_rng.ui.workspace_layout import LocalViews, MonitorWorkspaceSplit, WorkspacePages, WorkspaceSplit, scroll_surface
 from auto_bdsp_rng.ui.static_workspace import StaticWorkspaceLayout
 from auto_bdsp_rng.ui.video_info_overlay import VideoInfoOverlay
+from auto_bdsp_rng.ui.video_lifecycle import BrokerStopThread, CaptureDeviceEnumerationThread, CleanupThread, LatestFrameMailbox, PreviewFrameThread
 from auto_bdsp_rng.notifications.qq_service import QQNotificationService
 from auto_bdsp_rng.ui.qq_notifications import QQNotificationDialog, notification_icon
 
-import csv
 import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -164,6 +168,7 @@ from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.image_io import write_image
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
+from auto_bdsp_rng.ui_stall_diagnostics import start_ui_stall_diagnostics
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
@@ -176,6 +181,7 @@ from auto_bdsp_rng.ui.easycon_panel import (
 )
 from auto_bdsp_rng.ui.help_menu import HelpMenuController
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
+from auto_bdsp_rng.ui.history_archive import ReservedHistoryEvent, publish_history_event
 from auto_bdsp_rng.ui.numeric_locale import set_c_locale
 from auto_bdsp_rng.ui.ocr_settings_dialog import OcrSettingsDialog, load_ocr_region_config
 from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer
@@ -325,22 +331,35 @@ class _MenuPopupComboBox(QComboBox):
         menu.deleteLater()
 
 
+def _capture_source_identity(config: BlinkCaptureConfig) -> tuple[object, ...]:
+    """Only stable I/O fields identify a source; annotation and factories do not."""
+    if getattr(config, "uses_shared_video_source", False):
+        return "broker", getattr(config, "broker_session", None)
+    if not getattr(config, "monitor_window", False):
+        return "camera", getattr(config, "camera", 0)
+    crop = getattr(config, "crop", None)
+    return "window", getattr(config, "window_prefix", ""), None if crop is None or crop == (0, 0, 0, 0) else tuple(crop)
+
+
 def _uses_same_capture_source(left: BlinkCaptureConfig, right: BlinkCaptureConfig) -> bool:
-    if left.uses_shared_video_source or right.uses_shared_video_source:
-        return (
-            left.uses_shared_video_source
-            and right.uses_shared_video_source
-            and left.broker_session == right.broker_session
-        )
-    if left.monitor_window != right.monitor_window:
-        return False
-    if not left.monitor_window:
-        return left.camera == right.camera
+    return _capture_source_identity(left) == _capture_source_identity(right)
 
-    def normalized_crop(crop: tuple[int, int, int, int] | None) -> tuple[int, int, int, int] | None:
-        return None if crop is None or crop == (0, 0, 0, 0) else crop
 
-    return left.window_prefix == right.window_prefix and normalized_crop(left.crop) == normalized_crop(right.crop)
+@dataclass
+class _PreviewAction:
+    token: int
+    source_generation: int
+    config: BlinkCaptureConfig
+    source_identity: tuple[object, ...]
+    label: str
+    key: str
+    ready: Callable[[object], None]
+    failed: Callable[[str], None] | None
+    deadline: float
+    started_preview: bool
+    pause_legacy: bool
+    frame: object | None = None
+    releasing: bool = False
 
 
 def _scale_preview_pixmap(pixmap: QPixmap, target: QSize, device_pixel_ratio: float) -> tuple[QPixmap, QSize]:
@@ -427,11 +446,11 @@ def _enumerate_capture_devices(capture_api: int) -> list[tuple[int, str]]:
         return []
 
 
-def _draw_easycon_search_overlay(frame: object, result: object | None) -> object:
+def _draw_easycon_search_overlay(frame: object, result: object | None, *, copy: bool = True) -> object:
     """Draw EasyCon search metadata on an owned display copy."""
 
     copy_frame = getattr(frame, "copy", None)
-    annotated = copy_frame() if callable(copy_frame) else frame
+    annotated = copy_frame() if copy and callable(copy_frame) else frame
     if result is None:
         return annotated
     try:
@@ -455,6 +474,17 @@ def _draw_easycon_search_overlay(frame: object, result: object | None) -> object
     except Exception:
         return annotated
     return annotated
+
+
+def _bgr_frame_to_pixmap(frame: object) -> QPixmap:
+    # fromImage transfers pixels into Qt-owned storage before frame leaves
+    # scope. BGR888 avoids an RGB conversion and a second full-image copy.
+    import numpy as np
+
+    array = np.ascontiguousarray(frame)
+    height, width, _channel = array.shape
+    image = QImage(array.data, width, height, array.strides[0], QImage.Format.Format_BGR888)
+    return QPixmap.fromImage(image)
 
 
 def configure_application_identity(app: QApplication) -> QIcon:
@@ -1315,12 +1345,7 @@ class PictureInPicturePreview(QDialog):
         if frame is None:
             return
         try:
-            import cv2
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            height, width, channel = rgb.shape
-            image = QImage(rgb.data, width, height, channel * width, QImage.Format.Format_RGB888).copy()
-            pixmap = QPixmap.fromImage(image)
+            pixmap = _bgr_frame_to_pixmap(frame)
         except Exception:
             return
         target = self.frame_label.contentsRect().size()
@@ -1347,7 +1372,7 @@ class PictureInPicturePreview(QDialog):
 
     def eventFilter(self, obj, event):
         if obj is self.frame_label and event.type() == QEvent.Type.Resize:
-            QTimer.singleShot(0, self._refresh_frame)
+            QTimer.singleShot(0, self, self._refresh_frame)
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
@@ -1361,7 +1386,7 @@ class NoWheelDoubleSpinBox(QDoubleSpinBox):
         event.ignore()
 
 
-class PokeFinderTableWidget(QTableWidget):
+class PokeFinderTableWidget(PagedResultTable):
     """QTableWidget with PokeFinder-style prefix search on the active column."""
 
     searchStatusChanged = Signal(str)
@@ -1373,24 +1398,31 @@ class PokeFinderTableWidget(QTableWidget):
 
     def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         text = event.text()
-        if text and text.isprintable() and not event.modifiers() & (
+        backspace = event.key() == Qt.Key.Key_Backspace and bool(self._search_text)
+        if (backspace or text and text.isprintable()) and not event.modifiers() & (
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier
         ):
             now = time.monotonic()
             if now - self._last_search_at > 1.0:
                 self._search_text = ""
             self._last_search_at = now
-            self._search_text += text
-            if self._select_next_prefix_match(self._search_text):
+            self._search_text = self._search_text[:-1] if backspace else self._search_text + text
+            if not self._search_text:
+                self.pager.invalidate_prefix()
+                self.searchStatusChanged.emit("")
+            elif self._select_next_prefix_match(self._search_text):
                 self.searchStatusChanged.emit(f"查找: {self._search_text}")
             else:
                 self.searchStatusChanged.emit(f"未找到: {self._search_text}")
             event.accept()
             return
         self._search_text = ""
+        self.pager.invalidate_prefix()
         super().keyPressEvent(event)
 
     def _select_next_prefix_match(self, prefix: str) -> bool:
+        if self.pager.is_paged:
+            return self.pager.select_prefix(prefix, max(0, self.currentColumn()))
         if self.rowCount() <= 0 or self.columnCount() <= 0:
             return False
         column = self.currentColumn()
@@ -1518,6 +1550,7 @@ class CaptureBrokerStartThread(QThread):
         super().__init__(parent)
         self._start_broker = start_broker
         self._probe_client = probe_client
+        self.startup_done = threading.Event()
 
     def run(self) -> None:
         try:
@@ -1534,8 +1567,10 @@ class CaptureBrokerStartThread(QThread):
                 if callable(close):
                     close()
         except BaseException as exc:
+            self.startup_done.set()
             self.completed.emit(False, exc)
         else:
+            self.startup_done.set()
             self.completed.emit(True, None)
 
 
@@ -1547,6 +1582,7 @@ class MainWindow(QMainWindow):
     manualCaptureStarted = Signal(str, object)
     manualCaptureFinished = Signal(str, object, bool, str)
     autoCaptureFrameChanged = Signal(object)
+    autoCaptureFrameReady = Signal()
     autoCaptureProgressChanged = Signal(int, int)
     captureKeepAwakeRequested = Signal(int, int)
     autoSeedCaptured = Signal(object)
@@ -1589,6 +1625,11 @@ class MainWindow(QMainWindow):
         self._dev_mock_devices = bool(dev_mock_devices)
         self._mock_video_frame = None
         self._run_log_manager = run_log_manager or RunLogManager()
+        self._ui_stall_guard = None
+        self._ui_calls_closed = threading.Event()
+        self._ui_call_lock = threading.Lock()
+        self._pending_ui_calls: dict[threading.Event, tuple[list[object], list[BaseException]]] = {}
+        self._auto_frame_mailbox = LatestFrameMailbox()
         self._run_log_buffer = RunLogBuffer(self)
         self._run_log_manager.set_error_callback(self._queue_run_log_failure)
         self.runLogFailed.connect(self._handle_run_log_failure, Qt.ConnectionType.QueuedConnection)
@@ -1609,6 +1650,8 @@ class MainWindow(QMainWindow):
         self._states: list[State8] = []
         self._eye_image_path: Path | None = None
         self._latest_preview_frame: object | None = None
+        self._latest_preview_source: tuple[object, ...] | None = None
+        self._preview_source: tuple[object, ...] | None = None
         self._latest_annotated_preview_frame: object | None = None
         self._latest_easycon_image_search_result: object | None = None
         self._easycon_image_result_observer_serial = 0
@@ -1619,7 +1662,13 @@ class MainWindow(QMainWindow):
         self._easycon_image_result_observers_lock = threading.Lock()
         self._capture_broker_process = capture_broker_process
         self._capture_broker_start_thread: CaptureBrokerStartThread | None = None
+        self._capture_broker_stop_thread: BrokerStopThread | None = None
+        self._capture_broker_stop_context = "停止 Broker 失败"
+        self._capture_broker_stop_startup_done: threading.Event | None = None
         self._capture_broker_attempt = 0
+        self._capture_device_enumeration_thread: CaptureDeviceEnumerationThread | None = None
+        self._capture_device_enumeration_generation = 0
+        self._capture_device_enumeration_request: tuple[int, int] | None = None
         self._video_source_connected = False
         self._video_source_connecting = False
         self._video_source_cancel_requested = False
@@ -1641,8 +1690,23 @@ class MainWindow(QMainWindow):
         self._ocr_task_thread: OcrTaskThread | None = None
         self._ocr_task_label: str | None = None
         self._ocr_task_completed: Callable[[bool, object], None] | None = None
+        self._tid_ocr_request_serial = 0
+        self._tid_ocr_request_token: int | None = None
         self._ocr_shutdown_requested = False
         self._is_closing = False
+        self._easycon_close_pending = False
+        self._resume_confirmed_close = False
+        self._close_preparation_pending = False
+        self._resume_prepared_close = False
+        self._close_pending = False
+        self._close_ready = False
+        self._close_accepted = False
+        self._ui_scale_restart_pending = False
+        self._close_deadline = 0.0
+        self._close_timer = QTimer(self)
+        self._close_timer.setInterval(25)
+        self._close_timer.timeout.connect(self._poll_confirmed_close)
+        self._automation_connection_generation = 0
         self._startup_update_check_scheduled = False
         self._startup_update_check_started = False
         self._ocr_full_test_running = False
@@ -1655,10 +1719,29 @@ class MainWindow(QMainWindow):
         self._preview_timer.setInterval(PREVIEW_REFRESH_INTERVAL_MS)
         self._preview_timer.timeout.connect(self._update_preview_frame)
         self._preview_capture: PreviewFrameCapture | None = None
+        self._preview_thread: PreviewFrameThread | None = None
+        self._preview_cleanup_threads: set[CleanupThread] = set()
+        self._preview_generation = 0
+        self._preview_config: BlinkCaptureConfig | None = None
+        self._first_preview_continuation: Callable[[], None] | None = None
+        self._first_preview_serial = 0
+        self._first_preview_pending = False
+        self._first_preview_source: tuple[object, ...] | None = None
+        self._first_preview_owner = None
+        self._first_preview_deadline = 0.0
+        self._first_preview_timer = QTimer(self)
+        self._first_preview_timer.setInterval(50)
+        self._first_preview_timer.timeout.connect(self._poll_first_preview_frame)
+        self._preview_action: _PreviewAction | None = None
+        self._preview_action_serial = 0
+        self._preview_action_timer = QTimer(self)
+        self._preview_action_timer.setInterval(25)
+        self._preview_action_timer.timeout.connect(self._poll_preview_action)
         self._capture_timer = QTimer(self)
         self._capture_timer.setInterval(100)
         self._capture_timer.timeout.connect(self._poll_capture_thread)
         self._capture_cancel = threading.Event()
+        self._reidentify_cancellation: SearchCancellation | None = None
         self._capture_lock = threading.Lock()
         self._capture_thread: threading.Thread | None = None
         self._mock_capture_dialog = None
@@ -1667,12 +1750,11 @@ class MainWindow(QMainWindow):
         self._capture_frame: object | None = None
         self._shiny_calibration_thread: QThread | None = None
         self._shiny_calibration_worker: ShinyThresholdCalibrationWorker | None = None
-        self._static_generation_thread: threading.Thread | None = None
-        self._static_generation_result: tuple[StaticEncounterRecord, list[State8], bool, StaticSearchCriteria] | None = None
-        self._static_generation_error: Exception | None = None
-        self._static_generation_timer = QTimer(self)
-        self._static_generation_timer.setInterval(50)
-        self._static_generation_timer.timeout.connect(self._poll_static_generation_thread)
+        self._static_search = BackgroundSearch(self)
+        self._result_transfer = ResultTransfer(
+            self, changed=self._result_transfer_changed, copied=self._results_copied,
+            exported=self._results_exported, failed=self._result_transfer_failed,
+        )
         self._capture_mode = "seed"
         self._capture_progress = (0, DEFAULT_BLINK_COUNT)
         self._advance_timer = QTimer(self)
@@ -1693,7 +1775,11 @@ class MainWindow(QMainWindow):
         self.qq_notifications.log.connect(lambda message: self._write_run_log("QQ 通知", message))
         self._build_ui()
         self._restore_profile_settings()
+        self._connect_preview_source_signals()
         self._connect_auto_rng_sync_signals()
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._close_ui_calls)
         self._apply_theme()
         self._refresh_config_list()
         self._refresh_encounters()
@@ -1704,7 +1790,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._maybe_show_startup_notice)
 
     def _connect_auto_rng_sync_signals(self) -> None:
-        self.autoCaptureFrameChanged.connect(self._handle_auto_capture_frame)
+        self.autoCaptureFrameChanged.connect(self._publish_auto_capture_frame, Qt.ConnectionType.DirectConnection)
+        self.autoCaptureFrameReady.connect(self._flush_auto_capture_frame, Qt.ConnectionType.QueuedConnection)
         self.autoCaptureProgressChanged.connect(self._handle_auto_capture_progress)
         self.captureKeepAwakeRequested.connect(self._handle_capture_keep_awake_requested)
         self.autoSeedCaptured.connect(self._handle_auto_seed_captured)
@@ -1717,13 +1804,22 @@ class MainWindow(QMainWindow):
         self.uiCallRequested.connect(self._handle_ui_call_requested)
 
     def _call_on_ui_thread(self, callback: object) -> object:
+        if self._ui_calls_closed.is_set():
+            raise RuntimeError("主窗口已经关闭，无法执行界面回调")
         if QThread.currentThread() == self.thread():
             return callback()  # type: ignore[operator]
         done = threading.Event()
         result: list[object] = []
         errors: list[BaseException] = []
-        self.uiCallRequested.emit(callback, result, errors, done)
-        done.wait()
+        with self._ui_call_lock:
+            if self._ui_calls_closed.is_set():
+                raise RuntimeError("主窗口已经关闭，无法执行界面回调")
+            self._pending_ui_calls[done] = (result, errors)
+            self.uiCallRequested.emit(callback, result, errors, done)
+        if not done.wait(30.0):
+            # Keep the callback queued while the window is alive: script
+            # finalizers still have to release their reserved backend slot.
+            raise TimeoutError("界面回调在 30 秒内未完成")
         if errors:
             raise errors[0]
         return result[0] if result else None
@@ -1802,13 +1898,32 @@ class MainWindow(QMainWindow):
         done: threading.Event,
     ) -> None:
         try:
+            if self._ui_calls_closed.is_set():
+                raise RuntimeError("主窗口已经关闭，界面回调已取消")
             result.append(callback())  # type: ignore[operator]
         except BaseException as exc:
             errors.append(exc)
         finally:
+            with self._ui_call_lock:
+                self._pending_ui_calls.pop(done, None)
+            done.set()
+
+    def _close_ui_calls(self) -> None:
+        self._ui_calls_closed.set()
+        self._auto_frame_mailbox.clear(close=True)
+        with self._ui_call_lock:
+            pending, self._pending_ui_calls = self._pending_ui_calls, {}
+        for done, (_result, errors) in pending.items():
+            errors.append(RuntimeError("主窗口已经关闭，界面回调已取消"))
             done.set()
 
     def _build_actions(self) -> None:
+        self._preview_cancel_action = QAction("取消等待或框选", self)
+        self._preview_cancel_action.setShortcut("Esc")
+        self._preview_cancel_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._preview_cancel_action.setEnabled(False)
+        self._preview_cancel_action.triggered.connect(self._cancel_preview_interaction)
+        self.addAction(self._preview_cancel_action)
         generate = QAction("Generate", self)
         generate.setShortcut("Ctrl+R")
         generate.triggered.connect(self.generate_results)
@@ -1937,6 +2052,12 @@ class MainWindow(QMainWindow):
             frame_client_factory=self._new_easycon_frame_client,
             dev_mock_devices=self._dev_mock_devices,
         )
+        manager = self._run_log_manager
+        self.easycon_tab.set_native_log_sink(
+            lambda level, message: manager.write("伊机控", message, level=level),
+            result_sink=self._publish_native_output_tail,
+        )
+        self.easycon_tab.closePreparationFinished.connect(self._finish_close_preparation)
         self.easycon_tab.workspace_splitter.settings = self._profile_settings
         self.easycon_tab.workspace_splitter.restore_sizes()
         self.easycon_header_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1972,14 +2093,17 @@ class MainWindow(QMainWindow):
         )
         self.history_tab.related_logs_requested.connect(self._show_round_logs)
         self.records_tab = self.run_records_tab
-        self.id_tab = IdPanel(status_callback=lambda text: self.statusBar().showMessage(text))
+        self.id_tab = IdPanel(self, status_callback=lambda text: self.statusBar().showMessage(text))
+        self.id_tab.hide()
         self.id_tab.seedChanged.connect(self._sync_state32_from_id_seed64)
         self.auto_rng_tab.startRequested.connect(self._start_auto_rng)
         self.auto_rng_tab.stopRequested.connect(self._cancel_auto_rng_preparation)
+        self.auto_tid_rng_tab.stopRequested.connect(self._cancel_auto_tid_preparation)
         self.auto_rng_tab.runStateChanged.connect(self._refresh_automation_start_state)
         self.auto_tid_rng_tab.runStateChanged.connect(self._refresh_automation_start_state)
         self.auto_tid_rng_tab.targetsChanged.connect(self._refresh_automation_start_state)
         self.easycon_tab.connectionPresentationChanged.connect(self._refresh_automation_start_state)
+        self.easycon_tab.nativeShutdownFinished.connect(self._finish_easycon_close)
         self.easycon_tab._native_status_timer.timeout.connect(self._refresh_automation_start_state)
         self.auto_rng_tab.autoProgressChanged.connect(self._apply_auto_rng_header_progress)
         self.auto_rng_tab.runStateChanged.connect(self._set_ocr_automation_active)
@@ -2048,6 +2172,11 @@ class MainWindow(QMainWindow):
         status_bar = QStatusBar()
         status_bar.setObjectName("WorkspaceStatusBar")
         status_bar.setFixedHeight(24)
+        self._preview_cancel_button = QToolButton()
+        self._preview_cancel_button.setObjectName("PreviewCancelButton")
+        self._preview_cancel_button.setDefaultAction(self._preview_cancel_action)
+        self._preview_cancel_button.hide()
+        status_bar.addPermanentWidget(self._preview_cancel_button)
         self.view_status_logs_button = QToolButton()
         self.view_status_logs_button.setObjectName("StatusLogButton")
         self.view_status_logs_button.setText("完整日志")
@@ -2230,12 +2359,25 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes,
         )
         if choice != QMessageBox.StandardButton.Yes:
+            self._ui_scale_restart_pending = False
             self.statusBar().showMessage("界面缩放将在下次启动时生效", 5000)
             return
 
-        if not self.close():
+        self._ui_scale_restart_pending = True
+        if self.close():
+            self._finish_ui_scale_restart()
+        elif self._close_pending or self._easycon_close_pending or self._close_preparation_pending:
+            self.statusBar().showMessage("正在停止后台任务，完成后自动重启...", 5000)
+        else:
+            self._ui_scale_restart_pending = False
             self.statusBar().showMessage("后台任务尚未完全退出，界面缩放将在下次启动时生效", 5000)
+
+    def _finish_ui_scale_restart(self) -> None:
+        if not self._ui_scale_restart_pending:
             return
+        # Acceptance can happen in this close call or in a later close event.
+        # Consume the intent before launching so either path runs exactly once.
+        self._ui_scale_restart_pending = False
         if not _start_detached_gui_process():
             QMessageBox.warning(
                 None,
@@ -2261,6 +2403,28 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._run_log_manager.write(source, text, level=level)
+
+    def _publish_native_output_tail(self, level: str, message: str) -> None:
+        # This is the one final UI publication. Streaming output already went
+        # directly to disk on the worker, without per-line queued Qt signals.
+        text = str(message)
+        hint = "[输出显示已截断，仅保留末尾；完整输出需开启运行日志]\n"
+        limit = 256 * 1024
+        tail = text[-limit:]
+        lines = tail.splitlines(keepends=True)
+        long_line = any(len(line) > 4096 for line in lines)
+        if long_line:
+            tail = "".join(line[-4096:] for line in lines)
+        if len(text) > limit or long_line:
+            tail = hint + tail[-(limit - len(hint)):]
+        text = tail
+        run_id, round_id = self._run_log_context("伊机控")
+        self._run_log_buffer.publish("伊机控", text, level=level, run_id=run_id, round_id=round_id)
+
+    def _refresh_ui_stall_diagnostics(self) -> None:
+        guard = self._ui_stall_guard
+        if guard is not None:
+            guard.refresh_enabled()
 
     def _sync_run_log_controls(self, enabled: bool) -> None:
         controller = getattr(self, "help_menu_controller", None)
@@ -2293,6 +2457,7 @@ class MainWindow(QMainWindow):
             set_run_log_enabled(False)
         except OSError:
             pass
+        self._refresh_ui_stall_diagnostics()
         self.runLogFailed.emit(message)
 
     def _set_run_log_enabled(self, enabled: bool) -> bool:
@@ -2302,6 +2467,7 @@ class MainWindow(QMainWindow):
                 set_run_log_enabled(True)
             except (OSError, RunLogError) as exc:
                 self._run_log_manager.disable()
+                self._refresh_ui_stall_diagnostics()
                 try:
                     set_run_log_enabled(False)
                 except OSError:
@@ -2321,6 +2487,7 @@ class MainWindow(QMainWindow):
 
         self._write_run_log("应用", "自动保存运行日志已关闭")
         self._run_log_manager.disable()
+        self._refresh_ui_stall_diagnostics()
         try:
             set_run_log_enabled(False)
         except OSError as exc:
@@ -2341,6 +2508,7 @@ class MainWindow(QMainWindow):
 
     def _handle_run_log_failure(self, message: str) -> None:
         self._run_log_manager.disable()
+        self._refresh_ui_stall_diagnostics()
         settings_error: OSError | None = None
         try:
             set_run_log_enabled(False)
@@ -3202,7 +3370,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(footer)
         dialog.footer_layout.addWidget(close_button)
         dialog.footer_layout.addWidget(self.video_source_button)
-        QTimer.singleShot(0, self.refresh_capture_devices)
+        QTimer.singleShot(0, self, self.refresh_capture_devices)
         return dialog
 
     def _build_monitor_sidebar(self) -> QWidget:
@@ -3403,6 +3571,8 @@ class MainWindow(QMainWindow):
         self.results_more_menu.addAction("复制全部结果", self.copy_results)
         self.results_more_menu.addAction("复制选中行", self.static_table_tools.copy_selected)
         self.results_more_menu.addAction("导出 CSV", self.export_results)
+        self.cancel_search_action = self.results_more_menu.addAction("取消搜索", self._cancel_static_generation)
+        self.cancel_search_action.setEnabled(False)
         self.filter_presets.menu.setTitle("筛选方案")
         self.results_more_menu.addMenu(self.filter_presets.menu)
         self.static_table_tools.menu.setTitle("表格设置")
@@ -3410,6 +3580,8 @@ class MainWindow(QMainWindow):
         self.results_more_button.setMenu(self.results_more_menu)
         toolbar.addWidget(self.results_more_button)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.table.pager.controls)
+        self.table.pager.pageChanged.connect(self.static_table_tools.schedule_refresh)
         self.static_empty_state = TableEmptyState(self.table)
         self._static_result_state = "initial"
         self._refresh_static_result_state()
@@ -4423,26 +4595,51 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("存档信息已应用" if self.lang == "zh" else "Profile applied")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        self.easycon_tab.prepare_for_close_confirmation()
-        if not self._confirm_unsaved_easycon_script():
+        if self._close_accepted:
+            super().closeEvent(event)
+            return
+        if self._easycon_close_pending or self._close_pending or self._close_preparation_pending:
             event.ignore()
             return
-        if self._qq_dialog is not None and not self._qq_dialog.close():
-            self.show_qq_notifications()
-            event.ignore()
+        confirmed = self._resume_confirmed_close
+        self._resume_confirmed_close = False
+        if confirmed and self._close_ready:
+            self._accept_confirmed_close(event)
             return
+        if not confirmed:
+            prepared = self._resume_prepared_close
+            self._resume_prepared_close = False
+            if not prepared and self.easycon_tab.prepare_for_close_confirmation() is False:
+                self._close_preparation_pending = True
+                self.statusBar().showMessage("正在释放键盘控制，完成后确认关闭...")
+                event.ignore()
+                return
+            if not self._confirm_unsaved_easycon_script():
+                self._ui_scale_restart_pending = False
+                event.ignore()
+                return
+            if self._qq_dialog is not None and not self._qq_dialog.close():
+                self._ui_scale_restart_pending = False
+                self.show_qq_notifications()
+                event.ignore()
+                return
         self._is_closing = True
-        if not self.update_controller.shutdown():
-            self._is_closing = False
-            QMessageBox.warning(
-                self,
-                "正在停止更新任务",
-                "更新网络任务尚未退出，请稍后再关闭程序。",
-            )
-            event.ignore()
-            return
+        self._capture_device_enumeration_generation += 1
+        self._capture_device_enumeration_request = None
+        self.history_tab._archive.stop_accepting()
+        self.history_tab.prepare_for_close()
+        self._static_search.cancel()
+        self._result_transfer.cancel(preserve_commit_notice=True)
+        self.auto_tid_rng_tab.cancel_result_transfer(for_close=True)
+        self.auto_tid_rng_tab.cancel_manual_search()
+        self.id_tab.cancel_search()
+        self._cancel_first_preview_wait()
+        self._cancel_preview_interaction(restore_preview=False)
+        self._close_pending = True
+        self._close_deadline = time.monotonic() + 2.0
+        self.update_controller.cancel()
         self._capture_timer.stop()
-        self._capture_cancel.set()
+        self._cancel_capture()
         self._request_automation_runner_stop_with_reason(
             self.auto_rng_tab,
             "自动定点",
@@ -4455,67 +4652,129 @@ class MainWindow(QMainWindow):
         )
         self._ocr_shutdown_requested = True
         self._request_ocr_background_stop()
-        broker_start_stopped = self._shutdown_capture_broker_start_thread()
+        self._request_worker_stop(self._shiny_calibration_worker, "闪光判定校准")
+        self.disconnect_video_source(force=True, reason="主窗口关闭")
+        self._preview_timer.stop()
+        self._release_preview_capture()
+        self._close_timer.start()
+        if self._poll_confirmed_close(schedule_close=False):
+            self._accept_confirmed_close(event)
+        else:
+            event.ignore()
+
+    def _poll_confirmed_close(self, *, schedule_close: bool = True) -> bool:
+        if not self._close_pending:
+            return self._close_ready
 
         pending_tasks: list[str] = []
+        if self._result_transfer.committing or self.auto_tid_rng_tab.result_save_pending():
+            pending_tasks.append("结果保存")
+        if self.history_tab.result_save_pending():
+            pending_tasks.append("历史保存")
         if not self._shutdown_automation_runner(
             self.auto_rng_tab,
             "自动定点",
             request_stop=False,
+            wait_ms=0,
         ):
             pending_tasks.append("自动定点")
         if not self._shutdown_automation_runner(
             self.auto_tid_rng_tab,
             "自动 TID",
             request_stop=False,
+            wait_ms=0,
         ):
             pending_tasks.append("自动 TID")
-        if not broker_start_stopped:
-            pending_tasks.append("视频源连接")
         if not self._shutdown_worker_thread(
             self._shiny_calibration_worker,
             self._shiny_calibration_thread,
             "闪光判定校准",
+            request_stop=False,
+            wait_ms=0,
         ):
             pending_tasks.append("闪光判定校准")
-        if not self._shutdown_capture_thread():
+        if not self._shutdown_capture_thread(wait_ms=0):
             pending_tasks.append("Seed 捕捉")
-        self._release_preview_capture()
-        if not self._shutdown_ocr_warmup_thread():
+        if not self._shutdown_ocr_warmup_thread(wait_ms=0):
             pending_tasks.append("OCR 预热")
-        if not self._shutdown_ocr_task_thread():
+        if not self._shutdown_ocr_task_thread(wait_ms=0):
             pending_tasks.append("OCR 识别")
-
+        with self._ui_call_lock:
+            if self._pending_ui_calls:
+                pending_tasks.append("界面回调")
+        # No nested processEvents/wait: callbacks can release script slots and
+        # threads naturally while the normal Qt event loop remains in charge.
         if pending_tasks:
-            self._is_closing = False
-            self._restore_interrupted_ocr_state_if_idle()
-            if self._capture_thread is not None:
-                self._capture_timer.start()
-            if pending_tasks == ["伊机控或 CLI"]:
-                title = "正在停止伊机控任务"
-                message = "伊机控或 CLI 任务尚未退出，请稍后再关闭程序。"
-            else:
-                title = "正在停止后台任务"
-                message = f"{'、'.join(pending_tasks)}尚未退出，请稍后再关闭程序。"
-            QMessageBox.warning(self, title, message)
-            event.ignore()
-            return
-        if not self.disconnect_video_source(force=True, reason="主窗口关闭"):
-            self._is_closing = False
-            QMessageBox.warning(
-                self,
-                "视频源未能停止",
-                "共享视频源尚未确认停止，请重试断开后再关闭程序。",
-            )
-            event.ignore()
-            return
+            if time.monotonic() >= self._close_deadline:
+                self._reject_pending_close("正在停止后台任务", f"{'、'.join(pending_tasks)}尚未退出，请稍后再关闭程序。")
+            return False
+        if self._capture_broker_start_thread is not None or self._capture_broker_stop_thread is not None:
+            self.statusBar().showMessage("正在停止视频源，完成后自动关闭...")
+            return False
+        if self._video_source_stop_pending:
+            self._reject_pending_close("视频源未能停止", "共享视频源尚未确认停止，请重试断开后再关闭程序。")
+            return False
+        if self._preview_thread is not None or self._preview_cleanup_threads:
+            self.statusBar().showMessage("正在释放预览画面，完成后自动关闭...")
+            return False
+        if self._preview_capture is not None:
+            self._reject_pending_close("预览画面未能释放", "预览采集源尚未确认释放，请重试关闭程序。")
+            return False
+        if self._capture_device_enumeration_thread is not None:
+            self.statusBar().showMessage("正在等待采集设备刷新结束，完成后自动关闭...")
+            return False
+        if not self.update_controller.shutdown(wait_ms=0):
+            if time.monotonic() >= self._close_deadline:
+                self._reject_pending_close("正在停止更新任务", "更新网络任务尚未退出，请稍后再关闭程序。")
+            return False
         if not self.easycon_tab.shutdown():
-            self._is_closing = False
-            QMessageBox.warning(
-                self,
-                "正在停止伊机控任务",
-                "伊机控或 CLI 任务尚未退出，请稍后再关闭程序。",
-            )
+            if self.easycon_tab._shutdown_in_progress:
+                self._easycon_close_pending = True
+                self._close_pending = False
+                self._close_timer.stop()
+                self.statusBar().showMessage("正在停止伊机控任务，完成后自动关闭...")
+                return False
+            self._reject_pending_close("正在停止伊机控任务", "伊机控或 CLI 任务尚未退出，请稍后再关闭程序。")
+            return False
+        self._close_ready = True
+        self._close_pending = False
+        self._close_timer.stop()
+        if schedule_close:
+            self._resume_confirmed_close = True
+            QTimer.singleShot(0, self, self.close)
+        return True
+
+    def _reject_pending_close(self, title: str, message: str) -> None:
+        self._ui_scale_restart_pending = False
+        self._close_timer.stop()
+        self._close_pending = False
+        self._easycon_close_pending = False
+        self._close_ready = False
+        self._is_closing = False
+        self.history_tab.resume_after_close()
+        self._update_capture_device_refresh_enabled()
+        self._restore_interrupted_ocr_state_if_idle()
+        if self._capture_thread is not None:
+            self._capture_timer.start()
+        QMessageBox.warning(self, title, message)
+
+    def _finish_close_preparation(self, success: bool) -> None:
+        if not self._close_preparation_pending:
+            return
+        self._close_preparation_pending = False
+        if success:
+            self._resume_prepared_close = True
+            QTimer.singleShot(0, self, self.close)
+        else:
+            self._ui_scale_restart_pending = False
+            self.statusBar().showMessage("键盘控制未能释放，请稍后重试关闭")
+
+    def _accept_confirmed_close(self, event) -> None:
+        if not self.history_tab.shutdown():
+            self._close_ready = False
+            self._close_pending = True
+            self._close_deadline = time.monotonic() + 2.0
+            self._close_timer.start()
             event.ignore()
             return
         if self.seed_config_editor.active:
@@ -4527,7 +4786,31 @@ class MainWindow(QMainWindow):
         self._save_window_geometry()
         if self._picture_in_picture is not None:
             self._picture_in_picture.hide()
+        self._static_search.close()
+        self._result_transfer.close()
+        self.table.pager.close()
+        self.auto_tid_rng_tab.close_manual_search()
+        self.auto_tid_rng_tab.id_table.pager.close()
+        self.id_tab.close_search()
+        self._close_ui_calls()
+        self._close_accepted = True
         super().closeEvent(event)
+        self._finish_ui_scale_restart()
+
+    def _finish_easycon_close(self, success: bool) -> None:
+        if not self._easycon_close_pending:
+            return
+        self._easycon_close_pending = False
+        if success:
+            self._close_ready = True
+            self._resume_confirmed_close = True
+            QTimer.singleShot(0, self, self.close)
+        else:
+            self._ui_scale_restart_pending = False
+            self._is_closing = False
+            self.history_tab.resume_after_close()
+            self._update_capture_device_refresh_enabled()
+            self.statusBar().showMessage("伊机控任务未能停止，请稍后重试关闭")
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
@@ -4606,49 +4889,11 @@ class MainWindow(QMainWindow):
     def _shutdown_capture_broker_start_thread(self, *, wait_ms: int = 3000) -> bool:
         thread = self._capture_broker_start_thread
         if thread is None:
-            return True
-        self._video_source_cancel_requested = True
-        self._video_source_pending_status = "连接已取消"
-        if self._video_source_connected or self._video_source_connecting:
-            self._invalidate_video_source_consumers()
-        else:
-            self._clear_video_source_preview()
-        thread.requestInterruption()
-        process = self._capture_broker_process
-        stopped, stop_error = self._stop_capture_broker_process(
-            process,
-            context="关闭时停止 Broker 失败",
-        )
-        deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-        while thread.isRunning() and time.monotonic() < deadline:
-            QApplication.processEvents()
-            remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
-            thread.wait(min(50, remaining_ms))
-        if thread.isRunning():
-            if not stopped:
-                self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
-            else:
-                self._video_source_connecting = True
-                self.video_source_button.setEnabled(False)
-                self.video_source_button.setText("正在断开...")
-                self._set_video_source_status("正在结束视频源连接", "connecting")
-            self._write_run_log("视频源", "关闭时视频源连接线程未能及时退出", level="WARNING")
-            return False
-        stopped, stop_error = self._stop_capture_broker_process(
-            process,
-            context="关闭时最终确认 Broker 停止失败",
-        )
-        if self._capture_broker_start_thread is thread:
-            self._capture_broker_start_thread = None
-        self._video_source_connecting = False
-        self._video_source_cancel_requested = False
-        if not stopped:
-            self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
-            return False
-        self._video_source_stop_pending = False
-        self._video_source_stop_error = None
-        self._set_video_source_disconnected_ui(self._video_source_pending_status)
-        return True
+            return self._capture_broker_stop_thread is None
+        # The window retains both threads. Close completion is polled by Qt,
+        # so startup's UI finalizers remain runnable throughout cancellation.
+        self.disconnect_video_source(force=True, reason="主窗口关闭")
+        return False
 
     def _shutdown_automation_runner(
         self,
@@ -4706,41 +4951,15 @@ class MainWindow(QMainWindow):
             return True
         try:
             thread.quit()  # type: ignore[attr-defined]
-            deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-            while thread.isRunning() and time.monotonic() < deadline:  # type: ignore[attr-defined]
-                QApplication.processEvents()
-                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
-                thread.wait(min(50, remaining_ms))  # type: ignore[attr-defined]
-            if thread.isRunning():  # type: ignore[attr-defined]
-                timeout_seconds = max(0, wait_ms) / 1000.0
-                self._write_run_log(
-                    label,
-                    f"关闭时流程未能在 {timeout_seconds:g} 秒内退出",
-                    level="WARNING",
-                )
-                return False
+            return not thread.isRunning()  # type: ignore[attr-defined]
         except RuntimeError:
             return True
-        return True
 
     def _shutdown_capture_thread(self, *, wait_ms: int = 2000) -> bool:
         capture_thread = self._capture_thread
         if capture_thread is None:
             return True
-        deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-        while capture_thread.is_alive() and time.monotonic() < deadline:
-            QApplication.processEvents()
-            remaining_seconds = max(0.001, deadline - time.monotonic())
-            capture_thread.join(timeout=min(0.05, remaining_seconds))
-        if capture_thread.is_alive():
-            timeout_seconds = max(0, wait_ms) / 1000.0
-            self._write_run_log(
-                "Seed 捕捉",
-                f"关闭时捕捉线程未能在 {timeout_seconds:g} 秒内退出",
-                level="WARNING",
-            )
-            return False
-        return True
+        return not capture_thread.is_alive()
 
     def _shutdown_ocr_warmup_thread(self, *, wait_ms: int = 2000) -> bool:
         warmup_thread = self._ocr_warmup_thread
@@ -4749,18 +4968,7 @@ class MainWindow(QMainWindow):
             return True
         try:
             warmup_thread.requestInterruption()
-            deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-            while warmup_thread.isRunning() and time.monotonic() < deadline:
-                QApplication.processEvents()
-                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
-                warmup_thread.wait(min(50, remaining_ms))
             if warmup_thread.isRunning():
-                timeout_seconds = max(0, wait_ms) / 1000.0
-                self._write_run_log(
-                    "OCR",
-                    f"关闭时预热线程未能在 {timeout_seconds:g} 秒内退出",
-                    level="WARNING",
-                )
                 return False
             try:
                 warmup_thread.completed.disconnect(self._handle_ocr_warmup_completed)
@@ -4786,18 +4994,7 @@ class MainWindow(QMainWindow):
             return True
         try:
             task_thread.requestInterruption()
-            deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-            while task_thread.isRunning() and time.monotonic() < deadline:
-                QApplication.processEvents()
-                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
-                task_thread.wait(min(50, remaining_ms))
             if task_thread.isRunning():
-                timeout_seconds = max(0, wait_ms) / 1000.0
-                self._write_run_log(
-                    "OCR",
-                    f"关闭时{self._ocr_task_label or '识别任务'}未能在 {timeout_seconds:g} 秒内退出",
-                    level="WARNING",
-                )
                 return False
         except RuntimeError:
             pass
@@ -4878,8 +5075,7 @@ class MainWindow(QMainWindow):
         self.raw_screenshot_button.setText(self._text("raw_screenshot"))
         self.select_roi_button.setText(self._text("select_roi"))
         self.generate_button.setText(self._text("generate"))
-        self.copy_button.setText(self._text("copy"))
-        self.export_button.setText(self._text("export"))
+        self._result_transfer_changed()
         self.show_stats_check.setText("显示能力值" if self.lang == "zh" else "Show Stats")
         self.iv_calculator_button.setText("个体值计算器" if self.lang == "zh" else "IV Calculator")
         self._refresh_result_columns()
@@ -5229,8 +5425,13 @@ class MainWindow(QMainWindow):
         npc: int,
         search_min: int,
         search_max: int,
+        cancellation: SearchCancellation | None = None,
+        noisy: bool | None = None,
     ) -> ProjectXsReidentifyResult:
-        if self.reidentify_1_pk_npc.isChecked():
+        if noisy is None:
+            noisy = self.reidentify_1_pk_npc.isChecked()
+        cancellation_args = {"cancellation": cancellation} if cancellation is not None else {}
+        if noisy:
             if search_max <= search_min:
                 noisy_search_max = NOISY_REIDENTIFY_MAX_SEARCH_FRAMES
             elif search_min > 0:
@@ -5242,6 +5443,7 @@ class MainWindow(QMainWindow):
                 observation,  # type: ignore[arg-type]
                 search_min=search_min,
                 search_max=noisy_search_max,
+                **cancellation_args,
             )
         return reidentify_seed_from_observation(
             state,
@@ -5249,9 +5451,19 @@ class MainWindow(QMainWindow):
             npc=npc,
             search_min=search_min,
             search_max=search_max,
+            **cancellation_args,
         )
 
+    def _cancel_capture(self) -> None:
+        self._capture_cancel.set()
+        self._cancel_first_preview_wait(finish_preparation=True)
+        if self._reidentify_cancellation is not None:
+            self._reidentify_cancellation.cancel()
+
     def save_current_config(self) -> None:
+        if self.seed_config_editor.active and self.seed_config_editor.testing:
+            self.seed_config_editor.status.setText("请先停止测试捕捉，再保存配置。")
+            return
         try:
             config = self._config_from_form()
             if self.seed_config_editor.active and self.seed_config_editor.starter_locked:
@@ -5276,6 +5488,7 @@ class MainWindow(QMainWindow):
             or self._video_source_connecting
             or self._video_source_stop_pending
             or start_thread is not None
+            or self._capture_broker_stop_thread is not None
         ):
             raise RuntimeError("请先断开当前视频源")
         self._capture_broker_process = process
@@ -5311,15 +5524,21 @@ class MainWindow(QMainWindow):
 
     def _invalidate_video_source_consumers(self) -> None:
         self._video_source_connected = False
+        self._resume_preview_after_capture = False
         self._video_source_generation += 1
         self._preview_annotation_error_reported = False
         self._latest_preview_frame = None
+        self._latest_preview_source = None
         self._latest_annotated_preview_frame = None
+        self._auto_frame_mailbox.clear()
+        self._cancel_first_preview_wait(finish_preparation=True)
+        self._cancel_preview_interaction(restore_preview=False)
         self._clear_easycon_image_search_result()
         self.easycon_tab.video_source_state_changed()
 
     def _clear_video_source_preview(self) -> None:
         self._latest_preview_frame = None
+        self._latest_preview_source = None
         self._latest_annotated_preview_frame = None
         self._clear_easycon_image_search_result()
         self.preview_label.clear()
@@ -5391,12 +5610,25 @@ class MainWindow(QMainWindow):
             self.capture_api_combo,
         ):
             widget.setEnabled(enabled)
+        self._update_capture_device_refresh_enabled()
+
+    def _update_capture_device_refresh_enabled(self) -> None:
+        source_locked = self._video_source_connecting or self._video_source_stop_pending or (
+            self._video_source_connected and self._mock_video_frame is None
+        )
+        self.capture_device_refresh_button.setEnabled(
+            self.capture_api_combo.isEnabled()
+            and self.capture_device_combo.isEnabled()
+            and self._capture_device_enumeration_thread is None
+            and not self._is_closing
+            and not source_locked
+        )
 
     def _set_video_source_disconnected_ui(self, status: str = "未连接") -> None:
         self._mock_video_frame = None
         self.video_source_button.setEnabled(True)
         self.video_source_button.setText("连接")
-        state = "failed" if status == "连接失败" else "disconnected"
+        state = "failed" if status in {"连接失败", "视频源故障"} else "disconnected"
         self._set_video_source_status(status, state)
         self._set_video_source_config_enabled(True)
         self._clear_video_source_preview()
@@ -5645,28 +5877,65 @@ class MainWindow(QMainWindow):
         *,
         context: str,
     ) -> tuple[bool, str | None]:
+        if self._capture_broker_stop_thread is not None:
+            return False, None
         if process is None:
-            if self._video_source_stop_pending:
+            if self._video_source_stop_pending and self._capture_broker_start_thread is None:
                 message = "共享视频源进程控制器不存在，无法确认停止"
                 self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
                 return False, message
-            return True, None
-        stop = getattr(process, "stop", None)
-        if not callable(stop):
-            message = "共享视频源进程控制器不支持停止"
-            self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
-            return False, message
-        try:
-            result = stop()
-        except Exception as exc:
-            message = str(exc) or type(exc).__name__
-            self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
-            return False, message
-        if result is False:
-            message = "Broker 未确认停止"
-            self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
-            return False, message
-        return True, None
+            if self._capture_broker_start_thread is None:
+                return True, None
+        startup = self._capture_broker_start_thread
+        startup_done = None
+        if startup is not None:
+            startup_done = getattr(startup, "startup_done", None)
+            if startup_done is None:
+                startup_done = threading.Event()
+                if not getattr(startup, "isRunning", lambda: False)():
+                    startup_done.set()
+            self._capture_broker_stop_startup_done = startup_done
+        thread = BrokerStopThread(process, startup_done, self)
+        self._capture_broker_stop_thread = thread
+        self._capture_broker_stop_context = context
+        self._video_source_stop_pending = True
+        self._video_source_stop_error = None
+        self.video_source_button.setEnabled(False)
+        self.video_source_button.setText("正在断开...")
+        self._set_video_source_status("正在结束视频源连接", "connecting")
+        self._set_video_source_config_enabled(False)
+        thread.finished.connect(lambda current=thread: self._finish_capture_broker_stop(current))
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        return False, None
+
+    def _finish_capture_broker_stop(self, thread: BrokerStopThread) -> None:
+        if thread is not self._capture_broker_stop_thread:
+            return
+        self._capture_broker_stop_thread = None
+        self._capture_broker_stop_startup_done = None
+        if thread.controller is not self._capture_broker_process:
+            return
+        startup = self._capture_broker_start_thread
+        if startup is not None and not getattr(startup, "isRunning", lambda: False)():
+            self._capture_broker_start_thread = None
+        if self._capture_broker_start_thread is None:
+            self._video_source_connecting = False
+            self._video_source_cancel_requested = False
+        if thread.error is not None or thread.result is False:
+            message = str(thread.error or "Broker 未确认停止")
+            self._write_run_log("视频源", f"{self._capture_broker_stop_context}: {message}", level="WARNING")
+            self._set_video_source_stop_failure(message)
+            if self._close_pending:
+                self._reject_pending_close("视频源未能停止", "共享视频源尚未确认停止，请重试断开后再关闭程序。")
+            return
+        self._video_source_stop_pending = False
+        self._video_source_stop_error = None
+        if self._capture_broker_start_thread is None:
+            self._video_source_connecting = False
+            self._video_source_cancel_requested = False
+            self._set_video_source_disconnected_ui(self._video_source_pending_status)
+            self._video_source_pending_status = "未连接"
 
     def _capture_device_index(self) -> int:
         data = self.capture_device_combo.currentData()
@@ -5680,6 +5949,53 @@ class MainWindow(QMainWindow):
             raise ProjectXsIntegrationError("采集卡设备序号无效") from exc
 
     def refresh_capture_devices(self) -> None:
+        if self._is_closing:
+            return
+        self._capture_device_enumeration_generation += 1
+        self._capture_device_enumeration_request = (self._capture_device_enumeration_generation, self._capture_api())
+        if self._capture_device_enumeration_thread is not None:
+            return
+        self._start_capture_device_enumeration()
+
+    def _start_capture_device_enumeration(self) -> None:
+        request, self._capture_device_enumeration_request = self._capture_device_enumeration_request, None
+        if request is None or self._is_closing:
+            return
+        generation, capture_api = request
+        thread = CaptureDeviceEnumerationThread(_enumerate_capture_devices, capture_api, generation, self)
+        self._capture_device_enumeration_thread = thread
+        self.capture_device_refresh_button.setEnabled(False)
+        self.capture_device_refresh_button.setIcon(QIcon())
+        self.capture_device_refresh_button.setText("…")
+        self.capture_device_refresh_button.setAccessibleName("正在刷新采集设备")
+        self.capture_device_refresh_button.setToolTip("正在刷新采集设备")
+        self.statusBar().showMessage("正在刷新采集设备...")
+        thread.finished.connect(lambda current=thread: self._finish_capture_device_enumeration(current))
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _finish_capture_device_enumeration(self, thread: CaptureDeviceEnumerationThread) -> None:
+        if thread is not self._capture_device_enumeration_thread:
+            return
+        self._capture_device_enumeration_thread = None
+        if not self._is_closing and self._capture_device_enumeration_request is not None:
+            self._start_capture_device_enumeration()
+            return
+        self.capture_device_refresh_button.setText("")
+        self.capture_device_refresh_button.setIcon(workspace_icon("refresh"))
+        self.capture_device_refresh_button.setAccessibleName("刷新采集设备")
+        self.capture_device_refresh_button.setToolTip("刷新采集设备")
+        self._update_capture_device_refresh_enabled()
+        if self._is_closing or thread.generation != self._capture_device_enumeration_generation or thread.capture_api != self._capture_api():
+            return
+        if self._video_source_connected or self._video_source_connecting or self._video_source_stop_pending:
+            return
+        if thread.error is not None:
+            self._write_run_log("视频源", f"刷新采集设备失败: {thread.error}", level="WARNING")
+        self._apply_capture_devices(thread.result if isinstance(thread.result, list) else [])
+        self.statusBar().showMessage("采集设备已刷新", 3000)
+
+    def _apply_capture_devices(self, devices: list[tuple[int, str]]) -> None:
         selected_mock = self.capture_device_combo.currentData() == MOCK_CAPTURE_DEVICE
         selected_name = self.capture_device_combo.currentText().partition(" - ")[2].strip()
         try:
@@ -5689,12 +6005,18 @@ class MainWindow(QMainWindow):
                 self._profile_settings.value("video_source/device_index", 0),
                 0,
             )
-        devices = _enumerate_capture_devices(self._capture_api())
         if not devices:
             fallback_indices = list(range(10))
             if selected_index not in fallback_indices:
                 fallback_indices.append(selected_index)
             devices = [(index, "") for index in fallback_indices]
+        elif not selected_mock and not selected_name and selected_index not in {index for index, _name in devices}:
+            # A plain numeric choice is an explicit/manual device index. Keep
+            # it available even when the driver omits it from enumeration.
+            devices = [*devices, (selected_index, "")]
+        # Menu actions retain their row numbers. Dismiss them before replacing
+        # the list so an old action cannot select a different capture device.
+        self.capture_device_combo.hidePopup()
         self.capture_device_combo.blockSignals(True)
         self.capture_device_combo.clear()
         for index, name in devices:
@@ -5705,7 +6027,7 @@ class MainWindow(QMainWindow):
         selected = -1
         if self._dev_mock_devices and selected_mock:
             selected = self.capture_device_combo.findData(MOCK_CAPTURE_DEVICE)
-        if selected_name:
+        if selected_name and not selected_mock:
             selected = next(
                 (
                     row
@@ -5793,6 +6115,8 @@ class MainWindow(QMainWindow):
 
     def toggle_video_source(self) -> None:
         if self._video_source_connecting:
+            if self._capture_broker_stop_thread is None:
+                self.disconnect_video_source()
             return
         if self._video_source_connected or self._video_source_stop_pending:
             self.disconnect_video_source()
@@ -5800,8 +6124,17 @@ class MainWindow(QMainWindow):
             self.connect_video_source()
 
     def connect_video_source(self) -> bool:
+        if self._is_closing or self._capture_broker_stop_thread is not None:
+            return False
         if self._video_source_connected:
             return True
+        self._cancel_preview_interaction(restore_preview=False)
+        if self._preview_thread is not None or self._preview_capture is not None:
+            self._preview_timer.stop()
+            self._release_preview_capture()
+        if self._preview_cleanup_threads or (self._preview_thread is not None and self._preview_thread.stopping):
+            self.statusBar().showMessage("正在释放预览画面，请稍候再连接")
+            return False
         if self.capture_device_combo.currentData() == MOCK_CAPTURE_DEVICE:
             self._connect_mock_video_source()
             return True
@@ -5855,8 +6188,8 @@ class MainWindow(QMainWindow):
         self._video_source_cancel_requested = False
         self._video_source_pending_status = "连接失败"
         self._clear_easycon_image_search_result()
-        self.video_source_button.setEnabled(False)
-        self.video_source_button.setText("连接中...")
+        self.video_source_button.setEnabled(True)
+        self.video_source_button.setText("取消连接")
         self._set_video_source_status("正在等待第一帧", "connecting")
         self._set_video_source_config_enabled(False)
         thread.start()
@@ -5883,6 +6216,8 @@ class MainWindow(QMainWindow):
         self._display_frame(frame)
         self._video_source_connecting = False
         self._video_source_connected = True
+        self._preview_source = None
+        self._latest_preview_source = self._synchronize_preview_source()
         self._video_source_stop_pending = False
         self._video_source_stop_error = None
         self._video_source_pending_status = "未连接"
@@ -5918,18 +6253,12 @@ class MainWindow(QMainWindow):
                 f"视频源连接失败；{self._video_source_diagnostic_snapshot()}",
                 level="ERROR",
             )
-            stopped, stop_error = self._stop_capture_broker_process(
+            self._stop_capture_broker_process(
                 process,
                 context="清理启动失败的 Broker 时出错",
             )
             self._video_source_connected = False
             self._video_source_pending_status = "连接失败"
-            if stopped:
-                self._video_source_stop_pending = False
-                self._video_source_stop_error = None
-                self._set_video_source_status("连接失败，正在清理", "connecting")
-            else:
-                self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
             error = payload if isinstance(payload, BaseException) else RuntimeError(str(payload))
             self._show_error("视频源连接失败", error)
             return
@@ -5969,20 +6298,35 @@ class MainWindow(QMainWindow):
     ) -> None:
         if thread is not self._capture_broker_start_thread or attempt != self._capture_broker_attempt:
             return
+        startup_done = self._capture_broker_stop_startup_done
+        if startup_done is not None:
+            startup_done.set()
+        self._capture_broker_start_thread = None
         if self._video_source_connected:
-            self._capture_broker_start_thread = None
+            return
+        if self._capture_broker_stop_thread is not None:
+            return
+        if self._video_source_stop_error is not None:
+            self._video_source_connecting = False
+            self._video_source_cancel_requested = False
+            self._set_video_source_stop_failure(self._video_source_stop_error)
             return
         controller = self._capture_broker_process if process is None else process
-        stopped, stop_error = self._stop_capture_broker_process(
-            controller,
-            context="连接线程结束后最终确认 Broker 停止失败",
-        )
-        self._capture_broker_start_thread = None
+        # When a stop has already succeeded, do not launch a duplicate cleanup
+        # just because the startup finished notification arrived afterwards.
+        if self._video_source_cancel_requested and not self._video_source_stop_pending:
+            stopped, stop_error = True, None
+        else:
+            stopped, stop_error = self._stop_capture_broker_process(
+                controller,
+                context="连接线程结束后最终确认 Broker 停止失败",
+            )
         self._video_source_connecting = False
-        self._video_source_cancel_requested = False
         if not stopped:
-            self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
+            if stop_error is not None:
+                self._set_video_source_stop_failure(stop_error)
             return
+        self._video_source_cancel_requested = False
         self._video_source_stop_pending = False
         self._video_source_stop_error = None
         self._set_video_source_disconnected_ui(self._video_source_pending_status)
@@ -5995,8 +6339,6 @@ class MainWindow(QMainWindow):
     ) -> bool:
         start_thread = self._capture_broker_start_thread
         starter_pending = start_thread is not None
-        starter_running = start_thread is not None and start_thread.isRunning()
-        was_starting = self._video_source_connecting and not self._video_source_connected
         if (
             not self._video_source_connected
             and not self._video_source_connecting
@@ -6022,7 +6364,7 @@ class MainWindow(QMainWindow):
                 return False
         if active:
             stop_reason = reason or "用户断开/切换视频源"
-            self._capture_cancel.set()
+            self._cancel_capture()
             self._request_automation_runner_stop_with_reason(
                 self.auto_rng_tab,
                 "自动定点",
@@ -6040,40 +6382,29 @@ class MainWindow(QMainWindow):
         self._release_preview_capture()
         if starter_pending and start_thread is not None:
             self._video_source_cancel_requested = True
-            if was_starting:
-                self._video_source_pending_status = "连接已取消"
+            self._video_source_connecting = True
+            self._video_source_pending_status = "连接已取消"
             start_thread.requestInterruption()
         process = self._capture_broker_process
         if self._video_source_connected or self._video_source_connecting or starter_pending:
             self._invalidate_video_source_consumers()
         else:
             self._clear_video_source_preview()
+        if not starter_pending:
+            self._video_source_pending_status = "未连接"
         stopped, stop_error = self._stop_capture_broker_process(
             process,
             context="停止 Broker 失败",
         )
-        starter_running = start_thread is not None and start_thread.isRunning()
-        if starter_pending and not starter_running:
-            stopped, stop_error = self._stop_capture_broker_process(
-                process,
-                context="取消连接后最终确认 Broker 停止失败",
-            )
-        if starter_pending and not starter_running and self._capture_broker_start_thread is start_thread:
-            self._capture_broker_start_thread = None
         if not stopped:
-            if not starter_running:
+            if not starter_pending:
                 self._video_source_connecting = False
                 self._video_source_cancel_requested = False
-            self._set_video_source_stop_failure(stop_error or "Broker 未确认停止")
+            if stop_error is not None:
+                self._set_video_source_stop_failure(stop_error)
             return False
         self._video_source_stop_pending = False
         self._video_source_stop_error = None
-        if starter_running:
-            self._video_source_connecting = True
-            self.video_source_button.setEnabled(False)
-            self.video_source_button.setText("正在断开...")
-            self._set_video_source_status("正在结束视频源连接", "connecting")
-            return False
         self._video_source_connecting = False
         self._video_source_cancel_requested = False
         status = self._video_source_pending_status if starter_pending else "未连接"
@@ -6142,19 +6473,57 @@ class MainWindow(QMainWindow):
             self._display_frame(frame)
 
     def _release_preview_capture(self) -> None:
-        capture = self._preview_capture
-        self._preview_capture = None
-        if capture is None:
+        self._preview_generation += 1
+        thread = self._preview_thread
+        if thread is not None:
+            thread.request_stop()
             return
-        try:
+        if self._preview_capture is None or self._preview_cleanup_threads:
+            return
+        cleanup = CleanupThread(self._close_preview_capture_on_worker, self)
+        self._preview_cleanup_threads.add(cleanup)
+        cleanup.finished.connect(lambda current=cleanup: self._preview_cleanup_finished(current))
+        cleanup.finished.connect(cleanup.deleteLater)
+        cleanup.start()
+
+    def _preview_cleanup_finished(self, thread: CleanupThread) -> None:
+        self._preview_cleanup_threads.discard(thread)
+        if thread.error is not None:
+            self._handle_preview_release_error(thread.error)
+
+    def _close_preview_capture_on_worker(self) -> None:
+        capture = self._preview_capture
+        if capture is not None:
             capture.release()
-        except Exception as exc:
-            self._write_run_log("Seed 捕捉", f"关闭预览捕捉源失败: {exc}", level="WARNING")
+            self._preview_capture = None
+
+    def _preview_thread_finished(self) -> None:
+        thread = self._preview_thread
+        if thread is None:
+            return
+        result = thread.take()
+        if result is not None:
+            self._consume_preview_result(result)
+        self._preview_thread = None
+        if thread.release_error is not None:
+            self._handle_preview_release_error(thread.release_error)
+        thread.deleteLater()
+
+    def _handle_preview_release_error(self, error: BaseException) -> None:
+        message = f"释放预览画面失败，请重试：{error}"
+        self._preview_timer.stop()
+        self._cancel_first_preview_wait(finish_preparation=True)
+        # Failed action callbacks restore their controls. A selection failure
+        # must not restart the retained source until the user retries it.
+        self._resume_preview_after_selection = False
+        self._cancel_preview_action(message, release_preview=False)
+        self._write_run_log("Seed 捕捉", message, level="WARNING")
+        self.statusBar().showMessage(message)
 
     def _read_live_preview_frame(self, config: BlinkCaptureConfig) -> object:
         capture = self._preview_capture
         if capture is None or not _uses_same_capture_source(capture.config, config):
-            self._release_preview_capture()
+            self._close_preview_capture_on_worker()
             capture = PreviewFrameCapture(config)
             if capture.keep_open_for_preview:
                 self._preview_capture = capture
@@ -6162,11 +6531,57 @@ class MainWindow(QMainWindow):
             return capture.read()
         except Exception:
             if capture is self._preview_capture:
-                self._release_preview_capture()
+                self._close_preview_capture_on_worker()
             raise
         finally:
             if capture is not self._preview_capture:
                 capture.release()
+
+    def _synchronize_preview_source(self, config: BlinkCaptureConfig | None = None) -> tuple[object, ...]:
+        if config is None:
+            config = self._config_from_form().capture
+        identity = (self._video_source_generation, *_capture_source_identity(config))
+        previous = self._preview_source
+        if previous != identity:
+            self._preview_source = identity
+            self._resume_preview_after_capture = False
+            if previous is not None:
+                self._preview_generation += 1
+                self._latest_preview_frame = None
+                self._latest_annotated_preview_frame = None
+                self._latest_preview_source = None
+                self._cancel_first_preview_wait(finish_preparation=self._first_preview_pending)
+                self._cancel_preview_interaction(restore_preview=False)
+                self._clear_easycon_image_search_result()
+            elif self._latest_preview_frame is not None and self._latest_preview_source is None:
+                # Preserve explicitly supplied initial snapshots. Every frame
+                # produced by our readers is tagged at publication below.
+                self._latest_preview_source = identity
+        return identity
+
+    def _connect_preview_source_signals(self) -> None:
+        self.monitor_window.toggled.connect(self._preview_source_form_changed)
+        self.window_prefix.textChanged.connect(self._preview_source_form_changed)
+        self.camera.textChanged.connect(self._preview_source_form_changed)
+        self.config_combo.currentIndexChanged.connect(self._preview_source_form_changed)
+
+    def _preview_source_form_changed(self, *_args: object) -> None:
+        if self._is_closing or self._preview_source is None:
+            return
+        try:
+            self._synchronize_preview_source()
+        except Exception:
+            self._resume_preview_after_capture = False
+            self._preview_generation += 1
+            self._latest_preview_frame = None
+            self._latest_annotated_preview_frame = None
+            self._latest_preview_source = None
+            self._cancel_first_preview_wait(finish_preparation=True)
+            self._cancel_preview_interaction(restore_preview=False)
+
+    def _cached_preview_frame(self, config: BlinkCaptureConfig | None = None) -> object | None:
+        identity = self._synchronize_preview_source(config)
+        return self._latest_preview_frame if self._latest_preview_source == identity else None
 
     def _capture_preview_frame_for_config(self, config: BlinkCaptureConfig) -> object:
         def read_active_preview() -> tuple[bool, object | None]:
@@ -6178,7 +6593,10 @@ class MainWindow(QMainWindow):
                 return False, None
             if not _uses_same_capture_source(active_config, config):
                 return False, None
-            return True, self._read_live_preview_frame(config)
+            # Preview I/O belongs to its worker. OCR/screenshots can consume
+            # the latest owned raw snapshot without opening/reading on Qt.
+            frame = self._cached_preview_frame(active_config)
+            return frame is not None, frame
 
         used_preview, frame = self._call_on_ui_thread(read_active_preview)
         if used_preview:
@@ -6194,6 +6612,9 @@ class MainWindow(QMainWindow):
             self._release_preview_capture()
 
     def _restore_preview_after_capture(self) -> None:
+        if self._is_closing:
+            self._resume_preview_after_capture = False
+            return
         if self._video_source_connected:
             if not self._preview_timer.isActive():
                 self._preview_timer.start()
@@ -6203,93 +6624,337 @@ class MainWindow(QMainWindow):
             self._preview_timer.start()
         self._resume_preview_after_capture = False
 
-    def _ensure_preview_frame_before_capture(self) -> bool:
+    def _ensure_preview_frame_before_capture(self, *, on_ready: Callable[[], None] | None = None) -> bool:
         if self._capture_broker_process is not None and not self._video_source_connected:
             QMessageBox.warning(self, "视频源未连接", "请先连接视频源后再运行需要画面的任务。")
             return False
-        if self._latest_preview_frame is not None:
+        try:
+            frame = self._cached_preview_frame()
+        except Exception as exc:
+            self._cancel_first_preview_wait(finish_preparation=True)
+            self.statusBar().showMessage(f"获取画面配置失败: {exc}")
+            return False
+        if self._first_preview_pending:
+            if on_ready is not None and self._first_preview_continuation == on_ready:
+                self._cancel_first_preview_wait(finish_preparation=True)
+                self.statusBar().showMessage("捕捉准备已取消")
+            return False
+        if frame is not None:
             return True
         if not self._preview_timer.isActive():
             self._preview_timer.start()
             self.statusBar().showMessage("预览已自动启动，等待摄像头就绪…")
-        # 等待摄像头首帧到达（最多等 5 秒）
-        waited = 0.0
-        while self._latest_preview_frame is None and waited < 5.0:
-            time.sleep(0.2)
-            waited += 0.2
-            self._update_preview_frame()
-        # Legacy camera capture must release the handle before blink tracking;
-        # Broker consumers can keep the shared preview alive throughout.
-        if (
-            not self._video_source_connected
-            and self._latest_preview_frame is not None
-            and self._preview_timer.isActive()
-        ):
-            self._preview_timer.stop()
-            self._release_preview_capture()
+        self._first_preview_continuation = on_ready
+        self._first_preview_serial += 1
+        self._first_preview_pending = True
+        self._first_preview_source = self._preview_source
+        self._first_preview_deadline = time.monotonic() + 5.0
+        self._first_preview_timer.start()
+        self._update_preview_frame()
+        if self._cached_preview_frame() is not None and self._preview_thread is None and not self._preview_cleanup_threads:
+            self._cancel_first_preview_wait()
+            if not self._video_source_connected:
+                self._preview_timer.stop()
+                self.preview_label.clear()
+                self.preview_label.setText(self._text("no_preview"))
+            return True
+        return False
+
+    def _set_first_preview_continuation(self, continuation: Callable[[], None], owner) -> None:
+        self._first_preview_continuation = continuation
+        self._first_preview_owner = owner
+
+    def _cancel_first_preview_wait(self, *, finish_preparation: bool = False) -> None:
+        self._first_preview_timer.stop()
+        self._first_preview_serial += 1
+        self._first_preview_pending = False
+        self._first_preview_continuation = None
+        self._first_preview_source = None
+        self._first_preview_owner = None
+        if finish_preparation:
+            if self.auto_rng_tab._runner_thread is None:
+                self._finish_auto_rng_preparation()
+            if self.auto_tid_rng_tab._runner_thread is None:
+                self.auto_tid_rng_tab.set_preparing(False)
+            self._refresh_automation_start_state()
+
+    def _poll_first_preview_frame(self) -> None:
+        if self._is_closing or not self._first_preview_pending:
+            self._cancel_first_preview_wait(finish_preparation=True)
+            return
+        try:
+            frame = self._cached_preview_frame()
+        except Exception as exc:
+            self._cancel_first_preview_wait(finish_preparation=True)
+            self.statusBar().showMessage(f"获取画面配置失败: {exc}")
+            return
+        if not self._first_preview_pending:
+            return
+        if frame is None:
+            if time.monotonic() >= self._first_preview_deadline:
+                self._cancel_first_preview_wait(finish_preparation=True)
+                self.statusBar().showMessage("5 秒内未收到摄像头首帧，任务未启动")
+            return
+        if not self._video_source_connected:
+            # Releasing OBS/legacy handles also belongs to the worker. Resume
+            # the original operation only after its finished notification.
+            if self._preview_timer.isActive():
+                self._preview_timer.stop()
+                self._release_preview_capture()
+            if self._preview_thread is not None or self._preview_cleanup_threads:
+                return
             self.preview_label.clear()
             self.preview_label.setText(self._text("no_preview"))
-        return self._latest_preview_frame is not None
+        continuation = self._first_preview_continuation
+        serial = self._first_preview_serial
+        source = self._first_preview_source
+        owner = self._first_preview_owner
+        self._first_preview_timer.stop()
+        if continuation is not None:
+            def resume() -> None:
+                if self._is_closing or serial != self._first_preview_serial or not self._first_preview_pending:
+                    return
+                try:
+                    current_source = self._synchronize_preview_source()
+                except Exception as exc:
+                    self._cancel_first_preview_wait(finish_preparation=True)
+                    self.statusBar().showMessage(f"获取画面配置失败: {exc}")
+                    return
+                if current_source != source:
+                    return
+                if owner is not None and (not owner._preparing or owner._stop_pending):
+                    self._cancel_first_preview_wait(finish_preparation=True)
+                    return
+                self._cancel_first_preview_wait()
+                continuation()
+
+            QTimer.singleShot(0, self, resume)
+        else:
+            self._cancel_first_preview_wait(finish_preparation=True)
+
+    def _refresh_preview_cancel_action(self) -> None:
+        active = (
+            self._preview_action is not None
+            or self._selection_mode is not None
+            or self._tid_ocr_request_token is not None
+        )
+        self._preview_cancel_action.setEnabled(active)
+        self._preview_cancel_button.setVisible(active)
+
+    def _cancel_preview_action(self, message: str | None = None, *, release_preview: bool = True) -> None:
+        action, self._preview_action = self._preview_action, None
+        self._preview_action_serial += 1
+        self._preview_action_timer.stop()
+        if action is not None:
+            if not self._video_source_connected and (action.started_preview or action.pause_legacy):
+                self._preview_timer.stop()
+                if release_preview:
+                    self._release_preview_capture()
+            if message is not None and action.failed is not None:
+                action.failed(message)
+        self._refresh_preview_cancel_action()
+
+    def _cancel_preview_interaction(self, *, restore_preview: bool = True) -> None:
+        if self._tid_ocr_request_token is not None:
+            self._cancel_tid_ocr_recognition()
+        if self._selection_mode is not None:
+            self._cancel_preview_selection(restore_preview=restore_preview)
+        elif self._preview_action is not None:
+            self._cancel_preview_action("等待画面已取消")
+            self.statusBar().showMessage("等待画面已取消")
+
+    def _request_preview_action(
+        self,
+        label: str,
+        ready: Callable[[object], None],
+        *,
+        key: str,
+        pause_legacy: bool = False,
+        failed: Callable[[str], None] | None = None,
+    ) -> None:
+        if self._is_closing:
+            return
+        try:
+            config = self._config_from_form().capture
+            source_identity = self._synchronize_preview_source(config)
+        except Exception as exc:
+            message = f"获取画面配置失败: {exc}"
+            if failed is not None:
+                failed(message)
+            self.statusBar().showMessage(message)
+            return
+        if self._preview_action is not None and self._preview_action.key == key:
+            self._cancel_preview_action("等待画面已取消")
+            self.statusBar().showMessage("等待画面已取消")
+            return
+        self._cancel_preview_action("等待画面已取消")
+        frame = self._cached_preview_frame(config)
+        release_pending = pause_legacy and not self._video_source_connected and (
+            self._preview_thread is not None
+            or self._preview_capture is not None
+            or bool(self._preview_cleanup_threads)
+        )
+        if frame is not None and not release_pending:
+            ready(frame)
+            return
+        if self._video_source_connecting or self._video_source_stop_pending or self._first_preview_pending:
+            message = "视频源正在准备或停止，请完成后重试"
+            if failed is not None:
+                failed(message)
+            self.statusBar().showMessage(message)
+            return
+        self._preview_action_serial += 1
+        self._preview_action = _PreviewAction(
+            self._preview_action_serial,
+            self._video_source_generation,
+            config,
+            source_identity,
+            label,
+            key,
+            ready,
+            failed,
+            time.monotonic() + 5.0,
+            not self._preview_timer.isActive(),
+            pause_legacy,
+            frame=frame,
+        )
+        self._preview_timer.start()
+        self._preview_action_timer.start()
+        self._refresh_preview_cancel_action()
+        self.statusBar().showMessage(f"正在等待画面以{label}，按 Esc 取消...")
+        if frame is not None:
+            self._poll_preview_action()
+        else:
+            self._update_preview_frame()
+
+    def _poll_preview_action(self) -> None:
+        action = self._preview_action
+        if action is None:
+            return
+        if self._is_closing or action.source_generation != self._video_source_generation:
+            self._cancel_preview_interaction(restore_preview=False)
+            return
+        try:
+            current_config = self._config_from_form().capture
+            same_source = self._synchronize_preview_source(current_config) == action.source_identity
+        except Exception:
+            same_source = False
+        if not same_source:
+            self._cancel_preview_interaction(restore_preview=False)
+            self._preview_timer.stop()
+            self._release_preview_capture()
+            self._latest_preview_frame = None
+            self._latest_annotated_preview_frame = None
+            self.statusBar().showMessage("视频来源已改变，请重新等待画面")
+            return
+        if action.frame is None:
+            frame = self._cached_preview_frame(current_config)
+            if frame is None:
+                if time.monotonic() >= action.deadline:
+                    message = f"5 秒内未收到视频画面，无法{action.label}"
+                    self._cancel_preview_action(message)
+                    self.statusBar().showMessage(message)
+                return
+            action.frame = frame
+        if not self._video_source_connected and (action.started_preview or action.pause_legacy):
+            if not action.releasing:
+                action.releasing = True
+                self._preview_timer.stop()
+                self._release_preview_capture()
+                self.statusBar().showMessage(f"正在释放视频采集以{action.label}，按 Esc 取消...")
+            if self._preview_thread is not None or self._preview_cleanup_threads:
+                return
+        # Polling owns completion: no frame payload or delayed callback is
+        # queued after cancellation, source changes, or window destruction.
+        if action is not self._preview_action or action.token != self._preview_action_serial:
+            return
+        self._preview_action = None
+        self._preview_action_timer.stop()
+        self._refresh_preview_cancel_action()
+        action.ready(action.frame)
+
+    def _prepare_preview_selection(self, mode: str) -> bool:
+        if self._is_closing or self._is_capturing():
+            return False
+        try:
+            self._synchronize_preview_source()
+        except Exception as exc:
+            self.statusBar().showMessage(f"获取画面配置失败: {exc}")
+            return False
+        previous_mode = self._selection_mode
+        if previous_mode is not None:
+            self._cancel_preview_selection()
+            if previous_mode == mode:
+                return False
+        return True
 
     def start_roi_selection(self) -> None:
-        if self._is_capturing():
+        if not self._prepare_preview_selection("roi"):
             return
         self._roi_before_selection = (int(self.x.text() or 0), int(self.y.text() or 0), int(self.w.text() or 0), int(self.h.text() or 0))
         self._begin_preview_selection("roi")
-        self.statusBar().showMessage(self._text("roi_selecting"))
 
     def start_eye_capture_selection(self) -> None:
-        if self._is_capturing():
+        if not self._prepare_preview_selection("eye"):
             return
         if self.seed_config_editor.active and self.seed_config_editor.starter_locked:
             self.statusBar().showMessage("御三家固定眼睛模板，仅可调整 ROI 和匹配阈值。")
             return
         self._begin_preview_selection("eye")
-        self.statusBar().showMessage(self._text("eye_selecting"))
 
     def start_ocr_region_selection(self, field: str) -> None:
-        if self._is_capturing():
+        if not self._prepare_preview_selection("ocr_region"):
             return
         self._ocr_selection_field = field
         self._begin_preview_selection("ocr_region")
-        label = OCR_REGION_LABELS.get(field, field)
-        self.statusBar().showMessage(f"正在框选 OCR 区域：{label}")
 
     def start_tid_ocr_region_selection(self) -> None:
-        if self._is_capturing():
+        if not self._prepare_preview_selection("tid_ocr_region"):
             return
         self._begin_preview_selection("tid_ocr_region")
-        self.statusBar().showMessage("正在框选 TID OCR 区域")
 
     def _begin_preview_selection(self, mode: str) -> None:
+        self._cancel_preview_action("等待画面已取消")
         self._selection_mode = mode
         self._resume_preview_after_selection = self._preview_timer.isActive()
+        self._set_preview_selection_enabled(False)
+
+        def failed(message: str) -> None:
+            self._cancel_preview_selection()
+            self.statusBar().showMessage(message)
+
+        self._request_preview_action(
+            "框选区域",
+            lambda frame: self._finish_preview_selection_frame(mode, frame),
+            key=f"selection:{mode}",
+            pause_legacy=True,
+            failed=failed,
+        )
+
+    def _finish_preview_selection_frame(self, mode: str, frame: object) -> None:
+        if self._is_closing or self._selection_mode != mode:
+            return
         if self._preview_timer.isActive() and not self._video_source_connected:
             self._preview_timer.stop()
             self._release_preview_capture()
-        if self._latest_preview_frame is None:
-            try:
-                frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
-                frame_copy = getattr(frame, "copy", None)
-                self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
-            except Exception as exc:
-                self._selection_mode = None
-                self._ocr_selection_field = None
-                self._roi_before_selection = None
-                self._restore_preview_after_selection()
-                self._show_error("Preview failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
-                self.captureSelectionFinished.emit(mode, False)
-                return
-        frame_copy = getattr(self._latest_preview_frame, "copy", None)
-        self._selection_preview_frame = (
-            frame_copy() if callable(frame_copy) else self._latest_preview_frame
-        )
+        frame_copy = getattr(frame, "copy", None)
+        self._selection_preview_frame = frame_copy() if callable(frame_copy) else frame
         self._display_frame(self._selection_preview_frame)
         self._set_preview_selection_enabled(True)
         self._sync_picture_in_picture_frame()
+        self._refresh_preview_cancel_action()
+        messages = {
+            "roi": self._text("roi_selecting"),
+            "eye": self._text("eye_selecting"),
+            "ocr_region": f"正在框选 OCR 区域：{OCR_REGION_LABELS.get(self._ocr_selection_field or '', self._ocr_selection_field or '')}",
+            "tid_ocr_region": "正在框选 TID OCR 区域",
+        }
+        self.statusBar().showMessage(messages[mode] + "，按 Esc 取消")
         self.captureSelectionStarted.emit(mode)
 
     def _handle_preview_selection(self, roi: object) -> None:
+        if self._preview_action is not None:
+            return
         if self._selection_mode not in {"eye", "roi", "ocr_region", "tid_ocr_region"}:
             return
         if not self._confirm_preview_selection(roi):
@@ -6335,15 +7000,18 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Ok,
         ) == QMessageBox.StandardButton.Ok
 
-    def _cancel_preview_selection(self) -> None:
+    def _cancel_preview_selection(self, *, restore_preview: bool = True) -> None:
         mode = self._selection_mode
+        self._cancel_preview_action()
         self._set_preview_selection_enabled(False)
         self._roi_before_selection = None
         self._ocr_selection_field = None
         self._selection_mode = None
+        if not restore_preview:
+            self._resume_preview_after_selection = False
         self._restore_preview_after_selection()
         self.statusBar().showMessage("已取消框选，继续使用之前的设置")
-        if mode in ("roi", "eye", "ocr_region"):
+        if mode in ("roi", "eye", "ocr_region", "tid_ocr_region"):
             self.captureSelectionFinished.emit(mode, False)
 
     def _restore_preview_after_selection(self) -> None:
@@ -6354,6 +7022,7 @@ class MainWindow(QMainWindow):
             self._preview_timer.start()
         self._refresh_preview_presentation()
         self._sync_picture_in_picture_frame()
+        self._refresh_preview_cancel_action()
 
     def apply_selected_ocr_region(self, roi: object) -> None:
         field = self._ocr_selection_field
@@ -6524,12 +7193,14 @@ class MainWindow(QMainWindow):
 
     def _ensure_tid_ocr_settings(self) -> None:
         if self._tid_ocr_dialog is None:
-            dialog = TidOcrDialog(self.ocr_tid_page, recognizer=self._recognize_tid_ocr_region)
+            dialog = TidOcrDialog(self.ocr_tid_page, async_recognition=True)
             dialog.embed_in_workspace()
             self.ocr_tid_page.layout().addWidget(dialog)
             dialog.show()
             dialog.regionSelectionRequested.connect(self.start_tid_ocr_region_selection)
             dialog.regionDisplayRequested.connect(self._show_tid_ocr_region_overlay)
+            dialog.recognitionRequested.connect(self._request_tid_ocr_region_recognition)
+            dialog.recognitionCancelRequested.connect(self._cancel_tid_ocr_recognition)
             self.tidOcrRegionSelected.connect(dialog.set_region)
             self._tid_ocr_dialog = dialog
             _make_labels_copyable(dialog)
@@ -6538,13 +7209,17 @@ class MainWindow(QMainWindow):
         configured_region = region if isinstance(region, OcrRegion) else None
         if region is not None and configured_region is None:
             configured_region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
+        if self._latest_preview_frame is None and self.auto_rng_tab._runner_thread is not None:
+            self.statusBar().showMessage("自动流程运行中，当前没有可显示的 OCR 预览帧")
+            return
+        self._request_preview_action(
+            "显示 OCR 范围",
+            lambda frame: self._display_ocr_region_overlay(field, configured_region, frame),
+            key=f"overlay:{field}",
+        )
+
+    def _display_ocr_region_overlay(self, field: str, configured_region: OcrRegion | None, frame: object) -> None:
         try:
-            frame = self._latest_preview_frame
-            if frame is None:
-                if self.auto_rng_tab._runner_thread is not None:
-                    self.statusBar().showMessage("自动流程运行中，当前没有可显示的 OCR 预览帧")
-                    return
-                frame = self._current_preview_frame_for_ocr()
             image_shape = tuple(getattr(frame, "shape"))
             effective_region = self._ocr_region_config().resolve(field, image_shape)
             if effective_region is None:
@@ -6575,20 +7250,26 @@ class MainWindow(QMainWindow):
     def _show_tid_ocr_region_overlay(self, region: object) -> None:
         if not isinstance(region, OcrRegion):
             region = OcrRegion(*(int(value) for value in region))  # type: ignore[arg-type]
-        self._set_preview_ocr_overlay("tid", region)
-        try:
-            self._display_frame(self._current_preview_frame_for_ocr())
-        except Exception:
-            if self._latest_preview_frame is not None:
-                self._display_frame(self._latest_preview_frame)
-        self.statusBar().showMessage("显示 TID OCR 区域")
+        if self._latest_preview_frame is None and self.auto_tid_rng_tab._runner_thread is not None:
+            self.statusBar().showMessage("自动流程运行中，当前没有可显示的 OCR 预览帧")
+            return
+
+        def display(frame: object) -> None:
+            self._set_preview_ocr_overlay("tid", region)
+            self._display_frame(frame)
+            self.statusBar().showMessage("显示 TID OCR 区域")
+
+        self._request_preview_action("显示 TID OCR 范围", display, key="overlay:tid")
 
     def _current_preview_frame_for_ocr(self) -> object:
-        if self._latest_preview_frame is not None:
-            return self._latest_preview_frame
-        frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
+        config = self._config_from_form().capture
+        frame = self._cached_preview_frame(config)
+        if frame is not None:
+            return frame
+        frame = self._capture_preview_frame_for_config(config)
         frame_copy = getattr(frame, "copy", None)
         self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
+        self._latest_preview_source = self._synchronize_preview_source(config)
         self._display_frame(self._latest_preview_frame)
         return self._latest_preview_frame
 
@@ -6665,7 +7346,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _handle_ocr_task_completed(self, success: bool, payload: object) -> None:
-        if self._is_closing:
+        if self._is_closing or (self.sender() is not None and self.sender() is not self._ocr_task_thread):
             return
         completed = self._ocr_task_completed
         if completed is not None:
@@ -6686,6 +7367,7 @@ class MainWindow(QMainWindow):
         label = OCR_REGION_LABELS.get(field, field)
         try:
             capture_config = self._config_from_form().capture
+            source_identity = self._synchronize_preview_source(capture_config)
             regions = self._ocr_region_config()
         except Exception as exc:
             if dialog is not None:
@@ -6715,6 +7397,10 @@ class MainWindow(QMainWindow):
         def completed(success: bool, payload: object) -> None:
             if self._is_closing:
                 return
+            if self._synchronize_preview_source() != source_identity:
+                if dialog is not None:
+                    dialog.fail_recognition(field, "视频来源已改变，识别已取消")
+                return
             if not success:
                 message = str(payload)
                 self._write_run_log("OCR", f"{label}识别失败: {message}", level="ERROR")
@@ -6741,6 +7427,7 @@ class MainWindow(QMainWindow):
             self._write_run_log("OCR", f"{label}识别结果: {text or '空'}")
             frame_copy = getattr(frame, "copy", None)
             self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
+            self._latest_preview_source = source_identity
             if dialog is not None:
                 dialog.set_preview_frame_shape(image_shape)
                 dialog.finish_recognition(field, text)
@@ -6758,6 +7445,87 @@ class MainWindow(QMainWindow):
             raise
         self._write_run_log("OCR", f"TID识别结果: {text or '空'}")
         return text
+
+    def _cancel_tid_ocr_recognition(self, message: str = "TID 识别已取消") -> None:
+        self._tid_ocr_request_serial += 1
+        self._tid_ocr_request_token = None
+        if self._preview_action is not None and self._preview_action.key == "tid_recognition":
+            self._cancel_preview_action()
+        if self._ocr_task_label == "TID识别" and self._ocr_task_thread is not None:
+            self._ocr_task_thread.requestInterruption()
+        if self._tid_ocr_dialog is not None:
+            self._tid_ocr_dialog.finish_recognition(False, message)
+        self._refresh_preview_cancel_action()
+
+    def _request_tid_ocr_region_recognition(self, region: OcrRegion) -> None:
+        dialog = self._tid_ocr_dialog
+        if self._is_closing or dialog is None:
+            return
+        try:
+            source_identity = self._synchronize_preview_source()
+        except Exception as exc:
+            dialog.finish_recognition(False, f"获取画面配置失败: {exc}")
+            return
+        if (
+            self.auto_rng_tab._runner_thread is not None
+            or self.auto_tid_rng_tab._runner_thread is not None
+            or self._shiny_calibration_worker is not None
+            or self._ocr_activity_running()
+        ):
+            dialog.finish_recognition(False, "已有自动流程或 OCR 任务正在运行")
+            return
+        self._tid_ocr_request_serial += 1
+        token = self._tid_ocr_request_serial
+        self._tid_ocr_request_token = token
+        source_generation = self._video_source_generation
+        dialog.set_recognition_running("正在等待画面，按 Esc 或取消识别中止...")
+        self._refresh_preview_cancel_action()
+
+        def current() -> bool:
+            return (
+                not self._is_closing
+                and self._tid_ocr_request_token == token
+                and source_generation == self._video_source_generation
+                and source_identity == self._synchronize_preview_source()
+                and dialog.region == region
+            )
+
+        def failed(message: str) -> None:
+            if current():
+                self._tid_ocr_request_token = None
+                dialog.finish_recognition(False, message)
+                self._refresh_preview_cancel_action()
+
+        def recognize(frame: object) -> None:
+            if not current():
+                return
+            dialog.set_recognition_running("正在识别，按 Esc 或取消识别中止...")
+
+            def task(should_stop: Callable[[], bool]) -> object:
+                if should_stop():
+                    raise InterruptedError("TID 识别已取消")
+                text = recognize_ocr_field(frame, "tid", region)
+                if should_stop():
+                    raise InterruptedError("TID 识别已取消")
+                return text
+
+            def completed(success: bool, payload: object) -> None:
+                if not current():
+                    return
+                self._tid_ocr_request_token = None
+                text = str(payload)
+                if success:
+                    self._write_run_log("OCR", f"TID识别结果: {text or '空'}")
+                    dialog.finish_recognition(True, text)
+                else:
+                    self._write_run_log("OCR", f"TID识别失败: {text}", level="ERROR")
+                    dialog.finish_recognition(False, f"失败: {text}")
+                self._refresh_preview_cancel_action()
+
+            if not self._start_managed_ocr_task("TID识别", task, completed):
+                failed("已有 OCR 任务正在运行")
+
+        self._request_preview_action("识别 TID", recognize, key="tid_recognition", failed=failed)
 
     def _ocr_region_config(self):
         if self._ocr_settings_dialog is not None:
@@ -6802,7 +7570,7 @@ class MainWindow(QMainWindow):
             if kind == "auto_rng" and self._ocr_warmup_thread is not None:
                 self._ocr_after_warmup = pending
                 return
-            QTimer.singleShot(0, action)
+            QTimer.singleShot(0, self, action)
             return
         if kind.startswith("recognize:"):
             field = kind.split(":", 1)[1]
@@ -6990,8 +7758,19 @@ class MainWindow(QMainWindow):
         self._latest_easycon_image_search_result = result
 
     def _update_preview_frame(self) -> None:
+        if self._is_closing:
+            return
         if self._dev_mock_devices and self._video_source_connected and self._mock_video_frame is not None:
             self._refresh_preview_presentation()
+            return
+        thread = self._preview_thread
+        if thread is not None:
+            result = thread.take()
+            if result is not None:
+                self._consume_preview_result(result)
+            if thread.stopping or self._preview_thread is not thread:
+                return
+        elif self._preview_cleanup_threads:
             return
         config_error: Exception | None = None
         try:
@@ -7006,8 +7785,8 @@ class MainWindow(QMainWindow):
                     level="WARNING",
                 )
             self.statusBar().showMessage(f"预览识别配置无效，显示原始画面: {exc}")
-            if self._preview_capture is not None:
-                config = self._preview_capture.config
+            if self._preview_config is not None:
+                config = self._preview_config
             elif self._video_source_connected:
                 config = self._shared_capture_config(
                     BlinkCaptureConfig(
@@ -7017,82 +7796,65 @@ class MainWindow(QMainWindow):
                 )
             else:
                 return
-
-        try:
-            frame = self._read_live_preview_frame(config)
-        except Exception as exc:
-            shared_source_failed = self._video_source_connected
-            error = exc if isinstance(exc, BaseException) else Exception(str(exc))
-            error_detail = _exception_chain_text(error)
-            diagnostic = self._video_source_diagnostic_snapshot()
-            try:
-                self._write_run_log(
-                    "视频源",
-                    f"预览读帧失败，准备停止视频源；异常链={error_detail}；{diagnostic}",
-                    level="ERROR",
-                )
-            except Exception:
-                pass
-            self._preview_timer.stop()
-            self._release_preview_capture()
-            stopped = True
-            if shared_source_failed:
-                stopped = self.disconnect_video_source(
-                    force=True,
-                    reason=f"视频源读帧失败（{error_detail}）",
-                )
-            self._show_error(
-                "Preview failed",
-                error,
-                source="视频源",
-                write_log=not shared_source_failed,
-            )
-            if shared_source_failed:
-                self._set_video_source_status(
-                    "视频源故障" if stopped else "停止失败，请重试",
-                    "failed",
-                )
+        self._preview_config = config
+        source_identity = self._synchronize_preview_source(config)
+        if thread is not None and thread.stopping:
             return
+        if thread is None:
+            thread = PreviewFrameThread(self._read_render_preview_frame, self._close_preview_capture_on_worker, self)
+            self._preview_thread = thread
+            thread.finished.connect(self._preview_thread_finished)
+            thread.start()
+        thread.submit((self._preview_generation, source_identity, config, config_error, self._latest_easycon_image_search_result))
 
-        frame_copy = getattr(frame, "copy", None)
-        self._latest_preview_frame = frame_copy() if callable(frame_copy) else frame
+    def _read_render_preview_frame(self, request: object) -> object:
+        generation, source_identity, config, config_error, image_result = request  # type: ignore[misc]
+        frame = self._read_live_preview_frame(config)
         preview = None
-        if config_error is not None:
-            annotated_copy = getattr(self._latest_preview_frame, "copy", None)
-            annotated = (
-                annotated_copy()
-                if callable(annotated_copy)
-                else self._latest_preview_frame
-            )
-        else:
+        annotation_error = None
+        annotated = frame
+        if config_error is None:
             try:
+                # render_eye_preview already returns one owned display copy.
                 annotated, preview = render_eye_preview(config, frame)
-                annotated = _draw_easycon_search_overlay(
-                    annotated,
-                    self._latest_easycon_image_search_result,
-                )
+                annotated = _draw_easycon_search_overlay(annotated, image_result, copy=False)
             except Exception as exc:
-                annotated_copy = getattr(self._latest_preview_frame, "copy", None)
-                annotated = (
-                    annotated_copy()
-                    if callable(annotated_copy)
-                    else self._latest_preview_frame
-                )
-                if not self._preview_annotation_error_reported:
-                    self._preview_annotation_error_reported = True
-                    self._write_run_log(
-                        "视频源",
-                        f"预览识别框绘制失败，已回退到原始画面: {exc}",
-                        level="WARNING",
-                    )
-        annotated_copy = getattr(annotated, "copy", None)
-        self._latest_annotated_preview_frame = annotated_copy() if callable(annotated_copy) else annotated
+                annotated = frame
+                annotation_error = exc
+        capture = self._preview_capture
+        obs = capture is not None and capture.keep_open_for_preview and not self._video_source_connected
+        return generation, source_identity, frame, annotated, preview, config_error, annotation_error, obs
+
+    def _consume_preview_result(self, result: tuple[bool, object]) -> None:
+        success, payload = result
+        generation = payload[0] if success else payload[0][0]  # type: ignore[index]
+        source_identity = payload[1] if success else payload[0][1]  # type: ignore[index]
+        try:
+            current_source = self._synchronize_preview_source()
+        except Exception:
+            current_source = self._preview_source
+        if generation != self._preview_generation or source_identity != current_source or self._is_closing:
+            return
+        if not success:
+            self._handle_preview_read_error(payload[1])  # type: ignore[index]
+            return
+        _generation, _source, frame, annotated, preview, config_error, annotation_error, obs = payload  # type: ignore[misc]
+        # Frames are owned by the capture/read call. Overlay drawing changes
+        # only its annotation copy; raw OCR/screenshots retain the original.
+        self._latest_preview_frame = frame
+        self._latest_preview_source = source_identity
+        self._latest_annotated_preview_frame = annotated
+        if annotation_error is not None and not self._preview_annotation_error_reported:
+            self._preview_annotation_error_reported = True
+            self._write_run_log(
+                "视频源", f"预览识别框绘制失败，已回退到原始画面: {annotation_error}", level="WARNING",
+            )
         self.video_overlay.set_match_score(None if preview is None else preview.match_score)
         self._refresh_preview_presentation()
         if self._picture_in_picture is not None and self._picture_in_picture.isVisible():
             self._sync_picture_in_picture_frame()
         resolution = ""
-        if self._preview_capture is not None and self._preview_capture.keep_open_for_preview:
+        if obs:
             frame_height, frame_width = frame.shape[:2]
             resolution = f" | OBS {frame_width}x{frame_height}"
             if frame_width < 1280 or frame_height < 720:
@@ -7108,6 +7870,46 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{self._text('preview_running')}{resolution}{score}{annotation_status}"
         )
+
+    def _handle_preview_read_error(self, exc: BaseException) -> None:
+        try:
+            shared_source_failed = self._video_source_connected
+            error = exc if isinstance(exc, BaseException) else Exception(str(exc))
+            error_detail = _exception_chain_text(error)
+            diagnostic = self._video_source_diagnostic_snapshot()
+            try:
+                self._write_run_log(
+                    "视频源",
+                    f"预览读帧失败，准备停止视频源；异常链={error_detail}；{diagnostic}",
+                    level="ERROR",
+                )
+            except Exception:
+                pass
+            self._preview_timer.stop()
+            self._release_preview_capture()
+            if shared_source_failed:
+                self.disconnect_video_source(
+                    force=True,
+                    reason=f"视频源读帧失败（{error_detail}）",
+                )
+                self._video_source_pending_status = "视频源故障"
+            self._show_error(
+                "Preview failed",
+                error,
+                source="视频源",
+                write_log=not shared_source_failed,
+            )
+            if shared_source_failed:
+                self._set_video_source_status(
+                    "视频源故障，正在断开" if self._capture_broker_stop_thread is not None else "视频源故障",
+                    "connecting" if self._capture_broker_stop_thread is not None else "failed",
+                )
+        finally:
+            self._cancel_first_preview_wait(finish_preparation=True)
+            if self._selection_mode is not None:
+                self._cancel_preview_selection(restore_preview=False)
+            else:
+                self._cancel_preview_action("获取视频画面失败")
 
     def _display_frame(self, frame: object) -> None:
         if self._selection_preview_frame is not None:
@@ -7133,12 +7935,7 @@ class MainWindow(QMainWindow):
         self.preview_label.setPixmap(scaled)
 
     def _frame_to_pixmap(self, frame: object) -> QPixmap:
-        import cv2
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        height, width, channel = rgb.shape
-        image = QImage(rgb.data, width, height, channel * width, QImage.Format.Format_RGB888).copy()
-        return QPixmap.fromImage(image)
+        return _bgr_frame_to_pixmap(frame)
 
     def save_raw_screenshot(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Raw screenshot", "raw_screenshot.png", "PNG files (*.png)")
@@ -7469,7 +8266,7 @@ class MainWindow(QMainWindow):
         self._auto_refresh_results()
 
     def _auto_refresh_results(self) -> None:
-        if getattr(self, "_states", None):
+        if getattr(self, "_states", None) or getattr(self, "_static_result_state", None) == "searching":
             self._generate_static_results(collapse_query=False)
 
     def _current_profile(self) -> Profile8:
@@ -7608,11 +8405,41 @@ class MainWindow(QMainWindow):
         if not self.auto_rng_tab._preparing:
             return
         self._ocr_after_warmup = None
+        self._cancel_first_preview_wait()
+        self._automation_connection_generation += 1
         self.auto_rng_tab.set_phase_text("已停止")
         self.auto_rng_tab.add_log("用户取消启动，等待准备任务退出")
         self._finish_auto_rng_preparation()
 
+    def _cancel_auto_tid_preparation(self) -> None:
+        if self.auto_tid_rng_tab._preparing:
+            self._cancel_first_preview_wait()
+            self._automation_connection_generation += 1
+            self.auto_tid_rng_tab.set_preparing(False)
+            self._refresh_automation_start_state()
+
+    def _connect_automation_controller(self, panel, resume: Callable[[], None]) -> bool:
+        self._automation_connection_generation += 1
+        generation = self._automation_connection_generation
+
+        def finished(success):
+            if generation != self._automation_connection_generation or not panel._preparing:
+                return
+            if self._is_closing or panel._stop_pending or not self._video_source_connected:
+                panel.set_preparing(False)
+                self._refresh_automation_start_state()
+                return
+            if success:
+                resume()
+            else:
+                panel.add_log("自动连接失败，请检查串口和连接后重试", level="ERROR")
+                panel.set_preparing(False)
+                self._refresh_automation_start_state()
+
+        return self._ensure_bridge_connected(on_finished=finished)
+
     def _start_auto_rng_after_warmup(self, config: AutoRngConfig) -> None:
+        connection_pending = False
         self.auto_rng_tab.set_preparing(True)
         self._refresh_automation_start_state()
         try:
@@ -7621,9 +8448,15 @@ class MainWindow(QMainWindow):
             if not self._ensure_automation_start_available(owner=self.auto_rng_tab):
                 return
             if not self._ensure_preview_for_auto_rng():
+                if self._first_preview_pending:
+                    connection_pending = True
+                    self._set_first_preview_continuation(lambda: self._start_auto_rng_after_warmup(config), self.auto_rng_tab)
                 return
             # 自动连接伊机控（如果尚未连接）
-            if not self._ensure_bridge_connected():
+            if not self.easycon_tab._native_is_connected():
+                connection_pending = self._connect_automation_controller(
+                    self.auto_rng_tab, lambda: self._start_auto_rng_after_warmup(config),
+                )
                 return
             config = replace(
                 config,
@@ -7638,29 +8471,40 @@ class MainWindow(QMainWindow):
             self.run_records_tab.set_session_context("自动定点", target_label)
             self.run_records_tab.set_active_round(None)
             services = self._build_auto_rng_services(config)
+            history_archive = self.history_tab._archive
+            emit_history = self.autoHistoryEvent.emit
+            runner = AutoRngRunner(config, services=services)
 
             def history_callback(event: str, args: tuple[object, ...]) -> None:
-                self.autoHistoryEvent.emit(event, args)
+                publish_history_event(history_archive, emit_history, event, args, cancelled=runner.should_stop)
 
-            self.auto_rng_tab.run_with_runner(AutoRngRunner(config, services=services, history_callback=history_callback))
+            runner.history_callback = history_callback
+            self.auto_rng_tab.run_with_runner(runner)
         except Exception as exc:
             self.auto_rng_tab.set_phase_text("启动失败")
             self.auto_rng_tab.add_log(str(exc), level="ERROR")
         finally:
-            if self.auto_rng_tab._runner_thread is None:
+            if self.auto_rng_tab._runner_thread is None and not connection_pending:
                 self._finish_auto_rng_preparation()
 
-    def _start_auto_tid_rng(self, config: AutoTidRngConfig) -> None:
-        if not self._ensure_automation_start_available():
+    def _start_auto_tid_rng(self, config: AutoTidRngConfig, *, _resuming: bool = False) -> None:
+        if not self._ensure_automation_start_available(owner=self.auto_tid_rng_tab if _resuming else None):
             return
+        connection_pending = False
         self.auto_tid_rng_tab.set_preparing(True)
         self._refresh_automation_start_state()
         try:
             if not self._ensure_automation_start_available(owner=self.auto_tid_rng_tab):
                 return
             if not self._ensure_preview_for_auto_rng():
+                if self._first_preview_pending:
+                    connection_pending = True
+                    self._set_first_preview_continuation(lambda: self._start_auto_tid_rng(config, _resuming=True), self.auto_tid_rng_tab)
                 return
-            if not self._ensure_bridge_connected():
+            if not self.easycon_tab._native_is_connected():
+                connection_pending = self._connect_automation_controller(
+                    self.auto_tid_rng_tab, lambda: self._start_auto_tid_rng(config, _resuming=True),
+                )
                 return
             self._active_auto_tid_run_id = uuid.uuid4().hex
             self._active_auto_tid_round_id = 1
@@ -7682,14 +8526,26 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.auto_tid_rng_tab._runner_failed(str(exc))
         finally:
-            if self.auto_tid_rng_tab._runner_thread is None:
+            if self.auto_tid_rng_tab._runner_thread is None and not connection_pending:
                 self.auto_tid_rng_tab._worker_done = False
                 self.auto_tid_rng_tab.set_preparing(False)
                 self._refresh_automation_start_state()
 
+    def _automation_controller_busy(self) -> bool:
+        panel = self.easycon_tab
+        if self._is_closing or self._close_preparation_pending or panel._shutting_down or panel._close_preparation_thread is not None:
+            return True
+        operation = panel._native_lifecycle_thread
+        if operation is None:
+            return False
+        # A matching connect can be shared by the automatic start callback.
+        # Disconnect, late-cancel cleanup and close cannot reserve the device.
+        return not (operation.operation == "connect" and not operation.cancel_event.is_set()
+                    and operation.port == panel._connection_port())
+
     def _automation_script_busy(self) -> bool:
         panel = self.easycon_tab
-        return bool(panel._controller_script_running() or panel.native_run_thread is not None
+        return bool(self._automation_controller_busy() or panel._controller_script_running() or panel.native_run_thread is not None
                     or panel.bridge_run_thread is not None or panel._native_status() == EasyConStatus.RUNNING)
 
     def _refresh_automation_start_state(self, *_args: object) -> None:
@@ -7707,6 +8563,9 @@ class MainWindow(QMainWindow):
         self.manual_seed_action.setEnabled(not busy and self._capture_thread is None)
 
     def _ensure_automation_start_available(self, *, owner=None) -> bool:
+        if self._automation_controller_busy():
+            self.statusBar().showMessage("伊机控正在断开或关闭，请完成后再启动自动任务。")
+            return False
         if self.seed_config_editor.active:
             self.seed_config_editor.reveal()
             self.statusBar().showMessage("请先保存或取消 Seed 配置编辑，再启动自动任务。")
@@ -7830,6 +8689,8 @@ class MainWindow(QMainWindow):
         )
 
     def _build_auto_tid_rng_services(self, config: AutoTidRngConfig) -> AutoTidRngServices:
+        frame_generation = self._video_source_generation
+        search_cancellation = SearchCancellation()
         seed_config_path = self._selected_auto_seed_config_path()
         tracking_config = load_project_xs_config(seed_config_path, blink_count=TIDSID_BLINK_COUNT)
         tracking_config = replace(
@@ -7869,7 +8730,7 @@ class MainWindow(QMainWindow):
             self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
 
             def store_frame(frame: object) -> None:
-                self.autoCaptureFrameChanged.emit(frame)
+                self._publish_auto_capture_frame(frame, generation=frame_generation)
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
@@ -7908,6 +8769,7 @@ class MainWindow(QMainWindow):
                 initial_advances=0,
                 max_advances=max(0, int(threshold)) + 1,
                 state_filter=IDFilter(),
+                cancellation=search_cancellation,
             )
 
         def lookup_tid_state_service(seed_result: AutoTidSeedResult, tid: int, center_advances: int, window: int):
@@ -7919,6 +8781,7 @@ class MainWindow(QMainWindow):
                 initial_advances=start,
                 max_advances=count,
                 state_filter=IDFilter(tid=[int(tid)]),
+                cancellation=search_cancellation,
             )
             if not states:
                 return None
@@ -7949,7 +8812,8 @@ class MainWindow(QMainWindow):
             return text
 
         def stop_current_script_service() -> None:
-            self._capture_cancel.set()
+            search_cancellation.cancel()
+            self._cancel_capture()
             try:
                 native_backend = self._call_on_ui_thread(self.easycon_tab._ensure_native_backend)
             except Exception:
@@ -7976,6 +8840,15 @@ class MainWindow(QMainWindow):
         )
 
     def _handle_auto_history_event(self, event: str, args: object) -> None:
+        reservation = args.reservation if isinstance(args, ReservedHistoryEvent) else None
+        values = args.values if isinstance(args, ReservedHistoryEvent) else args
+        try:
+            self._dispatch_auto_history_event(event, values, reservation)
+        finally:
+            if reservation is not None:
+                reservation.release_unclaimed()
+
+    def _dispatch_auto_history_event(self, event: str, args: object, reservation=None) -> None:
         values = tuple(args) if isinstance(args, tuple) else tuple()
         h = self.history_tab
         if event == "cycle_start" and len(values) >= 1:
@@ -8016,7 +8889,9 @@ class MainWindow(QMainWindow):
             candidates = list(values[0])
             locked_index = int(values[1])
             self.auto_rng_tab.set_candidate_targets(candidates, locked_index, flags)
-            h.candidates_found(candidates, locked_index, flags)  # type: ignore[arg-type]
+            if not h.candidates_found(candidates, locked_index, flags, reservation=reservation):  # type: ignore[arg-type]
+                self._write_run_log("历史记录", "候选记录未受理，请归档完成后重试", level="WARNING")
+                return
             locked_adv = (
                 getattr(candidates[locked_index], "advances", "-")
                 if 0 <= locked_index < len(candidates)
@@ -8028,7 +8903,9 @@ class MainWindow(QMainWindow):
             candidates = list(values[0])
             locked_index = int(values[1])
             self.auto_rng_tab.set_candidate_targets(candidates, locked_index, flags)
-            h.candidates_refiltered(candidates, locked_index, flags)  # type: ignore[arg-type]
+            if not h.candidates_refiltered(candidates, locked_index, flags, reservation=reservation):  # type: ignore[arg-type]
+                self._write_run_log("历史记录", "候选记录未受理，请归档完成后重试", level="WARNING")
+                return
             locked_adv = (
                 getattr(candidates[locked_index], "advances", "-")
                 if 0 <= locked_index < len(candidates)
@@ -8090,7 +8967,9 @@ class MainWindow(QMainWindow):
             delays = list(values[2]) if len(values) >= 3 and values[2] is not None else None
             ocr = dict(values[3]) if len(values) >= 4 and values[3] is not None else None
             results = list(values[0])
-            h.reverse_lookup_results(results, chara, delays, ocr)  # type: ignore[arg-type]
+            if not h.reverse_lookup_results(results, chara, delays, ocr, reservation=reservation):  # type: ignore[arg-type]
+                self._write_run_log("历史记录", "反查候选记录未受理，请归档完成后重试", level="WARNING")
+                return
             if ocr and ocr.get("characteristic_match_failed"):
                 self._write_run_log(
                     "历史记录",
@@ -8100,7 +8979,7 @@ class MainWindow(QMainWindow):
             else:
                 self._write_run_log("历史记录", f"反查完成；候选 {len(results)} 个；个性 {chara or '-'}")
 
-    def _ensure_bridge_connected(self) -> bool:
+    def _ensure_bridge_connected(self, *, on_finished: Callable[[bool], None] | None = None) -> bool:
         """Compatibility name for ensuring the native persistent backend is ready."""
 
         if not self._video_source_connected:
@@ -8123,16 +9002,30 @@ class MainWindow(QMainWindow):
         if not port:
             self._show_error("自动连接失败", "请先在伊机控面板选择串口并连接单片机")
             return False
-        if not self.easycon_tab.connect_native():
+        if not self.easycon_tab.connect_native(on_finished=on_finished):
             self._show_error("自动连接失败", "无法连接到单片机，请检查串口和连接")
             return False
         return True
 
     def _handle_auto_capture_frame(self, frame: object) -> None:
+        if self._is_closing or self._ui_calls_closed.is_set():
+            return
         if self._video_source_connected:
             self._refresh_preview_presentation()
         else:
             self._display_frame(frame)
+
+    def _publish_auto_capture_frame(self, frame: object, *, generation: int | None = None) -> None:
+        source = self._video_source_generation if generation is None else generation
+        if source != self._video_source_generation:
+            return
+        if self._auto_frame_mailbox.offer(source, frame):
+            self.autoCaptureFrameReady.emit()
+
+    def _flush_auto_capture_frame(self) -> None:
+        latest = self._auto_frame_mailbox.take()
+        if latest is not None and latest[0] == self._video_source_generation:
+            self._handle_auto_capture_frame(latest[1])
 
     def _handle_auto_capture_progress(self, done: int, total: int) -> None:
         self.video_overlay.set_capture_progress(done, total, automatic=True)
@@ -8222,6 +9115,7 @@ class MainWindow(QMainWindow):
         self._advance_timer.stop()
 
     def _sync_bdsp_data_from_auto_rng(self, seed: SeedPair64) -> None:
+        self._result_transfer.cancel()
         self.auto_rng_tab.set_target_version(self._profile_version)
         record, state_filter, shiny_mode = self.auto_rng_tab.targets()[0]
         self._apply_auto_target_to_bdsp_controls(record, state_filter, shiny_mode)
@@ -8237,13 +9131,13 @@ class MainWindow(QMainWindow):
                 lead=Lead.NONE,
                 shiny_mode=shiny_mode,
             )
-            states = generate_static_candidates(criteria)
         except Exception as exc:
+            self._static_search.cancel()
             self._static_result_state = "failed"
             self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
-        self._finish_static_generation(record, states, criteria=criteria, collapse_query=False)
+        self._start_static_generation(record, criteria, collapse_query=False)
 
     def _apply_auto_target_to_bdsp_controls(self, record: StaticEncounterRecord, state_filter: StateFilter, shiny_mode: str) -> None:
         category_index = self.category_combo.findData(record.category.value)
@@ -8280,6 +9174,10 @@ class MainWindow(QMainWindow):
         self.nature_combo.setCurrentIndex(max(0, self.nature_combo.findData(nature_index)))
 
     def _build_auto_rng_services(self, config: AutoRngConfig) -> AutoRngServices:
+        frame_generation = self._video_source_generation
+        search_cancellation = SearchCancellation()
+        history_archive = self.history_tab._archive
+        emit_history = self.autoHistoryEvent.emit
         from auto_bdsp_rng.automation.auto_rng.starter_flow import (
             DialogObserver, STARTER_SLOTS, STARTER_TIMING, StarterFlow,
             crop_starter_dialog,
@@ -8368,6 +9266,7 @@ class MainWindow(QMainWindow):
                     observation,  # type: ignore[arg-type]
                     search_min=search_min,
                     search_max=search_max,
+                    cancellation=search_cancellation,
                 )
             return reidentify_seed_from_observation(
                 current_state,
@@ -8375,6 +9274,7 @@ class MainWindow(QMainWindow):
                 npc=source_config.npc,
                 search_min=search_min,
                 search_max=search_max,
+                cancellation=search_cancellation,
             )
 
         def reidentify_search_args(
@@ -8415,7 +9315,7 @@ class MainWindow(QMainWindow):
             self._capture_cancel.clear()
 
             def store_frame(frame: object) -> None:
-                self.autoCaptureFrameChanged.emit(frame)
+                self._publish_auto_capture_frame(frame, generation=frame_generation)
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
@@ -8465,24 +9365,17 @@ class MainWindow(QMainWindow):
         def current_seed_service() -> AutoRngSeedResult:
             return self._call_on_ui_thread(self._current_auto_rng_seed_result)  # type: ignore[return-value]
 
-        def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
-            self._capture_cancel.clear()
-            self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
+        def reidentify_work(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             source_config = exit_tracking_config if seed_result.after_exit_reseed else tracking_config
             source_npc = source_config.npc
 
             def store_frame(frame: object) -> None:
-                self.autoCaptureFrameChanged.emit(frame)
+                self._publish_auto_capture_frame(frame, generation=frame_generation)
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
 
             store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
-
-            # 测种前暂停预览，避免抢摄像头
-            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
-            if preview_was_running:
-                time.sleep(0.3)
 
             hint = seed_result.expected_advances_hint
             search_min, search_max = reidentify_search_args(source_config, hint)
@@ -8525,6 +9418,7 @@ class MainWindow(QMainWindow):
             result = None
             last_error: Exception | None = None
             for attempt_index, (attempt_min, attempt_max) in enumerate(search_attempts):
+                search_cancellation.check()
                 try:
                     result = reidentify_from_observation_for(
                         state32_from_result(seed_result),
@@ -8533,6 +9427,7 @@ class MainWindow(QMainWindow):
                         search_min=attempt_min,
                         search_max=attempt_max,
                     )
+                    search_cancellation.check()
                     if attempt_index:
                         attempt_end = (
                             attempt_min + attempt_max
@@ -8543,7 +9438,10 @@ class MainWindow(QMainWindow):
                             f"校正扩大搜索范围后成功：{attempt_min}..{attempt_end}"
                         )
                     break
+                except SearchCancelled:
+                    raise
                 except Exception as exc:
+                    search_cancellation.check()
                     last_error = exc
                     if attempt_index + 1 < len(search_attempts):
                         attempt_end = (
@@ -8558,6 +9456,7 @@ class MainWindow(QMainWindow):
             if result is None:
                 assert last_error is not None
                 raise last_error
+            search_cancellation.check()
             log_reidentify_debug(
                 "校正",
                 source_config,
@@ -8598,25 +9497,17 @@ class MainWindow(QMainWindow):
                 advance_delay=source_config.advance_delay,
                 advance_delay_2=source_config.advance_delay_2,
             )
-            self.autoSeedCaptured.emit(reidentified)
-            self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+            accept_reidentified(reidentified)
             return reidentified
 
-        def reidentify_exit_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
-            self._capture_cancel.clear()
-            self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
-
+        def reidentify_exit_work(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
             def store_frame(frame: object) -> None:
-                self.autoCaptureFrameChanged.emit(frame)
+                self._publish_auto_capture_frame(frame, generation=frame_generation)
 
             def store_progress(done: int, total: int) -> None:
                 self.autoCaptureProgressChanged.emit(done, total)
 
             store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
-
-            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
-            if preview_was_running:
-                time.sleep(0.3)
 
             observation = capture_player_blinks(
                 replace(exit_tracking_config.capture, blink_count=NOISY_REIDENTIFY_BLINK_COUNT),
@@ -8630,12 +9521,15 @@ class MainWindow(QMainWindow):
             # Noisy search_max is a window length, so this searches 0..1,000,000.
             search_min, search_max = 0, EXIT_REIDENTIFY_SEARCH_FRAMES
             reidentify_started_at = time.perf_counter()
+            search_cancellation.check()
             result = reidentify_seed_from_observation_noisy(
                 state32_from_result(seed_result),
                 observation,
                 search_min=search_min,
                 search_max=search_max,
+                cancellation=search_cancellation,
             )
+            search_cancellation.check()
             log_reidentify_debug(
                 "过场校正",
                 exit_tracking_config,
@@ -8667,14 +9561,43 @@ class MainWindow(QMainWindow):
                 advance_delay=exit_tracking_config.advance_delay,
                 advance_delay_2=exit_tracking_config.advance_delay_2,
             )
-            self.autoSeedCaptured.emit(reidentified)
-            self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+            accept_reidentified(reidentified)
             return reidentified
+
+        def accept_reidentified(result):
+            def accept():
+                search_cancellation.check()
+                self.autoSeedCaptured.emit(result)
+
+            # Validate at the UI acceptance point too: a queued delivery must
+            # not change an accepted Seed/frame after the user stopped the run.
+            self._call_on_ui_thread(accept)
+
+        def with_reidentify_preview(work, seed_result):
+            # A stopped run never clears its event or starts another capture.
+            search_cancellation.check()
+            self._capture_cancel.clear()
+            self._call_on_ui_thread(lambda: self.video_overlay.begin_capture(automatic=True))
+            preview_was_running = bool(self._call_on_ui_thread(self._pause_auto_preview_for_capture))
+            try:
+                if preview_was_running:
+                    time.sleep(0.3)
+                search_cancellation.check()
+                return work(seed_result)
+            finally:
+                self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+
+        def reidentify_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
+            return with_reidentify_preview(reidentify_work, seed_result)
+
+        def reidentify_exit_service(seed_result: AutoRngSeedResult) -> AutoRngSeedResult:
+            return with_reidentify_preview(reidentify_exit_work, seed_result)
 
         def search_candidates_service(seed_result: AutoRngSeedResult) -> list[State8]:
             candidates = generate_static_candidates_multi(
                 replace(search_criteria, seed=seed_pair_from_result(seed_result)),
                 search_targets,
+                cancellation=search_cancellation,
             )
             locked = candidates[0].advances if candidates else None
             if locked is None:
@@ -8697,7 +9620,7 @@ class MainWindow(QMainWindow):
                 StaticSearchTarget(replace(target.state_filter, natures=crit.state_filter.natures), target.shiny_mode)
                 for target in search_targets
             ]
-            candidates = generate_static_candidates_multi(crit, sync_targets)
+            candidates = generate_static_candidates_multi(crit, sync_targets, cancellation=search_cancellation)
             return list(candidates)
 
         def run_script_text_service(
@@ -8745,7 +9668,8 @@ class MainWindow(QMainWindow):
                     self._remove_easycon_image_result_observer(observer_token)
 
         def stop_current_script_service() -> None:
-            self._capture_cancel.set()
+            search_cancellation.cancel()
+            self._cancel_capture()
             try:
                 native_backend = self._call_on_ui_thread(self.easycon_tab._ensure_native_backend)
             except Exception:
@@ -9221,16 +10145,19 @@ class MainWindow(QMainWindow):
             # 输出结果
             if not candidates:
                 log("[自动反查] 3次尝试均未找到匹配个体")
-                self.autoHistoryEvent.emit("reverse_lookup_results", ([], characteristic, None, last_ocr_stats))
+                publish_history_event(history_archive, emit_history, "reverse_lookup_results",
+                                      ([], characteristic, None, last_ocr_stats), cancelled=search_cancellation.is_cancelled)
                 return ()
             else:
                 delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + used_delay
                           if target.raw_target_advances else int(getattr(s, "advances", 0))
                           for s in candidates]
                 result_context = last_ocr_stats if characteristic_match_failed else None
-                self.autoHistoryEvent.emit(
+                publish_history_event(
+                    history_archive, emit_history,
                     "reverse_lookup_results",
                     (candidates, characteristic, delays, result_context),
+                    cancelled=search_cancellation.is_cancelled,
                 )
                 for state in candidates:
                     adv = int(getattr(state, "advances", 0))
@@ -9555,9 +10482,11 @@ class MainWindow(QMainWindow):
             self._refresh_tracked_advances_from_clock()
         self._set_tracked_advances(self._tracked_advances + advances)
 
-    def capture_seed(self) -> None:
+    def capture_seed(self, *, config: ProjectXsTrackingConfig | None = None) -> None:
+        if self._is_closing:
+            return
         if self._is_capturing():
-            self._capture_cancel.set()
+            self._cancel_capture()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
             self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
@@ -9566,11 +10495,12 @@ class MainWindow(QMainWindow):
         if start_mock_capture(self, "seed"):
             return
         try:
-            config = self._config_from_form()
+            if config is None:
+                config = self._config_from_form()
         except ProjectXsIntegrationError as exc:
             self._show_error("Blink capture failed", exc)
             return
-        if not self._ensure_preview_frame_before_capture():
+        if not self._ensure_preview_frame_before_capture(on_ready=self.capture_seed):
             return
 
         self._pause_preview_for_capture()
@@ -9634,9 +10564,11 @@ class MainWindow(QMainWindow):
         self.manualCaptureStarted.emit("seed", self._capture_thread)
         self._capture_timer.start()
 
-    def reidentify_seed(self) -> None:
+    def reidentify_seed(self, *, config: ProjectXsTrackingConfig | None = None) -> None:
+        if self._is_closing:
+            return
         if self._is_capturing():
-            self._capture_cancel.set()
+            self._cancel_capture()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
             self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
@@ -9645,24 +10577,31 @@ class MainWindow(QMainWindow):
         if start_mock_capture(self, "reidentify"):
             return
         try:
-            config = self._config_from_form()
+            if config is None:
+                config = self._config_from_form()
             current_state = SeedState32.from_hex_words([box.text() for box in self.seed32_inputs])
         except Exception as exc:
             self._show_error("校正失败", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return
-        if not self._ensure_preview_frame_before_capture():
+        if not self._ensure_preview_frame_before_capture(on_ready=self.reidentify_seed):
             return
 
         self._pause_preview_for_capture()
         self.reidentify_button.setEnabled(False)
         self._set_preview_selection_enabled(False)
         tracked_advances = self._tracked_advances
-        self._stop_advance_tracking()
+        # Calibration has not accepted a new frame yet. A cancellation must
+        # leave the last accepted counter/Seed intact.
+        self._advance_timer.stop()
         self._capture_cancel.clear()
+        cancellation = self._reidentify_cancellation = SearchCancellation()
         self._capture_result = None
         self._capture_error = None
         self._capture_mode = "reidentify"
         reidentify_capture = self._reidentify_capture_config(config.capture)
+        noisy = bool(config.reidentify_1_pk_npc)
+        search_min = max(0, tracked_advances - 10_000) if tracked_advances else 0
+        search_max = max(100_000, int(self.max_advances.text() or 0))
         reidentify_blink_count = reidentify_capture.blink_count
         self._capture_progress = (0, reidentify_blink_count)
         with self._capture_lock:
@@ -9703,13 +10642,20 @@ class MainWindow(QMainWindow):
                     progress_callback=store_progress,
                     show_window=False,
                 )
-                self._capture_result = self._reidentify_from_observation(
+                cancellation.check()
+                result = self._reidentify_from_observation(
                     current_state,
                     observation,
                     npc=config.npc,
-                    search_min=max(0, tracked_advances - 10_000) if tracked_advances else 0,
-                    search_max=max(100_000, int(self.max_advances.text() or 0) if hasattr(self, "max_advances") else 100_000),
+                    search_min=search_min,
+                    search_max=search_max,
+                    cancellation=cancellation,
+                    noisy=noisy,
                 )
+                cancellation.check()
+                self._capture_result = result
+            except SearchCancelled as exc:
+                self._capture_error = exc
             except Exception as exc:  # pragma: no cover - exercised through UI polling
                 self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
 
@@ -9718,20 +10664,23 @@ class MainWindow(QMainWindow):
         self.manualCaptureStarted.emit("reidentify", self._capture_thread)
         self._capture_timer.start()
 
-    def capture_tidsid_seed(self) -> None:
+    def capture_tidsid_seed(self, *, config: ProjectXsTrackingConfig | None = None) -> None:
+        if self._is_closing:
+            return
         if self._is_capturing():
-            self._capture_cancel.set()
+            self._cancel_capture()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
             self._write_run_log("Seed 捕捉", f"已请求停止{self._capture_mode_label()}", level="WARNING")
             return
         try:
-            config = self._config_from_form()
+            if config is None:
+                config = self._config_from_form()
             config = replace(config, capture=replace(config.capture, blink_count=TIDSID_BLINK_COUNT))
         except ProjectXsIntegrationError as exc:
             self._show_error("TID/SID capture failed", exc)
             return
-        if not self._ensure_preview_frame_before_capture():
+        if not self._ensure_preview_frame_before_capture(on_ready=self.capture_tidsid_seed):
             return
 
         self._pause_preview_for_capture()
@@ -9809,6 +10758,7 @@ class MainWindow(QMainWindow):
         self.video_overlay.finish_capture()
         thread = self._capture_thread
         self._capture_thread = None
+        self._reidentify_cancellation = None
         if thread is not None:
             thread.join(timeout=0)
         mock_dialog, self._mock_capture_dialog = self._mock_capture_dialog, None
@@ -9819,7 +10769,7 @@ class MainWindow(QMainWindow):
         self.tidsid_button.setEnabled(True)
         self.capture_button.setText(self._text("capture_seed"))
         self._restore_preview_after_capture()
-        if self._capture_error is not None:
+        if self._capture_error is not None or self._capture_cancel.is_set():
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))
                 self._write_run_log("Seed 捕捉", f"{self._capture_mode_label()}已停止", level="WARNING")
@@ -9918,77 +10868,48 @@ class MainWindow(QMainWindow):
                 shiny_mode=shiny_mode,
             )
         except Exception as exc:
+            self._static_search.cancel()
             self._static_result_state = "failed"
             self._refresh_static_result_state()
             self._show_error("Generation failed", exc)
             return
-        if criteria.max_advances >= 1_000_000:
-            self._start_static_generation(record, criteria, collapse_query=collapse_query)
-            return
-        self._static_result_state = "searching"
-        self._refresh_static_result_state()
-        try:
-            states = generate_static_candidates(criteria)
-        except Exception as exc:
-            self._static_result_state = "failed"
-            self._refresh_static_result_state()
-            self._show_error("Generation failed", exc)
-            return
-        self._finish_static_generation(record, states, criteria=criteria, collapse_query=collapse_query)
+        self._start_static_generation(record, criteria, collapse_query=collapse_query)
 
     def _start_static_generation(
         self, record: StaticEncounterRecord, criteria: StaticSearchCriteria, *, collapse_query: bool,
     ) -> None:
-        if self._static_generation_thread is not None and self._static_generation_thread.is_alive():
-            self.statusBar().showMessage("Static generation is already running")
+        if self._is_closing:
             return
+        self._result_transfer.cancel()
         self._static_result_state = "searching"
         self._refresh_static_result_state()
-        self._static_generation_result = None
-        self._static_generation_error = None
-
-        def run() -> None:
-            try:
-                states = generate_static_candidates(criteria)
-            except Exception as exc:
-                self._static_generation_error = exc
-            else:
-                self._static_generation_result = (record, states, collapse_query, criteria)
-
-        thread = threading.Thread(target=run, name="static-generation", daemon=True)
-        self._static_generation_thread = thread
-        self.generate_button.setEnabled(False)
+        self._static_search.submit(
+            lambda token: generate_static_candidates(criteria, cancellation=token),
+            lambda states: self._finish_static_generation(record, states, criteria=criteria, collapse_query=collapse_query),
+            self._static_generation_failed,
+        )
         self.statusBar().showMessage("Generating static results...")
-        self._static_generation_timer.start()
-        thread.start()
 
     def _poll_static_generation_thread(self) -> None:
-        thread = self._static_generation_thread
-        if thread is None or thread.is_alive():
+        self._static_search.poll()
+
+    def _static_generation_failed(self, error: Exception) -> None:
+        if self._is_closing:
             return
-        self._static_generation_timer.stop()
-        self._static_generation_thread = None
-        self.generate_button.setEnabled(True)
-        if self._static_generation_error is not None:
-            error = self._static_generation_error
-            self._static_generation_error = None
-            self._static_result_state = "failed"
-            self._refresh_static_result_state()
-            self._show_error("Generation failed", error)
-            return
-        result = self._static_generation_result
-        self._static_generation_result = None
-        if result is None:
-            self._static_result_state = "failed"
-            self._refresh_static_result_state()
-            self._show_error("Generation failed", RuntimeError("Static generation finished without results"))
-            return
-        record, states, collapse_query, criteria = result
-        self._finish_static_generation(record, states, criteria=criteria, collapse_query=collapse_query)
+        self._static_result_state = "failed"
+        self._refresh_static_result_state()
+        self._show_error("Generation failed", error)
+
+    def _cancel_static_generation(self) -> None:
+        self._static_search.cancel()
+        self._static_result_state = "complete" if self._states else "initial"
+        self._refresh_static_result_state()
+        self.statusBar().showMessage("已取消搜索")
 
     def _finish_static_generation(
         self, record: StaticEncounterRecord, states: list[State8], *, criteria: StaticSearchCriteria, collapse_query: bool = True,
     ) -> None:
+        self._result_transfer.cancel()
         self._static_result_state = "complete"
         self._states = states
         self._active_record = record
@@ -10004,13 +10925,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(states)} {self._text('results')}")
 
     def _populate_table(self, states: list[State8]) -> None:
-        sorting = self.table.isSortingEnabled()
-        self.table.setSortingEnabled(False)
         self._update_result_headers()
-        self.table.setRowCount(len(states))
-        for row, state in enumerate(states):
+
+        def items(source):
+            state = states[source]
             values = self._state_row(state, show_stats=False)
             stats = self._stat_values(state)
+            row_items = []
             for column, value in enumerate(values):
                 if 7 <= column < 13:
                     item = StatResultItem(state.ivs[column - 7], stats[column - 7], self._stat_display_mode)
@@ -10018,10 +10939,80 @@ class MainWindow(QMainWindow):
                     item = ResultItem(value, sort_value=int(value, 16) if column in (1, 2) else None)
                 if column == 3 and value not in ("-", "否"):
                     item.setForeground(Qt.GlobalColor.yellow)
-                self.table.setItem(row, column, item)
-        self.table.setSortingEnabled(sorting)
+                row_items.append(item)
+            return row_items
+
+        # Re-capture display mode on each sort/search request. The returned
+        # callbacks use only these domain snapshots, including in a worker.
+        snapshot = lambda: self._result_sort_callbacks(states)
+        sort_key, text, identity = snapshot()
+        self.table.pager.set_source(len(states), items, sort_key, text, identity, snapshot=snapshot)
         self.result_count.setText(f"{len(states)} {self._text('results')}")
         self._refresh_static_result_state()
+
+    def _result_sort_callbacks(self, states):
+        lang = self.lang
+        record = self._active_record
+        bases = record.species_info.stats if record is not None else None
+        abilities = record.species_info.abilities if record is not None else ()
+        show_stats = self._stat_display_mode.show_stats
+        shiny_names = {0: "否", 1: "星闪", 2: "方闪"} if lang == "zh" else {0: "-", 1: "Star", 2: "Square"}
+        gender_names = {0: "雄", 1: "雌", 2: "-"} if lang == "zh" else {0: "M", 1: "F", 2: "-"}
+        natures = NATURES_ZH if lang == "zh" else NATURES
+        numeric_attributes = {0: "advances", 1: "ec", 2: "pid", 13: "height", 14: "weight"}
+
+        def stat(state, index):
+            if bases is None:
+                return 0
+            # HP has no nature modifier, as in _stat_values.
+            if index == 0:
+                return ((2 * bases[0] + state.ivs[0]) * state.level) // 100 + state.level + 10
+            return _compute_stat(bases[index], state.ivs[index], state.level, state.nature, index)
+
+        def text(source, column):
+            state = states[source]
+            if column == 0:
+                return str(state.advances)
+            if column in (1, 2):
+                return f"{state.ec if column == 1 else state.pid:08X}"
+            if column == 3:
+                return shiny_names.get(state.shiny, str(state.shiny))
+            if column == 4:
+                return natures[state.nature]
+            if column == 5:
+                slot = state.ability
+                if lang != "zh" or not abilities:
+                    return str(slot)
+                ability_id = abilities[slot] if 0 <= slot < len(abilities) and abilities[slot] else abilities[0]
+                name = ABILITY_NAMES_ZH.get(ability_id)
+                return f"{slot}: {name}" if name else str(slot)
+            if column == 6:
+                return gender_names.get(state.gender, str(state.gender))
+            if 7 <= column < 13:
+                return str(stat(state, column - 7) if show_stats else state.ivs[column - 7])
+            if column in (13, 14):
+                return str(state.height if column == 13 else state.weight)
+            order = (0, 1, 2, 5, 3, 4)
+            # Characteristic ties start at EC % 6, matching _characteristic_text.
+            start = state.ec % 6
+            best = start
+            max_iv = 0
+            for offset in range(6):
+                candidate = (start + offset) % 6
+                if state.ivs[order[candidate]] > max_iv:
+                    best, max_iv = candidate, state.ivs[order[candidate]]
+            stat_index = order[best]
+            return CHARACTERISTICS_ZH[stat_index][max_iv % 5] if lang == "zh" else f"{IV_LABELS[stat_index]} {max_iv}"
+
+        def sort_key(source, column):
+            state = states[source]
+            if column in numeric_attributes:
+                return getattr(state, numeric_attributes[column])
+            if 7 <= column < 13:
+                return stat(state, column - 7) if show_stats else state.ivs[column - 7]
+            return numeric_sort_key(text(source, column))
+
+        return sort_key, text, lambda source: states[source].advances
 
     def _refresh_static_result_state(self) -> None:
         messages = {
@@ -10039,8 +11030,9 @@ class MainWindow(QMainWindow):
             self.static_empty_state.set_action("调整筛选条件", lambda: self._focus_static_configuration(self.iv_min[0]))
         else:
             self.static_empty_state.set_action("设置 Seed 与参数", lambda: self._focus_static_configuration(self.bdsp_seed64_inputs[0]))
-        self.copy_button.setEnabled(has_results)
-        self.export_button.setEnabled(has_results)
+        self.copy_button.setEnabled(has_results and not self._result_transfer.committing)
+        self.export_button.setEnabled(has_results and not self._result_transfer.committing)
+        self.cancel_search_action.setEnabled(self._static_result_state == "searching")
 
     def _focus_static_configuration(self, control) -> None:
         self.tabs.setCurrentWidget(self.bdsp_tab)
@@ -10087,6 +11079,41 @@ class MainWindow(QMainWindow):
             rows.append("\t".join(self._state_row(state)))
         return "\n".join(rows)
 
+    def _result_export_snapshot(self):
+        states = tuple(self._states)
+        headers = tuple(self._result_headers())
+        _, text, _ = self._result_sort_callbacks(states)
+
+        def rows():
+            yield headers
+            for source in range(len(states)):
+                yield tuple(text(source, column) for column in range(len(headers)))
+
+        return rows, len(states)
+
+    def _result_transfer_changed(self) -> None:
+        kind = self._result_transfer.kind
+        committing = self._result_transfer.committing
+        self.copy_button.setText("取消复制" if kind == "copy" else self._text("copy"))
+        self.export_button.setText("保存中…" if committing else "取消导出" if kind == "export" else self._text("export"))
+        self.copy_button.setEnabled(bool(self._states) and not committing)
+        self.export_button.setEnabled(bool(self._states) and not committing)
+        if committing:
+            self.statusBar().showMessage("正在保存完整结果…")
+        elif kind is not None:
+            action = "复制" if kind == "copy" else "导出"
+            self.statusBar().showMessage(f"正在准备{action} {self._result_transfer.count} 条结果；再次点击可取消")
+
+    def _results_copied(self, text: str, count: int) -> None:
+        QGuiApplication.clipboard().setText(text)
+        self.statusBar().showMessage(f"Copied {count} result(s)")
+
+    def _results_exported(self, output: Path) -> None:
+        self.statusBar().showMessage(f"Exported {output}")
+
+    def _result_transfer_failed(self, error: Exception) -> None:
+        self._show_error("Copy/export failed", error)
+
     def _show_result_context_menu(self, position: QPoint) -> None:
         menu = QMenu(self.table)
         copy_action = menu.addAction("复制" if self.lang == "zh" else "Copy")
@@ -10103,37 +11130,45 @@ class MainWindow(QMainWindow):
             self.export_results()
 
     def copy_results(self) -> None:
+        if self._result_transfer.kind == "copy":
+            if self._result_transfer.cancel():
+                self.statusBar().showMessage("已取消复制准备")
+            return
         if not self._states:
             self.statusBar().showMessage("No results to copy")
             return
-        QGuiApplication.clipboard().setText(self._table_text())
-        self.statusBar().showMessage(f"Copied {len(self._states)} result(s)")
+        rows, count = self._result_export_snapshot()
+        self._result_transfer.copy(rows, count)
 
     def export_results(self) -> None:
+        if self._result_transfer.kind == "export":
+            if self._result_transfer.cancel():
+                self.statusBar().showMessage("已取消导出准备")
+            return
         if not self._states:
             self.statusBar().showMessage("No results to export")
             return
+        rows, count = self._result_export_snapshot()
+        generation = self._result_transfer.generation
         path, _ = QFileDialog.getSaveFileName(self, "Export results", "bdsp_static_results.csv", "CSV files (*.csv)")
-        if not path:
+        if not path or self._is_closing or generation != self._result_transfer.generation:
             return
-        output = Path(path)
-        with output.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(self._result_headers())
-            for state in self._states:
-                writer.writerow(self._state_row(state))
-        self.statusBar().showMessage(f"Exported {output}")
+        self._result_transfer.export(rows, count, path)
 
     def export_results_txt(self) -> None:
+        if self._result_transfer.kind == "export":
+            if self._result_transfer.cancel():
+                self.statusBar().showMessage("已取消导出准备")
+            return
         if not self._states:
             self.statusBar().showMessage("No results to export")
             return
+        rows, count = self._result_export_snapshot()
+        generation = self._result_transfer.generation
         path, _ = QFileDialog.getSaveFileName(self, "Export results", "bdsp_static_results.txt", "Text files (*.txt)")
-        if not path:
+        if not path or self._is_closing or generation != self._result_transfer.generation:
             return
-        output = Path(path)
-        output.write_text(self._table_text(), encoding="utf-8")
-        self.statusBar().showMessage(f"Exported {output}")
+        self._result_transfer.export(rows, count, path, csv_format=False)
 
     def _show_error(
         self,
@@ -10713,13 +11748,18 @@ def run(*, dev_mock_devices: bool = False) -> int:
             )
 
     shutdown_run_log_errors: list[str] = []
+    ui_stall_guard = None
     try:
+        # The standalone application is the sole owner of this timeout. The
+        # diagnostics API defaults to False for tests and embedded callers.
+        ui_stall_guard = start_ui_stall_diagnostics(app, run_log_manager, native_fallback=True)
         window = create_window(
             run_log_manager=run_log_manager,
             ui_scale=ui_scale,
             ui_scale_environment=ui_scale_environment,
             dev_mock_devices=dev_mock_devices,
         )
+        window._ui_stall_guard = ui_stall_guard
         if run_log_startup_error is not None:
             QTimer.singleShot(
                 0,
@@ -10751,6 +11791,8 @@ def run(*, dev_mock_devices: bool = False) -> int:
         raise
     finally:
         run_log_manager.set_error_callback(shutdown_run_log_errors.append)
+        if ui_stall_guard is not None:
+            ui_stall_guard.stop()
         run_log_manager.close()
         if shutdown_run_log_errors:
             try:

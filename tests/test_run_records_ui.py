@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import pytest
+import time
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QWidget
 from PySide6.QtTest import QTest
 
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngProgress
 from auto_bdsp_rng.run_log import RunLogManager
+from auto_bdsp_rng.automation.easycon import EasyConStatus
 from auto_bdsp_rng.ui import MainWindow
 from auto_bdsp_rng.ui.history_panel import HistoryPanel
 from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES, RunLogBuffer, RunLogPanel
 from auto_bdsp_rng.ui.run_records_panel import RunRecordsPanel
 from auto_bdsp_rng.ui.run_log_window import RunLogWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
+from tests.ui_wait import close_all_widgets, wait_until
 
 
 @pytest.fixture
@@ -25,12 +28,7 @@ def app(monkeypatch):
     monkeypatch.setattr(main_window_module, "should_show_startup_notice", lambda: False)
     application = QApplication.instance() or QApplication([])
     yield application
-    for widget in application.topLevelWidgets():
-        for timer in widget.findChildren(QTimer):
-            timer.stop()
-        widget.close()
-        widget.deleteLater()
-    application.processEvents()
+    close_all_widgets(application)
 
 
 def _messages(panel: RunLogPanel) -> list[str]:
@@ -265,7 +263,11 @@ def test_run_records_header_and_history_empty_state_switch_cleanly(app):
     assert history.export_button.isEnabled()
 
     history.search_edit.setText("不存在的轮次")
-    app.processEvents()
+    deadline = time.monotonic() + 5
+    while (history._search_inflight or history._filter_start_timer.isActive()) and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.003)
+    assert not history._search_inflight and not history._filter_start_timer.isActive()
     assert history.empty_state.isVisible()
     assert history.empty_state_title.text() == "没有符合条件的轮次"
     assert not history.round_splitter.isVisible()
@@ -539,6 +541,13 @@ def test_auto_rng_round_button_preserves_unread_detailed_log_count(app, tmp_path
 def test_auto_rng_latest_message_uses_only_the_workspace_footer(app, tmp_path):
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
     window.tabs.setCurrentWidget(window.auto_rng_tab)
+    # Dispatch and finish startup device enumeration before publishing the log;
+    # its progress and completion messages also use the workspace footer.
+    app.processEvents()
+    wait_until(
+        lambda: window._capture_device_enumeration_thread is None
+        and window._capture_device_enumeration_request is None
+    )
     before = len(window._run_log_buffer.snapshot())
 
     window.auto_rng_tab.add_log("第一行\n最终消息")
@@ -674,7 +683,7 @@ def test_start_auto_tid_prepares_first_round_before_worker_logs(app, tmp_path, m
     window = MainWindow(run_log_manager=RunLogManager(tmp_path / "logs"))
     started = []
     monkeypatch.setattr(window, "_ensure_preview_for_auto_rng", lambda: True)
-    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
     monkeypatch.setattr(window, "_build_auto_tid_rng_services", lambda _config: object())
     monkeypatch.setattr(window.auto_tid_rng_tab, "run_with_runner", started.append)
 

@@ -15,11 +15,13 @@ from auto_bdsp_rng.automation.easycon.native.device import (
     COMMAND_CHANGE_AMIIBO_INDEX,
     READY,
     MemoryTransport,
+    NintendoSwitchDevice,
     SwitchReport,
 )
 from auto_bdsp_rng.automation.easycon.native_backend import (
     NativeEasyConBackend,
     NativeEasyConBusyError,
+    _RunOutput,
 )
 from auto_bdsp_rng.capture_broker import BrokerUnavailableError
 
@@ -319,3 +321,89 @@ def test_native_backend_requires_serial_and_sends_amiibo_for_amiibo_only_script(
         assert bytes((READY, 3, COMMAND_CHANGE_AMIIBO_INDEX)) in transport.writes
     finally:
         connected.close()
+
+
+def test_run_output_preserves_newlines_and_streams_all_messages_with_bounded_tail() -> None:
+    messages: list[tuple[str, str]] = []
+    output = _RunOutput(lambda level, message: messages.append((level, message)), limit=12)
+    output.print("first", False)
+    output.print("line", True)
+    assert output.text == "firstline\n"
+    output.alert("last alert")
+    assert output.text.endswith("\nlast alert\n")
+    assert "已省略较早的脚本输出 9 字符" in output.text
+    assert "完整输出需启用磁盘日志" in output.text
+    assert output._length == 12 and sum(map(len, output._parts)) == 12
+    assert messages == [("INFO", "first"), ("INFO", "line"), ("WARNING", "last alert")]
+    output.print("x" * 1000, False)
+    assert output.text.endswith("x" * 12)
+    assert len(output._parts) == 1 and output._length == 12
+
+
+def test_native_script_result_bounds_stdout_without_truncating_error_diagnostics() -> None:
+    messages: list[tuple[str, str]] = []
+    backend = NativeEasyConBackend(
+        stdout_limit=32, log_callback=lambda level, message: messages.append((level, message)),
+    )
+    script = "\n".join(f'PRINT "value-{index:03}"' for index in range(100))
+    script += "\n$value = 1 / 0"
+    result = backend.run_script_text(script, "bounded.ecs")
+    try:
+        assert result.status is EasyConStatus.FAILED and result.exit_code == 1
+        assert "已省略较早的脚本输出" in result.stdout
+        assert result.stdout.endswith("value-099\n")
+        assert "value-000\n" not in result.stdout
+        assert ("INFO", "value-000") in messages and ("INFO", "value-099") in messages
+        assert "bounded.ecs:101" in result.stderr
+        assert backend.execution_trace.snapshot().state == "failed"
+    finally:
+        backend.close()
+
+
+def test_native_backend_can_seal_unused_resources_without_running_disconnect(monkeypatch) -> None:
+    backend = NativeEasyConBackend()
+    monkeypatch.setattr(backend, "disconnect", lambda: pytest.fail("unused backend must not wait on I/O"))
+    assert backend.close_if_idle()
+    with pytest.raises(RuntimeError, match="已关闭"):
+        backend.connect("mock")
+
+
+def test_native_backend_rejects_scripts_during_connection_and_cleans_cancelled_transport() -> None:
+    entered, release, cancel = threading.Event(), threading.Event(), threading.Event()
+    transport = MemoryTransport("COM7")
+    original_open = transport.open
+
+    def slow_open(timeout):
+        entered.set()
+        assert release.wait(3)
+        return original_open(timeout)
+
+    transport.open = slow_open
+    backend = NativeEasyConBackend(device=NintendoSwitchDevice(transport_factory=lambda *_: transport))
+    errors: list[Exception] = []
+
+    def connect():
+        try:
+            backend.connect_cancellable("COM7", cancel)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=connect)
+    try:
+        worker.start()
+        assert entered.wait(1)
+        assert not backend.close_if_idle()
+        with pytest.raises(NativeEasyConBusyError, match="正在连接或断开"):
+            backend.run_script_text("WAIT 1")
+        cancel.set()
+        release.set()
+        worker.join(1)
+        assert not worker.is_alive() and len(errors) == 1
+        assert "连接已取消" in str(errors[0])
+        assert transport.closed and backend.connected_port is None
+        assert backend.close_if_idle()
+    finally:
+        cancel.set()
+        release.set()
+        worker.join(3)
+        backend.close()

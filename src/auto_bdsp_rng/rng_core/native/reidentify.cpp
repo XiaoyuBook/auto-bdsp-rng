@@ -69,8 +69,9 @@ std::optional<ReidentifyResult> reidentify_by_intervals_native(
     const std::vector<u32>& raw_intervals,
     int npc,
     u32 search_min,
-    u32 search_max)
+    u32 search_max, const SearchCancellation* cancellation)
 {
+    check_cancelled(cancellation);
     if (npc < 0) {
         return std::nullopt;
     }
@@ -92,6 +93,7 @@ std::optional<ReidentifyResult> reidentify_by_intervals_native(
         sampled_indices.reserve((search_max + step - 1) / step);
 
         for (u32 index = 0; index < search_max; ++index) {
+            if ((index & 1023) == 0) check_cancelled(cancellation);
             const u8 blink = is_player_blink(rng.next()) ? 1 : 0;
             if (index >= distance && ((index - distance) % step) == 0) {
                 sampled.push_back(blink);
@@ -104,6 +106,7 @@ std::optional<ReidentifyResult> reidentify_by_intervals_native(
 
         const std::size_t last_start = sampled.size() - observed_len;
         for (std::size_t start = 0; start <= last_start; ++start) {
+            if ((start & 1023) == 0) check_cancelled(cancellation);
             const u32 last_index = sampled_indices[start + observed_len - 1];
             if (last_index < search_min) {
                 continue;
@@ -128,8 +131,9 @@ std::optional<ReidentifyResult> reidentify_by_intervals_noisy_native(
     u64 seed1,
     const std::vector<u32>& raw_intervals,
     u32 search_min,
-    u32 search_max)
+    u32 search_max, const SearchCancellation* cancellation)
 {
+    check_cancelled(cancellation);
     const std::vector<u8> blink_bools = noisy_blink_bools(raw_intervals);
     const u64 reident_time = blink_bools.size();
     const u64 possible_length = reident_time * 4 / 3;
@@ -142,6 +146,7 @@ std::optional<ReidentifyResult> reidentify_by_intervals_noisy_native(
     std::vector<u8> blink_rands;
     blink_rands.reserve(search_max);
     for (u32 index = 0; index < search_max; ++index) {
+        if ((index & 1023) == 0) check_cancelled(cancellation);
         blink_rands.push_back(is_player_blink(rng.next()) ? 1 : 0);
     }
 
@@ -151,6 +156,7 @@ std::optional<ReidentifyResult> reidentify_by_intervals_noisy_native(
     const u64 max_advance = search_max - possible_length;
 
     for (u64 advance = 0; advance < max_advance; ++advance) {
+        if ((advance & 1023) == 0) check_cancelled(cancellation);
         u64 observed_index = 0;
         u64 rand_index = 0;
         u64 pokemon_blinks = 0;

@@ -10,6 +10,7 @@ from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria
 from auto_bdsp_rng.ui import main_window as mw
 from tests.test_start_readiness import window
+from tests.ui_wait import wait_search
 
 
 def finish(window, record, states):
@@ -130,6 +131,7 @@ def test_failed_auto_sync_keeps_old_results_bound_to_their_species(window, monke
     monkeypatch.setattr(mw, "generate_static_candidates", fail)
     monkeypatch.setattr(w, "_show_error", lambda *args: errors.append(args))
     w._sync_bdsp_data_from_auto_rng(SeedPair64(1, 2))
+    wait_search(w._static_search)
     assert errors
     assert w._states is states and w._active_record is record
     w.show_stats_check.setChecked(True)

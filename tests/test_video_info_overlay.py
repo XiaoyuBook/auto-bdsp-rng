@@ -132,6 +132,8 @@ def test_matching_uses_live_result_and_threshold_is_synced_and_locked_during_cap
     monkeypatch.setattr(mw, "render_eye_preview", lambda config, frame: (frame.copy(), SimpleNamespace(match_score=0.87654)))
     w._update_preview_frame()
     overlay = w.video_overlay
+    from tests.ui_wait import wait_until
+    wait_until(lambda: (w._update_preview_frame() or overlay.score_value.text() == "0.8765"))
     assert overlay.score_value.text() == "0.8765"
     assert overlay.score_value.property("blinking")
     assert overlay.match_row.isVisible()
@@ -146,6 +148,7 @@ def test_matching_uses_live_result_and_threshold_is_synced_and_locked_during_cap
     assert overlay.threshold.isEnabled()
     monkeypatch.setattr(mw, "render_eye_preview", lambda *args: (_ for _ in ()).throw(ValueError("invalid ROI")))
     w._update_preview_frame()
+    wait_until(lambda: (w._update_preview_frame() or not overlay.match_row.isVisible()))
     assert not overlay.match_row.isVisible()
     assert not overlay.status_panel.isVisible()
     assert w.monitor_frame_info.text() == "1280 × 720"

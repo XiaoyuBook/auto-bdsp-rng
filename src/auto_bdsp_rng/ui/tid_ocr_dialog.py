@@ -20,6 +20,8 @@ def load_tid_ocr_region(settings: QSettings | None = None) -> OcrRegion | None:
 class TidOcrDialog(QDialog):
     regionSelectionRequested = Signal()
     regionDisplayRequested = Signal(object)
+    recognitionRequested = Signal(object)
+    recognitionCancelRequested = Signal()
 
     def __init__(
         self,
@@ -27,6 +29,7 @@ class TidOcrDialog(QDialog):
         *,
         settings: QSettings | None = None,
         recognizer: TidRecognizer | None = None,
+        async_recognition: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setFont(ui_font())
@@ -49,6 +52,8 @@ class TidOcrDialog(QDialog):
         )
         self._settings = settings or QSettings("auto-bdsp-rng", "AutoTidRngOcr")
         self._recognizer = recognizer
+        self._async_recognition = async_recognition
+        self._recognition_running = False
         self.region = load_tid_ocr_region(self._settings)
         self._build_ui()
         self._refresh_region_text()
@@ -106,6 +111,8 @@ class TidOcrDialog(QDialog):
             super().reject()
 
     def set_region(self, region: OcrRegion | tuple[int, int, int, int]) -> None:
+        if self._recognition_running:
+            self.recognitionCancelRequested.emit()
         if not isinstance(region, OcrRegion):
             region = OcrRegion(*(int(value) for value in region))
         self.region = region
@@ -114,8 +121,15 @@ class TidOcrDialog(QDialog):
         self._refresh_region_text()
 
     def recognize_current(self) -> None:
+        if self._recognition_running:
+            self.recognitionCancelRequested.emit()
+            return
         if self.region is None:
             self.result_value.setText("未设置 ROI")
+            return
+        if self._async_recognition:
+            self.set_recognition_running("正在识别...")
+            self.recognitionRequested.emit(self.region)
             return
         if self._recognizer is None:
             self.result_value.setText("OCR 不可用")
@@ -125,6 +139,20 @@ class TidOcrDialog(QDialog):
         except Exception as exc:
             text = f"失败: {exc}"
         self.result_value.setText(text or "空")
+
+    def set_recognition_running(self, message: str) -> None:
+        self._recognition_running = True
+        self.recognize_button.setText("取消识别")
+        self.select_button.setEnabled(False)
+        self.show_button.setEnabled(False)
+        self.result_value.setText(message)
+
+    def finish_recognition(self, success: bool, text: str) -> None:
+        self._recognition_running = False
+        self.recognize_button.setText("识别当前内容")
+        self.select_button.setEnabled(True)
+        self.show_button.setEnabled(True)
+        self.result_value.setText((text or "空") if success else text)
 
     def show_region(self) -> None:
         if self.region is None:

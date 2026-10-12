@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QListView, QSizePolicy, QToolButton,
 
 from auto_bdsp_rng.blink_detection import BlinkCaptureConfig, ProjectXsTrackingConfig
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
+from auto_bdsp_rng.automation.easycon import EasyConStatus
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase, AutoTidRngProgress
 from auto_bdsp_rng.gen8_id import IDState8
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
@@ -21,6 +22,8 @@ from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
 from auto_bdsp_rng.ui.tid_ocr_dialog import TidOcrDialog
+from tests.ui_wait import close_all_widgets, wait_search, wait_until
+from tests.test_ui import isolated_ui_qsettings
 
 
 @pytest.fixture
@@ -28,12 +31,7 @@ def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     application = QApplication.instance() or QApplication([])
     yield application
-    for widget in application.topLevelWidgets():
-        for timer in widget.findChildren(QTimer):
-            timer.stop()
-        widget.close()
-        widget.deleteLater()
-    application.processEvents()
+    close_all_widgets(application)
 
 
 def _settings(tmp_path: Path) -> QSettings:
@@ -318,6 +316,7 @@ def test_tid_manual_seed_has_relative_times_until_capture_origin_is_known(config
     panel = configured_tid_panel
     panel.frame_threshold.setValue(2)
     panel.set_tid_seed(SeedPair64(1, 2))
+    wait_search(panel._manual_search)
     assert panel.id_table.item(0, 5).text() == "00:00.0"
     assert panel.id_table.item(1, 5).text() != "—"
     assert all(panel.id_table.item(r, 6).text() == "—" for r in range(3))
@@ -352,6 +351,7 @@ def test_manual_tid_capture_dates_share_counter_origin_and_follow_ticks(app, mon
     window._capture_thread.join(timeout=2)
     window._poll_capture_thread()
     panel = window.auto_tid_rng_tab
+    wait_search(panel._manual_search)
     next_tick = window._advance_counter.next_tick_at
     assert panel.id_table.item(0, 6).text() == "当前帧"
     assert panel.id_table.item(1, 6).text() == datetime.fromtimestamp(origin + next_tick - 100.0).strftime("%Y.%m.%d %H:%M:%S")
@@ -562,6 +562,7 @@ def test_preview_failure_logs_broker_diagnostics_and_tid_stop_reason(app, monkey
 
     window._update_preview_frame()
 
+    wait_until(lambda: bool(reasons))
     assert reasons and reasons[0].startswith("视频源读帧失败")
     preview_logs = [entry for entry in logs if entry[0] == "视频源"]
     assert len(preview_logs) == 1
@@ -786,6 +787,7 @@ def test_auto_tid_panel_seed_display_generates_id_table_from_threshold(app, tmp_
     panel.frame_threshold.setValue(4)
 
     panel.set_tid_seed(seed_pair)
+    wait_search(panel._manual_search)
 
     assert [box.text() for box in panel.tid_seed_inputs] == list(seed_pair.format_seeds())
     assert panel.id_table.rowCount() == 5
@@ -831,7 +833,7 @@ def test_main_window_starts_auto_tid_runner_from_panel_signal(app, tmp_path: Pat
     )
     started = []
     window._latest_preview_frame = object()
-    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
     monkeypatch.setattr(window.auto_tid_rng_tab, "run_with_runner", started.append)
 
     window._start_auto_tid_rng(config)
@@ -870,7 +872,7 @@ def test_tid_delay_edit_after_stop_reaches_new_runner_and_changes_script_time(ap
         sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
     )
     monkeypatch.setattr(window, "_ensure_preview_for_auto_rng", lambda: True)
-    monkeypatch.setattr(window, "_ensure_bridge_connected", lambda: True)
+    monkeypatch.setattr(window.easycon_tab, "_native_status", lambda: EasyConStatus.BRIDGE_CONNECTED)
     monkeypatch.setattr(window, "_build_auto_tid_rng_services", lambda config: services)
     monkeypatch.setattr(panel, "run_with_runner", started.append)
     start = panel._start_from_capture_clicked if from_capture else panel._start_clicked

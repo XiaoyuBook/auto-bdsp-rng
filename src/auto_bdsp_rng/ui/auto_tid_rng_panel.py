@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import json
 import re
-import csv
 import time
 import math
 from bisect import bisect_left, bisect_right
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from auto_bdsp_rng.ui.runtime_insights import RuntimeInsights
 from auto_bdsp_rng.ui.runtime_value import RuntimeValueLabel
 from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem, TableWorkbench
+from auto_bdsp_rng.ui.background_search import BackgroundSearch
+from auto_bdsp_rng.ui.result_transfer import ResultTransfer
+from auto_bdsp_rng.ui.result_paging import PagedResultTable, SOURCE_ROLE
+from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES
 from auto_bdsp_rng.ui.workspace_layout import LocalViews, ToolbarReflow, scroll_surface
 from auto_bdsp_rng.ui.task_settings import (
     ScriptAssignmentRow, TaskConfigBinding, TaskConfigurationGroups,
@@ -58,6 +61,7 @@ from auto_bdsp_rng.automation.auto_rng.scripts import DEFAULT_SEED_SCRIPT_NAME, 
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngPhase, AutoTidRngProgress, predict_tid_elapsed_seconds
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
+from auto_bdsp_rng.rng_core.cancellation import SearchCancelled
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
@@ -81,6 +85,28 @@ from auto_bdsp_rng.ui.tid_ocr_dialog import load_tid_ocr_region
 
 SCRIPT_DIR = script_directory()
 _TIMESTAMP_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
+
+
+class _ArrivalTexts(Sequence[str]):
+    """Immutable timing input, dates formatted only when a row is consumed."""
+    def __init__(self, elapsed, origin, formatter):
+        self._elapsed = elapsed
+        self._origin = origin
+        self._formatter = formatter
+        self._cache = {}
+
+    def __len__(self):
+        return len(self._elapsed)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(self[position] for position in range(*index.indices(len(self))))
+        elapsed = self._elapsed[index]  # Preserve normal IndexError behavior.
+        if index < 0:
+            index += len(self)
+        if index not in self._cache:
+            self._cache[index] = self._formatter(self._origin, elapsed)
+        return self._cache[index]
 
 
 class _TidViewButton(QToolButton):
@@ -133,9 +159,10 @@ class _CopyableLog(QPlainTextEdit):
         self.setReadOnly(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.setUndoRedoEnabled(False)
+        self.document().setMaximumBlockCount(MAX_LOG_ENTRIES)
 
 
-class _IdResultTable(QTableWidget):
+class _IdResultTable(PagedResultTable):
     searchStatusChanged = Signal(str)
 
     def __init__(self, parent=None):
@@ -145,24 +172,31 @@ class _IdResultTable(QTableWidget):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         text = event.text()
-        if text and text.isprintable() and not event.modifiers() & (
+        backspace = event.key() == Qt.Key.Key_Backspace and bool(self._search_text)
+        if (backspace or text and text.isprintable()) and not event.modifiers() & (
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier
         ):
             now = time.monotonic()
             if now - self._last_search_at > 1.0:
                 self._search_text = ""
             self._last_search_at = now
-            self._search_text += text
-            if self._select_next_prefix_match(self._search_text):
+            self._search_text = self._search_text[:-1] if backspace else self._search_text + text
+            if not self._search_text:
+                self.pager.invalidate_prefix()
+                self.searchStatusChanged.emit("")
+            elif self._select_next_prefix_match(self._search_text):
                 self.searchStatusChanged.emit(f"查找: {self._search_text}")
             else:
                 self.searchStatusChanged.emit(f"未找到: {self._search_text}")
             event.accept()
             return
         self._search_text = ""
+        self.pager.invalidate_prefix()
         super().keyPressEvent(event)
 
     def _select_next_prefix_match(self, prefix: str) -> bool:
+        if self.pager.is_paged:
+            return self.pager.select_prefix(prefix, max(0, self.currentColumn()))
         if self.rowCount() <= 0 or self.columnCount() <= 0:
             return False
         column = self.currentColumn()
@@ -290,6 +324,12 @@ class AutoTidRngWorker(QObject):
     def run(self) -> None:
         try:
             result = self.runner.run()
+        except SearchCancelled as exc:
+            if callable(getattr(self.runner, "should_stop", None)) and self.runner.should_stop():
+                self.finished.emit(self.runner.progress)
+            else:
+                self.failed.emit(str(exc))
+            return
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -359,12 +399,19 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self._highlighted_target_row: int | None = None
         self._reseed_reason = ""
         self._id_elapsed_seconds: tuple[float | None, ...] = ()
-        self._id_arrival_texts: tuple[str, ...] = ()
+        self._id_arrival_texts: Sequence[str] = ()
         self._arrival_items: dict[int, list[ResultItem]] = {}
         self._arrival_frames: list[int] = []
         self._table_current_advances: int | None = None
         self._visible_id_count = 0
         self._manual_tid_timing = False
+        self._manual_search = BackgroundSearch(self)
+        self._result_transfer = ResultTransfer(
+            self, changed=self._result_transfer_changed, copied=self._results_copied,
+            exported=self._results_exported, failed=self._result_transfer_failed,
+        )
+        self._manual_timing_origin: float | None = None
+        self._pending_manual_advances: int | None = None
         self._countdown_target_at: float | None = None
         self._countdown_timer = QTimer(self)
         self._countdown_timer.setInterval(100)
@@ -613,7 +660,13 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             )
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._result_transfer.committing:
+            self.status_badge.setText("正在保存完整 ID 数据，请完成后再关闭")
+            event.ignore()
+            return
         self._countdown_timer.stop()
+        self.close_manual_search()
+        self.id_table.pager.close()
         self._save_panel_state()
         super().closeEvent(event)
 
@@ -1232,6 +1285,9 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         actions.addWidget(self.result_more_button)
         self.id_table.model().layoutChanged.connect(self._id_layout_changed)
         layout.addWidget(self.id_table, 1)
+        layout.addWidget(self.id_table.pager.controls)
+        self.id_table.pager.pageChanged.connect(self._id_page_changed)
+        self.id_table.pager.pageChanged.connect(self.id_table_tools.schedule_refresh)
         self.id_empty_state = TableEmptyState(self.id_table)
         self._id_result_state = "initial"
         self._refresh_id_result_state()
@@ -1310,6 +1366,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         return self.target_display_tids()
 
     def set_tid_seed(self, seed: SeedPair64 | SeedState32, *, generate: bool = True) -> None:
+        self.cancel_result_transfer()
+        self.cancel_manual_search()
+        self._manual_timing_origin = None
+        self._pending_manual_advances = None
         seed_pair = seed.to_seed_pair64() if isinstance(seed, SeedState32) else seed
         for box, text in zip(self.tid_seed_inputs, seed_pair.format_seeds()):
             box.setText(text)
@@ -1319,16 +1379,47 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             return
         if not self._run_state_active and not self._preparing:
             self._active_config = None
-        states = generate_ids(
-            seed_pair,
-            initial_advances=0,
-            max_advances=max(0, int(self.frame_threshold.value())) + 1,
-            state_filter=IDFilter(),
-        )
-        self.set_id_states(
-            states, elapsed_seconds=predict_tid_elapsed_seconds(seed_pair, [state.advances for state in states]),
-        )
+        self.set_id_states([])
+        self._id_result_state = "searching"
+        self._refresh_id_result_state()
+        max_advances = max(0, int(self.frame_threshold.value())) + 1
 
+        def search(token):
+            states = generate_ids(seed_pair, initial_advances=0, max_advances=max_advances,
+                                  state_filter=IDFilter(), cancellation=token)
+            elapsed = predict_tid_elapsed_seconds(seed_pair, [state.advances for state in states],
+                                                 should_stop=token.is_cancelled)
+            token.check()
+            return states, elapsed
+
+        self._manual_search.submit(search, self._finish_manual_tid_generation, self._manual_tid_generation_failed)
+
+    def _finish_manual_tid_generation(self, result) -> None:
+        origin, current = self._manual_timing_origin, self._pending_manual_advances
+        states, elapsed = result
+        self.set_id_states(states, elapsed_seconds=elapsed, measured_wall_time=origin)
+        if origin is not None:
+            self.set_tid_timing_origin(origin)
+        if current is not None:
+            self.update_tid_current_advances(current)
+
+    def _manual_tid_generation_failed(self, error) -> None:
+        self._id_result_state = "failed"
+        self._refresh_id_result_state()
+        self.add_log(f"ID 搜索失败: {error}", level="ERROR")
+
+    def cancel_manual_search(self) -> None:
+        self._manual_search.cancel()
+
+    def close_manual_search(self) -> None:
+        self._manual_search.close()
+        self._result_transfer.close()
+
+    def cancel_result_transfer(self, *, for_close=False) -> bool:
+        return self._result_transfer.cancel(preserve_commit_notice=for_close)
+
+    def result_save_pending(self) -> bool:
+        return self._result_transfer.committing
     def build_config(self, *, start_phase: AutoTidRngPhase = AutoTidRngPhase.RUN_SEED_SCRIPT) -> AutoTidRngConfig:
         target_display_tids = self.target_display_tids()
         if not target_display_tids:
@@ -1455,6 +1546,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.add_log(progress.log_message, level=level)
 
     def _clear_runtime_data(self) -> None:
+        self.cancel_manual_search()
         self._countdown_timer.stop()
         self._countdown_target_at = None
         self._target_key = None
@@ -1597,9 +1689,21 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
                     item.setData(Qt.ItemDataRole.ForegroundRole, QColor("#087c58" if column == 4 else "#202A33") if locked else None)
                     if column < 5:
                         item.setToolTip(f"本轮目标 Display TID {self._target_key[1]:06d}" if locked else "")
-        self.target_data_button.setEnabled(self._highlighted_target_row is not None)
+        target_exists = self._highlighted_target_row is not None
+        if self.id_table.pager.is_paged:
+            target_exists = self._target_key in self._id_target_keys
+        self.target_data_button.setEnabled(target_exists)
 
     def _locate_target(self) -> None:
+        if self.id_table.pager.is_paged:
+            if self._target_key is None:
+                return
+            if not self.id_table.pager.locate(self._target_key, 4):
+                self.id_filter_all_button.setChecked(True)
+            self.id_table.pager.locate_when_ready(self._target_key, 4)
+            self.runtime_scroll.ensureWidgetVisible(self.id_table_group)
+            self.id_table_tools.set_column_visible(4, True)
+            return
         row = self._highlighted_target_row
         if row is None:
             return
@@ -1630,19 +1734,43 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self, states: list[IDState8], *, elapsed_seconds: tuple[float | None, ...] = (),
         measured_wall_time: float | None = None,
     ) -> None:
+        self.cancel_manual_search()
+        self.cancel_result_transfer()
         self._id_result_state = "complete"
         self._id_states = list(states)
+        self._id_target_keys = {(state.advances, state.display_tid) for state in states}
+        self._target_count_cache = None
         self._last_id_states = tuple(states)
         self._highlighted_target_row = None
         self._table_current_advances = None
         self._manual_tid_timing = False
         self._arrival_items = {}
         self._id_elapsed_seconds = elapsed_seconds if len(elapsed_seconds) == len(states) else (None,) * len(states)
-        self._id_arrival_texts = tuple(self._arrival_text(measured_wall_time, value) for value in self._id_elapsed_seconds)
-        sorting = self.id_table.isSortingEnabled()
-        self.id_table.setSortingEnabled(False)
-        self.id_table.setRowCount(len(self._id_states))
-        for row, state in enumerate(self._id_states):
+        self._id_arrival_texts = _ArrivalTexts(self._id_elapsed_seconds, measured_wall_time, self._arrival_text)
+        def snapshot():
+            states = self._id_states
+            seconds = self._id_elapsed_seconds
+            arrivals = self._id_arrival_texts
+            current = self._table_current_advances
+            duration = self._duration_text
+
+            def text(source, column):
+                state = states[source]
+                if column == 6:
+                    return ("已过" if state.advances < current else "当前帧" if state.advances == current else arrivals[source]) if current is not None else arrivals[source]
+                return (str(state.advances), str(state.tid), str(state.sid), str(state.tsv),
+                        f"{state.display_tid:06d}", duration(seconds[source]))[column]
+
+            def sort_key(source, column):
+                state = states[source]
+                if column >= 5:
+                    return seconds[source] if seconds[source] is not None else -1
+                return (state.advances, state.tid, state.sid, state.tsv, state.display_tid)[column]
+
+            return sort_key, text, lambda source: (states[source].advances, states[source].display_tid)
+
+        def items(row):
+            state = self._id_states[row]
             values = (
                 str(state.advances),
                 str(state.tid),
@@ -1652,6 +1780,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
                 self._duration_text(self._id_elapsed_seconds[row]),
                 self._id_arrival_texts[row],
             )
+            row_items = []
             for column, value in enumerate(values):
                 seconds = self._id_elapsed_seconds[row]
                 item = ResultItem(value, sort_value=(seconds if seconds is not None else -1) if column >= 5 else None)
@@ -1661,10 +1790,11 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
                 elif column == 6:
                     item.arrival_text = value
                     item.setToolTip(f"预计到达：{value}" if value != "—" else "没有测种计时起点，无法确定日期时间。")
-                    self._arrival_items.setdefault(state.advances, []).append(item)
-                self.id_table.setItem(row, column, item)
-        self._arrival_frames = sorted(self._arrival_items)
-        self.id_table.setSortingEnabled(sorting)
+                row_items.append(item)
+            return row_items
+
+        sort_key, text, identity = snapshot()
+        self.id_table.pager.set_source(len(self._id_states), items, sort_key, text, identity, snapshot=snapshot)
         self._highlight_target()
         self._apply_id_filter()
 
@@ -1679,10 +1809,13 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def set_tid_timing_origin(self, measured_wall_time: float) -> None:
         """Attach the manual capture counter's origin after ID generation."""
+        self.id_table.pager.invalidate_prefix()
         self._manual_tid_timing = True
-        self._id_arrival_texts = tuple(self._arrival_text(measured_wall_time, value) for value in self._id_elapsed_seconds)
-        for state, text in zip(self._id_states, self._id_arrival_texts):
-            for item in self._arrival_items.get(state.advances, ()):
+        self._manual_timing_origin = measured_wall_time
+        self._id_arrival_texts = _ArrivalTexts(self._id_elapsed_seconds, measured_wall_time, self._arrival_text)
+        for items in self._arrival_items.values():
+            for item in items:
+                text = self._id_arrival_texts[item.data(SOURCE_ROLE)]
                 item.arrival_text = text
                 item.setToolTip(f"预计到达：{text}")
                 item.setText(text)
@@ -1690,8 +1823,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.update_tid_current_advances(0)
 
     def update_tid_current_advances(self, current: int | None) -> None:
+        self._pending_manual_advances = current
         if current is None or current == self._table_current_advances:
             return
+        self.id_table.pager.invalidate_prefix()
         previous = self._table_current_advances
         self._table_current_advances = current
         # Only the old current frame and frames crossed since it need changes.
@@ -1707,12 +1842,43 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
                     item.setText(text)
 
     def _id_layout_changed(self) -> None:
+        if self.id_table.pager.populating:
+            return
+        self._highlight_target()
+        self._apply_id_filter()
+
+    def _id_page_changed(self) -> None:
+        self._arrival_items = {}
+        for row in range(self.id_table.rowCount()):
+            key = self.id_table.item(row, 0).data(IDENTITY_ROLE)
+            self._arrival_items.setdefault(key[0], []).append(self.id_table.item(row, 6))
+        self._arrival_frames = sorted(self._arrival_items)
+        current = self._table_current_advances
+        self._table_current_advances = None
+        if current is not None:
+            self.update_tid_current_advances(current)
         self._highlight_target()
         self._apply_id_filter()
 
     def _apply_id_filter(self, *_args: object) -> None:
         only_targets = self.id_filter_targets_button.isChecked()
         targets = set(self._active_config.target_display_tids or self._active_config.target_tids) if self._active_config is not None else set(self.target_display_tids())
+        if self.id_table.pager.is_paged:
+            target_key = tuple(sorted(targets))
+            if self._target_count_cache is None or self._target_count_cache[0] != target_key:
+                self._target_count_cache = (target_key, sum(state.display_tid in targets for state in self._id_states))
+            target_count = self._target_count_cache[1]
+            states = self._id_states
+            self.id_table.pager.set_filter(lambda source: not only_targets or states[source].display_tid in targets,
+                                           key=(only_targets, target_key))
+            visible_count = target_count if only_targets else len(self._id_states)
+            self._visible_id_count = visible_count
+            self.id_filter_all_button.set_count(len(self._id_states))
+            self.id_filter_targets_button.set_count(target_count)
+            self.id_result_count.setText(f"{visible_count} / {len(self._id_states)} 条结果" if only_targets else f"{len(self._id_states)} 条结果")
+            self.id_result_count.setToolTip("")
+            self._refresh_id_result_state()
+            return
         visible_count = 0
         target_count = 0
         for row in range(self.id_table.rowCount()):
@@ -1760,8 +1926,8 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.id_empty_state.set_action("调整搜索范围", self._focus_search_range)
         else:
             self.id_empty_state.set_action("开始前检查", self.preparationRequested.emit)
-        self.copy_button.setEnabled(has_results)
-        self.export_button.setEnabled(has_results)
+        self.copy_button.setEnabled(has_results and not self._result_transfer.committing)
+        self.export_button.setEnabled(has_results and not self._result_transfer.committing)
 
     def _focus_search_range(self) -> None:
         reveal = getattr(self.window(), "reveal_page_configuration", None)
@@ -1779,6 +1945,43 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             yield (str(state.advances), str(state.tid), str(state.sid), str(state.tsv),
                    f"{state.display_tid:06d}", self._duration_text(elapsed), arrival)
 
+    def _result_export_snapshot(self):
+        states = tuple(self._id_states)
+        seconds, arrivals = self._id_elapsed_seconds, self._id_arrival_texts
+        duration = self._duration_text
+
+        def rows():
+            yield ("Adv", "TID", "SID", "TSV", "Display TID", "累计用时", "预计到达时间")
+            for state, elapsed, arrival in zip(states, seconds, arrivals):
+                yield (str(state.advances), str(state.tid), str(state.sid), str(state.tsv),
+                       f"{state.display_tid:06d}", duration(elapsed), arrival)
+
+        return rows, len(states)
+
+    def _result_transfer_changed(self) -> None:
+        kind = self._result_transfer.kind
+        committing = self._result_transfer.committing
+        self.copy_button.setText("取消复制" if kind == "copy" else "复制全部")
+        self.export_button.setText("保存中…" if committing else "取消导出" if kind == "export" else "导出全部 CSV")
+        self.copy_button.setEnabled(bool(self._id_states) and not committing)
+        self.export_button.setEnabled(bool(self._id_states) and not committing)
+        if committing:
+            self.status_badge.setText("正在保存完整 ID 数据…")
+        elif kind is not None:
+            action = "复制" if kind == "copy" else "导出"
+            self.status_badge.setText(f"正在准备{action} {self._result_transfer.count} 条 ID 数据")
+
+    def _results_copied(self, text: str, count: int) -> None:
+        QGuiApplication.clipboard().setText(text)
+        self.status_badge.setText(f"已复制 {count} 条 ID 数据")
+
+    def _results_exported(self, output: Path) -> None:
+        self.status_badge.setText(f"已导出 {output.name}")
+
+    def _result_transfer_failed(self, error: Exception) -> None:
+        self.status_badge.setText("复制／导出未完成")
+        self.add_log(f"ID 复制／导出失败: {error}", level="ERROR")
+
     def _show_table_context_menu(self, position) -> None:
         menu = QMenu(self.id_table)
         copy_action = menu.addAction("复制全部")
@@ -1792,24 +1995,30 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.export_results()
 
     def copy_results(self) -> None:
+        if self._result_transfer.kind == "copy":
+            if self.cancel_result_transfer():
+                self.status_badge.setText("已取消复制准备")
+            return
         if not self._id_states:
             self.status_badge.setText("没有可复制的 ID 数据")
             return
-        QGuiApplication.clipboard().setText(self._table_text())
-        self.status_badge.setText(f"已复制 {len(self._id_states)} 条 ID 数据")
+        rows, count = self._result_export_snapshot()
+        self._result_transfer.copy(rows, count)
 
     def export_results(self) -> None:
+        if self._result_transfer.kind == "export":
+            if self.cancel_result_transfer():
+                self.status_badge.setText("已取消导出准备")
+            return
         if not self._id_states:
             self.status_badge.setText("没有可导出的 ID 数据")
             return
+        rows, count = self._result_export_snapshot()
+        generation = self._result_transfer.generation
         path, _ = QFileDialog.getSaveFileName(self, "导出 ID 数据", "auto_tid_id_results.csv", "CSV files (*.csv)")
-        if not path:
+        if not path or generation != self._result_transfer.generation:
             return
-        output = Path(path)
-        with output.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle)
-            writer.writerows(self._export_rows())
-        self.status_badge.setText(f"已导出 {output.name}")
+        self._result_transfer.export(rows, count, path)
 
     def _runner_finished(self, progress: object) -> None:
         if isinstance(progress, AutoTidRngProgress):
@@ -1850,6 +2059,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.add_log(str(exc), level="WARNING")
             return
         self._active_config = config
+        self.cancel_result_transfer()
         self._runtime_loop_index = 0
         self._reseed_reason = ""
         self._clear_runtime_data()

@@ -316,9 +316,13 @@ def test_main_window_close_respects_unsaved_qq_credentials(dialog, service, monk
         raise OSError("disk full")
 
     window = SimpleNamespace(
-        easycon_tab=SimpleNamespace(prepare_for_close_confirmation=lambda: None),
+        easycon_tab=SimpleNamespace(prepare_for_close_confirmation=lambda: True),
         _confirm_unsaved_easycon_script=lambda: True,
         _qq_dialog=dialog, show_qq_notifications=dialog.show, _is_closing=False,
+        _close_accepted=False, _close_ready=False, _close_pending=False,
+        _easycon_close_pending=False, _close_preparation_pending=False,
+        _resume_confirmed_close=False, _resume_prepared_close=False,
+        _ui_scale_restart_pending=False,
     )
     with monkeypatch.context() as scope:
         scope.setattr(service.store, "save", fail_save)

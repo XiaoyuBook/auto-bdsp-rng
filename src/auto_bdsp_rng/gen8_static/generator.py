@@ -23,6 +23,7 @@ from auto_bdsp_rng.gen8_static.models import (
 )
 from auto_bdsp_rng.rng_core.generators import BDSPXorshift, RNGList, XoroshiroBDSP
 from auto_bdsp_rng.rng_core.seed import SeedPair64, U32_MAX
+from auto_bdsp_rng.rng_core.cancellation import SearchCancellation
 
 try:
     from auto_bdsp_rng.rng_core._native import generate_static as _native_generate
@@ -159,8 +160,12 @@ class StaticGenerator8:
         if self.offset < 0:
             raise ValueError("offset must be non-negative")
 
-    def _generate_native(self, seed0: int, seed1: int, roamer: bool) -> list[State8]:
+    def _generate_native(self, seed0: int, seed1: int, roamer: bool, cancellation: SearchCancellation | None = None) -> list[State8] | None:
         """使用 C++ 原生扩展生成（高速路径），输出与 Python 完全一致。"""
+        if cancellation is not None:
+            cancellation.check()
+            if cancellation.native is None:
+                return None
         sf = self.state_filter
         template = self.template
         profile = self.profile
@@ -179,18 +184,35 @@ class StaticGenerator8:
             tuple(sf.natures), tuple(sf.hidden_powers),
         )
         try:
-            results_raw = _native_generate(*args[:15], template.level, *args[15:])
+            kwargs = {"cancel_token": cancellation.native} if cancellation is not None else {}
+            results_raw = _native_generate(*args[:15], template.level, *args[15:], **kwargs)
         except TypeError:
+            if cancellation is not None:
+                # Older extensions cannot accept the token. Never retry their
+                # uninterruptible API for a cancellable request.
+                cancellation.check()
+                return None
             results_raw = _native_generate(*args)
-        return [
-            State8(
+        return self._native_states(results_raw, cancellation)
+
+    def _native_states(self, results_raw, cancellation: SearchCancellation | None) -> list[State8]:
+        states = []
+        # Consume from the end in O(1) steps. This frees raw tuples as they are
+        # converted instead of destroying a second, huge list under one GIL hold.
+        for index in range(len(results_raw)):
+            if cancellation is not None and index % 1024 == 0:
+                cancellation.check()
+            r = results_raw.pop()
+            states.append(State8(
                 advances=r[0], ec=r[1], sidtid=r[2], pid=r[3],
                 ivs=tuple(r[4]),
-                ability=r[5], gender=r[6], level=template.level,
+                ability=r[5], gender=r[6], level=self.template.level,
                 nature=r[8], shiny=r[9], height=r[10], weight=r[11],
-            )
-            for r in results_raw
-        ]
+            ))
+        if cancellation is not None:
+            cancellation.check()
+        states.reverse()
+        return states
 
     def _native_args_for_filter(self, seed0: int, seed1: int, roamer: bool, state_filter: StateFilter) -> tuple[object, ...]:
         template = self.template
@@ -210,25 +232,28 @@ class StaticGenerator8:
             tuple(state_filter.natures), tuple(state_filter.hidden_powers),
         )
 
-    def _generate_native_multi(self, seed0: int, seed1: int, roamer: bool, filters: Sequence[StateFilter]) -> list[State8]:
+    def _generate_native_multi(self, seed0: int, seed1: int, roamer: bool, filters: Sequence[StateFilter], cancellation: SearchCancellation | None = None) -> list[State8] | None:
+        if cancellation is not None:
+            cancellation.check()
+            if cancellation.native is None:
+                return None
         if _native_generate_multi is None:
             raise ImportError("native multi static generator is unavailable")
         if not filters:
             return []
         base_args = self._native_args_for_filter(seed0, seed1, roamer, filters[0])[:16]
         filter_args = [self._native_args_for_filter(seed0, seed1, roamer, sf)[16:] for sf in filters]
-        results_raw = _native_generate_multi(*base_args, filter_args)
-        return [
-            State8(
-                advances=r[0], ec=r[1], sidtid=r[2], pid=r[3],
-                ivs=tuple(r[4]),
-                ability=r[5], gender=r[6], level=self.template.level,
-                nature=r[8], shiny=r[9], height=r[10], weight=r[11],
-            )
-            for r in results_raw
-        ]
+        kwargs = {"cancel_token": cancellation.native} if cancellation is not None else {}
+        try:
+            results_raw = _native_generate_multi(*base_args, filter_args, **kwargs)
+        except TypeError:
+            if cancellation is None:
+                raise
+            cancellation.check()
+            return None
+        return self._native_states(results_raw, cancellation)
 
-    def generate(self, seed0: int | SeedPair64, seed1: int | None = None) -> list[State8]:
+    def generate(self, seed0: int | SeedPair64, seed1: int | None = None, *, cancellation: SearchCancellation | None = None) -> list[State8]:
         if isinstance(seed0, SeedPair64):
             if seed1 is not None:
                 raise ValueError("seed1 must be omitted when seed0 is a SeedPair64")
@@ -237,15 +262,19 @@ class StaticGenerator8:
             raise ValueError("seed1 is required")
         seed0 = validate_seed64(seed0, "seed0")
         seed1 = validate_seed64(seed1, "seed1")
+        if cancellation is not None:
+            cancellation.check()
 
-        if _HAS_NATIVE:
-            return self._generate_native(seed0, seed1, self.template.roamer)
+        if _HAS_NATIVE and (cancellation is None or cancellation.native is not None):
+            states = self._generate_native(seed0, seed1, self.template.roamer, cancellation)
+            if states is not None:
+                return states
 
         if self.template.roamer:
-            return self.generate_roamer(seed0, seed1)
-        return self.generate_non_roamer(seed0, seed1)
+            return self.generate_roamer(seed0, seed1, cancellation=cancellation)
+        return self.generate_non_roamer(seed0, seed1, cancellation=cancellation)
 
-    def generate_matching_any(self, filters: Sequence[StateFilter], seed0: int | SeedPair64, seed1: int | None = None) -> list[State8]:
+    def generate_matching_any(self, filters: Sequence[StateFilter], seed0: int | SeedPair64, seed1: int | None = None, *, cancellation: SearchCancellation | None = None) -> list[State8]:
         if isinstance(seed0, SeedPair64):
             if seed1 is not None:
                 raise ValueError("seed1 must be omitted when seed0 is a SeedPair64")
@@ -254,25 +283,45 @@ class StaticGenerator8:
             raise ValueError("seed1 is required")
         seed0 = validate_seed64(seed0, "seed0")
         seed1 = validate_seed64(seed1, "seed1")
+        if cancellation is not None:
+            cancellation.check()
         filters = tuple(filters)
         if not filters:
             return []
 
-        if _HAS_NATIVE and _native_generate_multi is not None:
-            return self._generate_native_multi(seed0, seed1, self.template.roamer, filters)
+        if _HAS_NATIVE and _native_generate_multi is not None and (cancellation is None or cancellation.native is not None):
+            states = self._generate_native_multi(seed0, seed1, self.template.roamer, filters, cancellation)
+            if states is not None:
+                return states
 
         base = replace(self, state_filter=StateFilter(skip=True))
-        states = base.generate(seed0, seed1)
-        return [state for state in states if any(sf.compare_state(state) for sf in filters)]
+        if cancellation is None:
+            states = base.generate(seed0, seed1)
+        else:
+            # A rejected multi cancellation API must not re-enter an older
+            # single native generator while applying the union in Python.
+            generate_python = base.generate_roamer if self.template.roamer else base.generate_non_roamer
+            states = generate_python(seed0, seed1, cancellation=cancellation)
+        matched = []
+        for index, state in enumerate(states):
+            if cancellation is not None and index % 1024 == 0:
+                cancellation.check()
+            if any(sf.compare_state(state) for sf in filters):
+                matched.append(state)
+        if cancellation is not None:
+            cancellation.check()
+        return matched
 
-    def generate_non_roamer(self, seed0: int, seed1: int) -> list[State8]:
+    def generate_non_roamer(self, seed0: int, seed1: int, *, cancellation: SearchCancellation | None = None) -> list[State8]:
         rng = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
-        rng.advance(self.initial_advances + self.offset)
+        rng.jump(self.initial_advances + self.offset)
         rng_list: RNGList[int] = RNGList(rng, size=32, generate=_gen_static_ec)
         sf = self.state_filter
 
         states: list[State8] = []
         for count in range(self.max_advances + 1):
+            if cancellation is not None and count % 64 == 0:
+                cancellation.check()
             ec = rng_list.next()
             sidtid = rng_list.next()
             pid = rng_list.next()
@@ -300,7 +349,7 @@ class StaticGenerator8:
             matches_filter = sf.skip or (
                 (sf.ability == 255 or sf.ability == ability)
                 and (sf.gender == 255 or sf.gender == gender)
-                and (sf.shiny == 255 or bool(sf.shiny & shiny))
+                and (sf.shiny == 255 or (shiny == 0 if sf.shiny == 0 else bool(sf.shiny & shiny)))
                 and sf.natures[nature]
                 and sf.hidden_powers[hidden_power(ivs)]
                 and sf.height_min <= height <= sf.height_max
@@ -315,19 +364,23 @@ class StaticGenerator8:
                     nature=nature, shiny=shiny, height=height, weight=weight,
                 ))
             rng_list.advance_state()
+        if cancellation is not None:
+            cancellation.check()
         return states
 
-    def generate_roamer(self, seed0: int, seed1: int) -> list[State8]:
+    def generate_roamer(self, seed0: int, seed1: int, *, cancellation: SearchCancellation | None = None) -> list[State8]:
         import time as _time
         gender = GENDER_FEMALE if self.template.species == 488 else GENDER_GENDERLESS
         roamer = BDSPXorshift.from_seed_pair64(SeedPair64(seed0, seed1))
-        roamer.advance(self.initial_advances + self.offset)
+        roamer.jump(self.initial_advances + self.offset)
         sf = self.state_filter
-        need_shiny = sf.shiny != 255
+        need_shiny = not sf.skip and sf.shiny != 255
 
         states: list[State8] = []
         _yield_every = 50000
         for count in range(self.max_advances + 1):
+            if cancellation is not None and count % 64 == 0:
+                cancellation.check()
             if count % _yield_every == 0:
                 _time.sleep(0)
             ec = _gen_static_ec(roamer)
@@ -336,7 +389,7 @@ class StaticGenerator8:
             pid = rng.next_uint(U32_MAX)
             shiny, pid = _apply_roamer_shiny(self.profile, sidtid, pid)
 
-            if need_shiny and not (sf.shiny & shiny):
+            if need_shiny and (shiny != 0 if sf.shiny == 0 else not (sf.shiny & shiny)):
                 continue
 
             ivs = [255] * 6
@@ -356,9 +409,9 @@ class StaticGenerator8:
 
             if sf.quick_reject(shiny, ability, gender, nature, height, weight):
                 continue
-            if not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
+            if not sf.skip and not all(sf.iv_min[i] <= ivs[i] <= sf.iv_max[i] for i in range(6)):
                 continue
-            if not sf.hidden_powers[hidden_power(ivs)]:
+            if not sf.skip and not sf.hidden_powers[hidden_power(ivs)]:
                 continue
 
             state = State8(
@@ -368,4 +421,6 @@ class StaticGenerator8:
                 nature=nature, shiny=shiny, height=height, weight=weight,
             )
             states.append(state)
+        if cancellation is not None:
+            cancellation.check()
         return states

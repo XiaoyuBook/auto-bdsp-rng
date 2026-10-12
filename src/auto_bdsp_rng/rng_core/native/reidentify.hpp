@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hpp"
+#include "cancellation.hpp"
 #include <optional>
 #include <vector>
 
@@ -15,11 +16,11 @@ std::optional<ReidentifyResult> reidentify_by_intervals_native(
     const std::vector<u32>& raw_intervals,
     int npc,
     u32 search_min,
-    u32 search_max);
+    u32 search_max, const SearchCancellation* cancellation = nullptr);
 
 std::optional<ReidentifyResult> reidentify_by_intervals_noisy_native(
     u64 seed0,
     u64 seed1,
     const std::vector<u32>& raw_intervals,
     u32 search_min,
-    u32 search_max);
+    u32 search_max, const SearchCancellation* cancellation = nullptr);

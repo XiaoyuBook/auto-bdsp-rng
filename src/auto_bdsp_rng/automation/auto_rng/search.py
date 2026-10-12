@@ -6,6 +6,7 @@ from typing import Sequence
 from auto_bdsp_rng.data import StaticEncounterRecord
 from auto_bdsp_rng.gen8_static import Lead, Profile8, State8, StateFilter, StaticGenerator8
 from auto_bdsp_rng.rng_core import SeedPair64
+from auto_bdsp_rng.rng_core.cancellation import SearchCancellation
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ def _filter_for_shiny_mode(state_filter: StateFilter, shiny_mode: str) -> StateF
     return replace(state_filter, shiny=0)
 
 
-def generate_static_candidates(criteria: StaticSearchCriteria) -> list[State8]:
+def generate_static_candidates(criteria: StaticSearchCriteria, *, cancellation: SearchCancellation | None = None) -> list[State8]:
     template = replace(criteria.record.template, version=criteria.profile.version)
     generator = StaticGenerator8(
         criteria.initial_advances,
@@ -44,22 +45,26 @@ def generate_static_candidates(criteria: StaticSearchCriteria) -> list[State8]:
         criteria.profile,
         criteria.state_filter,
     )
-    states = generator.generate(criteria.seed)
+    states = generator.generate(criteria.seed, cancellation=cancellation)
     if criteria.shiny_mode == "none":
         states = [state for state in states if state.shiny == 0]
-    return sorted(states, key=lambda state: state.advances)
+    if cancellation is not None:
+        cancellation.check()
+    # Both generators already produce advancing frames in order.
+    return states
 
 
 def generate_static_candidates_multi(
     criteria: StaticSearchCriteria,
     targets: Sequence[StaticSearchTarget],
+    *, cancellation: SearchCancellation | None = None,
 ) -> list[State8]:
     if not targets:
         return []
     if len(targets) == 1:
         target = targets[0]
         return generate_static_candidates(
-            replace(criteria, state_filter=target.state_filter, shiny_mode=target.shiny_mode)
+            replace(criteria, state_filter=target.state_filter, shiny_mode=target.shiny_mode), cancellation=cancellation,
         )
 
     template = replace(criteria.record.template, version=criteria.profile.version)
@@ -76,8 +81,28 @@ def generate_static_candidates_multi(
         criteria.profile,
         StateFilter(skip=True),
     )
-    states = generator.generate_matching_any(filters, criteria.seed)
+    states = generator.generate_matching_any(filters, criteria.seed, cancellation=cancellation)
+    previous = None
+    ordered_unique = True
+    for index, state in enumerate(states):
+        if cancellation is not None and index % 1024 == 0:
+            cancellation.check()
+        if previous is not None and state.advances <= previous:
+            ordered_unique = False
+            break
+        previous = state.advances
+    if cancellation is not None:
+        cancellation.check()
+    if ordered_unique:
+        return states
+    # Preserve the helper's sorted/deduplicated contract for older or injected
+    # generators while avoiding another result list in the usual ordered path.
     unique: dict[int, State8] = {}
-    for state in states:
+    for index, state in enumerate(states):
+        if cancellation is not None and index % 1024 == 0:
+            cancellation.check()
         unique.setdefault(state.advances, state)
-    return sorted(unique.values(), key=lambda state: state.advances)
+    ordered = sorted(unique.values(), key=lambda state: state.advances)
+    if cancellation is not None:
+        cancellation.check()
+    return ordered

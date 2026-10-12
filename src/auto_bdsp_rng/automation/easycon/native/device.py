@@ -444,7 +444,12 @@ class TTLSerialTransport:
     def is_connected(self) -> bool:
         return self.status is TransportStatus.CONNECTED and self._thread is not None and self._thread.is_alive()
 
-    def open(self, timeout: float = DEFAULT_CONNECT_TIMEOUT) -> bool:
+    def open(
+        self,
+        timeout: float = DEFAULT_CONNECT_TIMEOUT,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
         if self.is_connected:
             return True
         self.close()
@@ -458,6 +463,9 @@ class TTLSerialTransport:
             serial_port.reset_input_buffer()
             serial_port.reset_output_buffer()
             self._serial = serial_port
+            if cancel_event is not None and cancel_event.is_set():
+                self.close()
+                return False
             self._thread = threading.Thread(
                 target=self._io_loop,
                 name=f"EasyConSerial-{self.port}-{self.baudrate}",
@@ -468,6 +476,7 @@ class TTLSerialTransport:
                 bytes((READY, READY, COMMAND_HELLO)),
                 lambda value: value == REPLY_HELLO,
                 timeout=max(0.0, timeout),
+                cancel_event=cancel_event,
             ):
                 self.status = TransportStatus.ERROR
                 self.close()
@@ -572,13 +581,29 @@ class TTLSerialTransport:
             raise DeviceConnectionError(f"伊机控串口写入失败: {request.error}") from request.error
         return True
 
-    def send_and_wait(self, data: bytes, predicate: BytePredicate, timeout: float) -> bool:
+    def send_and_wait(
+        self,
+        data: bytes,
+        predicate: BytePredicate,
+        timeout: float,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
         waiter = _ReplyWaiter(predicate)
         with self._waiter_lock:
             self._waiters.append(waiter)
         try:
             self.write(data, wait=True, timeout=min(DEFAULT_WRITE_TIMEOUT, max(0.001, timeout)))
-            waiter.done.wait(max(0.0, timeout))
+            if cancel_event is None:
+                waiter.done.wait(max(0.0, timeout))
+            else:
+                deadline = time.monotonic() + max(0.0, timeout)
+                while not cancel_event.is_set():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or waiter.done.wait(min(0.02, remaining)):
+                        break
+                if cancel_event.is_set():
+                    return False
             return waiter.matched
         finally:
             with self._waiter_lock:
@@ -796,23 +821,30 @@ class NintendoSwitchDevice:
         except Exception:
             pass
 
-    def connect(self, port: str) -> bool:
+    def connect(self, port: str, *, cancel_event: threading.Event | None = None) -> bool:
         actual_port = str(port).strip()
-        if not actual_port:
+        if not actual_port or (cancel_event is not None and cancel_event.is_set()):
             return False
         if self.is_connected and self.port == actual_port:
             return True
-        self.disconnect(release=False)
+        if not self.disconnect(release=False):
+            self.failure = self.failure or DeviceConnectionError("上一次伊机控连接尚未退出")
+            return False
         self.failure = None
         for attempt, baudrate in enumerate(self.baudrates):
+            if cancel_event is not None and cancel_event.is_set():
+                break
             transport: DeviceTransport | None = None
             try:
                 transport = self.transport_factory(actual_port, baudrate)
-                connected = transport.open(self.connect_timeout)
+                if isinstance(transport, TTLSerialTransport):
+                    connected = transport.open(self.connect_timeout, cancel_event=cancel_event)
+                else:
+                    connected = transport.open(self.connect_timeout)
             except BaseException as exc:
                 self.failure = exc
                 connected = False
-            if connected:
+            if connected and not (cancel_event is not None and cancel_event.is_set()):
                 assert transport is not None
                 self.port = actual_port
                 self.connected_baudrate = baudrate
@@ -831,11 +863,21 @@ class NintendoSwitchDevice:
                 if isinstance(transport_failure, BaseException):
                     self.failure = transport_failure
                 try:
-                    transport.close()
+                    closed = transport.close()
                 except BaseException as exc:
                     self.failure = exc
+                    closed = False
+                if closed is False:
+                    # Keep the owner available for a subsequent cleanup retry;
+                    # opening the next baudrate would orphan a live transport.
+                    self.transport = transport
+                    self.failure = self.failure or DeviceConnectionError("伊机控握手未能完成清理")
+                    return False
             if attempt + 1 < len(self.baudrates) and self.fallback_delay:
-                time.sleep(self.fallback_delay)
+                if cancel_event is None:
+                    time.sleep(self.fallback_delay)
+                elif cancel_event.wait(self.fallback_delay):
+                    break
         self.port = None
         self.connected_baudrate = None
         self.transport = None
@@ -1032,7 +1074,7 @@ class NintendoSwitchDevice:
         except BaseException as exc:
             self.failure = exc
             closed = False
-        self.transport = None
+        self.transport = None if closed else transport
         self.port = None
         self.connected_baudrate = None
         with self._state_lock:

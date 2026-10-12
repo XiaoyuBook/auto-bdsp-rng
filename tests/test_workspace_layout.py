@@ -8,6 +8,7 @@ from tests.test_start_readiness import window
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngPhase, AutoRngProgress
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngProgress
 from auto_bdsp_rng.gen8_id import IDState8
+from tests.ui_wait import wait_search
 
 
 def settle():
@@ -236,6 +237,7 @@ def test_real_static_generation_collapses_conditions_and_can_reopen_each_group(w
     w.initial_advances.setText("0")
     w.max_advances.setText("20")
     w.generate_results()
+    wait_search(w._static_search)
     assert not errors
     assert w.table.rowCount() == 21
     assert not w.query_toggle.isChecked()

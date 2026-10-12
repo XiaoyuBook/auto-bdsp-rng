@@ -8,13 +8,14 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from auto_bdsp_rng.rng_core import SeedState32
 from auto_bdsp_rng.run_log import RunLogManager
 from auto_bdsp_rng.ui import MainWindow
 import auto_bdsp_rng.ui.main_window as main_window_module
+from tests.test_ui import isolated_ui_qsettings
+from tests.ui_wait import close_all_widgets
 
 
 @pytest.fixture
@@ -24,12 +25,7 @@ def app(monkeypatch):
     monkeypatch.setattr(main_window_module, "should_show_startup_notice", lambda: False)
     application = QApplication.instance() or QApplication([])
     yield application
-    for widget in application.topLevelWidgets():
-        for timer in widget.findChildren(QTimer):
-            timer.stop()
-        widget.close()
-        widget.deleteLater()
-    application.processEvents()
+    close_all_widgets(application)
 
 
 def test_main_window_run_log_menu_toggles_and_collects_sources(app, tmp_path, monkeypatch):

@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, QProcess, Qt
+from PySide6.QtCore import QEvent, QProcess, QThread, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QPushButton, QSpinBox, QWidget
 from PySide6.QtGui import QKeyEvent, QTextCursor
 
@@ -23,6 +23,7 @@ from auto_bdsp_rng.automation.easycon import (
 )
 from auto_bdsp_rng.automation.easycon.native.device import SwitchButton, SwitchReport
 from auto_bdsp_rng.ui.easycon_panel import DEFAULT_KEY_MAPPING, EasyConPanel, KeyMappingDialog
+from tests.ui_wait import close_all_widgets
 
 
 class UnsupportedKeyboardHookFactory:
@@ -145,6 +146,12 @@ class FakeNativeBackend:
         self.closed = True
         self.connected_port = None
 
+    def close_if_idle(self) -> bool:
+        if self.connected_port is not None:
+            return False
+        self.closed = True
+        return True
+
     def get_report(self) -> SwitchReport:
         return self.report.copy()
 
@@ -186,7 +193,11 @@ class FakeNativeBackend:
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    return QApplication.instance() or QApplication([])
+    application = QApplication.instance() or QApplication([])
+    yield application
+    close_all_widgets(application)
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    application.processEvents()
 
 
 @pytest.fixture
@@ -207,6 +218,8 @@ def easycon_panel_factory(monkeypatch, tmp_path, app):
     )
     monkeypatch.setattr(panel_module, "list_ports", lambda _installation: ["COM7"])
 
+    panels: list[EasyConPanel] = []
+
     def create_panel(
         *,
         native_backend: object | None = None,
@@ -216,13 +229,17 @@ def easycon_panel_factory(monkeypatch, tmp_path, app):
             native_backend = FakeNativeBackend()
         if keyboard_hook_factory is None:
             keyboard_hook_factory = UnsupportedKeyboardHookFactory()
-        return EasyConPanel(
+        panel = EasyConPanel(
             native_backend=native_backend,
             video_source_connected=lambda: True,
             keyboard_hook_factory=keyboard_hook_factory,
         )
+        panels.append(panel)
+        return panel
 
-    return create_panel
+    yield create_panel
+    for panel in panels:
+        assert shutdown_panel(panel, wait_ms=3000), "panel teardown left resource owners active"
 
 
 @pytest.fixture
@@ -239,6 +256,337 @@ def process_events_until(predicate, timeout_ms=1000):
         time.sleep(0.01)
     app.processEvents()
     assert predicate()
+
+
+def connect_native(panel: EasyConPanel) -> bool:
+    results: list[bool] = []
+    if not panel.connect_native(on_finished=results.append):
+        return False
+    process_events_until(lambda: bool(results))
+    return results[0]
+
+
+def disconnect_native(panel: EasyConPanel) -> bool:
+    if not panel.disconnect_native():
+        return False
+    process_events_until(lambda: not panel._native_connection_busy())
+    return panel.task_state_text != "断开失败"
+
+
+def shutdown_panel(panel: EasyConPanel, *, wait_ms: int = 2000) -> bool:
+    if panel.shutdown(wait_ms=wait_ms):
+        return True
+    process_events_until(lambda: not panel._shutdown_in_progress, timeout_ms=max(1000, wait_ms + 1000))
+    return panel._shutdown_complete
+
+
+def test_native_handshake_keeps_qt_responsive_and_coalesces_duplicate_requests(easycon_panel_factory):
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowBackend(FakeNativeBackend):
+        def __init__(self):
+            super().__init__()
+            self.connect_calls = 0
+            self.connect_thread = None
+
+        def connect(self, port):
+            self.connect_calls += 1
+            self.connect_thread = QThread.currentThread()
+            entered.set()
+            assert release.wait(3)
+            super().connect(port)
+
+    backend = SlowBackend()
+    panel = easycon_panel_factory(native_backend=backend)
+    panel.show_connection_dialog()
+    heartbeats: list[float] = []
+    timer = QTimer(panel)
+    timer.setInterval(5)
+    timer.timeout.connect(lambda: heartbeats.append(time.monotonic()))
+    timer.start()
+    results: list[bool] = []
+    started = time.monotonic()
+    try:
+        assert panel.connect_native(on_finished=results.append)
+        assert time.monotonic() - started < 0.2
+        assert panel.native_connecting and panel.connect_button.text() == "取消连接"
+        assert panel.connection_presentation()[1:3] == ("connecting", "正在连接")
+        assert panel.connection_dialog.isVisible()
+        assert panel.connect_native(on_finished=results.append)
+        assert not panel.reserve_native_script_run()
+        process_events_until(lambda: entered.is_set() and len(heartbeats) >= 3)
+        assert backend.connect_calls == 1 and results == []
+        assert backend.connect_thread is not panel.thread()
+        release.set()
+        process_events_until(lambda: len(results) == 2)
+        assert results == [True, True]
+        assert not panel._native_connection_busy()
+        assert backend.connected_port == "COM7"
+        assert not panel.connection_dialog.isVisible()
+    finally:
+        release.set()
+        timer.stop()
+
+
+def test_native_cancel_cleans_late_handshake_before_retry(easycon_panel_factory):
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowBackend(FakeNativeBackend):
+        def __init__(self):
+            super().__init__()
+            self.connect_calls = 0
+            self.disconnect_calls = 0
+
+        def connect(self, port):
+            self.connect_calls += 1
+            entered.set()
+            assert release.wait(3)
+            super().connect(port)
+
+        def disconnect(self):
+            self.disconnect_calls += 1
+            super().disconnect()
+
+    backend = SlowBackend()
+    panel = easycon_panel_factory(native_backend=backend)
+    results: list[bool] = []
+    try:
+        assert panel.connect_native(on_finished=results.append)
+        process_events_until(entered.is_set)
+        panel.connect_button.click()
+        assert panel.native_disconnecting
+        assert panel.connection_presentation()[1:3] == ("disconnecting", "正在取消")
+        assert not panel.connect_native()
+        assert panel.disconnect_native()  # Repeated cancellation is harmless.
+        release.set()
+        process_events_until(lambda: results == [False])
+        assert backend.connected_port is None and backend.disconnect_calls == 1
+        assert panel.connection_presentation()[1:3] == ("cancelled", "已取消连接")
+        assert panel.connect_button.isEnabled() and panel.port_combo.isEnabled()
+        assert connect_native(panel)
+        assert backend.connect_calls == 2
+    finally:
+        release.set()
+
+
+def test_native_disconnect_allows_script_to_finish_ui_callback(easycon_panel_factory):
+    request_ui, release_script = threading.Event(), threading.Event()
+
+    class UiWaitingBackend(FakeNativeBackend):
+        def run_script_text(self, *args, **kwargs):
+            request_ui.set()
+            assert release_script.wait(3)
+            return super().run_script_text(*args, **kwargs)
+
+        def disconnect(self):
+            assert release_script.wait(3)
+            super().disconnect()
+
+    backend = UiWaitingBackend()
+    panel = easycon_panel_factory(native_backend=backend)
+    assert connect_native(panel)
+    panel.editor.setPlainText("WAIT 1")
+    panel.run_script_via_native()
+    process_events_until(request_ui.is_set)
+    assert panel.disconnect_native()
+    assert panel.connection_presentation()[1:3] == ("disconnecting", "正在断开")
+    assert not panel.run_button.isEnabled() and not panel.keyboard_controller_check.isEnabled()
+    assert not panel.connect_native()
+    assert panel.disconnect_native()
+    QTimer.singleShot(0, release_script.set)
+    process_events_until(lambda: not panel._native_connection_busy() and panel.native_run_thread is None)
+    assert backend.connected_port is None and panel.task_state_text == "未运行"
+
+
+def test_native_shutdown_cancels_connect_and_waits_without_blocking_ui(easycon_panel_factory):
+    entered, release = threading.Event(), threading.Event()
+    operations: list[str] = []
+
+    class SlowBackend(FakeNativeBackend):
+        def connect(self, port):
+            operations.append("connect")
+            entered.set()
+            assert release.wait(3)
+            super().connect(port)
+
+        def disconnect(self):
+            operations.append("disconnect")
+            super().disconnect()
+
+        def close(self):
+            operations.append("close")
+            super().close()
+
+        def close_if_idle(self):
+            return False
+
+    backend = SlowBackend()
+    panel = easycon_panel_factory(native_backend=backend)
+    connections: list[bool] = []
+    shutdowns: list[bool] = []
+    panel.nativeShutdownFinished.connect(shutdowns.append)
+    try:
+        assert panel.connect_native(on_finished=connections.append)
+        process_events_until(entered.is_set)
+        started = time.monotonic()
+        assert panel.shutdown() is False
+        assert panel.shutdown() is False
+        assert time.monotonic() - started < 0.2
+        assert not panel.connect_native() and not panel.disconnect_native()
+        assert panel._shutdown_in_progress
+        QTimer.singleShot(0, release.set)
+        process_events_until(lambda: bool(shutdowns))
+        assert connections == [False] and shutdowns == [True]
+        assert operations == ["connect", "disconnect", "close"]
+        assert backend.closed and backend.connected_port is None
+        assert panel.native_backend is None and panel.shutdown() is True
+        assert panel.connection_presentation() == ("伊机控 未连接", "disconnected", "已关闭", False)
+    finally:
+        release.set()
+
+
+def test_native_shutdown_failure_restores_controls_and_can_retry(easycon_panel_factory):
+    class RetryBackend(FakeNativeBackend):
+        def __init__(self):
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("temporary busy")
+            super().close()
+
+    backend = RetryBackend()
+    panel = easycon_panel_factory(native_backend=backend)
+    assert connect_native(panel)
+    assert shutdown_panel(panel) is False
+    assert not panel._shutting_down and not panel._shutdown_in_progress
+    assert panel.native_backend is backend and panel.connect_button.isEnabled()
+    assert panel.connection_settings_action.isEnabled()
+    assert panel._native_status_timer.isActive()
+    assert shutdown_panel(panel)
+    assert backend.close_calls == 2 and backend.closed
+
+
+def test_shutdown_defers_hook_stop_and_key_release_in_order(easycon_panel_factory, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    operations: list[str] = []
+
+    class RecordingBackend(FakeNativeBackend):
+        def key_up(self, button):
+            assert QThread.currentThread() is not panel.thread()
+            operations.append("key-up")
+            super().key_up(button)
+
+        def close(self):
+            operations.append("close")
+            super().close()
+
+    backend = RecordingBackend()
+    hooks = FakeKeyboardHookFactory()
+    panel = easycon_panel_factory(native_backend=backend, keyboard_hook_factory=hooks)
+    assert connect_native(panel) and panel._activate_virtual_controller()
+    panel._start_recording()
+    panel._handle_virtual_controller_key(Qt.Key.Key_L, True)
+    hook = hooks.instances[0]
+    original_stop = hook.stop
+
+    def slow_stop():
+        entered.set()
+        assert release.wait(3)
+        operations.append("hook-stop")
+        return original_stop()
+
+    monkeypatch.setattr(hook, "stop", slow_stop)
+    beats: list[int] = []
+    timer = QTimer(panel)
+    timer.setInterval(5)
+    timer.timeout.connect(lambda: beats.append(1))
+    timer.start()
+    try:
+        started = time.monotonic()
+        assert panel.shutdown() is False
+        assert time.monotonic() - started < 0.2
+        assert not panel.virtual_controller_keys and not panel._recording
+        assert panel.editor.toPlainText().endswith("A UP\n")
+        process_events_until(lambda: entered.is_set() and len(beats) >= 3)
+        assert operations == []
+        hook.emit_key(Qt.Key.Key_L, True)
+        QTimer.singleShot(0, release.set)
+        process_events_until(lambda: not panel._shutdown_in_progress)
+        assert panel._shutdown_complete and panel._keyboard_hook is None
+        assert operations == ["hook-stop", "key-up", "close"]
+        assert backend.key_events == [("down", "A"), ("up", "A")]
+    finally:
+        release.set()
+        timer.stop()
+
+
+def test_unused_native_backend_can_shutdown_close_and_delete_without_a_thread(app, monkeypatch):
+    from shiboken6 import isValid
+    from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
+
+    backend = NativeEasyConBackend()
+    monkeypatch.setattr(backend, "list_ports", lambda: [])
+    panel = EasyConPanel(native_backend=backend, isolated_demo=True)
+    monkeypatch.setattr(
+        panel_module, "BackendOperation", lambda *_a, **_k: pytest.fail("unused backend should not start a thread"),
+    )
+    assert panel.shutdown() is True
+    assert panel.native_backend is None and panel._native_lifecycle_thread is None
+    assert panel.close()
+    panel.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+    assert not isValid(panel)
+
+
+def test_native_stream_sink_runs_on_worker_and_result_tail_is_not_persisted_again(easycon_panel_factory, tmp_path):
+    from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
+    from auto_bdsp_rng.run_log import RunLogManager
+
+    backend = NativeEasyConBackend(stdout_limit=6)
+    backend.connect("mock")
+    panel = easycon_panel_factory(native_backend=backend)
+    panel.port_combo.addItem("mock", "mock")
+    panel.port_combo.setCurrentIndex(panel.port_combo.count() - 1)
+    streamed: list[tuple[str, str, bool]] = []
+    persisted: list[str] = []
+    displayed: list[str] = []
+    manager = RunLogManager(tmp_path / "streamed-logs")
+    log_path = manager.enable()
+
+    def stream_sink(level, message):
+        streamed.append((level, message, QThread.currentThread() is panel.thread()))
+        manager.write("伊机控", message, level=level)
+
+    def ui_sink(level, message):
+        persisted.append(message)
+        manager.write("伊机控", message, level=level)
+
+    panel._run_log_sink = ui_sink
+    panel.set_native_log_sink(
+        stream_sink,
+        result_sink=lambda _level, message: displayed.append(message),
+    )
+    assert panel.native_output_streamed
+    panel.editor.setPlainText('PRINT "first"\nPRINT "second"\nPRINT "last"')
+    panel.run_script_via_native()
+    process_events_until(lambda: panel.native_run_thread is None)
+    output_messages = [message for level, message, _ui in streamed if level == "INFO" and message in ("first", "second", "last")]
+    assert output_messages == ["first", "second", "last"]
+    assert not any(ui for _level, _message, ui in streamed)
+    assert len(displayed) == 1 and "已省略较早的脚本输出" in displayed[0]
+    assert displayed[0].endswith("last") and displayed[0] not in persisted
+    assert "last" in panel.log_view.toPlainText()
+    manager.close()
+    records = log_path.read_text(encoding="utf-8").splitlines()
+    for message in ("first", "second", "last"):
+        assert sum(record.endswith(f"[伊机控] {message}") for record in records) == 1
+    assert all("已省略较早的脚本输出" not in record for record in records)
+    panel.set_native_log_sink(None)
+    assert not panel.native_output_streamed
 
 
 def test_easycon_panel_uses_connection_dialog_and_global_controller_menu(
@@ -298,6 +646,7 @@ def test_connection_dialog_actions_keep_backend_and_visible_state_in_sync(easyco
     assert panel.connection_dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert panel.connection_dialog.rect().contains(panel.connection_dialog.title_bar.geometry())
     panel.connect_button.click()
+    process_events_until(lambda: not panel._native_connection_busy())
     assert panel.native_backend.connected_port == "COM7"
     assert not panel.connection_dialog.isVisible()
 
@@ -312,7 +661,7 @@ def test_connection_dialog_actions_keep_backend_and_visible_state_in_sync(easyco
 
     panel.show_connection_dialog()
     panel.connect_button.click()
-    app.processEvents()
+    process_events_until(lambda: not panel._native_connection_busy())
     assert panel.native_backend.connected_port is None
     assert panel.connect_button.text() == "连接"
     assert panel.connect_button.property("disconnect") is False
@@ -344,7 +693,7 @@ def test_global_menu_and_overlay_switch_active_standby_and_off(
 ):
     hook_factory = FakeKeyboardHookFactory()
     panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
-    assert panel.connect_native()
+    assert connect_native(panel)
 
     panel.virtual_controller_action.trigger()
 
@@ -369,7 +718,7 @@ def test_global_menu_and_overlay_switch_active_standby_and_off(
     assert not panel._controller_overlay.isVisible()
     assert panel.virtual_controller_action.text() == "打开虚拟手柄"
     assert panel.keyboard_controller_state_label.text() == "已关闭"
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_connection_and_keyboard_presentations_follow_real_state(
@@ -389,7 +738,7 @@ def test_easycon_panel_connection_and_keyboard_presentations_follow_real_state(
 
     easycon_panel.show_connection_dialog()
     app.processEvents()
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
 
     assert easycon_panel.connection_dialog.isVisible() is False
     assert easycon_panel.connection_presentation() == (
@@ -413,7 +762,7 @@ def test_easycon_panel_connection_and_keyboard_presentations_follow_real_state(
 
     assert easycon_panel._deactivate_virtual_controller()
     assert easycon_panel.keyboard_controller_state_label.text() == "已关闭"
-    assert easycon_panel.disconnect_native()
+    assert disconnect_native(easycon_panel)
     assert easycon_panel.connection_presentation()[1] == "disconnected"
     assert easycon_panel.connection_status_dot.property("state") == "disconnected"
 
@@ -697,7 +1046,7 @@ def test_easycon_panel_native_script_runs_without_video_and_preserves_source_dir
     blink_input = easycon_panel.parameter_widgets["_闪帧"]
     assert isinstance(blink_input, QLineEdit)
     blink_input.setText("123")
-    easycon_panel.connect_native()
+    connect_native(easycon_panel)
 
     easycon_panel._video_source_connected = lambda: False
     easycon_panel.video_source_state_changed()
@@ -725,7 +1074,7 @@ def test_easycon_panel_native_script_runs_without_video_and_preserves_source_dir
 def test_easycon_panel_native_controls_and_keep_awake_share_backend(easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
 
     easycon_panel.send_controller_press("A", duration_ms=120)
     easycon_panel.send_controller_stick("left", "RESET")
@@ -739,7 +1088,7 @@ def test_easycon_panel_native_controls_and_keep_awake_share_backend(easycon_pane
 def test_easycon_panel_keeps_connection_display_while_native_script_is_reserved(easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     easycon_panel.task_state_text = "执行中"
 
     assert easycon_panel.reserve_native_script_run()
@@ -785,7 +1134,7 @@ def test_easycon_panel_persists_native_connection_failure(monkeypatch, easycon_p
 
     monkeypatch.setattr(backend, "connect", fail_connect)
 
-    assert easycon_panel.connect_native() is False
+    assert connect_native(easycon_panel) is False
     easycon_panel._poll_native_connection_status()
 
     assert easycon_panel.connection_state_label.text() == "当前状态：连接失败"
@@ -799,7 +1148,7 @@ def test_easycon_panel_persists_native_connection_failure(monkeypatch, easycon_p
 def test_easycon_panel_refreshes_native_state_after_disconnect_failure(monkeypatch, easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
 
     def fail_disconnect():
         backend.connected_port = None
@@ -807,7 +1156,7 @@ def test_easycon_panel_refreshes_native_state_after_disconnect_failure(monkeypat
 
     monkeypatch.setattr(backend, "disconnect", fail_disconnect)
 
-    assert easycon_panel.disconnect_native() is False
+    assert disconnect_native(easycon_panel) is False
     assert easycon_panel.connection_state_label.text() == "当前状态：未连接"
     assert easycon_panel.task_state_label.text() == "任务: 断开失败"
     assert easycon_panel.status_controller_label.text() == "单片机未连接"
@@ -817,14 +1166,14 @@ def test_easycon_panel_refreshes_native_state_after_disconnect_failure(monkeypat
 def test_easycon_panel_disconnect_failure_preserves_actual_connection(monkeypatch, easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
 
     def fail_disconnect():
         raise RuntimeError("device busy")
 
     monkeypatch.setattr(backend, "disconnect", fail_disconnect)
 
-    assert easycon_panel.disconnect_native() is False
+    assert disconnect_native(easycon_panel) is False
     assert easycon_panel.connection_state_label.text() == "当前状态：已连接"
     assert easycon_panel.task_state_label.text() == "任务: 断开失败"
     assert easycon_panel.status_controller_label.text() == "单片机已连接"
@@ -834,7 +1183,7 @@ def test_easycon_panel_disconnect_failure_preserves_actual_connection(monkeypatc
 def test_easycon_panel_polls_native_physical_disconnect(easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     backend.connected_port = None
 
     easycon_panel._poll_native_connection_status()
@@ -849,7 +1198,7 @@ def test_easycon_panel_polls_native_physical_disconnect(easycon_panel):
 def test_easycon_panel_polls_native_disconnect_while_script_runs(easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     easycon_panel.task_state_text = "执行中"
     assert easycon_panel.reserve_native_script_run()
     backend.connected_port = None
@@ -874,7 +1223,7 @@ def test_easycon_panel_releases_reservation_when_worker_setup_fails(easycon_pane
     blink_input = easycon_panel.parameter_widgets["_闪帧"]
     assert isinstance(blink_input, QLineEdit)
     blink_input.setText("123")
-    easycon_panel.connect_native()
+    connect_native(easycon_panel)
     monkeypatch.setattr(
         panel_module,
         "NativeScriptWorker",
@@ -907,7 +1256,7 @@ def test_easycon_panel_native_mock_port_does_not_need_ezcon(monkeypatch, tmp_pat
     assert panel.port_combo.count() == 0
     assert panel.port_combo.currentIndex() == -1
     assert panel._connection_port() == "mock"
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert backend.connected_port == "mock"
     assert panel.connection_presentation()[0] == "伊机控 已连接"
     assert "mock" not in panel.connection_presentation()[0].casefold()
@@ -923,7 +1272,7 @@ def test_native_mock_config_does_not_override_a_visible_serial_port(monkeypatch,
 
     assert [panel.port_combo.itemText(index) for index in range(panel.port_combo.count())] == ["COM7"]
     assert panel._connection_port() == "COM7"
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert backend.connected_port == "COM7"
 
 
@@ -942,7 +1291,7 @@ def test_native_mock_config_only_falls_back_when_no_real_ports_exist(
 
     assert panel.port_combo.count() == 1
     assert panel._connection_port() == ""
-    assert panel.connect_native() is False
+    assert connect_native(panel) is False
     assert backend.connected_port is None
 
 
@@ -1562,6 +1911,10 @@ def test_capture_keep_awake_cli_timeout_preserves_normal_task_state(monkeypatch,
     easycon_panel.current_run_started_at = normal_started_at
     easycon_panel.current_run_script_path = normal_script_path
     easycon_panel.current_run_port = "mock"
+    normal_timer = easycon_panel.run_timer
+    ticks: list[None] = []
+    normal_timer.timeout.connect(lambda: ticks.append(None))
+    normal_timer.setInterval(20)
     easycon_panel.run_timer.start()
     toast_calls: list[str] = []
     monkeypatch.setattr(easycon_panel, "_show_failure_toast", toast_calls.append)
@@ -1581,8 +1934,11 @@ def test_capture_keep_awake_cli_timeout_preserves_normal_task_state(monkeypatch,
 
     assert easycon_panel.process is None
     assert easycon_panel.task_state_text == "执行中"
+    assert easycon_panel.run_timer is normal_timer
     assert easycon_panel.run_timer.isActive() is True
-    assert easycon_panel.run_seconds == 37
+    ticks_after_timeout = len(ticks)
+    process_events_until(lambda: len(ticks) > ticks_after_timeout)
+    assert easycon_panel.run_seconds == 37 + len(ticks)
     assert easycon_panel.current_run_stdout == ["normal stdout"]
     assert easycon_panel.current_run_stderr == ["normal stderr"]
     assert easycon_panel.current_run_started_at is normal_started_at
@@ -1661,7 +2017,7 @@ def test_easycon_panel_virtual_controller_uses_supported_keyboard_hook(easycon_p
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
 
     assert panel._activate_virtual_controller()
 
@@ -1678,7 +2034,7 @@ def test_easycon_panel_virtual_controller_uses_supported_keyboard_hook(easycon_p
     process_events_until(lambda: len(backend.key_events) == 2)
 
     assert backend.key_events == [("down", "A"), ("up", "A")]
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
     assert hook.stop_calls == 1
 
 
@@ -1692,7 +2048,7 @@ def test_easycon_panel_ignores_failed_hook_events_after_qt_fallback(
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
 
     assert panel._activate_virtual_controller()
 
@@ -1712,7 +2068,7 @@ def test_easycon_panel_ignores_failed_hook_events_after_qt_fallback(
     assert panel._vpad_input_source == "qt"
     assert backend.key_events == []
     assert "意外停止" not in panel.log_view.toPlainText()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_virtual_controller_falls_back_to_qt_events(easycon_panel_factory):
@@ -1722,7 +2078,7 @@ def test_easycon_panel_virtual_controller_falls_back_to_qt_events(easycon_panel_
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
 
     assert panel._activate_virtual_controller()
 
@@ -1739,7 +2095,7 @@ def test_easycon_panel_virtual_controller_falls_back_to_qt_events(easycon_panel_
     )
 
     assert backend.key_events == [("down", "A"), ("up", "A")]
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_qt_fallback_only_swallows_mapped_auto_repeat_keys(
@@ -1747,7 +2103,7 @@ def test_easycon_panel_qt_fallback_only_swallows_mapped_auto_repeat_keys(
 ):
     backend = FakeNativeBackend()
     panel = easycon_panel_factory(native_backend=backend)
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     assert panel._vpad_input_source == "qt"
 
@@ -1773,7 +2129,7 @@ def test_easycon_panel_qt_fallback_only_swallows_mapped_auto_repeat_keys(
         assert panel.eventFilter(panel, mapped) is True
 
     assert backend.key_events == []
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_discards_queued_events_from_stopped_hook(easycon_panel_factory, app):
@@ -1783,7 +2139,7 @@ def test_easycon_panel_discards_queued_events_from_stopped_hook(easycon_panel_fa
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     hook = hook_factory.instances[0]
     active_generation = panel._vpad_generation
@@ -1797,7 +2153,7 @@ def test_easycon_panel_discards_queued_events_from_stopped_hook(easycon_panel_fa
     assert backend.key_events == []
     assert panel.virtual_controller_keys == {}
     assert "意外停止" not in panel.log_view.toPlainText()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_native_reservation_disables_hook_without_restoring(
@@ -1809,7 +2165,7 @@ def test_easycon_panel_native_reservation_disables_hook_without_restoring(
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     hook = hook_factory.instances[0]
     hook.emit_key(Qt.Key.Key_L, True)
@@ -1829,7 +2185,7 @@ def test_easycon_panel_native_reservation_disables_hook_without_restoring(
     assert panel.virtual_controller_enabled is False
     assert panel.keyboard_controller_check.isChecked() is False
     assert len(hook_factory.instances) == 1
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_native_reservation_retries_retained_stopped_hook(
@@ -1844,7 +2200,7 @@ def test_easycon_panel_native_reservation_retries_retained_stopped_hook(
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     hook = hook_factory.instances[0]
 
@@ -1864,7 +2220,7 @@ def test_easycon_panel_native_reservation_retries_retained_stopped_hook(
     assert panel._keyboard_hook is None
     assert panel._native_run_reserved is True
     panel.release_native_script_run()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_bridge_script_disables_hook_without_restoring(
@@ -1894,7 +2250,7 @@ def test_easycon_panel_bridge_script_disables_hook_without_restoring(
     assert panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
     assert panel.virtual_controller_enabled is False
     assert len(hook_factory.instances) == 1
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_bridge_script_retries_retained_stopped_hook(
@@ -1935,7 +2291,7 @@ def test_easycon_panel_bridge_script_retries_retained_stopped_hook(
     assert panel._keyboard_hook is None
     assert len(backend.script_runs) == 1
     assert panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_bridge_failure_retries_retained_stopped_hook(
@@ -1976,7 +2332,7 @@ def test_easycon_panel_bridge_failure_retries_retained_stopped_hook(
     assert hook.stop_calls == 2
     assert panel._keyboard_hook is None
     assert panel.bridge_status == EasyConStatus.FAILED
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_poll_keeps_hook_standby_until_physical_disconnect(
@@ -1989,7 +2345,7 @@ def test_easycon_panel_poll_keeps_hook_standby_until_physical_disconnect(
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     assert panel._set_virtual_controller_standby()
     hook = hook_factory.instances[0]
@@ -2011,7 +2367,7 @@ def test_easycon_panel_poll_keeps_hook_standby_until_physical_disconnect(
     assert panel._vpad_input_source is None
     assert hook.stop_calls == 1
     assert not overlay.isVisible()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_script_reservation_fully_stops_hook_from_standby(
@@ -2020,7 +2376,7 @@ def test_easycon_panel_script_reservation_fully_stops_hook_from_standby(
 ):
     hook_factory = FakeKeyboardHookFactory()
     panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     assert panel._set_virtual_controller_standby()
     hook = hook_factory.instances[0]
@@ -2035,7 +2391,7 @@ def test_easycon_panel_script_reservation_fully_stops_hook_from_standby(
     assert hook.stop_calls == 1
     assert overlay.isVisible()
     panel.release_native_script_run()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_physical_disconnect_stops_hook_and_hides_overlay(
@@ -2048,7 +2404,7 @@ def test_easycon_panel_physical_disconnect_stops_hook_and_hides_overlay(
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     hook = hook_factory.instances[0]
     overlay = panel._controller_overlay
@@ -2063,7 +2419,7 @@ def test_easycon_panel_physical_disconnect_stops_hook_and_hides_overlay(
     assert panel.virtual_controller_enabled is False
     assert panel.keyboard_controller_check.isChecked() is False
     assert not overlay.isVisible()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_physical_disconnect_retries_retained_stopped_hook(
@@ -2079,7 +2435,7 @@ def test_easycon_panel_physical_disconnect_retries_retained_stopped_hook(
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     hook = hook_factory.instances[0]
     overlay = panel._controller_overlay
@@ -2101,7 +2457,7 @@ def test_easycon_panel_physical_disconnect_retries_retained_stopped_hook(
     assert hook.stop_calls == 2
     assert panel._keyboard_hook is None
     assert not overlay.isVisible()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_controller_overlay_reads_native_report(easycon_panel_factory, app):
@@ -2114,7 +2470,7 @@ def test_easycon_panel_controller_overlay_reads_native_report(easycon_panel_fact
         ry=192,
     )
     panel = easycon_panel_factory(native_backend=backend)
-    assert panel.connect_native()
+    assert connect_native(panel)
 
     panel.show_controller_overlay()
     app.processEvents()
@@ -2127,7 +2483,7 @@ def test_easycon_panel_controller_overlay_reads_native_report(easycon_panel_fact
     assert snapshot is not backend.report
     backend.report.reset()
     assert snapshot.button == int(SwitchButton.A | SwitchButton.HOME)
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_shutdown_stops_keyboard_hook_and_overlay(
@@ -2136,7 +2492,7 @@ def test_easycon_panel_shutdown_stops_keyboard_hook_and_overlay(
 ):
     hook_factory = FakeKeyboardHookFactory()
     panel = easycon_panel_factory(keyboard_hook_factory=hook_factory)
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     hook = hook_factory.instances[0]
     overlay = panel._controller_overlay
@@ -2144,7 +2500,7 @@ def test_easycon_panel_shutdown_stops_keyboard_hook_and_overlay(
     app.processEvents()
     assert overlay._timer.isActive()
 
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
     assert hook.stop_calls == 1
     assert not hook.is_running
@@ -2203,7 +2559,7 @@ def test_easycon_panel_streams_recording_without_replacing_selection_or_repeatin
         panel.connect_bridge()
         assert panel.bridge_status == EasyConStatus.BRIDGE_CONNECTED
     else:
-        assert panel.connect_native()
+        assert connect_native(panel)
     assert panel._activate_virtual_controller()
     # A selected, unterminated existing script must survive live appends.
     original = "# 保留已有草稿\nWAIT 20"
@@ -2225,14 +2581,14 @@ def test_easycon_panel_streams_recording_without_replacing_selection_or_repeatin
     assert not panel.virtual_controller_keys
     panel._stop_recording()
     assert panel.editor.toPlainText() == finished
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monkeypatch, easycon_panel):
     timestamps = iter((101.0, 103.0, 104.0, 107.0, 109.0, 110.0))
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
     easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
@@ -2262,7 +2618,7 @@ def test_easycon_panel_records_uppercase_direction_press_release_and_reset(monke
         "WAIT 1000\n"
         "RS RESET\n"
     )
-    assert easycon_panel.shutdown()
+    assert shutdown_panel(easycon_panel)
 
 
 def test_easycon_panel_records_composite_hat_and_stick_directions(monkeypatch, easycon_panel):
@@ -2270,7 +2626,7 @@ def test_easycon_panel_records_composite_hat_and_stick_directions(monkeypatch, e
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
     easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
     easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
@@ -2304,7 +2660,7 @@ def test_easycon_panel_records_composite_hat_and_stick_directions(monkeypatch, e
         "WAIT 1000\n"
         "LS RESET\n"
     )
-    assert easycon_panel.shutdown()
+    assert shutdown_panel(easycon_panel)
 
 
 def test_easycon_panel_skips_unchanged_composite_hat_direction(monkeypatch, easycon_panel):
@@ -2313,7 +2669,7 @@ def test_easycon_panel_skips_unchanged_composite_hat_direction(monkeypatch, easy
     easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
     easycon_panel.key_mapping["Right"] = int(Qt.Key.Key_H)
     easycon_panel.key_mapping["UpRight"] = int(Qt.Key.Key_Y)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
@@ -2340,7 +2696,7 @@ def test_easycon_panel_skips_unchanged_composite_hat_direction(monkeypatch, easy
         "WAIT 1000\n"
         "RIGHT UP\n"
     )
-    assert easycon_panel.shutdown()
+    assert shutdown_panel(easycon_panel)
 
 
 def test_easycon_panel_recording_ignores_auto_repeat_events(monkeypatch, easycon_panel):
@@ -2348,7 +2704,7 @@ def test_easycon_panel_recording_ignores_auto_repeat_events(monkeypatch, easycon
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     easycon_panel.keyboard_controller_check.setChecked(True)
     easycon_panel.editor.clear()
 
@@ -2397,7 +2753,7 @@ def test_easycon_panel_records_opposite_directions_as_neutral(monkeypatch, easyc
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
     easycon_panel.key_mapping["Up"] = int(Qt.Key.Key_U)
     easycon_panel.key_mapping["Down"] = int(Qt.Key.Key_H)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
@@ -2432,13 +2788,13 @@ def test_easycon_panel_records_opposite_directions_as_neutral(monkeypatch, easyc
         "WAIT 1000\n"
         "LS RESET\n"
     )
-    assert easycon_panel.shutdown()
+    assert shutdown_panel(easycon_panel)
 
 
 def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypatch, easycon_panel):
     timestamps = iter((101.0, 102.0, 1001.0, 1003.0))
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
@@ -2471,13 +2827,13 @@ def test_easycon_panel_resume_recording_excludes_paused_input_and_wait(monkeypat
         "WAIT 2000\n"
         "RS RESET\n"
     )
-    assert easycon_panel.shutdown()
+    assert shutdown_panel(easycon_panel)
 
 
 def test_easycon_panel_stop_while_paused_preserves_closed_recording(monkeypatch, easycon_panel):
     timestamps = iter((101.0, 104.0))
     monkeypatch.setattr(panel_module, "monotonic", lambda: next(timestamps))
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel._activate_virtual_controller()
     easycon_panel.editor.clear()
 
@@ -2494,7 +2850,7 @@ def test_easycon_panel_stop_while_paused_preserves_closed_recording(monkeypatch,
     assert not easycon_panel._recording
     assert not easycon_panel._recording_paused
     assert easycon_panel.editor.toPlainText() == "LS RIGHT\nWAIT 3000\nLS RESET\n"
-    assert easycon_panel.shutdown()
+    assert shutdown_panel(easycon_panel)
 
 
 def test_easycon_panel_escape_press_immediately_toggles_hook_controller(
@@ -2507,7 +2863,7 @@ def test_easycon_panel_escape_press_immediately_toggles_hook_controller(
         native_backend=backend,
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     hook = hook_factory.instances[0]
     overlay = panel._controller_overlay
@@ -2546,7 +2902,7 @@ def test_easycon_panel_escape_press_immediately_toggles_hook_controller(
     assert overlay.active is True
     hook.emit_key(Qt.Key.Key_Escape, False)
 
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
     assert hook.stop_calls == 1
     assert not hook.is_running
 
@@ -2560,7 +2916,7 @@ def test_easycon_panel_escape_press_immediately_toggles_qt_fallback_controller(
         native_backend=backend,
         keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     assert panel._vpad_input_source == "qt"
     overlay = panel._controller_overlay
@@ -2608,7 +2964,7 @@ def test_easycon_panel_escape_press_immediately_toggles_qt_fallback_controller(
     assert panel.keyboard_controller_check.isChecked()
     assert overlay.active is True
     send_escape(False)
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 @pytest.mark.parametrize(
@@ -2626,7 +2982,7 @@ def test_easycon_panel_ctrl_escape_fully_closes_from_active_or_standby(
         native_backend=FakeNativeBackend(),
         keyboard_hook_factory=hook_factory,
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     overlay = panel._controller_overlay
     assert overlay is not None
@@ -2655,7 +3011,7 @@ def test_easycon_panel_ctrl_escape_fully_closes_from_active_or_standby(
     if use_hook:
         assert hook.stop_calls == 1
         assert not hook.is_running
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_escape_auto_repeat_and_release_do_not_toggle_again(
@@ -2666,7 +3022,7 @@ def test_easycon_panel_escape_auto_repeat_and_release_do_not_toggle_again(
         native_backend=FakeNativeBackend(),
         keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
 
     QApplication.sendEvent(
@@ -2710,7 +3066,7 @@ def test_easycon_panel_escape_auto_repeat_and_release_do_not_toggle_again(
     )
     app.processEvents()
     assert panel.virtual_controller_enabled is True
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_qt_fallback_keeps_standby_held_key_passthrough_after_resume(
@@ -2721,7 +3077,7 @@ def test_easycon_panel_qt_fallback_keeps_standby_held_key_passthrough_after_resu
         native_backend=backend,
         keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     assert panel._set_virtual_controller_standby()
 
@@ -2746,7 +3102,7 @@ def test_easycon_panel_qt_fallback_keeps_standby_held_key_passthrough_after_resu
     assert panel.eventFilter(panel, mapped_press) is True
     assert panel.eventFilter(panel, mapped_release) is True
     assert backend.key_events == [("down", "A"), ("up", "A")]
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_qt_fallback_clears_standby_passthrough_on_app_deactivate(
@@ -2756,7 +3112,7 @@ def test_easycon_panel_qt_fallback_clears_standby_passthrough_on_app_deactivate(
         native_backend=FakeNativeBackend(),
         keyboard_hook_factory=UnsupportedKeyboardHookFactory(),
     )
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     assert panel._set_virtual_controller_standby()
     mapped_press = QKeyEvent(
@@ -2770,7 +3126,7 @@ def test_easycon_panel_qt_fallback_clears_standby_passthrough_on_app_deactivate(
     panel.eventFilter(QApplication.instance(), QEvent(QEvent.Type.ApplicationDeactivate))
 
     assert panel._qt_passthrough_pressed_keys == set()
-    assert panel.shutdown()
+    assert shutdown_panel(panel)
 
 
 def test_easycon_panel_keyboard_virtual_controller_releases_on_app_deactivate(monkeypatch, tmp_path, easycon_panel):
@@ -3019,20 +3375,20 @@ def test_easycon_panel_shutdown_closes_persistent_bridge(easycon_panel):
     backend = FakeBridgeBackend()
     easycon_panel.bridge_backend = backend
 
-    assert easycon_panel.shutdown() is True
+    assert shutdown_panel(easycon_panel) is True
 
     assert backend.closed is True
     assert easycon_panel.bridge_backend is None
     with pytest.raises(RuntimeError, match="正在关闭"):
         easycon_panel._ensure_bridge_backend()
 
-    assert easycon_panel.shutdown() is True
+    assert shutdown_panel(easycon_panel) is True
 
 
 def test_easycon_panel_shutdown_clears_pending_native_run_reservation(easycon_panel):
     backend = easycon_panel.native_backend
     assert isinstance(backend, FakeNativeBackend)
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel.reserve_native_script_run()
     assert easycon_panel.native_run_thread is None
     presentations: list[tuple[str, str, str, bool]] = []
@@ -3041,7 +3397,7 @@ def test_easycon_panel_shutdown_clears_pending_native_run_reservation(easycon_pa
     )
     easycon_panel.show_connection_dialog()
 
-    assert easycon_panel.shutdown() is True
+    assert shutdown_panel(easycon_panel) is True
 
     assert easycon_panel._native_run_reserved is False
     assert backend.closed is True
@@ -3058,8 +3414,10 @@ def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel)
     events: list[object] = []
 
     class StuckProcess:
+        running = True
+
         def state(self):
-            return QProcess.ProcessState.Running
+            return QProcess.ProcessState.Running if self.running else QProcess.ProcessState.NotRunning
 
         def kill(self) -> None:
             events.append("process-kill")
@@ -3069,8 +3427,10 @@ def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel)
             return False
 
     class StuckThread:
+        running = True
+
         def isRunning(self) -> bool:
-            return True
+            return self.running
 
         def requestInterruption(self) -> None:
             events.append("thread-interrupt")
@@ -3082,24 +3442,32 @@ def test_easycon_panel_shutdown_reports_process_or_thread_timeout(easycon_panel)
             events.append(("thread-wait", wait_ms))
             return False
 
-    assert easycon_panel.connect_native()
+    assert connect_native(easycon_panel)
     assert easycon_panel.virtual_controller_action.isEnabled()
-    easycon_panel.process = StuckProcess()  # type: ignore[assignment]
-    easycon_panel.bridge_run_thread = StuckThread()  # type: ignore[assignment]
+    process, thread = StuckProcess(), StuckThread()
+    easycon_panel.process = process  # type: ignore[assignment]
+    easycon_panel.bridge_run_thread = thread  # type: ignore[assignment]
 
     assert easycon_panel.shutdown(wait_ms=25) is False
     assert events == [
         "process-kill",
-        ("process-wait", 25),
         "thread-interrupt",
         "thread-quit",
-        ("thread-wait", 25),
     ]
     assert not easycon_panel.connection_settings_action.isEnabled()
     assert not easycon_panel.virtual_controller_action.isEnabled()
     assert not easycon_panel.mapping_action.isEnabled()
     assert not easycon_panel.mapping_button.isEnabled()
     assert not easycon_panel.record_btn.isEnabled()
+    process_events_until(lambda: not easycon_panel._shutdown_in_progress)
+    assert not easycon_panel._shutdown_complete
+    assert easycon_panel.process is process and easycon_panel.bridge_run_thread is thread
+    assert easycon_panel.connection_settings_action.isEnabled()
+    assert "CLI 任务尚未退出" in easycon_panel.log_view.toPlainText()
+
+    process.running = thread.running = False
+    assert shutdown_panel(easycon_panel)
+    assert not any(isinstance(event, tuple) for event in events)
 
 
 def test_easycon_panel_shutdown_retries_failed_bridge_close(easycon_panel):
@@ -3117,9 +3485,9 @@ def test_easycon_panel_shutdown_retries_failed_bridge_close(easycon_panel):
     backend = RetryBackend()
     easycon_panel.bridge_backend = backend
 
-    assert easycon_panel.shutdown(wait_ms=25) is False
+    assert shutdown_panel(easycon_panel, wait_ms=25) is False
     assert easycon_panel.bridge_backend is backend
-    assert easycon_panel.shutdown(wait_ms=25) is True
+    assert shutdown_panel(easycon_panel, wait_ms=25) is True
     assert easycon_panel.bridge_backend is None
     assert backend.closed is True
 

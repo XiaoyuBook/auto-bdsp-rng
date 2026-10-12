@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import threading
+from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
@@ -51,6 +52,7 @@ from auto_bdsp_rng.automation.easycon.native.pause import PauseControl
 LogCallback = Callable[[str, str], None]
 FrameClientFactory = Callable[[], Any]
 ImageResultCallback = Callable[[ImageSearchResult], None]
+DEFAULT_STDOUT_LIMIT = 256 * 1024
 
 
 class NativeEasyConBusyError(RuntimeError):
@@ -58,22 +60,46 @@ class NativeEasyConBusyError(RuntimeError):
 
 
 class _RunOutput:
-    def __init__(self, emit: LogCallback) -> None:
+    def __init__(self, emit: LogCallback, limit: int = DEFAULT_STDOUT_LIMIT) -> None:
         self._emit = emit
-        self._parts: list[str] = []
+        self._limit = max(1, int(limit))
+        self._parts: deque[str] = deque()
+        self._length = 0
+        self._dropped = 0
 
     @property
     def text(self) -> str:
-        return "".join(self._parts)
+        tail = "".join(self._parts)
+        if not self._dropped:
+            return tail
+        return (
+            f"[已省略较早的脚本输出 {self._dropped} 字符，仅保留末尾；"
+            "完整输出需启用磁盘日志]\n" + tail
+        )
+
+    def _append(self, rendered: str) -> None:
+        if not rendered:
+            return
+        self._parts.append(rendered)
+        self._length += len(rendered)
+        excess = self._length - self._limit
+        while excess > 0:
+            first = self._parts.popleft()
+            removed = min(excess, len(first))
+            if removed < len(first):
+                self._parts.appendleft(first[removed:])
+            self._length -= removed
+            self._dropped += removed
+            excess -= removed
 
     def print(self, message: str, newline: bool) -> None:
         rendered = str(message) + ("\n" if newline else "")
-        self._parts.append(rendered)
+        self._append(rendered)
         self._emit("INFO", str(message))
 
     def alert(self, message: str) -> None:
         rendered = str(message)
-        self._parts.append(rendered + "\n")
+        self._append(rendered + "\n")
         self._emit("WARNING", rendered)
 
 
@@ -143,6 +169,7 @@ class NativeEasyConBackend(EasyConBackend):
         ocr_reader: OcrReader | None = None,
         waiter: Any | None = None,
         disconnect_timeout: float = 2.0,
+        stdout_limit: int = DEFAULT_STDOUT_LIMIT,
     ) -> None:
         self._log_callback = log_callback
         self._device = device or NintendoSwitchDevice(action_sink=self._device_log)
@@ -153,7 +180,11 @@ class NativeEasyConBackend(EasyConBackend):
         self._ocr_reader = ocr_reader
         self._waiter = waiter
         self._disconnect_timeout = max(0.1, float(disconnect_timeout))
+        self._stdout_limit = max(1, int(stdout_limit))
+        self._lifecycle_lock = threading.RLock()
         self._state_lock = threading.RLock()
+        self._connecting = False
+        self._disconnecting = False
         self._run_lock = threading.Lock()
         self._run_cancel: threading.Event | None = None
         self._run_done = threading.Event()
@@ -182,6 +213,11 @@ class NativeEasyConBackend(EasyConBackend):
     def set_image_result_callback(self, callback: ImageResultCallback | None) -> None:
         self._image_result_callback = callback
 
+    def set_log_callback(self, callback: LogCallback | None) -> None:
+        """Install a thread-safe sink called directly by native worker threads."""
+
+        self._log_callback = callback
+
     def discover(self) -> EasyConInstallation:
         return EasyConInstallation(
             path=Path(__file__).resolve(),
@@ -203,35 +239,72 @@ class NativeEasyConBackend(EasyConBackend):
             return EasyConStatus.BRIDGE_CONNECTED
         return EasyConStatus.BRIDGE_DISCONNECTED
 
-    def connect(self, port: str) -> None:
+    def connect(self, port: str, *, cancel_event: threading.Event | None = None) -> None:
         actual_port = str(port).strip()
         if not actual_port:
             raise DeviceConnectionError("请选择伊机控串口")
-        with self._state_lock:
-            if self._closed:
-                raise RuntimeError("原生伊机控后端已关闭")
-            if self._running:
-                raise NativeEasyConBusyError("脚本运行时不能切换串口")
-        if not self._device.connect(actual_port):
-            detail = f": {self._device.failure}" if self._device.failure is not None else ""
-            raise DeviceConnectionError(f"无法连接伊机控串口 {actual_port}{detail}")
-        self._emit("INFO", f"原生伊机控已连接: {actual_port}")
+        with self._lifecycle_lock:
+            with self._state_lock:
+                if self._closed:
+                    raise RuntimeError("原生伊机控后端已关闭")
+                if self._running:
+                    raise NativeEasyConBusyError("脚本运行时不能切换串口")
+                self._connecting = True
+            try:
+                if not self._device.connect(actual_port, cancel_event=cancel_event):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise DeviceCancelledError("伊机控连接已取消")
+                    detail = f": {self._device.failure}" if self._device.failure is not None else ""
+                    raise DeviceConnectionError(f"无法连接伊机控串口 {actual_port}{detail}")
+                self._emit("INFO", f"原生伊机控已连接: {actual_port}")
+            finally:
+                with self._state_lock:
+                    self._connecting = False
+
+    def connect_cancellable(self, port: str, cancel_event: threading.Event) -> None:
+        """Connect synchronously on a worker, with cooperative handshake cancellation."""
+
+        self.connect(port, cancel_event=cancel_event)
 
     def disconnect(self) -> None:
-        self.stop_current_script()
-        if not self._run_done.wait(self._disconnect_timeout):
-            raise NativeEasyConBusyError("伊机控脚本仍在停止，暂不能断开串口")
-        if not self._device.disconnect(release=True, timeout=self._disconnect_timeout):
-            raise DeviceConnectionError("伊机控串口未能在限定时间内断开")
-        with self._state_lock:
-            for directions in self._stick_directions.values():
-                directions.clear()
-        self._emit("INFO", "原生伊机控已断开")
+        with self._lifecycle_lock:
+            with self._state_lock:
+                self._disconnecting = True
+            try:
+                self.stop_current_script()
+                if not self._run_done.wait(self._disconnect_timeout):
+                    raise NativeEasyConBusyError("伊机控脚本仍在停止，暂不能断开串口")
+                if not self._device.disconnect(release=True, timeout=self._disconnect_timeout):
+                    raise DeviceConnectionError("伊机控串口未能在限定时间内断开")
+                with self._state_lock:
+                    for directions in self._stick_directions.values():
+                        directions.clear()
+                self._emit("INFO", "原生伊机控已断开")
+            finally:
+                with self._state_lock:
+                    self._disconnecting = False
 
     def close(self) -> None:
-        self.disconnect()
-        with self._state_lock:
-            self._closed = True
+        with self._lifecycle_lock:
+            self.disconnect()
+            with self._state_lock:
+                self._closed = True
+
+    def close_if_idle(self) -> bool:
+        """Seal an unused backend without serial I/O or waiting for another call."""
+
+        if not self._lifecycle_lock.acquire(blocking=False):
+            return False
+        try:
+            with self._state_lock:
+                if self._running or self._connecting or self._disconnecting:
+                    return False
+                if self._device.transport is not None:
+                    return False
+                self._closed = True
+                return True
+        finally:
+            self._lifecycle_lock.release()
 
     def run_script(self, task: EasyConRunTask) -> EasyConRunResult:
         if not self._device.is_connected:
@@ -258,7 +331,7 @@ class NativeEasyConBackend(EasyConBackend):
             raise NativeEasyConBusyError("已有伊机控脚本正在运行")
         script_path, actual_script_dir, source = _script_location(name, script_dir)
         started_at = datetime.now()
-        output = _RunOutput(self._emit)
+        output = _RunOutput(self._emit, self._stdout_limit)
         cancel = threading.Event()
         control = PauseControl(
             cancel, self.execution_trace.finish,
@@ -270,6 +343,9 @@ class NativeEasyConBackend(EasyConBackend):
             if self._closed:
                 self._run_lock.release()
                 raise RuntimeError("原生伊机控后端已关闭")
+            if self._connecting or self._disconnecting:
+                self._run_lock.release()
+                raise NativeEasyConBusyError("伊机控串口正在连接或断开")
             self._running = True
             self._run_cancel = cancel
             self._pause_control = control

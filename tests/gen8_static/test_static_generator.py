@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from types import SimpleNamespace
+
 import pytest
 
 from auto_bdsp_rng.gen8_static import Lead, PersonalInfo8, Profile8, Shiny, State8, StateFilter, StaticGenerator8, StaticTemplate8
+from auto_bdsp_rng.gen8_static import generator as generator_module
+from auto_bdsp_rng.rng_core.cancellation import SearchCancellation, SearchCancelled
 
 
 SEED0 = 1311768467139281697
@@ -173,3 +178,140 @@ def test_shiny_filter_matches_pokefinder_star_square_semantics():
     assert StateFilter(shiny=1 | 2).compare_state(star) is True
     assert StateFilter(shiny=1 | 2).compare_state(square) is True
     assert StateFilter(shiny=1 | 2).compare_state(non_shiny) is False
+
+
+def _legacy_generator(max_advances=130):
+    template = StaticTemplate8(
+        species=387, shiny=Shiny.NEVER, ability=255, iv_count=0, level=5,
+        info=PersonalInfo8(gender_ratio=31, ability_count=2),
+    )
+    return StaticGenerator8(7, max_advances, 3, Lead.NONE, template, PROFILE, StateFilter(ability=1))
+
+
+@pytest.mark.parametrize("legacy", ["missing_token_type", "reject_cancel_keyword"])
+@pytest.mark.parametrize("multi", [False, True])
+def test_cancellable_legacy_native_uses_interruptible_python_without_partial_results(monkeypatch, legacy, multi):
+    generator = _legacy_generator()
+    filters = [generator.state_filter, StateFilter(height_min=100, height_max=130)]
+    all_states = replace(generator, state_filter=StateFilter(skip=True)).generate_non_roamer(SEED0, SEED1)
+    expected = [state for state in all_states if any(sf.compare_state(state) for sf in filters)] if multi else [
+        state for state in all_states if generator.state_filter.compare_state(state)
+    ]
+    native_calls = []
+
+    def legacy_native(role, kwargs):
+        native_calls.append((role, kwargs))
+        if "cancel_token" in kwargs:
+            raise TypeError("unexpected keyword argument 'cancel_token'")
+        raise AssertionError("uncancellable legacy native generator was entered")
+
+    monkeypatch.setattr(generator_module, "_HAS_NATIVE", True)
+    monkeypatch.setattr(generator_module, "_native_generate", lambda *args, **kwargs: legacy_native("single", kwargs), raising=False)
+    monkeypatch.setattr(generator_module, "_native_generate_multi", lambda *args, **kwargs: legacy_native("multi", kwargs))
+
+    def make_token():
+        token = SearchCancellation()
+        token.native = None if legacy == "missing_token_type" else SimpleNamespace(cancel=lambda: None)
+        return token
+
+    def generate(token):
+        if multi:
+            return generator.generate_matching_any(filters, SEED0, SEED1, cancellation=token)
+        return generator.generate(SEED0, SEED1, cancellation=token)
+
+    cancellation = make_token()
+    assert generate(cancellation) == expected
+    expected_calls = [] if legacy == "missing_token_type" else [("multi" if multi else "single", {"cancel_token": cancellation.native})]
+    assert native_calls == expected_calls
+
+    # Cancel after real Python encounters have been generated, before the
+    # next cooperative check; the public call must not return that prefix.
+    native_calls.clear()
+    cancellation = make_token()
+    original_advance = generator_module.RNGList.advance_state
+    advances = 0
+
+    def advance(rng):
+        nonlocal advances
+        result = original_advance(rng)
+        advances += 1
+        if advances == 64:
+            cancellation.cancel()
+        return result
+
+    monkeypatch.setattr(generator_module.RNGList, "advance_state", advance)
+    with pytest.raises(SearchCancelled):
+        generate(cancellation)
+    assert advances == 64
+    expected_calls = [] if legacy == "missing_token_type" else [("multi" if multi else "single", {"cancel_token": cancellation.native})]
+    assert native_calls == expected_calls
+
+    native_calls.clear()
+    cancellation = make_token()
+    cancellation.cancel()
+    with pytest.raises(SearchCancelled):
+        generate(cancellation)
+    assert not native_calls and advances == 64
+
+
+@pytest.mark.parametrize("accept_level", [False, True])
+def test_uncancellable_legacy_level_api_remains_compatible(monkeypatch, accept_level):
+    generator = replace(_legacy_generator(max_advances=0), state_filter=StateFilter())
+    expected = generator.generate_non_roamer(SEED0, SEED1)[0]
+    raw_state = (
+        expected.advances, expected.ec, expected.sidtid, expected.pid, expected.ivs,
+        expected.ability, expected.gender, 100, expected.nature, expected.shiny,
+        expected.height, expected.weight,
+    )
+    calls = []
+
+    def native(*args, **kwargs):
+        calls.append((len(args), kwargs))
+        if not accept_level and len(args) == 28:
+            raise TypeError("legacy API has no level argument")
+        assert len(args) == (28 if accept_level else 27) and not kwargs
+        return [raw_state]
+
+    monkeypatch.setattr(generator_module, "_HAS_NATIVE", True)
+    monkeypatch.setattr(generator_module, "_native_generate", native, raising=False)
+    monkeypatch.setattr(generator_module, "_native_generate_multi", None)
+    assert generator.generate(SEED0, SEED1) == [expected]
+    assert generator.generate_matching_any([StateFilter()], SEED0, SEED1) == [expected]
+    assert [count for count, kwargs in calls] == ([28, 28] if accept_level else [28, 27, 28, 27])
+
+
+@pytest.mark.parametrize("roamer,skip", [(False, False), (True, False), (True, True)])
+def test_cancellable_native_single_and_multi_keep_all_python_fields(monkeypatch, roamer, skip):
+    from auto_bdsp_rng.data import get_static_encounters
+
+    cancellation = SearchCancellation()
+    if not generator_module._HAS_NATIVE or generator_module._native_generate_multi is None or cancellation.native is None:
+        pytest.skip("cancellable native extension required")
+    template = next(record.template for record in get_static_encounters()
+                    if record.template.roamer == roamer and (not roamer or record.template.species == 481))
+    filters = [StateFilter(shiny=0, natures=tuple(index % 2 == 0 for index in range(25))),
+               StateFilter(height_min=100, height_max=130)]
+    if skip:
+        filters[0] = StateFilter(skip=True, iv_max=(0,) * 6, hidden_powers=(False,) * 16)
+    generator = StaticGenerator8(31, 100, 3, Lead.NONE, template, PROFILE, filters[0])
+    generate_python = StaticGenerator8.generate_roamer if roamer else StaticGenerator8.generate_non_roamer
+    expected_single = generate_python(generator, SEED0, SEED1)
+    all_states = generate_python(replace(generator, state_filter=StateFilter(skip=True)), SEED0, SEED1)
+    expected_multi = [state for state in all_states if any(sf.compare_state(state) for sf in filters)]
+    native_single, native_multi = generator_module._native_generate, generator_module._native_generate_multi
+    calls = []
+
+    def single(*args, **kwargs):
+        calls.append(("single", kwargs.get("cancel_token")))
+        return native_single(*args, **kwargs)
+
+    def multi(*args, **kwargs):
+        calls.append(("multi", kwargs.get("cancel_token")))
+        return native_multi(*args, **kwargs)
+
+    monkeypatch.setattr(generator_module, "_native_generate", single)
+    monkeypatch.setattr(generator_module, "_native_generate_multi", multi)
+    assert generator.generate(SEED0, SEED1, cancellation=cancellation) == expected_single
+    multi_cancellation = SearchCancellation()
+    assert generator.generate_matching_any(filters, SEED0, SEED1, cancellation=multi_cancellation) == expected_multi
+    assert calls == [("single", cancellation.native), ("multi", multi_cancellation.native)]

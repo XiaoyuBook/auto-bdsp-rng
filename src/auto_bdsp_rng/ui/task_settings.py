@@ -223,7 +223,7 @@ class TaskConfigBinding(QWidget):
         if self._refresh_pending:
             return
         self._refresh_pending = True
-        QTimer.singleShot(0, self._finish_refresh)
+        QTimer.singleShot(0, self, self._finish_refresh)
 
     def _finish_refresh(self):
         self._refresh_pending = False

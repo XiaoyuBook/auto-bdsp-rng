@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hpp"
+#include "cancellation.hpp"
 #include <array>
 #include <vector>
 
@@ -44,7 +45,8 @@ std::vector<StateResult> generate_non_roamer(
     int lead, ShinyTemplate shiny_template, bool fateful,
     u8 iv_count, u8 ability_template, u8 gender_ratio, u8 ability_count,
     u16 tid, u16 sid, u8 level,
-    const FilterParams& filter);
+    const FilterParams& filter, const SearchCancellation* cancellation = nullptr,
+    const std::vector<FilterParams>* filters = nullptr);
 
 std::vector<StateResult> generate_non_roamer_multi(
     u64 seed0, u64 seed1,
@@ -52,16 +54,17 @@ std::vector<StateResult> generate_non_roamer_multi(
     int lead, ShinyTemplate shiny_template, bool fateful,
     u8 iv_count, u8 ability_template, u8 gender_ratio, u8 ability_count,
     u16 tid, u16 sid, u8 level,
-    const std::vector<FilterParams>& filters);
+    const std::vector<FilterParams>& filters, const SearchCancellation* cancellation = nullptr);
 
 std::vector<StateResult> generate_roamer(
     u64 seed0, u64 seed1,
     u32 initial_advances, u32 max_advances, u32 offset,
     int lead, u16 tid, u16 sid, u16 species, u8 level,
-    const FilterParams& filter);
+    const FilterParams& filter, const SearchCancellation* cancellation = nullptr,
+    const std::vector<FilterParams>* filters = nullptr);
 
 std::vector<StateResult> generate_roamer_multi(
     u64 seed0, u64 seed1,
     u32 initial_advances, u32 max_advances, u32 offset,
     int lead, u16 tid, u16 sid, u16 species, u8 level,
-    const std::vector<FilterParams>& filters);
+    const std::vector<FilterParams>& filters, const SearchCancellation* cancellation = nullptr);

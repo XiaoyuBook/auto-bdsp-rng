@@ -15,7 +15,7 @@ from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
 from auto_bdsp_rng.ui.easycon_execution import source_key
 from tests.automation.test_easycon_native_backend import FakeFrameClient
 from tests.test_easycon_panel import (
-    app, easycon_panel_factory, easycon_panel, process_events_until,
+    app, connect_native, easycon_panel_factory, easycon_panel, process_events_until, shutdown_panel,
 )
 
 
@@ -61,7 +61,7 @@ def test_execution_highlight_scrolls_without_moving_edit_cursor_and_preserves_st
     assert panel.editor.execution_line == 70
     assert "已停止" in panel.execution.state_label.text()
     assert "70" in panel.execution.action_label.text()
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_library_follow_keeps_main_draft_and_dirty_state(easycon_panel, tmp_path):
@@ -99,7 +99,7 @@ def test_library_follow_keeps_main_draft_and_dirty_state(easycon_panel, tmp_path
     assert not panel.execution.viewing_snapshot
     panel.execution.follow.setChecked(True)
     assert panel.execution.viewing_snapshot
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_external_run_shows_its_source_and_edit_invalidates_old_line(easycon_panel, tmp_path):
@@ -127,7 +127,7 @@ def test_external_run_shows_its_source_and_edit_invalidates_old_line(easycon_pan
     assert panel.execution.state_label.text() == "等待运行"
     assert not panel.execution.locate.isEnabled()
     assert not panel.execution.viewing_snapshot
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_recording_returns_to_draft_and_locks_file_switching_until_stopped(easycon_panel, tmp_path):
@@ -140,7 +140,7 @@ def test_recording_returns_to_draft_and_locks_file_switching_until_stopped(easyc
     library.write_text("WAIT 50\n", encoding="utf-8")
     panel.execution.show_source(str(library))
     assert panel.execution.viewing_snapshot
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     panel._start_recording()
     assert not panel.execution.viewing_snapshot
@@ -165,7 +165,7 @@ def test_recording_returns_to_draft_and_locks_file_switching_until_stopped(easyc
     panel.execution.show_source(str(library))
     assert panel.execution.viewing_snapshot
     assert panel.editor.toPlainText().startswith(original + "LS UP\n")
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_live_recording_scrolls_to_new_commands(easycon_panel):
@@ -175,7 +175,7 @@ def test_live_recording_scrolls_to_new_commands(easycon_panel):
     panel.editor.setPlainText("# 已有脚本\n" * 120)
     QTest.qWait(50)
     panel.editor.verticalScrollBar().setValue(0)
-    assert panel.connect_native()
+    assert connect_native(panel)
     assert panel._activate_virtual_controller()
     panel._start_recording()
     panel._handle_virtual_controller_key(Qt.Key.Key_W, True)
@@ -184,7 +184,7 @@ def test_live_recording_scrolls_to_new_commands(easycon_panel):
     assert 0 <= rect.top() < rect.bottom() <= panel.editor.viewport().height()
     assert block.text() == "LS UP"
     panel._stop_recording()
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_real_native_worker_wait_stop_restart_and_draft_guards(easycon_panel_factory, tmp_path):
@@ -218,7 +218,7 @@ def test_real_native_worker_wait_stop_restart_and_draft_guards(easycon_panel_fac
         assert panel.execution.snapshot.state == "completed"
         assert panel.editor.execution_line == 1
     finally:
-        panel.shutdown()
+        shutdown_panel(panel)
 
 
 def test_real_loop_counter_stays_visible_during_wait_and_after_stop_without_video(easycon_panel_factory, tmp_path):
@@ -254,7 +254,7 @@ def test_real_loop_counter_stays_visible_during_wait_and_after_stop_without_vide
         panel.execution.clear()
         assert panel.execution.loop_label.isHidden()
     finally:
-        panel.shutdown()
+        shutdown_panel(panel)
 
 
 def test_follow_reveals_line_after_temporary_tools_and_showing_page(easycon_panel, tmp_path):
@@ -283,7 +283,7 @@ def test_follow_reveals_line_after_temporary_tools_and_showing_page(easycon_pane
     QTest.qWait(100)
     rect = panel.editor.cursorRect(QTextCursor(panel.editor.document().findBlockByNumber(39)))
     assert panel.editor.viewport().visibleRegion().contains(rect)
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_replaced_backend_trace_starts_fresh_after_old_record_dismissed(easycon_panel, tmp_path):
@@ -298,7 +298,7 @@ def test_replaced_backend_trace_starts_fresh_after_old_record_dismissed(easycon_
     publish(panel, path, "WAIT 5", 1, state="completed")
     assert not panel.execution.bar.isHidden()
     assert panel.editor.execution_line == 1
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_script_library_lists_txt_ecs_and_double_click_loads_current(easycon_panel):
@@ -341,7 +341,7 @@ def test_script_library_lists_txt_ecs_and_double_click_loads_current(easycon_pan
     assert tree.height() == collapsed_height
     panel.execution.refresh_sources()
     assert not tree.topLevelItem(tree.topLevelItemCount() - 1).isExpanded()
-    panel.shutdown()
+    shutdown_panel(panel)
 
 
 def test_open_from_library_protects_dirty_current_script(easycon_panel, monkeypatch):
@@ -365,4 +365,4 @@ def test_open_from_library_protects_dirty_current_script(easycon_panel, monkeypa
     assert original.read_text(encoding="utf-8") == "WAIT 123"
     assert panel.current_script_path == other
     assert panel.editor.toPlainText() == "WAIT 2"
-    panel.shutdown()
+    shutdown_panel(panel)

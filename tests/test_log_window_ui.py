@@ -5,9 +5,11 @@ from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from tests.test_easycon_panel import connect_native
 from tests.test_run_records_ui import app
 from tests.test_start_readiness import window
 from tests.test_workspace_layout import settle
+from tests.ui_wait import close_widget
 
 
 def messages(panel):
@@ -17,7 +19,10 @@ def messages(panel):
 def test_complete_log_window_reuses_model_and_receives_workers_while_closed(app, window):
     w = window
     w.tabs.setCurrentWidget(w.easycon_tab)
-    assert w.easycon_tab.connect_native()
+    assert connect_native(w.easycon_tab)
+    backend = w.easycon_tab.native_backend
+    assert backend.connected_port == w.easycon_tab._connection_port()
+    assert w.easycon_tab._native_lifecycle_thread is None
     assert w.easycon_tab._activate_virtual_controller()
     original = w.tabs.currentWidget()
     logs, panel = w.run_log_window, w.run_log_window.log_panel
@@ -50,6 +55,14 @@ def test_complete_log_window_reuses_model_and_receives_workers_while_closed(app,
     assert logs.unread_problem_count == 0 and w.live_log_panel.problem_label.isHidden()
     w._show_run_logs(None)
     assert w.run_log_window is logs and w.tabs.currentWidget() is w.auto_rng_tab
+    close_widget(w)
+    assert w._close_accepted and w.easycon_tab._shutdown_complete
+    assert not w.easycon_tab.virtual_controller_enabled
+    assert w.easycon_tab._native_lifecycle_thread is None
+    assert w.easycon_tab._close_preparation_thread is None
+    assert w.easycon_tab._keyboard_hook is None
+    assert w.easycon_tab.native_backend is None and backend.closed
+    assert backend.connected_port is None
 
 
 def test_live_source_current_run_and_historical_round_routes_are_independent(app, window):

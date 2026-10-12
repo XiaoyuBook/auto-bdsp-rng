@@ -224,6 +224,79 @@ def test_ttl_serial_transport_handshake_io_loop_and_close():
     assert not transport.is_connected
 
 
+def test_cancelling_serial_handshake_stops_promptly_without_second_baudrate():
+    hello_sent, cancel = threading.Event(), threading.Event()
+    attempts: list[int] = []
+    serial_port = FakeSerial()
+
+    def silent_write(data):
+        serial_port.writes.append(bytes(data))
+        hello_sent.set()
+        return len(data)
+
+    serial_port.write = silent_write
+
+    def factory(port, baudrate):
+        attempts.append(baudrate)
+        return TTLSerialTransport(port, baudrate, serial_factory=lambda *_: serial_port)
+
+    device = NintendoSwitchDevice(transport_factory=factory, connect_timeout=5, fallback_delay=1)
+    results: list[bool] = []
+    worker = threading.Thread(target=lambda: results.append(device.connect("COM7", cancel_event=cancel)))
+    try:
+        worker.start()
+        assert hello_sent.wait(1)
+        cancel.set()
+        worker.join(0.5)
+        assert not worker.is_alive() and results == [False]
+        assert attempts == [115200]
+        assert serial_port.closed and not device.is_connected
+        assert device.transport is None
+    finally:
+        cancel.set()
+        worker.join(2)
+        device.disconnect()
+
+
+def test_pre_cancelled_device_connection_never_opens_transport():
+    cancel = threading.Event()
+    cancel.set()
+    device = NintendoSwitchDevice(transport_factory=lambda *_: pytest.fail("cancelled handshake must not open"))
+    assert not device.connect("COM7", cancel_event=cancel)
+
+
+def test_failed_transport_close_keeps_owner_and_prevents_overlapping_retry():
+    attempts: list[int] = []
+
+    class UnclosedTransport(MemoryTransport):
+        allow_close = False
+
+        def close(self, timeout=1.0):
+            if not self.allow_close:
+                return False
+            return super().close(timeout)
+
+    old = UnclosedTransport("COM7", handshake_success=False)
+
+    def factory(port, baudrate):
+        attempts.append(baudrate)
+        return old if len(attempts) == 1 else MemoryTransport(port, baudrate)
+
+    device = NintendoSwitchDevice(transport_factory=factory)
+    try:
+        assert not device.connect("COM7")
+        assert attempts == [115200] and device.transport is old
+        assert not device.connect("COM7")
+        assert attempts == [115200] and device.transport is old
+        old.allow_close = True
+        assert device.connect("COM7")
+        assert attempts == [115200, 115200]
+        assert old.closed and device.transport is not old
+    finally:
+        old.allow_close = True
+        device.disconnect()
+
+
 def test_mock_gamepad_runs_without_real_serial_and_records_actions():
     gamepad = MockGamepad()
     try:

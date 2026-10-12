@@ -1,5 +1,14 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <chrono>
+#include <thread>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <memory>
+#endif
 #include "generator.hpp"
 #include "reidentify.hpp"
 
@@ -60,6 +69,45 @@ static py::tuple state_to_tuple(const StateResult& r) {
         r.shiny, r.height, r.weight);
 }
 
+static py::list states_to_list(const std::vector<StateResult>& results, const SearchCancellation* cancellation) {
+    py::list out;
+#ifdef _WIN32
+    // Sleep(1) can round up to a 15.6ms scheduler tick. A reusable high-resolution
+    // timer keeps the real 1ms handoff without paying that delay for every batch.
+    std::unique_ptr<void, decltype(&CloseHandle)> scheduling_timer(
+        results.size() > 4096
+            ? CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                    TIMER_MODIFY_STATE | SYNCHRONIZE)
+            : nullptr,
+        &CloseHandle);
+#endif
+    for (std::size_t index = 0; index < results.size(); ++index) {
+        if ((index & 1023) == 0) {
+            check_cancelled(cancellation);
+            // A scheduler yield may immediately reacquire the GIL on Windows.
+            // Give its waiter a real scheduling window between bounded batches.
+            if ((index & 4095) == 0 && index != 0) {
+                py::gil_scoped_release release;
+                bool paused = false;
+#ifdef _WIN32
+                if (scheduling_timer) {
+                    LARGE_INTEGER due;
+                    due.QuadPart = -10'000;  // Relative 1ms, in 100ns units.
+                    paused = SetWaitableTimer(scheduling_timer.get(), &due, 0, nullptr, nullptr, FALSE)
+                        && WaitForSingleObject(scheduling_timer.get(), INFINITE) == WAIT_OBJECT_0;
+                }
+#endif
+                if (!paused) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
+        }
+        out.append(state_to_tuple(results[index]));
+    }
+    check_cancelled(cancellation);
+    return out;
+}
+
 // 统一入口
 static py::list generate_static_py(
     u64 seed0, u64 seed1,
@@ -73,7 +121,8 @@ static py::list generate_static_py(
     bool filter_skip, int filter_ability, int filter_gender, int filter_shiny,
     int height_min, int height_max, int weight_min, int weight_max,
     py::tuple iv_min_py, py::tuple iv_max_py,
-    py::tuple natures_py, py::tuple hidden_powers_py)
+    py::tuple natures_py, py::tuple hidden_powers_py,
+    const SearchCancellation* cancellation)
 {
     FilterParams filter = build_filter(
         filter_skip, filter_ability, filter_gender, filter_shiny,
@@ -81,11 +130,13 @@ static py::list generate_static_py(
         iv_min_py, iv_max_py, natures_py, hidden_powers_py);
 
     std::vector<StateResult> results;
+    {
+    py::gil_scoped_release release;
     if (roamer) {
         results = generate_roamer(
             seed0, seed1, initial_advances, max_advances, offset,
             lead, static_cast<u16>(tid), static_cast<u16>(sid), 0,
-            static_cast<u8>(level), filter);
+            static_cast<u8>(level), filter, cancellation);
     } else {
         results = generate_non_roamer(
             seed0, seed1, initial_advances, max_advances, offset,
@@ -93,14 +144,10 @@ static py::list generate_static_py(
             static_cast<u8>(iv_count), static_cast<u8>(ability_template),
             static_cast<u8>(gender_ratio), static_cast<u8>(ability_count),
             static_cast<u16>(tid), static_cast<u16>(sid),
-            static_cast<u8>(level), filter);
+            static_cast<u8>(level), filter, cancellation);
     }
-
-    py::list out;
-    for (const auto& r : results) {
-        out.append(state_to_tuple(r));
     }
-    return out;
+    return states_to_list(results, cancellation);
 }
 
 static py::list generate_static_multi_py(
@@ -111,15 +158,17 @@ static py::list generate_static_multi_py(
     int iv_count, int ability_template,
     int gender_ratio, int ability_count,
     int tid, int sid, int level,
-    py::list filters_py)
+    py::list filters_py, const SearchCancellation* cancellation)
 {
     std::vector<FilterParams> filters = build_filters(filters_py);
     std::vector<StateResult> results;
+    {
+    py::gil_scoped_release release;
     if (roamer) {
         results = generate_roamer_multi(
             seed0, seed1, initial_advances, max_advances, offset,
             lead, static_cast<u16>(tid), static_cast<u16>(sid), 0,
-            static_cast<u8>(level), filters);
+            static_cast<u8>(level), filters, cancellation);
     } else {
         results = generate_non_roamer_multi(
             seed0, seed1, initial_advances, max_advances, offset,
@@ -127,14 +176,10 @@ static py::list generate_static_multi_py(
             static_cast<u8>(iv_count), static_cast<u8>(ability_template),
             static_cast<u8>(gender_ratio), static_cast<u8>(ability_count),
             static_cast<u16>(tid), static_cast<u16>(sid),
-            static_cast<u8>(level), filters);
+            static_cast<u8>(level), filters, cancellation);
     }
-
-    py::list out;
-    for (const auto& r : results) {
-        out.append(state_to_tuple(r));
     }
-    return out;
+    return states_to_list(results, cancellation);
 }
 
 // ── IVChecker：PokeFinder Nature::computeStat 公式 ──
@@ -217,9 +262,14 @@ static py::list compute_iv_ranges_py(py::list bases_py, py::list stats_py, int n
 }
 
 static py::object reidentify_by_intervals_py(
-    u64 seed0, u64 seed1, std::vector<u32> intervals, int npc, u32 search_min, u32 search_max)
+    u64 seed0, u64 seed1, std::vector<u32> intervals, int npc, u32 search_min, u32 search_max,
+    const SearchCancellation* cancellation)
 {
-    auto result = reidentify_by_intervals_native(seed0, seed1, intervals, npc, search_min, search_max);
+    std::optional<ReidentifyResult> result;
+    {
+        py::gil_scoped_release release;
+        result = reidentify_by_intervals_native(seed0, seed1, intervals, npc, search_min, search_max, cancellation);
+    }
     if (!result.has_value()) {
         return py::none();
     }
@@ -227,9 +277,14 @@ static py::object reidentify_by_intervals_py(
 }
 
 static py::object reidentify_by_intervals_noisy_py(
-    u64 seed0, u64 seed1, std::vector<u32> intervals, u32 search_min, u32 search_max)
+    u64 seed0, u64 seed1, std::vector<u32> intervals, u32 search_min, u32 search_max,
+    const SearchCancellation* cancellation)
 {
-    auto result = reidentify_by_intervals_noisy_native(seed0, seed1, intervals, search_min, search_max);
+    std::optional<ReidentifyResult> result;
+    {
+        py::gil_scoped_release release;
+        result = reidentify_by_intervals_noisy_native(seed0, seed1, intervals, search_min, search_max, cancellation);
+    }
     if (!result.has_value()) {
         return py::none();
     }
@@ -238,6 +293,11 @@ static py::object reidentify_by_intervals_noisy_py(
 
 PYBIND11_MODULE(_native, m) {
     m.doc() = "BDSP RNG static generator (C++ native extension)";
+    py::register_exception<SearchCancelled>(m, "SearchCancelled");
+    py::class_<SearchCancellation>(m, "SearchCancellation")
+        .def(py::init<>())
+        .def("cancel", &SearchCancellation::cancel)
+        .def("is_cancelled", &SearchCancellation::is_cancelled);
     m.def("generate_static", &generate_static_py,
           py::arg("seed0"), py::arg("seed1"),
           py::arg("initial_advances"), py::arg("max_advances"), py::arg("offset"),
@@ -252,6 +312,7 @@ PYBIND11_MODULE(_native, m) {
           py::arg("weight_min"), py::arg("weight_max"),
           py::arg("iv_min"), py::arg("iv_max"),
           py::arg("natures"), py::arg("hidden_powers"),
+          py::arg("cancel_token") = nullptr,
           "Generate BDSP static encounter states (C++ native).");
     m.def("compute_iv_ranges", &compute_iv_ranges_py,
           py::arg("bases"), py::arg("stats"), py::arg("nature"), py::arg("level"),
@@ -265,13 +326,16 @@ PYBIND11_MODULE(_native, m) {
           py::arg("gender_ratio"), py::arg("ability_count"),
           py::arg("tid"), py::arg("sid"), py::arg("level"),
           py::arg("filters"),
+          py::arg("cancel_token") = nullptr,
           "Generate BDSP static encounter states matching any filter (C++ native).");
     m.def("reidentify_by_intervals", &reidentify_by_intervals_py,
           py::arg("seed0"), py::arg("seed1"), py::arg("intervals"),
           py::arg("npc"), py::arg("search_min"), py::arg("search_max"),
+          py::arg("cancel_token") = nullptr,
           "Reidentify Project_Xs Xorshift state from blink intervals (C++ native).");
     m.def("reidentify_by_intervals_noisy", &reidentify_by_intervals_noisy_py,
           py::arg("seed0"), py::arg("seed1"), py::arg("intervals"),
           py::arg("search_min"), py::arg("search_max"),
+          py::arg("cancel_token") = nullptr,
           "Reidentify Project_Xs Xorshift state from noisy blink intervals (C++ native).");
 }

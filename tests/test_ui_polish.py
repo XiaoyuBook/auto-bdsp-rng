@@ -16,6 +16,7 @@ from auto_bdsp_rng.rng_core import SeedPair64
 from auto_bdsp_rng.ui import auto_rng_panel, auto_tid_rng_panel, main_window as mw
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
 from auto_bdsp_rng.ui.auto_tid_rng_panel import AutoTidRngPanel
+from tests.ui_wait import wait_search
 
 
 def wait(app, condition):
@@ -327,39 +328,52 @@ def test_static_empty_search_success_and_failure(window, monkeypatch):
     w.initial_advances.setText('0')
     w.max_advances.setText('2')
     w.generate_results()
+    wait_search(w._static_search)
     assert w._states
     assert w.static_empty_state.isHidden()
     assert menu_enabled(monkeypatch, w._show_result_context_menu) == [True, True, True]
-    monkeypatch.setattr(mw, 'generate_static_candidates', lambda criteria: [])
+    monkeypatch.setattr(mw, 'generate_static_candidates', lambda criteria, *, cancellation=None: [])
     w.generate_results()
+    wait_search(w._static_search)
     assert w.table.rowCount() == 0
     assert w.static_empty_state.title.text() == '没有符合当前条件的结果'
     assert not w.export_button.isEnabled()
-    def fail(criteria):
-        assert w.static_empty_state.title.text() == '正在搜索'
+    errors = []
+    def fail(criteria, *, cancellation=None):
         raise RuntimeError('controlled failure')
     monkeypatch.setattr(mw, 'generate_static_candidates', fail)
-    monkeypatch.setattr(w, '_show_error', lambda *args, **kw: None)
+    monkeypatch.setattr(w, '_show_error', lambda _title, error, **kw: errors.append(error))
     w.generate_results()
+    assert w.static_empty_state.title.text() == '正在搜索'
+    wait_search(w._static_search)
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert str(errors[0]) == 'controlled failure'
     assert w.static_empty_state.title.text() == '搜索未完成'
     assert w.static_empty_state.parent() is w.table.viewport()
 
 
 def test_auto_rng_seed_sync_uses_static_result_lifecycle(window, monkeypatch):
     w, _app = window
-    monkeypatch.setattr(mw, 'generate_static_candidates', lambda _criteria: [])
+    monkeypatch.setattr(mw, 'generate_static_candidates', lambda _criteria, *, cancellation=None: [])
 
     w._sync_bdsp_data_from_auto_rng(SeedPair64(1, 2))
+    wait_search(w._static_search)
 
     assert w._static_result_state == 'complete'
     assert w.static_empty_state.title.text() == '没有符合当前条件的结果'
 
-    def fail(_criteria):
+    errors = []
+    def fail(_criteria, *, cancellation=None):
         raise RuntimeError('controlled failure')
 
     monkeypatch.setattr(mw, 'generate_static_candidates', fail)
-    monkeypatch.setattr(w, '_show_error', lambda *args, **kwargs: None)
+    monkeypatch.setattr(w, '_show_error', lambda _title, error, **kwargs: errors.append(error))
     w._sync_bdsp_data_from_auto_rng(SeedPair64(3, 4))
+    wait_search(w._static_search)
 
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert str(errors[0]) == 'controlled failure'
     assert w._static_result_state == 'failed'
     assert w.static_empty_state.title.text() == '搜索未完成'

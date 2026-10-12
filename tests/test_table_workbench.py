@@ -1,8 +1,11 @@
+import csv
 import json
 from types import SimpleNamespace
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
+from auto_bdsp_rng.gen8_id import IDState8
 from auto_bdsp_rng.ui.table_workbench import IDENTITY_ROLE, ResultItem
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngProgress, AutoTidRngPhase
 from tests.test_start_readiness import window
@@ -46,6 +49,30 @@ def test_selected_rows_include_hidden_columns_and_preserve_display_tid(window):
     assert len(text.splitlines()) == 3
     assert text.splitlines()[2].split("\t")[4] == "000002"
     assert p.id_table_tools.copy_button.isEnabled()
+
+
+def test_legacy_id_pages_sort_and_export_the_complete_original_results(window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog
+
+    panel = window.id_tab
+    states = [IDState8(i, i % 65536, 20, 1, i % 17) for i in range(1051)]
+    panel._finish_generation(states)
+    assert panel.table.rowCount() == 200
+    panel.table.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
+    panel.table.setSortingEnabled(True)
+    assert panel.table.pager.indices == sorted(range(len(states)), key=lambda i: states[i].display_tid, reverse=True)
+    assert panel.table.pager.select_prefix("1050", 0)
+    assert panel.table.currentItem().text() == "1050"
+    panel.copy_results()
+    rows = [line.split("\t") for line in QGuiApplication.clipboard().text().splitlines()]
+    assert len(rows) == len(states) + 1
+    assert [int(row[0]) for row in rows[1:]] == list(range(len(states)))
+    assert all(len(row[4]) == 6 for row in rows[1:])
+    output = tmp_path / "all_legacy_ids.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(output), ""))
+    panel.export_results()
+    with output.open(encoding="utf-8", newline="") as handle:
+        assert list(csv.reader(handle)) == rows
 
 
 def test_frozen_column_shares_selection_and_preferences(window):

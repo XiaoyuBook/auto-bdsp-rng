@@ -62,6 +62,7 @@ from auto_bdsp_rng.automation.auto_rng.delay_profiles import (
     encode_delay_profiles,
 )
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngPhase, AutoRngProgress
+from auto_bdsp_rng.rng_core.cancellation import SearchCancelled
 from auto_bdsp_rng.automation.auto_rng.starter_flow import STARTER_SLOTS
 from auto_bdsp_rng.automation.auto_rng.starter_scripts import bind_starter_config, starter_seed_config_path, validate_starter_config
 from auto_bdsp_rng.automation.auto_rng.scripts import (
@@ -81,6 +82,7 @@ from auto_bdsp_rng.data import (
 )
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.delay_strategy_dialog import (
@@ -183,6 +185,7 @@ class _CopyableTextEdit(QPlainTextEdit):
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.setUndoRedoEnabled(False)
+        self.document().setMaximumBlockCount(MAX_LOG_ENTRIES)
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu()
@@ -222,6 +225,12 @@ class AutoRngWorker(QObject):
     def run(self) -> None:
         try:
             result = self.runner.run()
+        except SearchCancelled as exc:
+            if callable(getattr(self.runner, "should_stop", None)) and self.runner.should_stop():
+                self.finished.emit(self.runner.progress)
+            else:
+                self.failed.emit(str(exc))
+            return
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -447,7 +456,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        QTimer.singleShot(0, self._resize_task_parameters)
+        QTimer.singleShot(0, self, self._resize_task_parameters)
 
     def _resize_task_parameters(self) -> None:
         if not hasattr(self, "strategy_group") or self.strategy_group.width() <= 0:
@@ -1120,7 +1129,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             return
         # The dialog already collected confirmation inline. Let the sending
         # button finish dispatching before the refresh disables it.
-        QTimer.singleShot(0, self.clear_delay_samples)
+        QTimer.singleShot(0, self, self.clear_delay_samples)
 
     @Slot(object)
     def set_active_delay(self, value: object, *, species_id: int | None = None) -> None:

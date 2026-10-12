@@ -30,7 +30,7 @@ def test_generate_static_candidates_multi_matches_any_target_and_sorts_lowest_fr
     base = _criteria(max_advances=9)
     captured_filters: list[StateFilter] = []
 
-    def fake_generate_matching_any(self, filters, seed):
+    def fake_generate_matching_any(self, filters, seed, *, cancellation=None):
         captured_filters.extend(filters)
         return [
             State8(advances=8, ec=1, sidtid=1, pid=1, ivs=(0, 0, 0, 0, 0, 0), ability=0, gender=2, level=30, nature=0, shiny=2, height=0, weight=10),

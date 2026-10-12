@@ -176,9 +176,11 @@ class StartReadinessController(QObject):
         window.tabs.currentChanged.connect(self._page_changed)
         window.easycon_tab.connectionPresentationChanged.connect(self.refresh)
         # Defer the first read until MainWindow finishes loading its settings.
-        QTimer.singleShot(0, self._page_changed)
+        QTimer.singleShot(0, self, self._page_changed)
 
     def _page_changed(self, *_args):
+        if self.window._is_closing:
+            return
         tab = self.window.tabs.currentWidget()
         if tab in (self.window.auto_rng_tab, self.window.auto_tid_rng_tab):
             self.dialog.module_combo.setCurrentIndex(int(tab is self.window.auto_tid_rng_tab))
@@ -227,7 +229,11 @@ class StartReadinessController(QObject):
         items.append(ReadinessItem("video", "视频源", *video, "video", "连接设置"))
         status = w.easycon_tab._native_status()
         port = w.easycon_tab._connection_port() or w.easycon_tab.config.last_port
-        if status == EasyConStatus.BRIDGE_CONNECTED:
+        if w._automation_controller_busy():
+            controller = ("blocked", "伊机控正在断开或关闭，完成后可启动。")
+        elif w.easycon_tab._native_connection_busy():
+            controller = ("pending", "正在连接伊机控，启动后将等待连接完成。")
+        elif status == EasyConStatus.BRIDGE_CONNECTED:
             controller = ("ok", "伊机控已连接。")
         elif status == EasyConStatus.RUNNING:
             controller = ("blocked", "伊机控脚本正在运行。")

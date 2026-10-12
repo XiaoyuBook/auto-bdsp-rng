@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 import types
 
 import numpy as np
@@ -416,7 +417,7 @@ def test_capture_rejects_cross_thread_read(monkeypatch) -> None:
 
 def test_qt_window_capture_proxy_delegates_to_qt_app_thread(monkeypatch) -> None:
     backend = types.SimpleNamespace(
-        read=lambda: (True, "frame"),
+        try_read=lambda: (True, "frame"),
         release=lambda: calls.append("release"),
     )
     calls = []
@@ -435,6 +436,133 @@ def test_qt_window_capture_proxy_delegates_to_qt_app_thread(monkeypatch) -> None
     proxy.release()
     assert proxy.read() == (False, None)
     assert calls == ["dispatch", "dispatch", "dispatch", "release"]
+
+
+def test_try_read_never_enters_qt_wait_and_checks_window_and_frame_ownership(monkeypatch) -> None:
+    loops, timers = _install_fake_qt_core(monkeypatch)
+    checks = []
+    monkeypatch.setattr(qt_window_capture, "_ensure_window_available", lambda hwnd: checks.append(hwnd))
+    capture = _capture_without_qt()
+    assert capture.try_read() == (False, None)
+    source = np.ones((3, 4, 3), np.uint8)
+    capture._latest_frame = source
+    capture._frame_serial = 1
+    ok, frame = capture.try_read()
+    assert ok and not np.shares_memory(frame, source)
+    assert capture.try_read() == (False, None)
+    assert not loops.instances and not timers.instances
+    assert capture._waiting_loop is None
+    assert checks == [321] * 3
+    capture._error = "capture lost"
+    with pytest.raises(RuntimeError, match="capture lost"):
+        capture.try_read()
+
+
+@pytest.mark.parametrize("completion", ["frame", "interrupt", "release", "window_close"])
+def test_real_qt_proxy_waits_on_worker_without_nested_ui_loop_or_request_backlog(monkeypatch, completion) -> None:
+    from PySide6.QtCore import QEventLoop, QThread, QTimer
+    from PySide6.QtWidgets import QApplication
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    owner = threading.get_ident()
+    capture = _capture_without_qt()
+    calls = []
+    releases = []
+    outcomes = []
+    available = True
+    loop = QEventLoop()
+    ticks = []
+    heartbeat = QTimer()
+    heartbeat.setInterval(10)
+    heartbeat.timeout.connect(lambda: ticks.append(time.perf_counter()))
+    watchdog = QTimer()
+    watchdog.setSingleShot(True)
+    watchdog.timeout.connect(loop.quit)
+    old_try_read = capture.try_read
+    old_release = capture.release
+    worker = None
+    proxy_holder = []
+
+    def check_window(_hwnd):
+        if not available:
+            raise RuntimeError("OBS 投影窗口已经关闭")
+
+    def try_read():
+        assert threading.get_ident() == owner
+        assert capture._waiting_loop is None
+        started = time.perf_counter()
+        result = old_try_read()
+        calls.append(time.perf_counter() - started)
+        return result
+
+    def release():
+        releases.append(threading.get_ident())
+        old_release()
+
+    def finish():
+        nonlocal available
+        if completion == "frame":
+            capture._latest_frame = np.full((3, 4, 3), 17, np.uint8)
+            capture._frame_serial += 1
+        elif completion == "interrupt":
+            worker.requestInterruption()
+        elif completion == "release":
+            assert proxy_holder
+            proxy_holder[0].release()
+        else:
+            available = False
+
+    def create(_target, _crop):
+        assert threading.get_ident() == owner
+        QTimer.singleShot(180, app, finish)
+        return capture
+
+    class Worker(QThread):
+        def run(self):
+            proxy = None
+            try:
+                proxy = qt_window_capture.create_qt_window_capture(capture._target)
+                proxy_holder.append(proxy)
+                assert isinstance(proxy, qt_window_capture.QtWindowCaptureProxy)
+                outcomes.append(proxy.read())
+            except BaseException as exc:
+                outcomes.append(exc)
+            finally:
+                if proxy is not None:
+                    proxy.release()
+
+    monkeypatch.setattr(qt_window_capture, "_ensure_window_available", check_window)
+    monkeypatch.setattr(qt_window_capture, "QtWindowCapture", create)
+    monkeypatch.setattr(capture, "try_read", try_read)
+    monkeypatch.setattr(capture, "read", lambda: pytest.fail("Proxy must not dispatch blocking read onto Qt"))
+    monkeypatch.setattr(capture, "release", release)
+    worker = Worker()
+    worker.finished.connect(loop.quit)
+    heartbeat.start()
+    watchdog.start(3000)
+    started = time.perf_counter()
+    worker.start()
+    loop.exec()
+    heartbeat.stop()
+    watchdog.stop()
+    elapsed = time.perf_counter() - started
+    assert worker.wait(1000)
+    assert elapsed < 1.0
+    assert len(ticks) >= 8
+    assert max(b - a for a, b in zip(ticks, ticks[1:])) < .2
+    assert 2 <= len(calls) <= 30
+    assert max(calls) < .05
+    assert releases == [owner]
+    assert capture._released and capture._waiting_loop is None
+    assert len(outcomes) == 1
+    if completion == "frame":
+        ok, frame = outcomes[0]
+        assert ok and np.all(frame == 17)
+    elif completion == "window_close":
+        assert isinstance(outcomes[0], RuntimeError) and "已经关闭" in str(outcomes[0])
+    else:
+        assert outcomes == [(False, None)]
 
 
 def test_release_is_idempotent_and_unblocks_waiter(monkeypatch) -> None:
