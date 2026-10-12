@@ -1,6 +1,9 @@
 name: Sync Gitee Release
 
 on:
+  workflow_run:
+    workflows: [Build Windows Release]
+    types: [completed]
   workflow_call:
     inputs:
       tag:
@@ -9,6 +12,9 @@ on:
     secrets:
       GITEE_ACCESS_TOKEN:
         required: true
+      GITEE_ACCESSS_TOKEN:
+        description: Optional legacy secret spelling
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -20,39 +26,56 @@ permissions:
   contents: read
 
 concurrency:
-  group: gitee-release-${{ inputs.tag }}
+  group: gitee-release-${{ inputs.tag || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
   sync:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
+          # Always run trusted, current publishing fixes, including for old tags.
+          ref: main
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Resolve and validate published tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: python scripts/resolve_gitee_release_tag.py
       - name: Install publishing dependencies
+        if: steps.release.outputs.tag != ''
         run: python -m pip install 'requests>=2.32,<3'
       - name: Mirror release tag
+        if: steps.release.outputs.tag != ''
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
         run: python scripts/sync_gitee_tag.py --tag "$RELEASE_TAG"
       - name: Download published assets
+        if: steps.release.outputs.tag != ''
         timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: python -u scripts/sync_gitee_release.py --tag "$RELEASE_TAG" --directory release --download-only
       - name: Sync and verify Gitee assets
+        if: steps.release.outputs.tag != ''
         timeout-minutes: 45
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
           PYTHONUNBUFFERED: '1'
         run: |
           curl --version

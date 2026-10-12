@@ -1,6 +1,9 @@
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import shutil
 import subprocess
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -126,10 +129,89 @@ def test_curl_upload_uses_stdin_credentials_and_hard_deadline(tmp_path, monkeypa
         assert "secret-token" in kwargs["input"]
         assert "form-string" in kwargs["input"]
         assert "--max-time" in command and "--speed-time" in command
+        assert "--http1.1" in command
+        assert command[command.index("--header") + 1] == "Expect:"
         assert kwargs["timeout"] == sync.TRANSFER_TIMEOUT + 30
-        return SimpleNamespace(returncode=0, stdout="201", stderr="")
+        return SimpleNamespace(returncode=0, stdout="201 123 0 0.250", stderr="")
     monkeypatch.setattr(sync.subprocess, "run", run)
     sync.upload_file(path, 123, "secret-token")
+
+
+def test_real_curl_upload_to_server_that_rejects_expect(tmp_path, monkeypatch, capsys):
+    if shutil.which("curl.exe" if sync.os.name == "nt" else "curl") is None:
+        pytest.skip("curl is not installed")
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def handle_expect_100(self):
+            self.send_error(417, "Expect header is not supported")
+            return False
+
+        def do_POST(self):
+            self.connection.settimeout(5)
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append((self.path, self.request_version, self.headers.get("Expect"), body))
+            self.send_response(201)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(sync, "API", f"http://127.0.0.1:{server.server_port}")
+    package = tmp_path / "package.zip"
+    package.write_bytes(b"x" * (2 * 1024 * 1024))
+    try:
+        sync.upload_file(package, 123, "secret-token")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert len(received) == 1
+    path, version, expect, body = received[0]
+    assert path == "/releases/123/attach_files"
+    assert version == "HTTP/1.1" and expect is None
+    assert b"secret-token" in body and package.read_bytes() in body
+    output = capsys.readouterr().out
+    assert "HTTP 201" in output and "uploaded" in output
+    assert "secret-token" not in output
+
+
+def test_stalled_upload_reports_numeric_progress_without_credentials(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
+    monkeypatch.setattr(sync.subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=28, stdout="100 3070186 0 62.500", stderr="secret-token"))
+    with pytest.raises(RuntimeError, match="curl exit 28, HTTP 100"):
+        sync.transfer("https://gitee.com/example", tmp_path / "out", form="secret-token")
+    output = capsys.readouterr().out
+    assert "uploaded 3070186 bytes" in output and "elapsed 62.500 s" in output
+    assert "secret-token" not in output
+
+
+def test_unexpected_curl_output_is_not_logged(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
+    monkeypatch.setattr(sync.subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=28, stdout="secret-token", stderr="secret-token"))
+    with pytest.raises(RuntimeError, match="HTTP unknown") as error:
+        sync.transfer("https://gitee.com/example", tmp_path / "out", form="secret-token")
+    assert "secret-token" not in str(error.value) + capsys.readouterr().out
+
+
+def test_public_download_keeps_default_protocol_and_https_redirects(tmp_path, monkeypatch):
+    monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
+    def run(command, **kwargs):
+        assert "--http1.1" not in command and "--header" not in command
+        assert command[command.index("--proto-redir") + 1] == "=https"
+        assert command[command.index("--max-filesize") + 1] == "7"
+        assert kwargs["input"] is None
+        return SimpleNamespace(returncode=0, stdout="200 0 7 0.250", stderr="")
+    monkeypatch.setattr(sync.subprocess, "run", run)
+    sync.transfer("https://gitee.com/example", tmp_path / "out", max_size=7)
 
 
 def test_curl_deadline_and_error_do_not_expose_credentials(tmp_path, monkeypatch):

@@ -34,12 +34,15 @@ def transfer(url: str, output: Path, *, form: str | None = None, max_size: int |
         raise RuntimeError("curl is required for bounded release transfers")
     command = [curl, "--silent", "--show-error", "--fail", "--connect-timeout", "30",
                "--max-time", str(TRANSFER_TIMEOUT), "--speed-limit", "32768", "--speed-time", "60",
-               "--output", str(output), "--write-out", "%{http_code}"]
+               "--output", str(output), "--write-out",
+               "%{http_code} %{size_upload} %{size_download} %{time_total}"]
     if form is None:
         command += ["--location", "--proto", "=https", "--proto-redir", "=https"]
     else:
         # Credentials travel over stdin, never in command-line arguments or logs.
-        command += ["--config", "-"]
+        # Avoid Expect: 100-continue / HTTP/2 interoperability problems on the
+        # attachment endpoint. Keep public downloads on curl's default protocol.
+        command += ["--http1.1", "--header", "Expect:", "--config", "-"]
     if max_size is not None:
         command += ["--max-filesize", str(max_size)]
     command.append(url)
@@ -48,10 +51,14 @@ def transfer(url: str, output: Path, *, form: str | None = None, max_size: int |
                                 timeout=TRANSFER_TIMEOUT + 30)
     except subprocess.TimeoutExpired:
         raise RuntimeError("Transfer exceeded its wall-clock deadline") from None
-    if result.returncode or not result.stdout.strip().startswith("2"):
+    fields = result.stdout.split()
+    status = fields[0] if fields and re.fullmatch(r"\d{3}", fields[0]) else "unknown"
+    # Only emit numeric counters; never echo unexpected stdout, stderr or URLs.
+    if len(fields) == 4 and all(re.fullmatch(r"\d+(?:\.\d+)?", item) for item in fields[1:]):
+        log(f"Transfer: HTTP {status}, uploaded {fields[1]} bytes, "
+            f"downloaded {fields[2]} bytes, elapsed {fields[3]} s")
+    if result.returncode or not status.startswith("2"):
         # Do not print curl stderr or server bodies, which may echo credentials.
-        status = result.stdout.strip()
-        status = status if re.fullmatch(r"\d{3}", status) else "unknown"
         raise RuntimeError(f"Transfer failed: curl exit {result.returncode}, HTTP {status}")
 
 
