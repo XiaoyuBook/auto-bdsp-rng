@@ -18,6 +18,12 @@ Clone the repository with submodules, or let the build script initialize them:
 git submodule update --init --recursive
 ```
 
+Build distributable packages from a clean checkout, including submodules.
+The builder copies Project_Xs configs and images as well as the outer `script`
+directory, so a development checkout can include personal calibration or custom
+eye images. Preserve those local files and use a separate clean checkout or the
+GitHub Actions tag build for publication.
+
 ## One-Command Build
 
 ```powershell
@@ -89,11 +95,37 @@ The application packages its Python EasyCon parser/runtime, `pyserial`, and the 
 
 ## First-launch WebView
 
-The first-launch mode chooser uses PySide6 Qt WebEngine and QWebChannel to load
+The first-launch welcome page uses PySide6 Qt WebEngine and QWebChannel to load
 `docs/assets/welcome/index.html` locally. The existing PySide6 collection and
 PyInstaller Qt WebEngine hooks collect the Chromium helper process and runtime
 resources; the `docs/assets` release-copy step includes the HTML page. Keep these
 files with the executable. The page uses system fonts and does not fetch web assets.
+Starting with v3.4.0, it opens the workspace directly; the old experience-level
+chooser and step-by-step RNG guide are removed. The QQ binding tutorial still
+uses WebEngine, so its runtime and tutorial assets remain required.
+
+## v3.4.0 Runtime Assets
+
+Rebuild the C++ extension from this release's sources. Generation and
+reidentification now expose cancellation support; do not reuse an older
+`_native.pyd` when validating the release.
+
+The starter automation requires both `seed.ecs` and `reverse.ecs` under
+`auto_bdsp_rng/automation/auto_rng/starter_assets`, plus the bundled Project_Xs
+`config_starter.json` and its eye template. Keep the separate user-editable
+`script/御三家反查.txt` in the outer script directory. Automatic starter mode
+uses the bundled scripts even when a user has customized the outer copy.
+
+The release notes are generated from the current changelog after version
+validation:
+
+```powershell
+python .\scripts\generate_release_notes.py --tag v3.4.0 --output .\release\release-notes.md
+```
+
+The expected complete archive is `release/auto-bdsp-rng-v3.4.0-windows-x64.zip`.
+Use a manifest from v3.3.3 to check the direct incremental upgrade; see
+[RELEASE.md](RELEASE.md) for the publication and regression checklist.
 
 ## UI And Sponsor Assets
 

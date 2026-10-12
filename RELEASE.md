@@ -23,7 +23,45 @@ Before the new package is published, identify features documented from `main` as
 
 Review every commit from the latest published tag through the release commit. Summarize the final user-visible behavior in the new changelog section, including fixes already committed to `main` but absent from the last package; omit abandoned approaches and unrelated local drafts.
 
+Also review `README.md`, `docs/USAGE.md`, `docs/DEVELOPMENT.md`, `BUILD.md`, and this checklist for changed entry points, defaults, and operational behavior. Refresh the README screenshot when the workspace layout changes and update `docs/assets/screenshots/README.md` with the actual version and capture conditions. Historical changelog entries and dated design evidence describe their original versions and should not be rewritten as current behavior.
+
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
+
+## v3.4.0 Release Scope
+
+The previous published release is **v3.3.3** (`5af44d2`, published 2026-10-03).
+This release reviews all **37 commits** in `v3.3.3..08cd090`, followed by the
+v3.4.0 metadata and documentation commit. The user-facing notes live only in
+the [3.4.0 changelog section](CHANGELOG.md#340); the workflow generates the
+GitHub Release body from that section.
+
+This is a minor release for the new starter automation and workspace behavior.
+Review these release-specific cases in addition to the general checks below:
+
+- Exercise all three starter species, built-in script/config binding, ROI/threshold-only editing, existing delay preservation, the 66-frame initial preset, the strict delay `< 78` limit, and the separate 5-second shiny threshold. Verify successful reverse lookup, missed targets, unknown shiny checks, and user stop; missed targets must not select a Pokemon or run reverse lookup.
+- Check all six workspace tabs, inline Seed configuration, the manual tools entry, standalone OCR settings, global controller menu, script error navigation, and direct welcome-page entry. The removed RNG guide must not restart from old settings; the QQ tutorial must still work.
+- Check static/TID pagination, whole-result sorting/search, target selection, cancellation, and clipboard/CSV/TXT output. Copy/export must include all applicable results, preserve old content on preparation cancellation, and complete a save already in progress before shutdown.
+- Check new-round candidate refresh, locked-target snapshots, separate search/reverse counts, and historical round log context. Verify 100-row history pages and full export before session history is released on exit.
+- Check slow device enumeration, connect/cancel/disconnect, source switching, first-frame cancellation, and shutdown with real capture/serial hardware. Confirm stopped calibration does not retry and old frames/OCR results cannot replace the new source.
+- Run the packaged Chinese/space-path image and real OCR probes, including a Chinese user profile and unwritable cache fallback. Confirm both bundled starter scripts and the Project_Xs template exist in the frozen package.
+- Apply the v3.3.3-to-v3.4.0 update to a disposable copy with modified scripts, Project_Xs configs, and custom eye images. Existing files must survive; changed defaults use `.new-v3.4.0` sidecars. Export needed session history before closing the old app.
+
+Expected artifacts are `auto-bdsp-rng-v3.4.0-windows-x64.zip`,
+`auto-bdsp-rng-v3.4.0-windows-x64.manifest.json`, and, when the v3.3.3 manifest
+is available, `auto-bdsp-rng-v3.3.3-to-v3.4.0-windows-x64.update.zip`.
+Automated tests and offscreen screenshots do not establish real-hardware or
+frozen-package validation; record those results from their actual runs.
+
+Local preparation verified on 2026-10-12: the complete pytest suite finished
+with **2,374 passed, 1 skipped, 0 failed**. The skipped sidecar-path case requires
+Windows symbolic-link creation privileges (`WinError 1314`); the run also
+reported existing Qt `invalidateFilter()` deprecation warnings. The CLI reports
+3.4.0, the release-notes generator accepts `v3.4.0`, and UTF-8, local document
+links, and Git whitespace checks pass. The README screenshot was rendered and
+inspected at 1440 × 960 logical pixels / DPR 1.25 with isolated settings and
+no connected hardware. Frozen-package builds, real-hardware checks, and an
+actual v3.3.3 package upgrade remain to be performed; local preparation does
+not publish the GitHub Release.
 
 ## Build And Test
 
@@ -53,8 +91,8 @@ Confirm:
 - `release/auto-bdsp-rng-vX.Y.Z-windows-x64.zip` exists,
 - `release/auto-bdsp-rng-vX.Y.Z-windows-x64.manifest.json` exists and lists the complete `dist/auto-bdsp-rng/` tree,
 - `release/release-notes.md` shows the intended **本次更新** content.
-- “帮助 -> 检查更新…” performs a manual check without any startup network request; source mode only offers the Release page.
-- the shared light UI style and bounded chevrons render consistently at 100%, 125%, and 150% scaling; the log view buttons and session status stay aligned at 860×600 and 1150×900, and view switching, unread counts, and split-button menus remain functional,
+- “帮助 -> 检查更新…” performs a manual check; startup checks follow “帮助 -> 启动时自动检查更新” (enabled by default), show a prompt only for a newer release, and respect the saved opt-out. Source mode only offers the Release page.
+- the shared light UI style and bounded chevrons render consistently at 100%, 125%, and 150% scaling; the six tabs, monitor, real-time log, and independent full-log window remain usable at 860×600 and 1150×900, with working pagination, unread counts, per-round log context, and split-button menus,
 - both sponsor QR images were restored and verified by the build; private images remain excluded from Git.
 
 To test an incremental artifact locally, download the previous Release manifest and run:

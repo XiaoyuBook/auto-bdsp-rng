@@ -39,9 +39,19 @@ py -3.12 -m venv .venv
 
 - 主程序通过 `ui/workspace_style.py` 在创建页面前统一安装基于 Fusion 的浅色 Qt 风格。箭头使用固定逻辑尺寸的线条绘制，不依赖 Windows 系统风格插件；保留 `ui_scale.py` 的 DPI 和界面倍率处理。
 - 页面仍复用 `ui/workspace_theme.py` 的颜色、尺寸及随包 MiSans 字体。主导航的 QSS 只作用于直接子标签栏，避免把样式传到内嵌页面。
-- 日志页切换按钮和会话状态由同一个水平布局管理，避免组合原生标签栏底线与角落控件。业务页面切换、未读计数和轮次过滤沿用现有逻辑。
+- v3.4.0 将轮次记录留在主导航，完整日志由共享 `RunLogBuffer` 驱动的独立非模态窗口展示，右栏保留实时日志。任务、历史轮次和实时区入口分别传入运行/轮次或来源上下文；窗口关闭后继续收集消息，警告与错误的未读提示由共享状态更新。
 - 延迟更新布局时给 `QTimer.singleShot` 传入控件上下文，确保控件销毁后取消回调。
-- 涉及控件绘制或布局的改动，至少检查 100%、125%、150% 缩放及 860×600、1150×900 窗口；相关回归测试为 `test_workspace_style.py`、`test_run_records_ui.py`、`test_responsive_layout.py` 和 `test_ui_font_loading.py`。
+- 涉及控件绘制或布局的改动，至少检查 100%、125%、150% 缩放及 860×600、1150×900 窗口；相关回归测试为 `test_workspace_style.py`、`test_run_records_ui.py`、`test_log_window_ui.py`、`test_responsive_layout.py` 和 `test_ui_font_loading.py`。
+
+## 搜索、结果与历史记录
+
+定点与 TID 查询使用后台工作线程和请求代次，取消或收到新 Seed 后不再应用旧结果。原生生成和校正释放 GIL，并通过取消令牌终止；Python 回退保留同一取消语义。更新原生接口后应重新执行 editable install，避免本机残留的旧 `_native.pyd` 掩盖接口变化。
+
+`ui/result_paging.py` 将定点与 TID 表限制为每页 200 行，排序、筛选和前缀查找基于完整数据；选中项以原始结果身份恢复。`ui/result_transfer.py` 在点击时固定结果、语言、能力值和日期基准，在后台准备完整复制或导出；准备阶段取消或失败时保留原剪贴板和已有文件，进入写入提交阶段后等待终态，以原子替换完成保存。
+
+`ui/history_archive.py` 为会话历史提供临时归档，轮次、候选与处理详情每页最多 100 条。生产端在后台整理快照，归档积压时等待容量，取消时解除等待；归档失败回滚并保留可用的内存记录。全量搜索、复制和导出独立于当前可见页，退出时释放临时存储。
+
+相关回归覆盖 `test_search_performance.py`、`test_result_transfer.py`、`test_reidentify_cancellation.py`、`test_history_performance.py` 及 `test_history_producer_*.py`。大量结果的布局可用 `scripts/render_search_results_review.py --dpi 100`（另验 125、150）检查；`scripts/benchmark_history_ui.py` 用于历史归档与界面响应基准，实测结果应连同机器条件记录。
 
 ## 视频、关闭与日志响应性
 
