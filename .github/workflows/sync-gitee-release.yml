@@ -60,8 +60,13 @@ jobs:
           ref: main
           fetch-depth: 0
       - uses: actions/setup-python@v5
+        if: runner.environment == 'github-hosted'
         with:
           python-version: '3.12'
+      - name: Verify preinstalled Python on self-hosted runner
+        if: runner.environment == 'self-hosted'
+        run: |
+          python -c "import sys; assert sys.version_info[:2] == (3, 12), 'Self-hosted publishing requires Python 3.12 on PATH'; print(sys.executable)"
       - name: Resolve and validate published tag
         id: release
         env:
