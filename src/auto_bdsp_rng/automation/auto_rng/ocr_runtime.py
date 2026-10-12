@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from pathlib import Path
 
 from auto_bdsp_rng.native_paths import NativePathError, ascii_resource_directory, native_cache_dir, needs_ascii_path
@@ -41,9 +42,21 @@ def configure_paddlex_cache() -> None:
     """Set PaddleX's writable cache before importing it, retaining the original model source."""
     global _source_cache_home, _prepared_cache_home
     source = _local_source_cache_home()
-    cache_home = source or Path.home() / ".paddlex"
+    configured = os.environ.get("PADDLE_PDX_CACHE_HOME", "").strip()
+    cache_home = Path(configured) if configured else source or Path.home() / ".paddlex"
     if needs_ascii_path(cache_home):
         cache_home = native_cache_dir("paddlex_cache")
+    else:
+        try:
+            cache_home.mkdir(parents=True, exist_ok=True)
+            # Windows tempfile retries PermissionError as a possible name
+            # collision; probe once so a read-only install falls back promptly.
+            probe = cache_home / f".write-test-{uuid.uuid4().hex}"
+            descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(descriptor)
+            probe.unlink()
+        except OSError:
+            cache_home = native_cache_dir("paddlex_cache")
     _source_cache_home = source
     _prepared_cache_home = cache_home
     os.environ["PADDLE_PDX_CACHE_HOME"] = str(cache_home)

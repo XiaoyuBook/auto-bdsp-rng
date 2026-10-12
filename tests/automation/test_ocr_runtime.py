@@ -4,6 +4,7 @@ import importlib
 import os
 import runpy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -103,6 +104,66 @@ def test_frozen_runtime_fails_fast_when_bundled_model_is_incomplete(monkeypatch,
 
     with pytest.raises(RuntimeError, match="安装包内置 OCR 模型不完整"):
         optimized_paddle_ocr_kwargs()
+
+
+@pytest.mark.parametrize("install_name", ("ascii-install", "中文安装目录 with spaces"))
+@pytest.mark.parametrize("cache_location", ("user", "install", None))
+def test_frozen_runtime_initializes_ocr_with_a_readonly_install(monkeypatch, tmp_path, install_name, cache_location):
+    install = tmp_path / install_name
+    original_dirs = _create_bundled_model_files(install)
+    user_cache = tmp_path / "user-cache"
+    native_cache = tmp_path / "native-cache"
+    monkeypatch.setattr(ocr_runtime.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(ocr_runtime.sys, "_MEIPASS", str(install), raising=False)
+    monkeypatch.setattr(ocr_runtime, "_source_cache_home", None)
+    monkeypatch.setattr(ocr_runtime, "_prepared_cache_home", None)
+    monkeypatch.setattr(pokemon_info_ocr, "_PADDLE_OCR", None)
+    monkeypatch.setenv("AUTO_BDSP_RNG_NATIVE_CACHE_HOME", str(native_cache))
+    if cache_location is None:
+        monkeypatch.delenv("PADDLE_PDX_CACHE_HOME", raising=False)
+    else:
+        configured = user_cache if cache_location == "user" else install / "paddlex_cache"
+        monkeypatch.setenv("PADDLE_PDX_CACHE_HOME", str(configured))
+
+    original_mkdir = os.mkdir
+    original_open = os.open
+
+    def readonly_mkdir(path, *args, **kwargs):
+        if Path(path).is_relative_to(install):
+            raise PermissionError("installation directory is read-only")
+        return original_mkdir(path, *args, **kwargs)
+
+    def readonly_open(path, flags, *args, **kwargs):
+        if flags & (os.O_WRONLY | os.O_RDWR) and Path(path).is_relative_to(install):
+            raise PermissionError("installation directory is read-only")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", readonly_mkdir)
+    monkeypatch.setattr(os, "open", readonly_open)
+    calls = []
+    instance = object()
+
+    def factory(**kwargs):
+        # PaddleX creates its temp directory before it can load the OCR models.
+        (Path(os.environ["PADDLE_PDX_CACHE_HOME"]) / "temp").mkdir(parents=True, exist_ok=True)
+        calls.append(kwargs)
+        return instance
+
+    monkeypatch.setitem(ocr_runtime.sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=factory))
+    hook = Path(__file__).resolve().parents[2] / "packaging" / "runtime_paddlex_cache.py"
+    runpy.run_path(str(hook))
+    runpy.run_path(str(hook))
+
+    assert pokemon_info_ocr.get_paddle_ocr() is instance
+    expected_cache = user_cache if cache_location == "user" else native_cache / "paddlex_cache"
+    assert os.environ["PADDLE_PDX_CACHE_HOME"] == str(expected_cache)
+    assert (expected_cache / "temp").is_dir()
+    assert len(calls) == 1
+    for key, original in zip(("text_detection_model_dir", "text_recognition_model_dir"), original_dirs):
+        model_dir = Path(calls[0][key])
+        assert str(model_dir).isascii()
+        for filename in ("inference.json", "inference.pdiparams", "inference.yml"):
+            assert (model_dir / filename).read_bytes() == (original / filename).read_bytes()
 
 
 def test_chinese_bundled_models_and_paddlex_cache_use_ascii_paths(monkeypatch, tmp_path):
