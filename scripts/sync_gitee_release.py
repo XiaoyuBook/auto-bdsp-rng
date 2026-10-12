@@ -222,7 +222,7 @@ def download_assets(tag: str, directory: Path) -> None:
         transfer(url, directory / name, max_size=selected[name]["size"])
 
 
-def sync(tag: str, directory: Path, token: str) -> None:
+def prepare_publication(tag: str, directory: Path) -> tuple[dict, dict, list[tuple[Path, dict]]]:
     source = load_release(tag)
     expected = mirror_assets(source)
     paths = [directory / name for name in sorted(expected)]
@@ -234,6 +234,11 @@ def sync(tag: str, directory: Path, token: str) -> None:
         if asset["size"] != original["size"] or asset["digest"] != original.get("digest"):
             raise ValueError("GitHub release asset size or SHA-256 mismatch")
     transfers = prepare_transfers(tag, paths, metadata)
+    return source, metadata, transfers
+
+
+def sync(tag: str, directory: Path, token: str) -> None:
+    source, metadata, transfers = prepare_publication(tag, directory)
     releases = request("GET", "/releases", token, params={"per_page": 100})
     release = next((item for item in releases if item["tag_name"] == tag), None)
     if release is None:
@@ -243,6 +248,11 @@ def sync(tag: str, directory: Path, token: str) -> None:
     release_id = release["id"]
     for path, asset in transfers:
         sync_asset(path, asset, release_id, token)
+    request("PATCH", f"/releases/{release_id}", token, json=release_payload(tag, source, metadata))
+    log(f"Gitee release ready: {tag}")
+
+
+def release_payload(tag: str, source: dict, metadata: dict) -> dict:
     github_release = f"https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/{tag}"
     body = (
         "## 下载说明\n\n"
@@ -263,8 +273,8 @@ def sync(tag: str, directory: Path, token: str) -> None:
             "脚本不会替换安装目录文件，原有升级器负责安装与回滚。\n"
         )
     body += "\n\n## 更新校验信息\n\n<!-- auto-bdsp-update:" + json.dumps(metadata, ensure_ascii=False, separators=(",", ":")) + " -->"
-    request("PATCH", f"/releases/{release_id}", token, json={"body": body, "name": source["name"]})
-    log(f"Gitee release ready: {tag}")
+    # Gitee PATCH requires tag_name, name and body, unlike GitHub's partial update.
+    return {"tag_name": tag, "name": source["name"], "body": body, "prerelease": False}
 
 
 if __name__ == "__main__":
@@ -272,10 +282,17 @@ if __name__ == "__main__":
     parser.add_argument("--tag", required=True)
     parser.add_argument("--directory", type=Path, default=Path("release"))
     parser.add_argument("--download-only", action="store_true")
+    parser.add_argument("--prepare-only", action="store_true",
+                        help="Export release text and metadata for manual publication; never writes to Gitee")
     args = parser.parse_args()
     try:
         if args.download_only:
             download_assets(args.tag, args.directory)
+        elif args.prepare_only:
+            source, metadata, _ = prepare_publication(args.tag, args.directory)
+            (args.directory / "gitee-release-body.md").write_text(release_payload(args.tag, source, metadata)["body"], encoding="utf-8")
+            (args.directory / "gitee-update-metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            log("Prepared local release text; publish only after verifying every public attachment")
         else:
             sync(args.tag, args.directory, os.environ["GITEE_ACCESS_TOKEN"])
     except RuntimeError as exc:

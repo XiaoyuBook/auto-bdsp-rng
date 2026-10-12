@@ -119,6 +119,12 @@ Pushing `vX.Y.Z` triggers GitHub Actions. The workflow generates the Release bod
 
 ## Gitee mirror
 
+### Direct local publication (no GitHub Actions)
+
+Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish_gitee_release.ps1 -Tag v3.4.0` from a checkout. The wrapper finds the project's Python 3.12 environment, uses the configured GitHub Git credential only for release discovery, and prompts for the Gitee token with hidden input if it is not already in the process environment. Tokens are never saved to disk or printed; previous environment values are restored on exit. It downloads the immutable original incremental assets, checks the tag, reuses already-uploaded attachments, verifies all anonymous downloads, and publishes the release metadata last. It does not register a runner, trigger Actions, rebuild the app, or push code.
+
+Use `-Directory <existing-asset-directory> -UseExistingFiles` to reuse downloaded ZIP/manifest files. Add `-PrepareOnly` to export `gitee-release-body.md` and `gitee-update-metadata.json` without a Gitee token or remote changes. After verifying all attachments, the generated body can also be pasted into the Gitee web release editor. Gitee's update API requires **tag_name, name and body** even when editing an existing release; the publisher supplies all three.
+
 Every push to GitHub `main` runs **Sync Gitee Code**, which pushes the latest `main` to Gitee `main` using the same token configured below. It can also be run manually to retry. Runs are serialized and never force-push: if Gitee has divergent commits, synchronization fails for review rather than overwriting them. Keep GitHub as the primary development repository. Code synchronization is independent of release attachment synchronization and does not build or publish a new version.
 
 Set the GitHub repository Actions secret `GITEE_ACCESS_TOKEN` to a Gitee token with repository (`projects`) access for `shekongsk/auto-bdsp-rng`. After **Build Windows Release** succeeds for a stable tag, the independent **Sync Gitee Release** workflow runs through `workflow_run`. A mirror failure does not change the successful build/publication result. Main-branch builds, failed builds, fork builds, and prerelease tags do not trigger publishing. The publisher checks out trusted `main` for the latest fixes and verifies that the tag commit matches the completed build before mirroring. Use `workflow_run`, since a release created with `GITHUB_TOKEN` does not trigger another workflow through the `release` event.

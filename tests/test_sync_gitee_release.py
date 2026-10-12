@@ -48,6 +48,19 @@ def test_metadata_only_published_after_upload_and_verification(tmp_path, monkeyp
     body = calls[-1][2]["json"]["body"]
     assert "auto-bdsp-update:" in body
     assert "test-token" not in body
+    payload = calls[-1][2]["json"]
+    assert payload["tag_name"] == "v3.3.1"
+    assert payload["name"] == "v3.3.1"
+    assert payload["prerelease"] is False
+
+
+def test_local_preparation_never_changes_gitee(tmp_path, monkeypatch):
+    calls, _ = setup_release(tmp_path, monkeypatch)
+    source, metadata, transfers = sync.prepare_publication('v3.3.1', tmp_path)
+    payload = sync.release_payload('v3.3.1', source, metadata)
+    assert not calls
+    assert payload['tag_name'] == metadata['tag_name']
+    assert len(transfers) == 1
 
 
 @pytest.mark.parametrize("failure", ["upload", "public"])

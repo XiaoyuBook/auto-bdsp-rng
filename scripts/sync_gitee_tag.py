@@ -53,7 +53,8 @@ if __name__ == "__main__":
     if not token:
         raise SystemExit("GITEE_ACCESS_TOKEN is missing")
     auth = base64.b64encode(("shekongsk:" + token).encode()).decode()
-    print("::add-mask::" + auth, flush=True)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("::add-mask::" + auth, flush=True)
     env = dict(os.environ, GIT_CONFIG_COUNT="1",
                GIT_CONFIG_KEY_0="http.https://gitee.com/.extraheader",
                GIT_CONFIG_VALUE_0="Authorization: Basic " + auth)
