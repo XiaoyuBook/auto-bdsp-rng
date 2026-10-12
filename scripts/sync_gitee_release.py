@@ -195,7 +195,10 @@ def prepare_transfers(tag: str, paths: list[Path], metadata: dict) -> list[tuple
         asset["parts"] = parts
         log(f"Split {path.name} into {len(parts)} Gitee attachments")
     if any("parts" in asset for asset in metadata["assets"]):
-        helper = Path(__file__).with_name("upgrade-from-gitee.ps1")
+        source_helper = Path(__file__).with_name("upgrade-from-gitee.ps1")
+        helper = paths[0].parent / source_helper.name
+        # A retry on Windows/Linux must publish the same helper bytes.
+        helper.write_bytes(source_helper.read_bytes().replace(b"\r\n", b"\n"))
         transfers.append((helper, metadata_for(tag, [helper])["assets"][0]))
     return transfers
 
