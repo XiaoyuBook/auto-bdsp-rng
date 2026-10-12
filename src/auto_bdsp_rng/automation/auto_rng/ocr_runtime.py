@@ -4,11 +4,16 @@ import os
 import sys
 from pathlib import Path
 
+from auto_bdsp_rng.native_paths import NativePathError, ascii_resource_directory, native_cache_dir, needs_ascii_path
+
 
 DEFAULT_OCR_CPU_THREADS = 2
 OCR_DETECTION_MODEL_NAME = "PP-OCRv5_mobile_det"
 OCR_RECOGNITION_MODEL_NAME = "PP-OCRv5_mobile_rec"
-_REQUIRED_MODEL_FILES = ("inference.json", "inference.pdiparams")
+_MODEL_NAMES = (OCR_DETECTION_MODEL_NAME, OCR_RECOGNITION_MODEL_NAME)
+_REQUIRED_MODEL_FILES = ("inference.json", "inference.pdiparams", "inference.yml")
+_source_cache_home: Path | None = None
+_prepared_cache_home: Path | None = None
 
 
 def configure_ocr_runtime(*, cpu_threads: int = DEFAULT_OCR_CPU_THREADS) -> None:
@@ -22,17 +27,45 @@ def configure_ocr_runtime(*, cpu_threads: int = DEFAULT_OCR_CPU_THREADS) -> None
 configure_ocr_runtime()
 
 
+def _local_source_cache_home() -> Path | None:
+    if getattr(sys, "frozen", False):
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+        return base_dir / "paddlex_cache"
+    configured = os.environ.get("PADDLE_PDX_CACHE_HOME", "").strip()
+    if _prepared_cache_home is not None and configured == str(_prepared_cache_home):
+        return _source_cache_home
+    return Path(configured) if configured else None
+
+
+def configure_paddlex_cache() -> None:
+    """Set PaddleX's writable cache before importing it, retaining the original model source."""
+    global _source_cache_home, _prepared_cache_home
+    source = _local_source_cache_home()
+    cache_home = source or Path.home() / ".paddlex"
+    if needs_ascii_path(cache_home):
+        cache_home = native_cache_dir("paddlex_cache")
+    _source_cache_home = source
+    _prepared_cache_home = cache_home
+    os.environ["PADDLE_PDX_CACHE_HOME"] = str(cache_home)
+
+
+def configure_packaged_paddlex_cache() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        configure_paddlex_cache()
+    except NativePathError:
+        # Keep the GUI available; OCR initialization will report the cache error
+        # in its normal failure dialog instead of aborting the whole application.
+        pass
+
+
 def resolve_local_ocr_model_dirs() -> tuple[Path, Path] | None:
     """Resolve validated local model directories without allowing a frozen app to fall back online."""
     frozen = bool(getattr(sys, "frozen", False))
-    if frozen:
-        base_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
-        cache_home = base_dir / "paddlex_cache"
-    else:
-        configured_home = os.environ.get("PADDLE_PDX_CACHE_HOME", "").strip()
-        if not configured_home:
-            return None
-        cache_home = Path(configured_home)
+    cache_home = _local_source_cache_home()
+    if cache_home is None:
+        return None
     model_root = cache_home / "official_models"
     detection_dir = model_root / OCR_DETECTION_MODEL_NAME
     recognition_dir = model_root / OCR_RECOGNITION_MODEL_NAME
@@ -44,10 +77,18 @@ def resolve_local_ocr_model_dirs() -> tuple[Path, Path] | None:
     ]
     if missing:
         if frozen:
-            missing_text = ", ".join(str(path.relative_to(base_dir)) for path in missing)
+            missing_text = ", ".join(str(path.relative_to(cache_home.parent)) for path in missing)
             raise RuntimeError(f"安装包内置 OCR 模型不完整，请重新安装软件: {missing_text}")
         return None
-    return detection_dir, recognition_dir
+    native_home = ascii_resource_directory(
+        cache_home,
+        "paddle_models",
+        subdirectories=tuple(f"official_models/{name}" for name in _MODEL_NAMES),
+    )
+    return (
+        native_home / "official_models" / OCR_DETECTION_MODEL_NAME,
+        native_home / "official_models" / OCR_RECOGNITION_MODEL_NAME,
+    )
 
 
 def optimized_paddle_ocr_kwargs(*, cpu_threads: int = DEFAULT_OCR_CPU_THREADS) -> dict[str, object]:

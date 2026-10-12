@@ -368,6 +368,7 @@ def test_advance_seed_state_uses_project_xs_xorshift(monkeypatch):
 
 
 def test_capture_pokemon_blinks_uses_project_xs_rngtool(monkeypatch, tmp_path):
+    monkeypatch.setattr(project_xs_module, "read_image", lambda *_args: "eye-image")
     fake_cv2 = types.SimpleNamespace(
         IMREAD_GRAYSCALE=0,
         imread=lambda _path, _mode: "eye-image",
@@ -538,6 +539,7 @@ def test_capture_pokemon_blinks_can_update_preview_without_popup(monkeypatch, tm
 
 
 def test_capture_player_blinks_keeps_project_xs_src_importable_during_tracking(monkeypatch, tmp_path):
+    monkeypatch.setattr(project_xs_module, "read_image", lambda *_args: "eye-image")
     project_xs_src = str(project_xs_module.PROJECT_XS_SRC)
     monkeypatch.setattr(sys, "path", [path for path in sys.path if path != project_xs_src])
     fake_cv2 = types.SimpleNamespace(
@@ -584,6 +586,7 @@ def test_load_eye_template_supports_unicode_windows_paths(tmp_path):
 
 
 def test_capture_pokemon_blinks_keeps_project_xs_src_importable_during_tracking(monkeypatch, tmp_path):
+    monkeypatch.setattr(project_xs_module, "read_image", lambda *_args: "eye-image")
     project_xs_src = str(project_xs_module.PROJECT_XS_SRC)
     monkeypatch.setattr(sys, "path", [path for path in sys.path if path != project_xs_src])
     fake_cv2 = types.SimpleNamespace(
@@ -883,17 +886,9 @@ def test_capture_preview_frame_releases_source_when_read_fails(monkeypatch, tmp_
 
 
 def test_save_preview_frame_writes_output(monkeypatch, tmp_path):
-    saved_paths = []
-    fake_cv2 = types.SimpleNamespace(
-        CAP_ANY=100,
-        CAP_PROP_FRAME_WIDTH=1,
-        CAP_PROP_FRAME_HEIGHT=2,
-        CAP_PROP_BUFFERSIZE=3,
-        VideoCapture=FakeVideoCapture,
-        imwrite=lambda path, frame: saved_paths.append((path, frame)) or True,
-    )
-    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
-    output = tmp_path / "debug" / "preview.png"
+    frame = np.full((8, 10, 3), 123, dtype=np.uint8)
+    monkeypatch.setattr(project_xs_module, "capture_preview_frame", lambda _config: frame)
+    output = tmp_path / "中文目录" / "截图.png"
     config = BlinkCaptureConfig(
         eye_image_path=tmp_path / "eye.png",
         roi=(1, 2, 3, 4),
@@ -901,7 +896,7 @@ def test_save_preview_frame_writes_output(monkeypatch, tmp_path):
     )
 
     assert save_preview_frame(config, output) == output
-    assert saved_paths == [(str(output), "camera-frame")]
+    assert np.array_equal(project_xs_module.read_image(output), frame)
 
 
 def test_render_eye_preview_matches_template(tmp_path):
@@ -935,7 +930,6 @@ def test_save_eye_preview_writes_annotated_output(monkeypatch, tmp_path):
     assert cv2.imwrite(str(eye_path), eye)
     frame = np.zeros((20, 20, 3), dtype=np.uint8)
     frame[8:12, 9:13] = 255
-    saved_paths = []
     config = BlinkCaptureConfig(
         eye_image_path=eye_path,
         roi=(6, 5, 10, 10),
@@ -944,11 +938,11 @@ def test_save_eye_preview_writes_annotated_output(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr("auto_bdsp_rng.blink_detection.project_xs.capture_preview_frame", lambda _config: frame)
-    monkeypatch.setattr(cv2, "imwrite", lambda path, image: saved_paths.append((path, image.shape)) or True)
-    output = tmp_path / "debug" / "eye_preview.png"
+    output = tmp_path / "中文目录" / "眼睛预览.png"
 
     saved, preview = save_eye_preview(config, output)
 
     assert saved == output
     assert preview.matched is True
-    assert saved_paths == [(str(output), frame.shape)]
+    annotated, _ = render_eye_preview(config, frame)
+    assert np.array_equal(project_xs_module.read_image(output), annotated)

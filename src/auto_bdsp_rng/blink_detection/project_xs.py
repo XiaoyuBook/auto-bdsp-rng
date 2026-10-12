@@ -12,6 +12,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Iterator
 
 from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.image_io import read_image, write_image
 from auto_bdsp_rng.blink_detection.models import (
     AdvanceEvent,
     BlinkCaptureConfig,
@@ -238,19 +239,11 @@ def _load_cv2() -> ModuleType:
 def _read_grayscale_image(path: Path) -> Any:
     cv2 = _load_cv2()
     try:
-        np = importlib.import_module("numpy")
-        data = np.fromfile(str(path), dtype=np.uint8)
-        image = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
-    except Exception:
-        try:
-            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-        except Exception:
-            image = None
-    if image is None:
+        return read_image(path, cv2.IMREAD_GRAYSCALE)
+    except Exception as exc:
         raise ProjectXsCaptureConfigError(
             f"Cannot read eye template image: {path}；请先在预览中框选并保存眼睛模板"
-        )
-    return image
+        ) from exc
 
 
 def _project_xs_crop(crop: tuple[int, int, int, int] | None) -> list[int] | None:
@@ -929,16 +922,13 @@ def capture_preview_frame(config: BlinkCaptureConfig) -> Any:
 def save_preview_frame(config: BlinkCaptureConfig, output_path: str | Path) -> Path:
     """Capture one preview frame and save it through OpenCV."""
 
-    cv2 = _load_cv2()
     output = Path(output_path)
     frame = capture_preview_frame(config)
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        saved = cv2.imwrite(str(output), frame)
+        write_image(output, frame)
     except Exception as exc:
         raise ProjectXsIntegrationError(f"Cannot save preview frame: {output}") from exc
-    if not saved:
-        raise ProjectXsIntegrationError(f"Cannot save preview frame: {output}")
     return output
 
 
@@ -995,17 +985,14 @@ def render_eye_preview(config: BlinkCaptureConfig, frame: Any) -> tuple[Any, Eye
 def save_eye_preview(config: BlinkCaptureConfig, output_path: str | Path) -> tuple[Path, EyePreviewResult]:
     """Capture a frame, draw eye-template preview information, and save it."""
 
-    cv2 = _load_cv2()
     output = Path(output_path)
     frame = capture_preview_frame(config)
     annotated, preview = render_eye_preview(config, frame)
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        saved = cv2.imwrite(str(output), annotated)
+        write_image(output, annotated)
     except Exception as exc:
         raise ProjectXsIntegrationError(f"Cannot save eye preview: {output}") from exc
-    if not saved:
-        raise ProjectXsIntegrationError(f"Cannot save eye preview: {output}")
     return output, preview
 
 

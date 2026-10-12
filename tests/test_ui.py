@@ -6750,8 +6750,7 @@ def test_main_window_applies_selected_roi(app, monkeypatch):
     class FakeImage:
         shape = (10, 12)
 
-    fake_cv2 = type("FakeCv2", (), {"IMREAD_GRAYSCALE": 0, "imread": staticmethod(lambda *_args: FakeImage())})
-    monkeypatch.setitem(__import__("sys").modules, "cv2", fake_cv2)
+    monkeypatch.setattr("auto_bdsp_rng.blink_detection.project_xs._load_eye_template", lambda _config: FakeImage())
 
     window.apply_selected_roi((20, 30, 40, 50))
 
@@ -6844,9 +6843,9 @@ def test_eye_capture_uses_frozen_frame_then_restores_live_preview(app, monkeypat
     monkeypatch.setattr(main_window_module, "resource_path", lambda *_parts: tmp_path)
     monkeypatch.setattr(window, "_selected_config_path", lambda: "profile.json")
     monkeypatch.setattr(
-        cv2,
-        "imwrite",
-        lambda _path, image: written_images.append(image.copy()) or True,
+        main_window_module,
+        "write_image",
+        lambda _path, image: written_images.append(image.copy()),
     )
 
     window.apply_selected_eye((2, 3, 4, 5))
@@ -6859,6 +6858,46 @@ def test_eye_capture_uses_frozen_frame_then_restores_live_preview(app, monkeypat
     assert window.preview_label._selection_enabled
     assert rendered_frames[-1] is live_frame
     assert window._preview_timer.isActive()
+
+
+def test_eye_capture_updates_template_in_chinese_install_directory(app, monkeypatch, tmp_path):
+    from auto_bdsp_rng.image_io import read_image
+
+    window = MainWindow()
+    output_dir = tmp_path / "中文软件目录 with spaces" / "images"
+    monkeypatch.setattr(main_window_module, "resource_path", lambda *_parts: output_dir)
+    monkeypatch.setattr(window, "_selected_config_path", lambda: "中文配置.json")
+    window._selection_preview_frame = np.full((12, 16, 3), 40, dtype=np.uint8)
+    window._latest_preview_frame = np.full((12, 16, 3), 200, dtype=np.uint8)
+    failures = []
+    monkeypatch.setattr(window, "_show_error", lambda *args: failures.append(args))
+
+    window.apply_selected_eye((2, 3, 4, 5), preserve_roi=True)
+
+    assert not failures
+    assert window._eye_image_path == output_dir / "中文配置_eye.png"
+    assert np.all(read_image(window._eye_image_path) == 40)
+    window._selection_preview_frame = np.full((12, 16, 3), 80, dtype=np.uint8)
+    window.apply_selected_eye((2, 3, 4, 5), preserve_roi=True)
+    assert not failures
+    assert np.all(read_image(window._eye_image_path) == 80)
+
+
+def test_raw_screenshot_saves_to_chinese_filename(app, monkeypatch, tmp_path):
+    from auto_bdsp_rng.image_io import read_image
+
+    window = MainWindow()
+    frame = np.arange(6 * 8 * 3, dtype=np.uint8).reshape((6, 8, 3))
+    output = tmp_path / "中文截图目录 with spaces" / "原始截图.png"
+    monkeypatch.setattr(main_window_module.QFileDialog, "getSaveFileName", lambda *_args: (str(output), ""))
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _config: frame)
+    failures = []
+    monkeypatch.setattr(window, "_show_error", lambda *args: failures.append(args))
+
+    window.save_raw_screenshot()
+
+    assert not failures
+    assert np.array_equal(read_image(output), frame)
 
 
 def test_preview_label_stores_ocr_overlay_region(app):

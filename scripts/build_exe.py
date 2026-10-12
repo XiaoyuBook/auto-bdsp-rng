@@ -7,6 +7,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 import zipfile
 from collections.abc import Callable
@@ -72,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     verify_script_layout()
     stage("Verify Project_Xs assets")
     verify_project_xs_assets()
+    stage("Verify Unicode installation paths and OCR inference")
+    verify_packaged_unicode_paths()
     stage("Create release zip")
     create_release_zip()
     print()
@@ -247,6 +250,48 @@ def verify_packaged_easycon_ocr() -> None:
         raise SystemExit(f"Packaged native EasyCon OCR smoke test failed:\n{text}")
 
 
+def verify_packaged_unicode_paths() -> None:
+    """Exercise native DLLs, image paths and actual inference from a Unicode install."""
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="unicode-smoke-", dir=BUILD_DIR) as temporary:
+        root = Path(temporary).absolute()
+        install = root / "中文安装目录 with spaces"
+        shutil.copytree(DIST_DIR, install)
+        profile = root / "中文用户名"
+        local = profile / "AppData" / "Local"
+        temp = local / "Temp"
+        temp.mkdir(parents=True)
+        env = os.environ.copy()
+        env["LOCALAPPDATA"] = str(local)
+        env["TEMP"] = env["TMP"] = str(temp)
+        env["AUTO_BDSP_RNG_OCR_SMOKE_MODE"] = "full"
+        # Keep the ProgramData fallback isolated when the build root is ASCII.
+        if str(root).isascii():
+            env["PROGRAMDATA"] = str(BUILD_DIR.absolute().parent / "native-cache")
+        env.pop("AUTO_BDSP_RNG_NATIVE_CACHE_HOME", None)
+        cases = (
+            ("AUTO_BDSP_RNG_IMAGE_PATH_SMOKE", "Image path smoke ok"),
+            ("AUTO_BDSP_RNG_OCR_SMOKE", "OCR smoke ok"),
+            ("AUTO_BDSP_RNG_EASYCON_OCR_SMOKE", "EasyCon OCR smoke ok"),
+        )
+        for name, _ in cases:
+            env.pop(name, None)
+        for index, (name, expected) in enumerate(cases):
+            output = profile / f"smoke-{index}.txt"
+            case_env = env | {name: str(output)}
+            try:
+                result = subprocess.run(
+                    [str(install / f"{EXE_NAME}.exe")], cwd=install, env=case_env,
+                    check=False, timeout=int(env.get("AUTO_BDSP_RNG_OCR_SMOKE_TIMEOUT", "300")),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SystemExit(f"Unicode-path smoke test timed out: {name}") from exc
+            text = output.read_text(encoding="utf-8", errors="replace") if output.exists() else "No result file"
+            if result.returncode != 0 or expected not in text:
+                raise SystemExit(f"Unicode-path smoke test failed: {name}\n{text}")
+            print(f"Unicode install: {text.strip()}", flush=True)
+
+
 def copy_release_files() -> None:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     copy_optional_tree(
@@ -309,6 +354,7 @@ def write_user_readme(path: Path) -> None:
                 f"请不要只复制 exe。必须保留 {EXE_NAME}.exe 旁边的 _internal、script、docs 等目录。",
                 f"普通用户不要下载 GitHub 绿色 Code 按钮里的 Source code zip，请下载 Release 里的 {ZIP_NAME}。",
                 "首次启动可能较慢，这是正常现象。",
+                "支持中文和空格解压路径；首次 OCR 使用时会自动准备所需的兼容资源。",
                 "",
                 "Windows SmartScreen 如果提示未知发布者，可以点击“更多信息”，确认来源是本项目 Release 后再选择“仍要运行”。",
                 "杀毒软件误报时，请先确认 zip 来自 XiaoyuBook/auto-bdsp-rng 的 GitHub Release，再将解压目录加入信任列表或提交误报反馈。",

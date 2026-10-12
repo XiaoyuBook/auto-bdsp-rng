@@ -11,7 +11,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, optimized_paddle_ocr_kwargs
+from auto_bdsp_rng.automation.auto_rng.ocr_runtime import configure_ocr_runtime, configure_paddlex_cache, optimized_paddle_ocr_kwargs
+from auto_bdsp_rng.image_io import read_image
 
 configure_ocr_runtime()
 
@@ -40,6 +41,7 @@ def get_paddle_ocr() -> object:
             return _PADDLE_OCR
         configure_ocr_runtime()
         preferred_kwargs = optimized_paddle_ocr_kwargs()
+        configure_paddlex_cache()
         try:
             from paddleocr import PaddleOCR
         except ImportError as exc:
@@ -94,7 +96,7 @@ def _create_paddle_ocr(
             return factory(**kwargs)
         except Exception as exc:
             last_error = exc
-    raise RuntimeError("Cannot initialize PaddleOCR") from last_error
+    raise RuntimeError(f"Cannot initialize PaddleOCR: {last_error}") from last_error
 
 
 def _ocr_rows(
@@ -988,10 +990,10 @@ def _load_image(image_input: str | Path | np.ndarray) -> np.ndarray:
         import cv2
     except ImportError as exc:
         raise RuntimeError("OpenCV is required for image loading") from exc
-    img = cv2.imread(str(image_input))
-    if img is None:
-        raise FileNotFoundError(f"Cannot load image: {image_input}")
-    return img
+    try:
+        return read_image(image_input, cv2.IMREAD_COLOR)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Cannot load image: {image_input}") from exc
 
 
 # ── CLI 测试入口 ───────────────────────────────────────────────────

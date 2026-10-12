@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import runpy
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from auto_bdsp_rng.automation.auto_rng.ocr_runtime import (
     DEFAULT_OCR_CPU_THREADS,
     configure_ocr_runtime,
+    configure_paddlex_cache,
+    configure_packaged_paddlex_cache,
     optimized_paddle_ocr_kwargs,
     resolve_local_ocr_model_dirs,
 )
@@ -23,6 +26,7 @@ def _create_bundled_model_files(root: Path) -> tuple[Path, Path]:
         model_dir.mkdir(parents=True)
         (model_dir / "inference.json").write_text("{}", encoding="utf-8")
         (model_dir / "inference.pdiparams").write_bytes(b"model")
+        (model_dir / "inference.yml").write_text("Global: {}", encoding="utf-8")
     return detection_dir, recognition_dir
 
 
@@ -99,6 +103,81 @@ def test_frozen_runtime_fails_fast_when_bundled_model_is_incomplete(monkeypatch,
 
     with pytest.raises(RuntimeError, match="安装包内置 OCR 模型不完整"):
         optimized_paddle_ocr_kwargs()
+
+
+def test_chinese_bundled_models_and_paddlex_cache_use_ascii_paths(monkeypatch, tmp_path):
+    source = tmp_path / "中文安装目录 with spaces"
+    original_dirs = _create_bundled_model_files(source)
+    monkeypatch.setattr(ocr_runtime.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(ocr_runtime.sys, "_MEIPASS", str(source), raising=False)
+    monkeypatch.setenv("AUTO_BDSP_RNG_NATIVE_CACHE_HOME", str(tmp_path / "native"))
+    monkeypatch.setenv("PADDLE_PDX_CACHE_HOME", str(tmp_path / "用户缓存"))
+
+    configure_paddlex_cache()
+    kwargs = optimized_paddle_ocr_kwargs()
+
+    assert os.environ["PADDLE_PDX_CACHE_HOME"].isascii()
+    for key, original in zip(("text_detection_model_dir", "text_recognition_model_dir"), original_dirs):
+        prepared = Path(kwargs[key])
+        assert str(prepared).isascii()
+        assert prepared != original
+        for filename in ("inference.json", "inference.pdiparams", "inference.yml"):
+            assert (prepared / filename).read_bytes() == (original / filename).read_bytes()
+
+    (original_dirs[0] / "inference.pdiparams").unlink()
+    with pytest.raises(RuntimeError, match="模型不完整"):
+        optimized_paddle_ocr_kwargs()
+
+
+def test_development_cache_remembers_original_chinese_model_source(monkeypatch, tmp_path):
+    original_dirs = _create_bundled_model_files(tmp_path / "中文开发路径")
+    monkeypatch.setenv("PADDLE_PDX_CACHE_HOME", str(original_dirs[0].parent.parent))
+    monkeypatch.setenv("AUTO_BDSP_RNG_NATIVE_CACHE_HOME", str(tmp_path / "native"))
+
+    configure_paddlex_cache()
+    first = resolve_local_ocr_model_dirs()
+    configure_paddlex_cache()
+    assert resolve_local_ocr_model_dirs() == first
+    assert first is not None
+    assert all(str(path).isascii() for path in first)
+
+
+def test_runtime_hook_prepares_unicode_cache_before_library_import(monkeypatch, tmp_path):
+    source = tmp_path / "中文安装目录"
+    _create_bundled_model_files(source)
+    monkeypatch.setattr(ocr_runtime.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(ocr_runtime.sys, "_MEIPASS", str(source), raising=False)
+    monkeypatch.setenv("AUTO_BDSP_RNG_NATIVE_CACHE_HOME", str(tmp_path / "native"))
+    monkeypatch.delenv("PADDLE_PDX_CACHE_HOME", raising=False)
+
+    hook = Path(__file__).resolve().parents[2] / "packaging" / "runtime_paddlex_cache.py"
+    runpy.run_path(str(hook))
+
+    assert os.environ["PADDLE_PDX_CACHE_HOME"].isascii()
+    assert all(str(path).isascii() for path in resolve_local_ocr_model_dirs())
+
+
+def test_bad_cache_location_does_not_prevent_gui_startup(monkeypatch, tmp_path):
+    source = tmp_path / "中文安装目录"
+    _create_bundled_model_files(source)
+    monkeypatch.setattr(ocr_runtime.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(ocr_runtime.sys, "_MEIPASS", str(source), raising=False)
+    monkeypatch.setenv("AUTO_BDSP_RNG_NATIVE_CACHE_HOME", str(tmp_path / "中文缓存目录"))
+
+    configure_packaged_paddlex_cache()
+
+    with pytest.raises(RuntimeError, match="AUTO_BDSP_RNG_NATIVE_CACHE_HOME"):
+        optimized_paddle_ocr_kwargs()
+
+
+def test_ocr_initialization_error_keeps_the_native_failure(monkeypatch):
+    def factory(**_kwargs):
+        raise OSError("Cannot open model at C:/中文目录/inference.json")
+
+    monkeypatch.setattr(pokemon_info_ocr, "optimized_paddle_ocr_kwargs", lambda: {"text_detection_model_dir": "local"})
+    with pytest.raises(RuntimeError, match="Cannot open model.*inference.json") as failure:
+        pokemon_info_ocr._create_paddle_ocr(factory)
+    assert isinstance(failure.value.__cause__, OSError)
 
 
 def test_dialog_timing_paddle_ocr_prefers_optimized_runtime_kwargs():

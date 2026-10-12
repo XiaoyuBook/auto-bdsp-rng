@@ -115,6 +115,14 @@ missing assets stop the release build. Keep private images out of Git.
 
 The Windows release package includes `paddlepaddle` and `paddleocr` so OCR shiny checks, stats-page OCR, and notes-page OCR are available from the green zip. This makes the zip larger and can make the first OCR use slower while Paddle initializes its models.
 
+Chinese installation paths, image filenames, and paths containing spaces are supported. Image files use `auto_bdsp_rng.image_io`: Python opens the files and OpenCV only encodes or decodes memory buffers. Template replacement is atomic, so a failed write preserves the previous template.
+
+Native Windows model loaders require ASCII filenames in some builds. When the source directory contains non-ASCII characters, the app prepares a SHA-256-verified copy of the two bundled mobile Paddle models (about 21 MiB) or EasyCon's language data. Copies are reused, damaged copies are repaired, and changed model content receives a separate cache directory. Frozen builds continue to validate their bundled models before using any copy and never replace missing bundled models with online downloads.
+
+Cache selection checks the entire absolute path, its length including resource filenames, and write access. It tries LocalAppData, the temporary directory, a per-user directory under ProgramData, and a per-user directory on the system drive; paths containing a Chinese username or exceeding the native path-length limit are skipped. Set `AUTO_BDSP_RNG_NATIVE_CACHE_HOME` to a writable ASCII absolute directory to select a custom location. No Windows locale or code-page changes are required. PaddleX's cache is configured before import, separately from the original bundled model source.
+
+Release builds also run the frozen executable from a copied `中文安装目录 with spaces`, with simulated Chinese LocalAppData and temporary paths. These checks cover image read/write and template updates, actual Paddle detection and recognition, and native EasyCon OCR. The Unicode-path checks always perform inference even when the initial OCR dependency smoke check is configured as import-only in CI.
+
 ## Troubleshooting
 
 - PySide6 platform plugin not found: rebuild with the provided spec; it collects PySide6 plugins including `platforms`, `styles`, and `imageformats`.
@@ -123,6 +131,6 @@ The Windows release package includes `paddlepaddle` and `paddleocr` so OCR shiny
 - `_native.pyd` not found: install Visual Studio Build Tools with MSVC, then rerun `.\build_exe.bat`.
 - MSVC compile failed: confirm Python 3.12 x64 and the C++ desktop workload are installed.
 - Native EasyCon OCR smoke failed: verify `packaging/easycon_native/x64/*.dll` and `packaging/easycon_native/Tessdata/chi_sim.traineddata` are present, then rebuild.
-- Chinese path or space path resource errors: use the resource helper in `auto_bdsp_rng.resources`; avoid adding new hard-coded cwd-relative paths.
+- Chinese path or space path resource errors: use `auto_bdsp_rng.resources` to locate assets, `auto_bdsp_rng.image_io` for image files, and `auto_bdsp_rng.native_paths` for narrow-character native model loaders. Avoid direct OpenCV file I/O and hard-coded cwd-relative paths. If no writable ASCII cache directory is available, select one with `AUTO_BDSP_RNG_NATIVE_CACHE_HOME`.
 - Windows SmartScreen unknown publisher: this build is unsigned. Users can choose “More info” and “Run anyway” after confirming the Release source.
 - Antivirus false positive: confirm the zip is from the official GitHub Release, then submit the file to the vendor as a false positive or add a local exception.

@@ -261,7 +261,7 @@ def _create_paddle_ocr(factory: Callable[..., object]) -> object:
             return factory(**kwargs)
         except Exception as exc:
             last_error = exc
-    raise RuntimeError("Cannot initialize PaddleOCR") from last_error
+    raise RuntimeError(f"Cannot initialize PaddleOCR: {last_error}") from last_error
 
 
 def _extract_paddle_text(result: object) -> str:

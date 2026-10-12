@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 
 import pytest
 
@@ -169,7 +170,7 @@ def test_windows_build_includes_ocr_dependencies():
     assert '"PP-OCRv5_mobile_rec"' in spec
     assert 'tree_datas(str(model_cache), "paddlex_cache/official_models")' not in spec
     assert "runtime_paddlex_cache.py" in spec
-    assert "PADDLE_PDX_CACHE_HOME" in runtime_hook
+    assert "configure_packaged_paddlex_cache" in runtime_hook
 
 
 def test_packaged_gui_entry_has_ocr_smoke_probe():
@@ -178,7 +179,59 @@ def test_packaged_gui_entry_has_ocr_smoke_probe():
 
     assert "AUTO_BDSP_RNG_OCR_SMOKE" in entry
     assert "read_paddle_ocr_text" in entry
-    assert "PADDLE_PDX_CACHE_HOME" in entry
+    assert "configure_packaged_paddlex_cache" in entry
+
+
+def test_unicode_install_verification_forces_inference_and_isolates_profile(monkeypatch, tmp_path):
+    install = tmp_path / "dist"
+    install.mkdir()
+    (install / f"{build_script_module.EXE_NAME}.exe").write_bytes(b"exe")
+    build = tmp_path / "build"
+    monkeypatch.setattr(build_script_module, "DIST_DIR", install)
+    monkeypatch.setattr(build_script_module, "BUILD_DIR", build)
+    monkeypatch.setenv("AUTO_BDSP_RNG_OCR_SMOKE_MODE", "import")
+    calls = []
+
+    def run(args, *, cwd, env, check, timeout):
+        cases = {
+            "AUTO_BDSP_RNG_IMAGE_PATH_SMOKE": "Image path smoke ok",
+            "AUTO_BDSP_RNG_OCR_SMOKE": "OCR smoke ok",
+            "AUTO_BDSP_RNG_EASYCON_OCR_SMOKE": "EasyCon OCR smoke ok",
+        }
+        selected = [name for name in cases if name in env]
+        assert len(selected) == 1
+        name = selected[0]
+        assert Path(args[0]).is_file()
+        assert "中文安装目录 with spaces" in str(cwd)
+        assert "中文用户名" in env["LOCALAPPDATA"]
+        assert "中文用户名" in env["TEMP"]
+        assert env["AUTO_BDSP_RNG_OCR_SMOKE_MODE"] == "full"
+        assert "AUTO_BDSP_RNG_NATIVE_CACHE_HOME" not in env
+        Path(env[name]).write_text(cases[name], encoding="utf-8")
+        calls.append(name)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(build_script_module.subprocess, "run", run)
+    build_script_module.verify_packaged_unicode_paths()
+
+    assert len(calls) == 3
+    assert not list(build.iterdir())
+
+
+def test_unicode_install_verification_rejects_failed_process(monkeypatch, tmp_path):
+    install = tmp_path / "dist"
+    install.mkdir()
+    (install / f"{build_script_module.EXE_NAME}.exe").write_bytes(b"exe")
+    monkeypatch.setattr(build_script_module, "DIST_DIR", install)
+    monkeypatch.setattr(build_script_module, "BUILD_DIR", tmp_path / "build")
+
+    def run(_args, **kwargs):
+        Path(kwargs["env"]["AUTO_BDSP_RNG_IMAGE_PATH_SMOKE"]).write_text("Image path smoke ok", encoding="utf-8")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(build_script_module.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="Unicode-path smoke test failed"):
+        build_script_module.verify_packaged_unicode_paths()
 
 
 def test_pyinstaller_spec_names_chinese_executable():

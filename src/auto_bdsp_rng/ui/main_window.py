@@ -162,6 +162,7 @@ from auto_bdsp_rng.gen8_id import IDFilter, generate_ids
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
+from auto_bdsp_rng.image_io import write_image
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
@@ -6441,8 +6442,7 @@ class MainWindow(QMainWindow):
             output_path = output_dir / f"{config_name}_eye.png"
             if self.seed_config_editor.active:
                 output_path = self.seed_config_editor.eye_output_path(output_dir, config_name)
-            if not cv2.imwrite(str(output_path), eye):
-                raise ProjectXsIntegrationError(f"Cannot save eye template: {output_path}")
+            write_image(output_path, eye)
         except Exception as exc:
             self._set_preview_selection_enabled(False)
             self._selection_mode = None
@@ -7145,11 +7145,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            import cv2
-
             frame = self._capture_preview_frame_for_config(self._config_from_form().capture)
-            if not cv2.imwrite(path, frame):
-                raise ProjectXsIntegrationError(f"Cannot save raw screenshot: {path}")
+            write_image(path, frame)
         except Exception as exc:
             self._show_error("Raw screenshot failed", exc if isinstance(exc, Exception) else Exception(str(exc)))
             return

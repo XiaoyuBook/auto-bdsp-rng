@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from auto_bdsp_rng.resources import resource_path
+from auto_bdsp_rng.native_paths import ascii_resource_directory
 
 
 class TesseractRuntimeError(RuntimeError):
@@ -58,6 +59,10 @@ class TesseractRuntime:
         traineddata = self.tessdata / f"{_LANGUAGE}.traineddata"
         if not traineddata.is_file():
             raise TesseractRuntimeError(f"缺少 EasyCon OCR 语言数据: {traineddata}")
+        try:
+            self.tessdata = ascii_resource_directory(self.tessdata, "easycon_tessdata")
+        except (OSError, RuntimeError) as exc:
+            raise TesseractRuntimeError(f"无法准备 EasyCon OCR 语言数据路径: {exc}") from exc
         self._dll_directory: Any | None = None
         self._leptonica: Any | None = None
         self._library = library if library is not None else self._load_library()

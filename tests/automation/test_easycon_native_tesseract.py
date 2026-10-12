@@ -91,3 +91,17 @@ def test_ctypes_runtime_uses_single_line_rgb_and_returns_mean_confidence(tmp_pat
 def test_runtime_rejects_missing_easycon_language_data(tmp_path: Path) -> None:
     with pytest.raises(TesseractRuntimeError, match="语言数据"):
         TesseractRuntime(tmp_path, library=_FakeTesseractLibrary())
+
+
+def test_chinese_tessdata_path_is_prepared_before_native_initialization(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AUTO_BDSP_RNG_NATIVE_CACHE_HOME", str(tmp_path / "native"))
+    root = _runtime_root(tmp_path / "中文用户")
+    library = _FakeTesseractLibrary()
+    runtime = TesseractRuntime(root, library=library)
+
+    runtime.read(np.zeros((2, 3, 3), dtype=np.uint8))
+
+    assert library.init_path.isascii()
+    assert runtime.root == root
+    assert runtime.tessdata != root / "Tessdata"
+    assert (runtime.tessdata / "chi_sim.traineddata").read_bytes() == b"test"
