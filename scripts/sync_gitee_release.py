@@ -155,9 +155,18 @@ def sync_asset(path: Path, asset: dict, release_id: int, token: str) -> None:
 def load_release(tag: str) -> dict:
     if re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None:
         raise ValueError("Expected a stable version tag")
-    raw = subprocess.check_output(["gh", "api",
-        f"repos/XiaoyuBook/auto-bdsp-rng/releases/tags/{tag}"], text=True, encoding="utf-8")
-    source = json.loads(raw)
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        response = requests.get(f"https://api.github.com/repos/XiaoyuBook/auto-bdsp-rng/releases/tags/{tag}",
+                                headers=headers, timeout=(30, 60))
+    except requests.RequestException as exc:
+        raise RuntimeError(f"GitHub release lookup failed: {type(exc).__name__}") from None
+    if not response.ok:
+        raise RuntimeError(f"GitHub release lookup failed: HTTP {response.status_code}")
+    source = response.json()
     if source["draft"] or source["prerelease"]:
         raise ValueError("Only published stable releases can be mirrored")
     return source
@@ -208,8 +217,9 @@ def download_assets(tag: str, directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     for name in sorted(selected):
         log(f"Downloading mirror asset: {name}")
-        subprocess.run(["gh", "release", "download", tag, "--repo", "XiaoyuBook/auto-bdsp-rng",
-                        "--dir", str(directory), "--pattern", name, "--clobber"], check=True, timeout=300)
+        # This repository is public; credentials are needed only for API discovery.
+        url = f"https://github.com/XiaoyuBook/auto-bdsp-rng/releases/download/{tag}/{name}"
+        transfer(url, directory / name, max_size=selected[name]["size"])
 
 
 def sync(tag: str, directory: Path, token: str) -> None:

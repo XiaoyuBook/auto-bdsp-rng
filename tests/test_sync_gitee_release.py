@@ -18,7 +18,7 @@ def setup_release(tmp_path, monkeypatch, *, existing=False, upload_ok=True, publ
     metadata = sync.metadata_for("v3.3.1", [package])
     source = dict(name="v3.3.1", body="## 本次更新\n\n- 支持 Gitee 更新源。", draft=False,
                   prerelease=False, assets=metadata["assets"])
-    monkeypatch.setattr(sync.subprocess, "check_output", lambda *a, **k: json.dumps(source))
+    monkeypatch.setattr(sync, "load_release", lambda tag: source)
     calls = []
     def request(method, endpoint, token, **kwargs):
         calls.append((method, endpoint, kwargs))
@@ -264,9 +264,9 @@ def test_large_patch_is_downloaded_for_splitting_but_full_archive_is_excluded(tm
         {'name': 'auto-bdsp-rng-v3.3.1-windows-x64.manifest.json', 'size': 100},
     ]
     commands = []
-    monkeypatch.setattr(sync.subprocess, 'run', lambda command, **kwargs: commands.append(command))
+    monkeypatch.setattr(sync, 'transfer', lambda url, path, **kwargs: commands.append((url, path, kwargs)))
     sync.download_assets('v3.3.1', tmp_path)
-    names = {command[command.index('--pattern') + 1] for command in commands}
+    names = {path.name for url, path, kwargs in commands}
     assert names == {patch, 'auto-bdsp-rng-v3.2.0-to-v3.3.1-windows-x64.update.zip',
                      'auto-bdsp-rng-v3.3.1-windows-x64.manifest.json'}
 
@@ -307,3 +307,21 @@ def test_missing_selected_patch_still_prevents_publication(tmp_path, monkeypatch
     with pytest.raises(ValueError, match='incomplete'):
         sync.sync('v3.3.1', tmp_path, 'test-token')
     assert not calls
+
+
+def test_release_discovery_uses_api_token_without_requiring_gh(monkeypatch):
+    monkeypatch.setenv('GH_TOKEN', 'secret-token')
+    def get(url, **kwargs):
+        assert url.endswith('/releases/tags/v3.4.0')
+        assert kwargs['headers']['Authorization'] == 'Bearer secret-token'
+        return SimpleNamespace(ok=True, json=lambda: dict(draft=False, prerelease=False))
+    monkeypatch.setattr(sync.requests, 'get', get)
+    assert sync.load_release('v3.4.0')['draft'] is False
+
+
+def test_release_discovery_does_not_log_response_or_token(monkeypatch):
+    monkeypatch.setattr(sync.requests, 'get', lambda *a, **k: SimpleNamespace(
+        ok=False, status_code=403, text='secret-token'))
+    with pytest.raises(RuntimeError, match='HTTP 403') as error:
+        sync.load_release('v3.4.0')
+    assert 'secret-token' not in str(error.value)
