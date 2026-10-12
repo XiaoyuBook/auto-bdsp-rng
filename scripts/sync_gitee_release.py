@@ -21,6 +21,8 @@ TRANSFER_TIMEOUT = 900
 ATTEMPTS = 3
 # Operational mirror policy, not a claim about Gitee's account-specific quota.
 MAX_MIRROR_ASSET_SIZE = 90 * 1024 * 1024
+MAX_UPDATE_ASSET_SIZE = 2 * 1024 * 1024 * 1024
+MIRROR_PART_SIZE = 8 * 1024 * 1024
 
 
 def log(message: str) -> None:
@@ -33,7 +35,9 @@ def transfer(url: str, output: Path, *, form: str | None = None, max_size: int |
     if curl is None:
         raise RuntimeError("curl is required for bounded release transfers")
     command = [curl, "--silent", "--show-error", "--fail", "--connect-timeout", "30",
-               "--max-time", str(TRANSFER_TIMEOUT), "--speed-limit", "32768", "--speed-time", "60",
+               "--max-time", str(TRANSFER_TIMEOUT),
+               "--speed-limit", "32768" if form is None else "1024",
+               "--speed-time", "60" if form is None else "120",
                "--output", str(output), "--write-out",
                "%{http_code} %{size_upload} %{size_download} %{time_total}"]
     if form is None:
@@ -67,8 +71,8 @@ def upload_file(path: Path, release_id: int, token: str) -> None:
         if "\n" in value or "\r" in value:
             raise ValueError("Invalid multipart value")
         return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
-    # form-string prevents a token beginning with @ from being treated as a filename.
-    form = "form-string = " + quoted("access_token=" + token) + "\n"
+    # Authenticate before the server reads the multipart body. Keep secrets on stdin.
+    form = "header = " + quoted("Authorization: Bearer " + token) + "\n"
     form += "form = " + quoted(f"file=@{path.resolve().as_posix()};type=application/octet-stream") + "\n"
     with tempfile.TemporaryDirectory() as directory:
         transfer(API + f"/releases/{release_id}/attach_files", Path(directory) / "response", form=form)
@@ -165,11 +169,35 @@ def mirror_assets(source: dict) -> dict[str, dict]:
         name = asset["name"]
         if not re.fullmatch(r"auto-bdsp-rng-v\d+\.\d+\.\d+(?:-to-v\d+\.\d+\.\d+)?-windows-x64\.(?:update\.zip|manifest\.json)", name):
             continue
-        if not 0 < asset["size"] <= MAX_MIRROR_ASSET_SIZE:
-            log(f"Kept on GitHub (outside mirror size policy): {name}")
-            continue
+        limit = MAX_UPDATE_ASSET_SIZE if name.endswith(".update.zip") else MAX_MIRROR_ASSET_SIZE
+        if not 0 < asset["size"] <= limit:
+            raise ValueError(f"Unsupported mirror asset size: {name}")
         selected[name] = asset
     return selected
+
+
+def prepare_transfers(tag: str, paths: list[Path], metadata: dict) -> list[tuple[Path, dict]]:
+    transfers = []
+    for path, asset in zip(paths, metadata["assets"], strict=True):
+        if asset["size"] <= MAX_MIRROR_ASSET_SIZE:
+            transfers.append((path, asset))
+            continue
+        parts = []
+        with path.open("rb") as source:
+            index = 1
+            while chunk := source.read(MIRROR_PART_SIZE):
+                part = path.with_name(f"{path.name}.part{index:04d}")
+                part.write_bytes(chunk)
+                info = metadata_for(tag, [part])["assets"][0]
+                parts.append(info)
+                transfers.append((part, info))
+                index += 1
+        asset["parts"] = parts
+        log(f"Split {path.name} into {len(parts)} Gitee attachments")
+    if any("parts" in asset for asset in metadata["assets"]):
+        helper = Path(__file__).with_name("upgrade-from-gitee.ps1")
+        transfers.append((helper, metadata_for(tag, [helper])["assets"][0]))
+    return transfers
 
 
 def download_assets(tag: str, directory: Path) -> None:
@@ -192,6 +220,7 @@ def sync(tag: str, directory: Path, token: str) -> None:
         original = expected[asset["name"]]
         if asset["size"] != original["size"] or asset["digest"] != original.get("digest"):
             raise ValueError("GitHub release asset size or SHA-256 mismatch")
+    transfers = prepare_transfers(tag, paths, metadata)
     releases = request("GET", "/releases", token, params={"per_page": 100})
     release = next((item for item in releases if item["tag_name"] == tag), None)
     if release is None:
@@ -199,7 +228,7 @@ def sync(tag: str, directory: Path, token: str) -> None:
             "tag_name": tag, "name": source["name"], "body": "发布文件同步中，请稍后下载。",
             "target_commitish": tag, "prerelease": False})
     release_id = release["id"]
-    for path, asset in zip(paths, metadata["assets"], strict=True):
+    for path, asset in transfers:
         sync_asset(path, asset, release_id, token)
     github_release = f"https://github.com/XiaoyuBook/auto-bdsp-rng/releases/tag/{tag}"
     body = (
@@ -207,9 +236,19 @@ def sync(tag: str, directory: Path, token: str) -> None:
         "Gitee 提供适合镜像的增量更新包，供软件内「帮助 → 检查更新」使用。"
         "增量包不能作为完整软件直接解压运行。\n\n"
         f"首次安装、修复安装或没有可用增量升级链时，请到 [GitHub 下载完整包]({github_release})。"
-        "完整包和超出镜像大小策略的增量包保留在 GitHub，不在 Gitee 提供。\n\n"
+        "完整包保留在 GitHub；超过单附件大小的增量包会分卷上传到 Gitee。\n\n"
         + MARKER.sub("", source["body"]).rstrip()
     )
+    if any("parts" in asset for asset in metadata["assets"]):
+        helper_url = f"https://gitee.com/{REPOSITORY}/releases/download/{tag}/upgrade-from-gitee.ps1"
+        body += (
+            "\n\n## 旧版客户端升级\n\n"
+            f"旧版不支持分卷下载。下载 [Gitee 升级辅助脚本]({helper_url})，在 PowerShell 中运行：\n\n"
+            f"```powershell\npowershell -NoProfile -ExecutionPolicy Bypass -File .\\upgrade-from-gitee.ps1 -Tag {tag} -CurrentVersion 3.3.3\n```\n\n"
+            "将 CurrentVersion 改为当前软件版本（需要本次发行版提供对应的直接增量包）。"
+            "脚本只从 Gitee 获取分卷并校验合并后的原始增量包。完成后，在软件里打开「帮助 → 检查更新」并升级。"
+            "脚本不会替换安装目录文件，原有升级器负责安装与回滚。\n"
+        )
     body += "\n\n## 更新校验信息\n\n<!-- auto-bdsp-update:" + json.dumps(metadata, ensure_ascii=False, separators=(",", ":")) + " -->"
     request("PATCH", f"/releases/{release_id}", token, json={"body": body, "name": source["name"]})
     log(f"Gitee release ready: {tag}")

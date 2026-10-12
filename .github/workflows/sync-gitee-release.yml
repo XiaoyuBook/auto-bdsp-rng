@@ -9,6 +9,11 @@ on:
       tag:
         required: true
         type: string
+      runner:
+        description: Runner label for publishing (a local one-shot runner can avoid cross-border uploads)
+        required: false
+        type: string
+        default: ubuntu-latest
     secrets:
       GITEE_ACCESS_TOKEN:
         required: true
@@ -21,9 +26,18 @@ on:
         description: Existing GitHub release tag to mirror
         required: true
         type: string
+      runner:
+        description: Runner label for publishing
+        required: false
+        type: string
+        default: ubuntu-latest
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: gitee-release-${{ inputs.tag || github.event.workflow_run.head_branch }}
@@ -37,7 +51,7 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository &&
        (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

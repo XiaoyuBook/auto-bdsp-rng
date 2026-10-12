@@ -127,7 +127,9 @@ def test_curl_upload_uses_stdin_credentials_and_hard_deadline(tmp_path, monkeypa
     def run(command, **kwargs):
         assert "secret-token" not in " ".join(command)
         assert "secret-token" in kwargs["input"]
-        assert "form-string" in kwargs["input"]
+        assert 'header = "Authorization: Bearer secret-token"' in kwargs["input"]
+        assert "access_token=" not in kwargs["input"]
+        assert command[command.index("--speed-limit") + 1] == "1024"
         assert "--max-time" in command and "--speed-time" in command
         assert "--http1.1" in command
         assert command[command.index("--header") + 1] == "Expect:"
@@ -150,6 +152,7 @@ def test_real_curl_upload_to_server_that_rejects_expect(tmp_path, monkeypatch, c
             return False
 
         def do_POST(self):
+            assert self.headers.get("Authorization") == "Bearer secret-token"
             self.connection.settimeout(5)
             body = self.rfile.read(int(self.headers["Content-Length"]))
             received.append((self.path, self.request_version, self.headers.get("Expect"), body))
@@ -176,7 +179,7 @@ def test_real_curl_upload_to_server_that_rejects_expect(tmp_path, monkeypatch, c
     path, version, expect, body = received[0]
     assert path == "/releases/123/attach_files"
     assert version == "HTTP/1.1" and expect is None
-    assert b"secret-token" in body and package.read_bytes() in body
+    assert b"secret-token" not in body and package.read_bytes() in body
     output = capsys.readouterr().out
     assert "HTTP 201" in output and "uploaded" in output
     assert "secret-token" not in output
@@ -252,7 +255,7 @@ def test_full_archive_is_not_required_or_advertised_as_a_domestic_asset(tmp_path
     assert build_update_plan('3.3.0', releases).incremental_available
 
 
-def test_oversized_patch_is_excluded_and_downloads_only_mirror_assets(tmp_path, monkeypatch):
+def test_large_patch_is_downloaded_for_splitting_but_full_archive_is_excluded(tmp_path, monkeypatch):
     calls, source = setup_release(tmp_path, monkeypatch)
     patch = source['assets'][0]['name']
     source['assets'] += [
@@ -264,7 +267,38 @@ def test_oversized_patch_is_excluded_and_downloads_only_mirror_assets(tmp_path, 
     monkeypatch.setattr(sync.subprocess, 'run', lambda command, **kwargs: commands.append(command))
     sync.download_assets('v3.3.1', tmp_path)
     names = {command[command.index('--pattern') + 1] for command in commands}
-    assert names == {patch, 'auto-bdsp-rng-v3.3.1-windows-x64.manifest.json'}
+    assert names == {patch, 'auto-bdsp-rng-v3.2.0-to-v3.3.1-windows-x64.update.zip',
+                     'auto-bdsp-rng-v3.3.1-windows-x64.manifest.json'}
+
+
+def test_split_mirror_verifies_all_parts_before_publishing_metadata(tmp_path, monkeypatch):
+    calls, source = setup_release(tmp_path, monkeypatch)
+    monkeypatch.setattr(sync, "MAX_MIRROR_ASSET_SIZE", 5)
+    monkeypatch.setattr(sync, "MIRROR_PART_SIZE", 4)
+    uploaded = []
+    monkeypatch.setattr(sync, "upload_file", lambda path, *a: uploaded.append(path))
+    sync.sync("v3.3.1", tmp_path, "test-token")
+    body = calls[-1][2]["json"]["body"]
+    metadata = json.loads(body.split('<!-- auto-bdsp-update:')[1].split(' -->')[0])
+    asset = metadata['assets'][0]
+    assert asset['digest'] == source['assets'][0]['digest']
+    parts = asset['parts']
+    assert len(parts) == 4 and sum(p['size'] for p in parts) == asset['size']
+    assert b''.join((tmp_path / p['name']).read_bytes() for p in parts) == b'release bytes'
+    assert uploaded[-1].name == 'upgrade-from-gitee.ps1'
+    assert all(p.name.endswith(('.part0001', '.part0002', '.part0003', '.part0004', '.ps1')) for p in uploaded)
+    assert 'CurrentVersion' in body
+
+
+def test_invalid_part_never_publishes_reconstructed_asset(tmp_path, monkeypatch):
+    calls, _ = setup_release(tmp_path, monkeypatch)
+    monkeypatch.setattr(sync, "MAX_MIRROR_ASSET_SIZE", 5)
+    monkeypatch.setattr(sync, "MIRROR_PART_SIZE", 4)
+    monkeypatch.setattr(sync, "upload_file", lambda *a: None)
+    monkeypatch.setattr(sync, "verify_public", lambda asset: not asset['name'].endswith('part0002'))
+    with pytest.raises(RuntimeError):
+        sync.sync('v3.3.1', tmp_path, 'test-token')
+    assert not any(c[0] == 'PATCH' for c in calls)
 
 
 def test_missing_selected_patch_still_prevents_publication(tmp_path, monkeypatch):

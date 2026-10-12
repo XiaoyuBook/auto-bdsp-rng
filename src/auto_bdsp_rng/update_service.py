@@ -50,6 +50,14 @@ class UpdateDownloadCancelled(UpdateServiceError):
 
 
 @dataclass(frozen=True)
+class UpdateAssetPart:
+    name: str
+    url: str
+    size: int
+    digest: str
+
+
+@dataclass(frozen=True)
 class UpdateAsset:
     name: str
     url: str
@@ -57,6 +65,7 @@ class UpdateAsset:
     digest: str
     from_version: str
     to_version: str
+    parts: tuple[UpdateAssetPart, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -305,7 +314,7 @@ def download_update_assets(
         if not any(urlparse(asset.url).netloc == "gitee.com" for asset in plan.assets):
             raise
         fallback = replace(plan, assets=tuple(
-            replace(asset, url=f"{RELEASES_URL}/download/v{asset.to_version}/{asset.name}")
+            replace(asset, url=f"{RELEASES_URL}/download/v{asset.to_version}/{asset.name}", parts=())
             for asset in plan.assets
         ))
         return _download_update_assets(fallback, progress_callback, cancel_event, **options)
@@ -345,32 +354,39 @@ def _download_update_assets(
         try:
             if temporary.exists():
                 temporary.unlink()
-            request = Request(
-                asset.url,
-                headers={
-                    "Accept": "application/octet-stream",
-                    "User-Agent": f"auto-bdsp-rng/{plan.current_version}",
-                },
-            )
             digest = hashlib.sha256()
             asset_downloaded = 0
-            with opener(request, timeout=timeout) as response, temporary.open("wb") as output:
-                header_size = response.headers.get("Content-Length")
-                if header_size is not None:
-                    try:
-                        parsed_header_size = int(header_size)
-                    except ValueError as exc:
-                        raise UpdateServiceError("升级包返回了无效的文件大小") from exc
-                    if parsed_header_size != asset.size:
-                        raise UpdateServiceError("升级包下载大小与 Release 信息不一致")
-                while chunk := response.read(1024 * 1024):
+            pieces = asset.parts or (UpdateAssetPart(asset.name, asset.url, asset.size, asset.digest),)
+            with temporary.open("wb") as output:
+                for piece in pieces:
                     _raise_if_cancelled(cancel_event)
-                    asset_downloaded += len(chunk)
-                    if asset_downloaded > asset.size or completed_size + asset_downloaded > MAX_UPDATE_DOWNLOAD_SIZE:
-                        raise UpdateServiceError("升级包下载大小超过安全限制")
-                    output.write(chunk)
-                    digest.update(chunk)
-                    progress_callback(completed_size + asset_downloaded, total_size)
+                    request = Request(piece.url, headers={"Accept": "application/octet-stream",
+                                      "User-Agent": f"auto-bdsp-rng/{plan.current_version}"})
+                    piece_digest = hashlib.sha256()
+                    piece_size = 0
+                    with opener(request, timeout=timeout) as response:
+                        header_size = response.headers.get("Content-Length")
+                        if header_size is not None:
+                            try:
+                                parsed_header_size = int(header_size)
+                            except ValueError as exc:
+                                raise UpdateServiceError("升级包返回了无效的文件大小") from exc
+                            if parsed_header_size != piece.size:
+                                raise UpdateServiceError("升级包下载大小与 Release 信息不一致")
+                        while chunk := response.read(1024 * 1024):
+                            _raise_if_cancelled(cancel_event)
+                            piece_size += len(chunk)
+                            asset_downloaded += len(chunk)
+                            if piece_size > piece.size or asset_downloaded > asset.size or completed_size + asset_downloaded > MAX_UPDATE_DOWNLOAD_SIZE:
+                                raise UpdateServiceError("升级包下载大小超过安全限制")
+                            output.write(chunk)
+                            digest.update(chunk)
+                            piece_digest.update(chunk)
+                            progress_callback(completed_size + asset_downloaded, total_size)
+                    if piece_size != piece.size:
+                        raise UpdateServiceError("升级包下载不完整")
+                    if piece_digest.hexdigest() != _asset_digest_hex(piece.digest):
+                        raise UpdateServiceError("升级包 SHA-256 校验失败")
                 output.flush()
                 os.fsync(output.fileno())
             if asset_downloaded != asset.size:
@@ -535,7 +551,30 @@ def _iter_update_assets(releases: dict[str, dict[str, Any]]) -> Iterable[UpdateA
                 continue
             if not isinstance(digest, str) or _ASSET_DIGEST_PATTERN.fullmatch(digest) is None:
                 continue
-            yield UpdateAsset(name, url, size, digest, from_version, to_version)
+            parts = _asset_parts(raw_asset, release_version, name, size)
+            if parts is None:
+                continue
+            yield UpdateAsset(name, url, size, digest, from_version, to_version, parts)
+
+
+def _asset_parts(raw_asset: dict, version: str, name: str, size: int) -> tuple[UpdateAssetPart, ...] | None:
+    if "parts" not in raw_asset:
+        return ()
+    raw_parts = raw_asset["parts"]
+    if not isinstance(raw_parts, list) or not 1 <= len(raw_parts) <= 256:
+        return None
+    parts = []
+    for index, part in enumerate(raw_parts, 1):
+        expected_name = f"{name}.part{index:04d}"
+        if (not isinstance(part, dict) or part.get("name") != expected_name
+                or not _is_official_asset_url(part.get("browser_download_url"), version, expected_name)
+                or urlparse(part["browser_download_url"]).netloc != "gitee.com"
+                or type(part.get("size")) is not int or not 0 < part["size"] <= 90 * 1024 * 1024
+                or not isinstance(part.get("digest"), str)
+                or _ASSET_DIGEST_PATTERN.fullmatch(part["digest"]) is None):
+            return None
+        parts.append(UpdateAssetPart(expected_name, part["browser_download_url"], part["size"], part["digest"]))
+    return tuple(parts) if sum(part.size for part in parts) == size else None
 
 
 def _shortest_asset_chain(
