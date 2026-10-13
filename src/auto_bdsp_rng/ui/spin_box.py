@@ -20,7 +20,45 @@ _SPIN_SUBCONTROL_PATTERN = re.compile(
 )
 
 
+# Qt ignores ancestor QLineEdit rules for an embedded spin-box editor unless
+# the editor has its own stylesheet. Give it a plain, unconstrained content box.
+_EDITOR_STYLE = """
+    QLineEdit {
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+        margin: 0;
+        min-width: 0;
+        max-width: 16777215px;
+        min-height: 0;
+        max-height: 16777215px;
+    }
+"""
+
+
+# Qt resolves an embedded editor's font from its container, even when the
+# editor has a stylesheet. Put the numeric font on the spin box itself.
+_NUMERIC_FONT_STYLE = """
+    QSpinBox, QDoubleSpinBox {
+        font-family: "Consolas", "Cascadia Mono", "Microsoft YaHei UI", "Segoe UI", monospace;
+        font-weight: 400;
+    }
+"""
+
+
 class _ChevronSpinMixin:
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # A stylesheet on the editor wins over application and ancestor QSS,
+        # including rules installed after the spin box has been constructed.
+        self.lineEdit().setStyleSheet(_EDITOR_STYLE)
+        self.setStyleSheet(self.styleSheet())
+
+    def setStyleSheet(self, stylesheet: str) -> None:  # noqa: N802
+        # Compact controls replace their local QSS later in the main window.
+        super().setStyleSheet(stylesheet + _NUMERIC_FONT_STYLE)
+
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         # Scroll the surrounding page, even when this input has focus.
         event.ignore()
