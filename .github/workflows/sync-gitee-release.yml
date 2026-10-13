@@ -52,7 +52,7 @@ jobs:
        (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 60
+    # No custom total deadline; GitHub-hosted jobs retain the platform's 6-hour limit.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,14 +83,12 @@ jobs:
         run: python scripts/sync_gitee_tag.py --tag "$RELEASE_TAG"
       - name: Download published assets
         if: steps.release.outputs.tag != ''
-        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: python -u scripts/sync_gitee_release.py --tag "$RELEASE_TAG" --directory release --download-only
       - name: Sync and verify Gitee assets
         if: steps.release.outputs.tag != ''
-        timeout-minutes: 45
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN || secrets.GITEE_ACCESSS_TOKEN }}

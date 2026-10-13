@@ -17,7 +17,8 @@ import requests
 REPOSITORY = "shekongsk/auto-bdsp-rng"
 API = f"https://gitee.com/api/v5/repos/{REPOSITORY}"
 MARKER = re.compile(r"\n*## 更新校验信息\n.*", re.DOTALL)
-TRANSFER_TIMEOUT = 900
+MIN_TRANSFER_SPEED = 5 * 1024
+LOW_SPEED_WINDOW = 60
 ATTEMPTS = 3
 # Operational mirror policy, not a claim about Gitee's account-specific quota.
 MAX_MIRROR_ASSET_SIZE = 90 * 1024 * 1024
@@ -25,19 +26,22 @@ MAX_UPDATE_ASSET_SIZE = 2 * 1024 * 1024 * 1024
 MIRROR_PART_SIZE = 8 * 1024 * 1024
 
 
+class LowSpeedTransferError(RuntimeError):
+    """Stop the sync instead of retrying a transfer below the requested minimum."""
+
+
 def log(message: str) -> None:
     print(message, flush=True)
 
 
 def transfer(url: str, output: Path, *, form: str | None = None, max_size: int | None = None) -> None:
-    """Bound the entire transfer, including a slowly trickling connection."""
+    """Allow long transfers while stopping sustained speeds below the threshold."""
     curl = shutil.which("curl.exe" if os.name == "nt" else "curl")
     if curl is None:
-        raise RuntimeError("curl is required for bounded release transfers")
+        raise RuntimeError("curl is required for release transfers")
     command = [curl, "--silent", "--show-error", "--fail", "--connect-timeout", "30",
-               "--max-time", str(TRANSFER_TIMEOUT),
-               "--speed-limit", "32768" if form is None else "1024",
-               "--speed-time", "60" if form is None else "120",
+               "--speed-limit", str(MIN_TRANSFER_SPEED),
+               "--speed-time", str(LOW_SPEED_WINDOW),
                "--output", str(output), "--write-out",
                "%{http_code} %{size_upload} %{size_download} %{time_total}"]
     if form is None:
@@ -50,11 +54,7 @@ def transfer(url: str, output: Path, *, form: str | None = None, max_size: int |
     if max_size is not None:
         command += ["--max-filesize", str(max_size)]
     command.append(url)
-    try:
-        result = subprocess.run(command, input=form, capture_output=True, text=True,
-                                timeout=TRANSFER_TIMEOUT + 30)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Transfer exceeded its wall-clock deadline") from None
+    result = subprocess.run(command, input=form, capture_output=True, text=True)
     fields = result.stdout.split()
     status = fields[0] if fields and re.fullmatch(r"\d{3}", fields[0]) else "unknown"
     # Only emit numeric counters; never echo unexpected stdout, stderr or URLs.
@@ -63,6 +63,9 @@ def transfer(url: str, output: Path, *, form: str | None = None, max_size: int |
             f"downloaded {fields[2]} bytes, elapsed {fields[3]} s")
     if result.returncode or not status.startswith("2"):
         # Do not print curl stderr or server bodies, which may echo credentials.
+        if result.returncode == 28 and "Operation too slow" in result.stderr:
+            raise LowSpeedTransferError(
+                f"Transfer stopped: speed below {MIN_TRANSFER_SPEED} bytes/s for {LOW_SPEED_WINDOW} seconds")
         raise RuntimeError(f"Transfer failed: curl exit {result.returncode}, HTTP {status}")
 
 
@@ -121,6 +124,8 @@ def verify_public(asset: dict) -> bool:
             if not valid:
                 log(f"Download size or SHA-256 mismatch: {asset['name']}")
             return valid
+    except LowSpeedTransferError:
+        raise
     except RuntimeError as exc:
         log(f"Anonymous verification failed for {asset['name']}: {exc}")
         return False
@@ -145,6 +150,8 @@ def sync_asset(path: Path, asset: dict, release_id: int, token: str) -> None:
                 raise RuntimeError(f"Attachment cannot be verified: {path.name}; refusing to replace it")
             log(f"Uploaded and verified: {path.name}")
             return
+        except LowSpeedTransferError:
+            raise
         except RuntimeError as exc:
             log(f"Attempt {attempt}/{ATTEMPTS} failed for {path.name}: {exc}")
             if attempt == ATTEMPTS:

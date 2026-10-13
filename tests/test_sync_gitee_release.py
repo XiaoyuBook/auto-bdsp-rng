@@ -133,7 +133,7 @@ def test_network_upload_retry_is_bounded(tmp_path, monkeypatch):
     assert not any(c[0] == "PATCH" for c in calls)
 
 
-def test_curl_upload_uses_stdin_credentials_and_hard_deadline(tmp_path, monkeypatch):
+def test_curl_upload_uses_stdin_credentials_and_low_speed_guard(tmp_path, monkeypatch):
     monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
     path = tmp_path / "package.zip"
     path.write_bytes(b"data")
@@ -142,11 +142,12 @@ def test_curl_upload_uses_stdin_credentials_and_hard_deadline(tmp_path, monkeypa
         assert "secret-token" in kwargs["input"]
         assert 'header = "Authorization: Bearer secret-token"' in kwargs["input"]
         assert "access_token=" not in kwargs["input"]
-        assert command[command.index("--speed-limit") + 1] == "1024"
-        assert "--max-time" in command and "--speed-time" in command
+        assert command[command.index("--speed-limit") + 1] == "5120"
+        assert command[command.index("--speed-time") + 1] == "60"
+        assert "--max-time" not in command
         assert "--http1.1" in command
         assert command[command.index("--header") + 1] == "Expect:"
-        assert kwargs["timeout"] == sync.TRANSFER_TIMEOUT + 30
+        assert "timeout" not in kwargs
         return SimpleNamespace(returncode=0, stdout="201 123 0 0.250", stderr="")
     monkeypatch.setattr(sync.subprocess, "run", run)
     sync.upload_file(path, 123, "secret-token")
@@ -209,6 +210,37 @@ def test_stalled_upload_reports_numeric_progress_without_credentials(tmp_path, m
     assert "secret-token" not in output
 
 
+def test_low_speed_stops_without_logging_curl_stderr(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sync.shutil, 'which', lambda command: 'curl')
+    monkeypatch.setattr(sync.subprocess, 'run', lambda *a, **k: SimpleNamespace(
+        returncode=28, stdout='000 100 0 60.0',
+        stderr='secret-token curl: (28) Operation too slow. Less than 5120 bytes/sec'))
+    with pytest.raises(sync.LowSpeedTransferError, match='speed below 5120') as error:
+        sync.transfer('https://gitee.com/example', tmp_path / 'out', form='secret-token')
+    assert 'secret-token' not in str(error.value) + capsys.readouterr().out
+
+
+def test_low_speed_aborts_sync_without_retry_or_metadata_publication(tmp_path, monkeypatch):
+    calls, _ = setup_release(tmp_path, monkeypatch)
+    uploads = []
+    def upload(*args):
+        uploads.append(1)
+        raise sync.LowSpeedTransferError('Transfer stopped: speed below 5120')
+    monkeypatch.setattr(sync, 'upload_file', upload)
+    with pytest.raises(sync.LowSpeedTransferError):
+        sync.sync('v3.3.1', tmp_path, 'test-token')
+    assert len(uploads) == 1
+    assert not any(call[0] == 'PATCH' for call in calls)
+
+
+def test_low_speed_public_verification_stops_sync(monkeypatch):
+    def transfer(*args, **kwargs):
+        raise sync.LowSpeedTransferError('speed below 5120')
+    monkeypatch.setattr(sync, 'transfer', transfer)
+    with pytest.raises(sync.LowSpeedTransferError):
+        sync.verify_public(dict(name='part', browser_download_url='https://gitee.com/example', size=1))
+
+
 def test_unexpected_curl_output_is_not_logged(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
     monkeypatch.setattr(sync.subprocess, "run", lambda *a, **k: SimpleNamespace(
@@ -230,14 +262,16 @@ def test_public_download_keeps_default_protocol_and_https_redirects(tmp_path, mo
     sync.transfer("https://gitee.com/example", tmp_path / "out", max_size=7)
 
 
-def test_curl_deadline_and_error_do_not_expose_credentials(tmp_path, monkeypatch):
+@pytest.mark.parametrize('form', [None, 'sensitive'])
+def test_transfer_uses_5kib_guard_without_total_deadline(tmp_path, monkeypatch, form):
     monkeypatch.setattr(sync.shutil, "which", lambda command: "curl")
     def run(command, **kwargs):
-        raise subprocess.TimeoutExpired(command + ["sensitive"], 10, output="sensitive")
+        assert command[command.index('--speed-limit') + 1] == '5120'
+        assert command[command.index('--speed-time') + 1] == '60'
+        assert '--max-time' not in command and 'timeout' not in kwargs
+        return SimpleNamespace(returncode=0, stdout='200 0 7 0.250', stderr='')
     monkeypatch.setattr(sync.subprocess, "run", run)
-    with pytest.raises(RuntimeError, match="wall-clock") as error:
-        sync.transfer("https://gitee.com/example", tmp_path / "out", form="sensitive")
-    assert "sensitive" not in str(error.value)
+    sync.transfer('https://gitee.com/example', tmp_path / 'out', form=form)
 
 
 def test_api_retries_transient_errors_without_logging_token(monkeypatch, capsys):
