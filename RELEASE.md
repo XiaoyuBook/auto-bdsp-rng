@@ -27,6 +27,24 @@ Also review `README.md`, `docs/USAGE.md`, `docs/DEVELOPMENT.md`, `BUILD.md`, and
 
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
 
+## v3.4.1 Release Scope
+
+This patch release includes the changes committed after `v3.4.0`: numeric
+input display compatibility, disabled text color preservation, and Gitee
+incremental update/mirror fixes. The user-facing notes live in the
+[3.4.1 changelog section](CHANGELOG.md#341).
+
+- Check integer/decimal inputs, disabled-to-enabled transitions, and changes
+  to parent styles at 75%, 100%, 125%, 150%, and 200% scaling. Confirm that
+  text stays inside the fields and disabled text uses the container's color.
+- Verify the numeric-input fix on a computer that showed blank or displaced
+  values; offscreen rendering cannot establish that environment's result.
+- Check the Gitee split-package/helper paths, anonymous download/hash
+  verification, and low-speed failure behavior without publishing test assets.
+
+Version metadata is prepared for `v3.4.1`; building packages, real-hardware
+validation, and publishing this release are separate steps.
+
 ## v3.4.0 Release Scope
 
 The previous published release is **v3.3.3** (`5af44d2`, published 2026-10-03).

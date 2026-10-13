@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QEvent, QPointF, QTimer, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -54,10 +54,35 @@ class _ChevronSpinMixin:
         # including rules installed after the spin box has been constructed.
         self.lineEdit().setStyleSheet(_EDITOR_STYLE)
         self.setStyleSheet(self.styleSheet())
+        self._sync_editor_palette()
 
     def setStyleSheet(self, stylesheet: str) -> None:  # noqa: N802
         # Compact controls replace their local QSS later in the main window.
         super().setStyleSheet(stylesheet + _NUMERIC_FONT_STYLE)
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() in (
+            QEvent.Type.EnabledChange,
+            QEvent.Type.PaletteChange,
+            QEvent.Type.StyleChange,
+        ):
+            self._sync_editor_palette()
+            if event.type() != QEvent.Type.EnabledChange:
+                # Qt may repolish the child after delivering the parent's
+                # style/palette change. Restore colors once that pass ends.
+                QTimer.singleShot(0, self, self._sync_editor_palette)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_editor_palette()
+
+    def _sync_editor_palette(self) -> None:
+        # An independently styled editor no longer inherits the container's
+        # disabled text or selection colors. Keep both palettes in sync.
+        editor = self.lineEdit()
+        if editor is not None and editor.palette() != self.palette():
+            editor.setPalette(self.palette())
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         # Scroll the surrounding page, even when this input has focus.

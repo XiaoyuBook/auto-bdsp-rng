@@ -17,7 +17,7 @@ def test_numeric_editors_keep_values_inside_small_fields(platform_style, scale):
     code = textwrap.dedent("""
         import sys
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QFontDatabase, QFontInfo
+        from PySide6.QtGui import QFontDatabase, QFontInfo, QPalette
         from PySide6.QtTest import QTest
         from PySide6.QtWidgets import (
             QApplication, QAbstractSpinBox, QStyleFactory, QVBoxLayout, QWidget,
@@ -44,6 +44,7 @@ def test_numeric_editors_keep_values_inside_small_fields(platform_style, scale):
                 field.setButtonSymbols(buttons)
                 field.setStyleSheet('QSpinBox, QDoubleSpinBox { background: white; }')
                 field.setFixedSize(110 if isinstance(field, ChevronDoubleSpinBox) else 80, 34)
+                field.setEnabled(False)
                 layout.addWidget(field)
                 fields.append(field)
         # Outer input styles may change after construction. Editor constraints
@@ -53,6 +54,7 @@ def test_numeric_editors_keep_values_inside_small_fields(platform_style, scale):
             QSpinBox, QDoubleSpinBox {
                 border: 1px solid #E0E5EB; border-radius: 7px; padding: 0 8px;
             }
+            QSpinBox:disabled, QDoubleSpinBox:disabled { color: #687480; }
             QLineEdit {
                 min-width: 220px; max-width: 240px;
                 min-height: 70px; max-height: 90px;
@@ -65,6 +67,10 @@ def test_numeric_editors_keep_values_inside_small_fields(platform_style, scale):
         available_fonts = set(QFontDatabase.families())
         for field in fields:
             editor = field.lineEdit()
+            assert editor.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text) == \
+                field.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+            field.setEnabled(True)
+            app.processEvents()
             assert field.rect().contains(editor.geometry()), editor.geometry()
             assert editor.minimumWidth() == editor.minimumHeight() == 0
             assert editor.fontMetrics().horizontalAdvance(editor.text()) + 4 <= editor.width()
@@ -88,7 +94,18 @@ def test_numeric_editors_keep_values_inside_small_fields(platform_style, scale):
             field.setReadOnly(True)
             assert field.rect().contains(editor.geometry())
             field.setEnabled(False)
+            app.processEvents()
             assert field.rect().contains(editor.geometry())
+            assert editor.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text) == \
+                field.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+            parent.setStyleSheet(parent.styleSheet().replace('#687480', '#986D80'))
+            app.processEvents()
+            assert editor.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text) == \
+                field.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+            field.setEnabled(True)
+            app.processEvents()
+            assert editor.palette().color(QPalette.ColorGroup.Active, QPalette.ColorRole.Text) == \
+                field.palette().color(QPalette.ColorGroup.Active, QPalette.ColorRole.Text)
     """)
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_SCALE_FACTOR=scale, PYTHONIOENCODING="utf-8")
     result = subprocess.run(
@@ -106,7 +123,7 @@ def test_target_and_task_parameter_values_remain_visible(tmp_path):
         import sys
         from pathlib import Path
         from PySide6.QtCore import QSettings
-        from PySide6.QtGui import QFontDatabase, QFontInfo
+        from PySide6.QtGui import QFontDatabase, QFontInfo, QPalette
         from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
         from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
         from auto_bdsp_rng.ui.main_window import MainWindow
@@ -135,6 +152,10 @@ def test_target_and_task_parameter_values_remain_visible(tmp_path):
             assert editor.fontMetrics().horizontalAdvance(editor.text()) + 4 <= editor.width()
             if 'Consolas' in QFontDatabase.families():
                 assert QFontInfo(editor.font()).family() == 'Consolas'
+            field.setEnabled(False)
+            app.processEvents()
+            assert editor.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text) == \
+                field.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
     """)
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
     result = subprocess.run(
