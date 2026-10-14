@@ -9,6 +9,77 @@ import textwrap
 import pytest
 
 
+@pytest.mark.parametrize("field_kind", ["integer", "decimal"])
+@pytest.mark.parametrize("platform", ["offscreen", "windows"])
+def test_numeric_editor_recovers_from_clipped_style_geometry(field_kind, platform):
+    if platform == "windows" and sys.platform != "win32":
+        pytest.skip("Windows platform plugin is only available on Windows")
+    code = textwrap.dedent("""
+        import sys
+        from PySide6.QtCore import QRect, Qt
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QProxyStyle, QStyle
+        from auto_bdsp_rng.ui.spin_box import ChevronSpinBox, ChevronDoubleSpinBox
+        from auto_bdsp_rng.ui.workspace_theme import ui_font
+
+        class ClippedEditorStyle(QProxyStyle):
+            def __init__(self):
+                super().__init__('Fusion')
+
+            def subControlRect(self, control, option, sub_control, widget=None):
+                if (control == QStyle.ComplexControl.CC_SpinBox and
+                        sub_control == QStyle.SubControl.SC_SpinBoxEditField):
+                    # A visible outer frame can coexist with a one-pixel text
+                    # area. The model still holds 31 but Qt clips every digit.
+                    return QRect(0, 1, 1, max(1, option.rect.height() - 2))
+                return super().subControlRect(control, option, sub_control, widget)
+
+        app = QApplication([])
+        app.setFont(ui_font())
+        style = ClippedEditorStyle()
+        app.setStyle(style)
+        kind = ChevronSpinBox if sys.argv[1] == 'integer' else ChevronDoubleSpinBox
+        field = kind()
+        field.setRange(0, 99)
+        if sys.argv[1] == 'decimal':
+            field.setDecimals(1)
+        field.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        field.setAlignment(Qt.AlignmentFlag.AlignRight)
+        field.setValue(31)
+        field.setFixedSize(160, 34)
+        field.show()
+        app.processEvents()
+        editor = field.lineEdit()
+        assert field.value() == 31
+        assert editor.width() > editor.fontMetrics().horizontalAdvance(editor.text()) + 4
+        assert field.rect().contains(editor.geometry())
+        before = field.grab().toImage()
+        field.setValue(42)
+        app.processEvents()
+        after = field.grab().toImage()
+        # Two different values must produce different visible pixels, not
+        # merely different text()/value() while the input remains blank.
+        assert before != after
+        field.setFocus()
+        field.selectAll()
+        QTest.keyClicks(field, '12')
+        QTest.keyClick(field, Qt.Key.Key_Return)
+        assert field.value() == 12
+        field.resize(120, 36)
+        field.setFixedSize(120, 36)
+        app.processEvents()
+        assert field.rect().contains(editor.geometry())
+        assert editor.width() > editor.fontMetrics().horizontalAdvance(editor.text()) + 4
+    """)
+    env = dict(os.environ, QT_QPA_PLATFORM=platform, PYTHONIOENCODING="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-c", code, field_kind],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("platform_style", ["Windows", "windowsvista", "windows11", "Fusion"])
 @pytest.mark.parametrize("scale", ["0.75", "1", "1.25", "1.5", "2"])
 def test_numeric_editors_keep_values_inside_small_fields(platform_style, scale):

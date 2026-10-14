@@ -84,6 +84,12 @@ jobs:
             throw "Frozen updater smoke test failed with exit code $($process.ExitCode)."
           }
 
+      - name: Verify numeric inputs against build runtime
+        shell: cmd
+        run: |
+          .venv\Scripts\python.exe -c "import PySide6; from PySide6.QtCore import qVersion; print('PySide6:', PySide6.__version__, 'Qt:', qVersion())"
+          .venv\Scripts\python.exe -m pytest tests/test_spin_box_display.py tests/test_control_wheel.py tests/test_numeric_locale.py tests/test_target_dialog.py -q
+
       - name: Find previous release manifest
         shell: pwsh
         env:

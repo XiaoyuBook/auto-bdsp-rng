@@ -27,6 +27,20 @@ Also review `README.md`, `docs/USAGE.md`, `docs/DEVELOPMENT.md`, `BUILD.md`, and
 
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
 
+## v3.4.2 Release Scope
+
+This patch restores the internal text area of numeric inputs. The official
+v3.4.1 executable embeds Qt 6.12.0; its numeric widget code reproduces the
+blank fields with a one-pixel-wide editor on the Windows platform. The fixed
+widgets display and accept values with that same runtime. Local validation
+passed 171 focused tests, including numeric rendering, editing, locale,
+wheel behavior, target dialogs, packaging, and release metadata.
+
+PySide6 is pinned to the validated 6.12.0 runtime. The release workflow runs
+the numeric regression tests in its build environment before publication.
+The user-facing notes live in the [3.4.2 changelog section](CHANGELOG.md#342).
+The affected user's computer still needs to verify the published update.
+
 ## v3.4.1 Release Scope
 
 This patch release includes the changes committed after `v3.4.0`: numeric

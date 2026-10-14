@@ -55,6 +55,7 @@ class _ChevronSpinMixin:
         self.lineEdit().setStyleSheet(_EDITOR_STYLE)
         self.setStyleSheet(self.styleSheet())
         self._sync_editor_palette()
+        self._sync_editor_geometry()
 
     def setStyleSheet(self, stylesheet: str) -> None:  # noqa: N802
         # Compact controls replace their local QSS later in the main window.
@@ -68,14 +69,54 @@ class _ChevronSpinMixin:
             QEvent.Type.StyleChange,
         ):
             self._sync_editor_palette()
+            self._sync_editor_geometry()
             if event.type() != QEvent.Type.EnabledChange:
                 # Qt may repolish the child after delivering the parent's
                 # style/palette change. Restore colors once that pass ends.
-                QTimer.singleShot(0, self, self._sync_editor_palette)
+                QTimer.singleShot(0, self, self._sync_editor_presentation)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self._sync_editor_palette()
+        self._sync_editor_geometry()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_editor_geometry()
+
+    def _sync_editor_presentation(self) -> None:
+        self._sync_editor_palette()
+        self._sync_editor_geometry()
+
+    def _sync_editor_geometry(self) -> None:
+        editor = self.lineEdit()
+        if editor is None or self.width() <= 0 or self.height() <= 0:
+            return
+        # The frame's width is not a guarantee that SC_SpinBoxEditField is
+        # usable. Some style/layout combinations return a narrow or displaced
+        # editor while the value remains valid. Lay out the text ourselves in
+        # logical pixels, independent of that subcontrol's cached rectangle.
+        horizontal_margin = min(9, (self.width() - 1) // 2)
+        vertical_margin = min(1, (self.height() - 1) // 2)
+        rect = self.rect().adjusted(
+            horizontal_margin, vertical_margin,
+            -horizontal_margin, -vertical_margin,
+        )
+        if self.buttonSymbols() != QAbstractSpinBox.ButtonSymbols.NoButtons:
+            option = QStyleOptionSpinBox()
+            self.initStyleOption(option)
+            for sub_control in (QStyle.SubControl.SC_SpinBoxUp, QStyle.SubControl.SC_SpinBoxDown):
+                button = self.style().subControlRect(
+                    QStyle.ComplexControl.CC_SpinBox, option, sub_control, self,
+                )
+                if not button.isValid() or not self.rect().contains(button):
+                    continue
+                if button.center().x() < self.rect().center().x():
+                    rect.setLeft(max(rect.left(), button.right() + 3))
+                else:
+                    rect.setRight(min(rect.right(), button.left() - 3))
+        if rect.isValid() and editor.geometry() != rect:
+            editor.setGeometry(rect)
 
     def _sync_editor_palette(self) -> None:
         # An independently styled editor no longer inherits the container's
@@ -89,6 +130,9 @@ class _ChevronSpinMixin:
         event.ignore()
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        # Range/button/style updates in Qt can relayout the editor after our
+        # resize handler. Restore the content area before children are painted.
+        self._sync_editor_geometry()
         super().paintEvent(event)
         if (
             self.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons
