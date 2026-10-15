@@ -20,7 +20,8 @@ from PySide6.QtWidgets import QFileDialog, QTableWidgetItem
 
 from auto_bdsp_rng.automation.auto_rng.search import StaticSearchCriteria
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
-from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidSeedResult
+from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
+from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngConfig, AutoTidRngRunner, AutoTidSeedResult
 from auto_bdsp_rng.data import get_static_encounters
 from auto_bdsp_rng.gen8_id import IDState8
 from auto_bdsp_rng.gen8_static import Lead, Profile8, Shiny, State8, StateFilter, StaticGenerator8
@@ -650,7 +651,8 @@ def test_automatic_stop_cancels_search_and_new_services_can_restart(window, tmp_
     worker.start()
     QTest.qWait(20)
     started = time.perf_counter()
-    services.stop_current_script()
+    runner_type = AutoRngRunner if kind == "static" else AutoTidRngRunner
+    runner_type(config, services=services).stop()
     stop_elapsed = time.perf_counter() - started
     wait_until(lambda: not worker.is_alive())
     elapsed = time.perf_counter() - started

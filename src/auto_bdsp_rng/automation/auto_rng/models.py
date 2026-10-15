@@ -132,6 +132,14 @@ class AutoRngDecision:
 
 
 @dataclass(frozen=True)
+class ReverseLookupResult:
+    """Final matched individuals, before deduplicating their delay estimates."""
+
+    candidates: tuple[Any, ...] = ()
+    delays: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class ShinyCheckResult:
     # False with no interval means OCR could not determine the result.
     is_shiny: bool

@@ -14,6 +14,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngProgress,
     AutoRngSeedResult,
     AutoRngTarget,
+    ReverseLookupResult,
     ShinyCheckResult,
 )
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import normalize_delay_candidates
@@ -498,13 +499,14 @@ class AutoRngServices:
     run_script_text: Callable[[str, str], object] = _missing_service  # type: ignore[assignment]
     run_hit_script_with_shiny_check: Callable[[str, str, float], ShinyCheckResult] | None = None
     run_starter_flow: Callable[[AutoRngSeedResult, AutoRngTarget, int], ShinyCheckResult] | None = None
-    run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], Sequence[int] | None] | None = None
+    run_reverse_lookup: Callable[[AutoRngSeedResult, AutoRngTarget], ReverseLookupResult | Sequence[int] | None] | None = None
     resolve_round_delay: Callable[[], int] | None = None
     record_delay_observation: Callable[[Sequence[int]], None] | None = None
     recover_zoom_mode: Callable[[], bool] | None = None
     stop_current_script: Callable[[], None] | None = None
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
+    cancel_run: Callable[[], None] | None = None
 
 
 class AutoRngRunner:
@@ -555,8 +557,12 @@ class AutoRngRunner:
 
     def stop(self) -> None:
         self._stop_requested = True
-        if self.services.stop_current_script is not None:
-            self.services.stop_current_script()
+        try:
+            if self.services.cancel_run is not None:
+                self.services.cancel_run()
+        finally:
+            if self.services.stop_current_script is not None:
+                self.services.stop_current_script()
         self._set_progress(AutoRngPhase.IDLE, "已请求停止自动流程")
 
     def should_stop(self) -> bool:
@@ -1631,13 +1637,27 @@ class AutoRngRunner:
             self._set_progress(AutoRngPhase.LOOP_CHECK, "未配置反查脚本，跳过反查")
             return
         try:
-            observed_delays = service(seed, target)
+            result = service(seed, target)
         except Exception as exc:
+            if self.should_stop():
+                return
             self._locked_target = None
             self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
             self._set_progress(AutoRngPhase.LOOP_CHECK, f"反查失败: {exc}")
             return
+        if self.should_stop():
+            return
+        unique_shiny = False
+        if isinstance(result, ReverseLookupResult):
+            observed_delays = result.delays
+            unique_shiny = (
+                len(result.candidates) == 1
+                and getattr(result.candidates[0], "shiny", 0) in (1, 2)
+            )
+        else:
+            # Preserve compatibility with adapters that return only delays.
+            observed_delays = result
         normalized_delays = normalize_delay_candidates(observed_delays or ())
         if normalized_delays and self.services.record_delay_observation is not None:
             try:
@@ -1650,8 +1670,16 @@ class AutoRngRunner:
                     )
                 )
         self._locked_target = None
-        self._history("cycle_result", False, interval, None, used_delay)
+        self._history("cycle_result", unique_shiny, interval, self.progress.trigger_advances, used_delay)
         self._cycle_started = False
+        if unique_shiny:
+            self._set_progress(
+                AutoRngPhase.COMPLETED,
+                f"{self._attempt_label()} 反查唯一候选为闪光，已停止自动流程；"
+                "请人工确认，并检查 OCR 判闪阈值",
+                loop_index=self._completed_loops,
+            )
+            return
         self._loop_check()
 
     def _loop_check(self) -> None:

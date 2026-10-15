@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -6063,6 +6064,91 @@ def _run_with_qt_events(app, callback):
     return results, errors
 
 
+@pytest.mark.parametrize("shiny_values", [(), (0,), (1,), (2,), (0, 1), (1, 2)])
+def test_auto_rng_non_shiny_script_stop_preserves_reverse_lookup_and_checks_unique_shiny(
+    app, tmp_path, monkeypatch, shiny_values,
+):
+    window = MainWindow()
+    hit_script = tmp_path / "hit.txt"
+    reverse_script = tmp_path / "reverse.txt"
+    seed_script = tmp_path / "seed.txt"
+    for path in (hit_script, reverse_script, seed_script):
+        path.write_text("A 100\n", encoding="utf-8")
+    scripts, stopped, history_events = [], [], []
+
+    class FakeBackend:
+        def run_script_text(self, _text, name, *, script_dir):
+            scripts.append(name)
+            return "ok"
+
+        def stop_current_script(self):
+            stopped.append(True)
+
+    # Different candidates deliberately share an advance/delay. Uniqueness
+    # must be based on the final candidates, not the deduplicated delays.
+    candidates = [
+        State8(1204, 0, 0, index, (1, 2, 3, 4, 5, 6), 0, 0, 50, 24, shiny, 0, 0)
+        for index, shiny in enumerate(shiny_values)
+    ]
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+
+    def extract(**kwargs):
+        if "notes_image" in kwargs:
+            return {"nature": "浮躁", "characteristic": "对声音敏感"}
+        return {"stats": {"HP": 20, "攻击": 11, "防御": 10, "特攻": 11, "特防": 9, "速度": 11}}
+
+    from auto_bdsp_rng.rng_core import _native as native_module
+
+    _install_connected_native_backend(window, monkeypatch, FakeBackend())
+    monkeypatch.setattr(window, "_call_on_ui_thread", lambda action: action())
+    monkeypatch.setattr(window, "_capture_preview_frame_for_config", lambda _capture: frame)
+    monkeypatch.setattr(window, "_pause_ocr_and_turn_to_stats_page", lambda **_kwargs: None)
+    monkeypatch.setattr(main_window_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main_window_module, "extract_pokemon_info", extract)
+    monkeypatch.setattr(main_window_module, "generate_static_candidates", lambda *_args, **_kwargs: candidates)
+    monkeypatch.setattr(native_module, "compute_iv_ranges", lambda *_args: [(0, 31)] * 6)
+    monkeypatch.setattr(
+        main_window_module, "measure_keyword_interval",
+        lambda *_args, **_kwargs: DialogTimingResult(10.0, 12.0, 2.0),
+    )
+    window.autoHistoryEvent.connect(lambda event, args: history_events.append((event, args)))
+    config = AutoRngConfig(
+        script_dir=tmp_path, hit_script_path=hit_script, reverse_script_path=reverse_script,
+        seed_script_path=seed_script, auto_reverse=True, loop_mode="infinite",
+        shiny_threshold_seconds=3.0, max_advances=3,
+    )
+    services = replace(window._build_auto_rng_services(config), monotonic=lambda: 10.0)
+    runner = AutoRngRunner(config, services=services, history_callback=window.autoHistoryEvent.emit)
+    runner._seed_result = AutoRngSeedResult(seed=SeedPair64(1, 2), current_advances=1104, measured_at=10.0)
+    runner._locked_target = AutoRngTarget(raw_target_advances=1204, used_delay=100)
+    runner._completed_loops = 1
+    runner._cycle_started = True
+    runner._history("cycle_start", 1)
+    runner.progress = AutoRngProgress(phase=AutoRngPhase.RUN_HIT_SCRIPT, loop_index=1)
+
+    # Exercise the real hit monitor, its script cleanup, reverse service,
+    # history admission and runner decision together.
+    runner.run(max_steps=2)
+
+    assert stopped == [True]
+    assert scripts == ["hit.txt", "reverse.txt"]
+    reverse_events = [args for event, args in history_events if event == "reverse_lookup_results"]
+    assert len(reverse_events) == 1
+    assert tuple(reverse_events[0][0]) == tuple(candidates)
+    cycle_results = [args for event, args in history_events if event == "cycle_result"]
+    expected_shiny = len(shiny_values) == 1 and shiny_values[0] in (1, 2)
+    assert len(cycle_results) == 1 and cycle_results[0][0] is expected_shiny
+    if expected_shiny:
+        assert runner.progress.phase == AutoRngPhase.COMPLETED
+        assert "反查唯一候选为闪光" in runner.progress.log_message
+        runner.run(max_steps=5)
+        assert scripts == ["hit.txt", "reverse.txt"]
+    else:
+        assert runner.progress.phase == AutoRngPhase.RUN_SEED_SCRIPT
+        # The same run's search token must remain usable after ordinary cleanup.
+        assert isinstance(services.search_candidates(runner._seed_result), list)
+
+
 def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failure(app, tmp_path, monkeypatch):
     window = MainWindow()
     reverse_script = tmp_path / "reverse.txt"
@@ -6133,7 +6219,8 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
     assert history_events[-1][0] == "reverse_lookup_results"
     assert history_events[-1][1][0] == (candidate,)
     assert history_events[-1][1][2] == (1452,)
-    assert observed_delays == (1452,)
+    assert observed_delays.delays == (1452,)
+    assert observed_delays.candidates == (candidate,)
 
     expansion_levels.clear()
     fallback_flags.clear()
@@ -6149,7 +6236,8 @@ def test_auto_reverse_lookup_uses_three_expansion_levels_before_success_or_failu
     assert fallback_flags == [False, False, False]
     assert history_events[-1][0] == "reverse_lookup_results"
     assert history_events[-1][1][0] == []
-    assert observed_delays == ()
+    assert observed_delays.delays == ()
+    assert observed_delays.candidates == ()
     log_text = window.auto_rng_tab.log_view.toPlainText()
     assert "能力页 OCR 第1次（原始六项 ROI）" in log_text
     assert "能力页 OCR 第2次（六项 ROI 每边扩大约 12%（至少 4px））" in log_text

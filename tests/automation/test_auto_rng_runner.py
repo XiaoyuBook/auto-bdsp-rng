@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     AutoRngProgress,
     AutoRngSeedResult,
     AutoRngTarget,
+    ReverseLookupResult,
     ShinyCheckResult,
 )
 from auto_bdsp_rng.automation.auto_rng.runner import (
@@ -36,6 +37,7 @@ class FakeState:
     ec: int = 0
     pid: int = 0
     nature: int = 0
+    shiny: int = 0
 
 
 def test_target_1000_delay_100_current_0_runs_advance_script():
@@ -2302,6 +2304,60 @@ def test_runner_reverse_lookup_normalizes_one_candidate_set_and_records_once(tmp
     cycle_result = next(args for event, args in history if event == "cycle_result")
     assert cycle_result[3] == 1452
     assert runner.progress.phase == AutoRngPhase.COMPLETED
+
+
+@pytest.mark.parametrize("shiny", [1, 2])
+@pytest.mark.parametrize("loop_mode", ["single", "count", "infinite"])
+def test_runner_unique_shiny_reverse_result_stops_all_loop_modes(tmp_path, shiny, loop_mode):
+    recorded_rounds, history = [], []
+    result = ReverseLookupResult(candidates=(FakeState(2000, shiny=shiny),), delays=(1452,))
+    runner = _runner_ready_for_reverse_lookup(
+        tmp_path, reverse_lookup=lambda _seed, _target: result,
+        recorded_rounds=recorded_rounds, history=history,
+    )
+    runner.config = replace(runner.config, loop_mode=loop_mode, loop_count=10)
+    runner._completed_loops = 1
+    runner._last_shiny_interval = 2.3
+    runner.services = replace(
+        runner.services,
+        run_script_text=lambda *_args: pytest.fail("反查出闪后不应再运行脚本"),
+    )
+
+    runner.run(max_steps=10)
+
+    assert runner.progress.phase == AutoRngPhase.COMPLETED
+    assert "反查唯一候选为闪光" in runner.progress.log_message
+    assert "OCR 判闪阈值" in runner.progress.log_message
+    assert history == [("cycle_result", (True, 2.3, None, 1452))]
+    assert recorded_rounds == [[1452]]
+    assert not runner._cycle_started
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_runner_user_stop_during_reverse_lookup_does_not_record_outcome_or_resume(tmp_path, raises):
+    recorded_rounds, history, stopped = [], [], []
+
+    def lookup(_seed, _target):
+        runner.stop()
+        if raises:
+            raise RuntimeError("反查已取消")
+        return ReverseLookupResult(candidates=(FakeState(2000, shiny=1),), delays=(1452,))
+
+    runner = _runner_ready_for_reverse_lookup(
+        tmp_path, reverse_lookup=lookup, recorded_rounds=recorded_rounds, history=history,
+    )
+    runner.config = replace(runner.config, loop_mode="infinite")
+    runner.services = replace(
+        runner.services, cancel_run=lambda: stopped.append("run"),
+        stop_current_script=lambda: stopped.append("script"),
+    )
+
+    runner.run(max_steps=10)
+
+    assert stopped == ["run", "script"]
+    assert runner.should_stop()
+    assert runner.progress.phase == AutoRngPhase.IDLE
+    assert history == [] and recorded_rounds == []
 
 
 def test_runner_reverse_lookup_does_not_record_empty_candidate_set(tmp_path):

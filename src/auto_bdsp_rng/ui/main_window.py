@@ -121,7 +121,7 @@ from auto_bdsp_rng.automation.auto_rng.dialog_timing import (
     read_ocr_text,
     suggested_shiny_threshold,
 )
-from auto_bdsp_rng.automation.auto_rng.models import ShinyCheckResult
+from auto_bdsp_rng.automation.auto_rng.models import ReverseLookupResult, ShinyCheckResult
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import (
     DYNAMIC_DEFAULT_REGION_FIELDS,
     NOTE_REGION_FIELDS,
@@ -9667,9 +9667,13 @@ class MainWindow(QMainWindow):
                 if observer_token is not None:
                     self._remove_easycon_image_result_observer(observer_token)
 
-        def stop_current_script_service() -> None:
+        def cancel_run_service() -> None:
             search_cancellation.cancel()
             self._cancel_capture()
+
+        def stop_current_script_service() -> None:
+            # A non-shiny attempt also stops its hit script before reverse
+            # lookup or the next attempt. Only cancel_run ends the whole run.
             try:
                 native_backend = self._call_on_ui_thread(self.easycon_tab._ensure_native_backend)
             except Exception:
@@ -9680,6 +9684,7 @@ class MainWindow(QMainWindow):
                 pass
 
         def run_hit_script_with_shiny_check(script_text: str, name: str, threshold_seconds: float) -> ShinyCheckResult:
+            search_cancellation.check()
             self._capture_cancel.clear()
             is_roamer = config.target_species in ROAMER_SPECIES
             is_starter = config.target_species in STARTER_SPECIES
@@ -9950,7 +9955,8 @@ class MainWindow(QMainWindow):
                 second_event_text="战斗" if is_starter else "去吧",
             )
 
-        def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> tuple[int, ...]:
+        def reverse_lookup_service(seed_result: AutoRngSeedResult, target: object) -> ReverseLookupResult:
+            search_cancellation.check()
             import time
             try:
                 from auto_bdsp_rng.rng_core._native import compute_iv_ranges as _compute_iv_ranges
@@ -10147,7 +10153,7 @@ class MainWindow(QMainWindow):
                 log("[自动反查] 3次尝试均未找到匹配个体")
                 publish_history_event(history_archive, emit_history, "reverse_lookup_results",
                                       ([], characteristic, None, last_ocr_stats), cancelled=search_cancellation.is_cancelled)
-                return ()
+                return ReverseLookupResult()
             else:
                 delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + used_delay
                           if target.raw_target_advances else int(getattr(s, "advances", 0))
@@ -10168,7 +10174,7 @@ class MainWindow(QMainWindow):
                     species = getattr(state, "_reverse_species", "")
                     species_tag = f"[{_reverse_species_label(species)}] " if species else ""
                     log(f"[自动反查] {species_tag}advances={adv} delay={actual_delay} EC={getattr(state,'ec','?')} PID={pid_val:08X} {iv_text}")
-                return tuple(sorted(set(delays)))
+                return ReverseLookupResult(candidates=tuple(candidates), delays=tuple(sorted(set(delays))))
 
         def resolve_round_delay_service() -> int:
             def resolve() -> int:
@@ -10279,6 +10285,7 @@ class MainWindow(QMainWindow):
             record_delay_observation=record_delay_observation_service,
             recover_zoom_mode=recover_zoom_mode_service,
             stop_current_script=stop_current_script_service,
+            cancel_run=cancel_run_service,
         )
 
     def _update_auto_rng_search_summary(self, criteria: StaticSearchCriteria, targets: list[StaticSearchTarget]) -> None:

@@ -11,6 +11,7 @@ import pytest
 from PySide6.QtTest import QTest
 
 from auto_bdsp_rng.automation.auto_rng import AutoRngConfig, AutoRngSeedResult
+from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
 from auto_bdsp_rng.blink_detection import BlinkObservation
 from auto_bdsp_rng.blink_detection import project_xs
 from auto_bdsp_rng.rng_core import SeedState32
@@ -195,7 +196,7 @@ def test_auto_service_stop_does_not_retry_capture_publish_or_reuse_cancelled_tok
     try:
         thread.start()
         assert entered.wait(1)
-        services.stop_current_script()  # The runner's production stop service.
+        AutoRngRunner(config, services=services).stop()
         assert tokens[0].is_cancelled()
         gate.set()
         wait_until(lambda: not thread.is_alive())
