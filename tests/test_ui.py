@@ -4953,7 +4953,7 @@ def test_live_preview_only_keeps_wgc_capture_open(app, monkeypatch):
     assert FakePreviewCapture.instances[2].release_count == 1
 
 
-def test_active_preview_frame_request_reuses_cached_raw_frame(app, monkeypatch):
+def test_active_preview_frame_request_reads_fresh_on_capture_owner(app, monkeypatch):
     config = BlinkCaptureConfig(
         Path("eye.png"),
         (0, 0, 1, 1),
@@ -4970,11 +4970,13 @@ def test_active_preview_frame_request_reuses_cached_raw_frame(app, monkeypatch):
 
         def read(self):
             self.read_count += 1
-            return "shared-frame"
+            read_threads.append(threading.get_ident())
+            return f"shared-frame-{self.read_count}"
 
         def release(self):
             pass
 
+    read_threads = []
     monkeypatch.setattr(main_window_module, "PreviewFrameCapture", FakePreviewCapture)
     monkeypatch.setattr(
         main_window_module,
@@ -4983,12 +4985,14 @@ def test_active_preview_frame_request_reuses_cached_raw_frame(app, monkeypatch):
     )
     window = MainWindow()
     monkeypatch.setattr(window, "_config_from_form", lambda: SimpleNamespace(capture=config))
-    window._latest_preview_frame = window._read_live_preview_frame(config)
+    window._latest_preview_frame = "stale-display-frame"
+    window._preview_timer.setInterval(100_000)
     window._preview_timer.start()
 
-    assert window._capture_preview_frame_for_config(config) == "shared-frame"
-    assert window._capture_preview_frame_for_config(config) == "shared-frame"
-    assert window._preview_capture.read_count == 1
+    assert window._capture_preview_frame_for_config(config) == "shared-frame-1"
+    assert window._capture_preview_frame_for_config(config) == "shared-frame-2"
+    assert window._preview_capture.read_count == 2
+    assert len(set(read_threads)) == 1 and threading.get_ident() not in read_threads
 
 
 def test_main_window_close_stops_manual_capture_thread(app):
@@ -6065,8 +6069,9 @@ def _run_with_qt_events(app, callback):
 
 
 @pytest.mark.parametrize("shiny_values", [(), (0,), (1,), (2,), (0, 1), (1, 2)])
+@pytest.mark.parametrize("clear_history", [False, True])
 def test_auto_rng_non_shiny_script_stop_preserves_reverse_lookup_and_checks_unique_shiny(
-    app, tmp_path, monkeypatch, shiny_values,
+    app, tmp_path, monkeypatch, shiny_values, clear_history,
 ):
     window = MainWindow()
     hit_script = tmp_path / "hit.txt"
@@ -6112,6 +6117,14 @@ def test_auto_rng_non_shiny_script_stop_preserves_reverse_lookup_and_checks_uniq
         lambda *_args, **_kwargs: DialogTimingResult(10.0, 12.0, 2.0),
     )
     window.autoHistoryEvent.connect(lambda event, args: history_events.append((event, args)))
+    if clear_history:
+        prepare = window.history_tab._archive._prepare_candidates
+
+        def clear_during_preparation(event, values, **kwargs):
+            window.history_tab.clear()
+            return prepare(event, values, **kwargs)
+
+        monkeypatch.setattr(window.history_tab._archive, "_prepare_candidates", clear_during_preparation)
     config = AutoRngConfig(
         script_dir=tmp_path, hit_script_path=hit_script, reverse_script_path=reverse_script,
         seed_script_path=seed_script, auto_reverse=True, loop_mode="infinite",
@@ -6133,8 +6146,11 @@ def test_auto_rng_non_shiny_script_stop_preserves_reverse_lookup_and_checks_uniq
     assert stopped == [True]
     assert scripts == ["hit.txt", "reverse.txt"]
     reverse_events = [args for event, args in history_events if event == "reverse_lookup_results"]
-    assert len(reverse_events) == 1
-    assert tuple(reverse_events[0][0]) == tuple(candidates)
+    if clear_history and candidates:
+        assert not reverse_events
+    else:
+        assert len(reverse_events) == 1
+        assert tuple(reverse_events[0][0]) == tuple(candidates)
     cycle_results = [args for event, args in history_events if event == "cycle_result"]
     expected_shiny = len(shiny_values) == 1 and shiny_values[0] in (1, 2)
     assert len(cycle_results) == 1 and cycle_results[0][0] is expected_shiny

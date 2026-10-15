@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import threading
 import sys
+from collections import deque
 from collections.abc import Callable
+from concurrent.futures import Future
 
 from PySide6.QtCore import QObject, QThread
 
@@ -164,6 +166,7 @@ class PreviewFrameThread(QThread):
         self._stop = threading.Event()
         self._request: object | None = None
         self._latest: tuple[bool, object] | None = None
+        self._frame_requests: deque[tuple[Callable[[], object], Future]] = deque()
         self.release_error: BaseException | None = None
 
     def submit(self, request: object) -> None:
@@ -178,6 +181,21 @@ class PreviewFrameThread(QThread):
             latest, self._latest = self._latest, None
             return latest
 
+    def request_frame(self, read: Callable[[], object]) -> Future:
+        """Read after this request on the capture owner, independently of display.
+
+        OCR must not reuse the GUI's last rendered frame or take a frame from
+        a preview read that was already in flight before a page change.
+        """
+        result: Future = Future()
+        with self._lock:
+            if self._stop.is_set():
+                result.set_exception(RuntimeError("视频预览已停止，无法获取新画面"))
+            else:
+                self._frame_requests.append((read, result))
+                self._wake.set()
+        return result
+
     def request_stop(self) -> None:
         self.requestInterruption()
         with self._lock:
@@ -185,6 +203,14 @@ class PreviewFrameThread(QThread):
             self._request = None
             self._latest = None
             self._wake.set()
+        self._fail_frame_requests()
+
+    def _fail_frame_requests(self) -> None:
+        with self._lock:
+            pending = tuple(self._frame_requests)
+            self._frame_requests.clear()
+        for _read, result in pending:
+            result.set_exception(RuntimeError("视频预览已停止，无法获取新画面"))
 
     @property
     def stopping(self) -> bool:
@@ -195,8 +221,25 @@ class PreviewFrameThread(QThread):
             while not self._stop.is_set():
                 self._wake.wait()
                 with self._lock:
-                    self._wake.clear()
-                    request, self._request = self._request, None
+                    frame_request = self._frame_requests.popleft() if self._frame_requests else None
+                    request = None
+                    if frame_request is None:
+                        request, self._request = self._request, None
+                    if not self._frame_requests and self._request is None:
+                        self._wake.clear()
+                if frame_request is not None:
+                    read, future = frame_request
+                    try:
+                        if self._stop.is_set():
+                            raise RuntimeError("视频预览已停止，无法获取新画面")
+                        frame = read()
+                        if self._stop.is_set():
+                            raise RuntimeError("视频预览已停止，无法获取新画面")
+                    except BaseException as exc:
+                        future.set_exception(exc)
+                    else:
+                        future.set_result(frame)
+                    continue
                 if request is None or self._stop.is_set():
                     continue
                 try:
@@ -209,6 +252,8 @@ class PreviewFrameThread(QThread):
                 if not result[0]:
                     break
         finally:
+            self._stop.set()
+            self._fail_frame_requests()
             try:
                 self._release()
             except BaseException as exc:

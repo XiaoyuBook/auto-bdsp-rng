@@ -33,7 +33,7 @@ class PlainSnapshot:
 
 
 class CandidateReservation:
-    """One bounded source slot, from producer admission until disk commit."""
+    """Own a candidate snapshot from publication until disk commit."""
 
     def __init__(self, archive: HistoryArchive, epoch: int) -> None:
         self._archive = archive
@@ -79,10 +79,12 @@ def publish_history_event(
     archive: HistoryArchive, emit: Callable[[str, object], None], event: str,
     values: tuple[object, ...], *, cancelled: Callable[[], bool] | None = None,
 ) -> None:
-    """Producer-side backpressure, before adding a candidate event to Qt."""
+    """Publish history without making automation wait for archival capacity.
+
+    A cleared/closed archive discards its own pending records. Only the run's
+    cancellation callback may cancel automation, including reverse lookup.
+    """
     reservation = None
-    if event in {"candidates_found", "candidates_refiltered", "reverse_lookup_results"} and values and len(values[0]):
-        reservation = archive.reserve_candidate_batch(cancelled=cancelled)
 
     def interrupted() -> bool:
         if cancelled is not None and cancelled():
@@ -95,6 +97,12 @@ def publish_history_event(
         return False
 
     try:
+        if event in {"candidates_found", "candidates_refiltered", "reverse_lookup_results"} and values and len(values[0]):
+            reservation = archive.reserve_candidate_batch(wait=False, allow_overflow=True, cancelled=cancelled)
+            if reservation is None:
+                # An explicit clear owns the records being discarded. Do not
+                # pause or fail the game workflow while it clears the store.
+                return
         if interrupted():
             raise SearchCancelled("History event producer stopped")
         if reservation is not None and archive._prepare_candidates is not None:
@@ -104,6 +112,11 @@ def publish_history_event(
                     raise SearchCancelled("History event producer stopped")
                 reservation.prepared_rows = prepared
         emit(event, values if reservation is None else ReservedHistoryEvent(values, reservation))
+    except SearchCancelled:
+        if reservation is not None:
+            reservation.release_unclaimed()
+        if cancelled is not None and cancelled():
+            raise
     except BaseException:
         if reservation is not None:
             reservation.release_unclaimed()
@@ -155,7 +168,10 @@ class HistoryArchive:
         self._next_batch = 0
         self._pending: dict[int, tuple[Callable[[], Iterator[Any]], int, CandidateReservation]] = {}
         self._fallback_candidates: dict[int, tuple[Callable[[], Iterator[Any]], int]] = {}
-        self._jobs: queue.Queue[tuple[int, Callable[[], Iterator[Any]], CandidateReservation]] = queue.Queue(maxsize=MAX_PENDING_CANDIDATE_BATCHES)
+        # Keep complete snapshots when the disk falls behind. Automation must
+        # not wait for a display/archive queue before acting on its target.
+        # Sources are released as soon as the background writer commits them.
+        self._jobs: queue.Queue[tuple[int, Callable[[], Iterator[Any]], CandidateReservation]] = queue.Queue()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
 
@@ -321,14 +337,15 @@ class HistoryArchive:
             for _, encoded in rows:
                 yield pickle.loads(encoded)
 
-    def reserve_candidate_batch(self, *, wait: bool = True, cancelled: Callable[[], bool] | None = None) -> CandidateReservation | None:
-        """Wait only on producer workers. GUI callers use immediate admission."""
+    def reserve_candidate_batch(self, *, wait: bool = True, allow_overflow: bool = False,
+                                cancelled: Callable[[], bool] | None = None) -> CandidateReservation | None:
+        """Automation bypasses capacity waits; direct GUI admission stays bounded."""
         with self._capacity:
             generation = self._capacity_generation
             while True:
                 if self._closed or not self._accepting or generation != self._capacity_generation or (cancelled is not None and cancelled()):
                     raise SearchCancelled("History candidate admission cancelled")
-                if not self._clearing and len(self._reservations) < MAX_PENDING_CANDIDATE_BATCHES:
+                if not self._clearing and (allow_overflow or len(self._reservations) < MAX_PENDING_CANDIDATE_BATCHES):
                     reservation = CandidateReservation(self, self._epoch)
                     self._reservations.add(reservation)
                     return reservation
@@ -398,7 +415,7 @@ class HistoryArchive:
                 if background:
                     # Windows Event.wait can round a 2 ms delay to an entire
                     # scheduler tick. Yield without imposing disk throughput
-                    # backpressure here; admission already bounds the sources.
+                    # delays here; automation must remain independent of I/O.
                     time.sleep(0)
         if chunk:
             self._perform(lambda db: db.executemany("INSERT OR REPLACE INTO candidate VALUES (?, ?, ?)", chunk), write=True, candidates=True)

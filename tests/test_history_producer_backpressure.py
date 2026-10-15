@@ -44,7 +44,7 @@ def _runner_from_actual_start(window, monkeypatch, tmp_path):
     return captured[0]
 
 
-def test_actual_runner_history_callback_applies_bounded_backpressure_before_qt_emission(app, monkeypatch, tmp_path):
+def test_actual_runner_keeps_going_while_slow_disk_archives_all_candidates(app, monkeypatch, tmp_path):
     window = MainWindow()
     runner = _runner_from_actual_start(window, monkeypatch, tmp_path)
     archive = window.history_tab._archive
@@ -75,12 +75,10 @@ def test_actual_runner_history_callback_applies_bounded_backpressure_before_qt_e
     producer = threading.Thread(target=produce)
     producer.start()
     wait_until(first_write.is_set)
-    wait_until(lambda: len(emitted) == MAX_PENDING_CANDIDATE_BATCHES)
-    assert producer.is_alive()
-    assert len(archive._reservations) == MAX_PENDING_CANDIDATE_BATCHES
-    assert len(archive._pending) <= MAX_PENDING_CANDIDATE_BATCHES
-    # The producer has not filled Qt's event queue with the remaining results.
-    assert window.history_tab._candidate_count == 4500
+    wait_until(lambda: not producer.is_alive() and window.history_tab._candidate_count == 9000)
+    # All six publications finish before even the first disk write is allowed.
+    assert len(archive._reservations) == 6
+    assert len(archive._pending) == 6
     beats = []
     timer = QTimer()
     timer.setInterval(10)
@@ -92,7 +90,6 @@ def test_actual_runner_history_callback_applies_bounded_backpressure_before_qt_e
     timer.stop()
     assert errors == [] and emitted == list(range(6))
     assert gui_thread not in write_threads and len(write_threads) == 6
-    assert archive._jobs.maxsize == MAX_PENDING_CANDIDATE_BATCHES
     assert not archive._pending and len(archive._cache) <= 128
     copied = window.history_tab._complete_plain_text()
     assert copied.count("  候选") == 9000
@@ -100,7 +97,7 @@ def test_actual_runner_history_callback_applies_bounded_backpressure_before_qt_e
     assert positions == sorted(positions)
 
 
-def test_actual_runner_wait_can_stop_and_rejected_close_reopens_admission(app, monkeypatch, tmp_path):
+def test_actual_run_stop_cancels_publication_and_rejected_close_reopens_admission(app, monkeypatch, tmp_path):
     window = MainWindow()
     runner = _runner_from_actual_start(window, monkeypatch, tmp_path)
     archive = window.history_tab._archive
@@ -118,9 +115,9 @@ def test_actual_runner_wait_can_stop_and_rejected_close_reopens_admission(app, m
             finished.set()
 
     producer = threading.Thread(target=produce)
+    runner.stop()
     producer.start()
     assert started.wait(1)
-    runner.stop()
     wait_until(finished.is_set)
     assert errors == ["cancelled"]
     for reservation in held:

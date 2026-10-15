@@ -24,6 +24,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QEvent,
+    QEventLoop,
     QObject,
     QPoint,
     QProcess,
@@ -1816,10 +1817,10 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("主窗口已经关闭，无法执行界面回调")
             self._pending_ui_calls[done] = (result, errors)
             self.uiCallRequested.emit(callback, result, errors, done)
-        if not done.wait(30.0):
-            # Keep the callback queued while the window is alive: script
-            # finalizers still have to release their reserved backend slot.
-            raise TimeoutError("界面回调在 30 秒内未完成")
+        # A side-effecting callback must not outlive its waiting caller: a
+        # late script preparation would reserve a backend with nobody left
+        # to execute/finalize it. Closing the window still wakes this wait.
+        done.wait()
         if errors:
             raise errors[0]
         return result[0] if result else None
@@ -6584,24 +6585,60 @@ class MainWindow(QMainWindow):
         return self._latest_preview_frame if self._latest_preview_source == identity else None
 
     def _capture_preview_frame_for_config(self, config: BlinkCaptureConfig) -> object:
-        def read_active_preview() -> tuple[bool, object | None]:
+        def request_active_preview():
             if not self._preview_timer.isActive():
-                return False, None
+                return None
             try:
                 active_config = self._config_from_form().capture
             except Exception:
-                return False, None
+                return None
             if not _uses_same_capture_source(active_config, config):
-                return False, None
-            # Preview I/O belongs to its worker. OCR/screenshots can consume
-            # the latest owned raw snapshot without opening/reading on Qt.
-            frame = self._cached_preview_frame(active_config)
-            return frame is not None, frame
+                return None
+            if self._is_closing or self._preview_cleanup_threads:
+                raise RuntimeError("视频预览正在关闭，无法获取新画面")
+            if self._preview_thread is not None and self._preview_thread.stopping:
+                raise RuntimeError("视频预览正在关闭，无法获取新画面")
+            identity = self._synchronize_preview_source(active_config)
+            generation = self._preview_generation
 
-        used_preview, frame = self._call_on_ui_thread(read_active_preview)
-        if used_preview:
-            return frame
-        return capture_preview_frame(config)
+            def read_frame():
+                # These Python generation fields are published by Qt. Check
+                # before opening/reading so a queued request cannot reopen a
+                # source that has since been changed or disconnected.
+                if (self._is_closing or generation != self._preview_generation
+                        or identity != self._preview_source):
+                    raise RuntimeError("视频源已改变，无法使用旧画面")
+                return self._read_live_preview_frame(config)
+
+            thread = self._ensure_preview_thread()
+            return thread.request_frame(read_frame), identity, generation
+
+        pending = self._call_on_ui_thread(request_active_preview)
+        if pending is None:
+            return capture_preview_frame(config)
+        future, identity, generation = pending
+        if QThread.currentThread() == self.thread() and not future.done():
+            # Legacy synchronous GUI callers still need Qt to service OBS's
+            # owner-thread calls. Automation waits directly on its worker.
+            loop = QEventLoop()
+            timer = QTimer()
+            timer.setInterval(10)
+            timer.timeout.connect(lambda: loop.quit() if future.done() else None)
+            timer.start()
+            try:
+                if not future.done():
+                    loop.exec()
+            finally:
+                timer.stop()
+        frame = future.result()
+
+        def validate_source() -> None:
+            if (self._is_closing or generation != self._preview_generation
+                    or identity != self._synchronize_preview_source()):
+                raise RuntimeError("视频源已改变，无法使用旧画面")
+
+        self._call_on_ui_thread(validate_source)
+        return frame
 
     def _pause_preview_for_capture(self) -> None:
         self._resume_preview_after_capture = self._preview_timer.isActive()
@@ -7801,11 +7838,16 @@ class MainWindow(QMainWindow):
         if thread is not None and thread.stopping:
             return
         if thread is None:
+            thread = self._ensure_preview_thread()
+        thread.submit((self._preview_generation, source_identity, config, config_error, self._latest_easycon_image_search_result))
+
+    def _ensure_preview_thread(self) -> PreviewFrameThread:
+        if self._preview_thread is None:
             thread = PreviewFrameThread(self._read_render_preview_frame, self._close_preview_capture_on_worker, self)
             self._preview_thread = thread
             thread.finished.connect(self._preview_thread_finished)
             thread.start()
-        thread.submit((self._preview_generation, source_identity, config, config_error, self._latest_easycon_image_search_result))
+        return self._preview_thread
 
     def _read_render_preview_frame(self, request: object) -> object:
         generation, source_identity, config, config_error, image_result = request  # type: ignore[misc]
@@ -8789,10 +8831,14 @@ class MainWindow(QMainWindow):
 
         def run_script_text_service(script_text: str, name: str) -> object:
             script_name, script_dir = self._native_script_context(config, script_text, name)
-            native_backend = self._call_on_ui_thread(
-                lambda: self._prepare_auto_easycon_script(script_name)
-            )
+
+            def prepare_script():
+                search_cancellation.check()
+                return self._prepare_auto_easycon_script(script_name)
+
+            native_backend = self._call_on_ui_thread(prepare_script)
             try:
+                search_cancellation.check()
                 result = native_backend.run_script_text(
                     script_text,
                     script_name,
@@ -9634,6 +9680,7 @@ class MainWindow(QMainWindow):
             script_name, script_dir = self._native_script_context(config, script_text, name)
 
             def prepare_script() -> tuple[object, int | None]:
+                search_cancellation.check()
                 backend = self._prepare_auto_easycon_script(script_name)
                 try:
                     observer_token = (
@@ -9656,6 +9703,7 @@ class MainWindow(QMainWindow):
             native_backend, observer_token = self._call_on_ui_thread(prepare_script)
             try:
                 try:
+                    search_cancellation.check()
                     result = native_backend.run_script_text(
                         script_text,
                         script_name,

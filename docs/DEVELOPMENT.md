@@ -49,7 +49,7 @@ py -3.12 -m venv .venv
 
 `ui/result_paging.py` 将定点与 TID 表限制为每页 200 行，排序、筛选和前缀查找基于完整数据；选中项以原始结果身份恢复。`ui/result_transfer.py` 在点击时固定结果、语言、能力值和日期基准，在后台准备完整复制或导出；准备阶段取消或失败时保留原剪贴板和已有文件，进入写入提交阶段后等待终态，以原子替换完成保存。
 
-`ui/history_archive.py` 为会话历史提供临时归档，轮次、候选与处理详情每页最多 100 条。生产端在后台整理快照，归档积压时等待容量，取消时解除等待；归档失败回滚并保留可用的内存记录。全量搜索、复制和导出独立于当前可见页，退出时释放临时存储。
+`ui/history_archive.py` 为会话历史提供临时归档，轮次、候选与处理详情每页最多 100 条。自动流程整理快照后交由后台归档，不等待磁盘队列容量；慢盘期间保留完整的待写入快照，提交后释放，因此积压会暂时增加内存占用。清空、关闭或失效的历史发布只丢弃对应记录，只有自动流程自身的取消信号才能抛出任务取消。归档失败回滚并保留可用的内存记录。全量搜索、复制和导出独立于当前可见页，退出时释放临时存储。
 
 相关回归覆盖 `test_search_performance.py`、`test_result_transfer.py`、`test_reidentify_cancellation.py`、`test_history_performance.py` 及 `test_history_producer_*.py`。大量结果的布局可用 `scripts/render_search_results_review.py --dpi 100`（另验 125、150）检查；`scripts/benchmark_history_ui.py` 用于历史归档与界面响应基准，实测结果应连同机器条件记录。
 

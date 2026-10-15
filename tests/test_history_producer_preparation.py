@@ -143,14 +143,14 @@ def test_cancel_during_producer_preparation_releases_slot_and_never_emits(app, m
         release.set()
     assert finished.wait(5)
     producer.join(0)
-    assert not producer.is_alive() and errors == ["cancelled"]
+    assert not producer.is_alive() and errors == (["cancelled"] if action == "cancel" else [])
     assert not emitted and not archive._reservations and not archive._pending and archive._jobs.empty()
     assert 512 <= len(snapshot_threads) <= 1024
     assert threading.get_ident() not in snapshot_threads
 
 
-@pytest.mark.parametrize("stop_waiting", [False, True])
-def test_capacity_is_reserved_before_preparation_and_unclaimed_source_is_released(app, monkeypatch, stop_waiting):
+@pytest.mark.parametrize("cancel_run", [False, True])
+def test_unclaimed_history_does_not_block_producer_and_run_cancel_still_works(app, monkeypatch, cancel_run):
     panel = HistoryPanel()
     archive = panel._archive
     cancellation = SearchCancellation()
@@ -159,7 +159,6 @@ def test_capacity_is_reserved_before_preparation_and_unclaimed_source_is_release
 
     def prepare(*args, **kwargs):
         prepared_threads.append(threading.get_ident())
-        assert len(archive._reservations) <= MAX_PENDING_CANDIDATE_BATCHES
         values, source = real_prepare(*args, **kwargs)
         source_refs.append(weakref.ref(source))
         return values, source
@@ -169,6 +168,8 @@ def test_capacity_is_reserved_before_preparation_and_unclaimed_source_is_release
     def produce():
         try:
             for batch in range(4):
+                if cancel_run and batch == MAX_PENDING_CANDIDATE_BATCHES:
+                    cancellation.cancel()
                 publish_history_event(archive, lambda *_args: emitted.append(_args[1]), "candidates_found",
                                       ([state(batch * 2000 + index) for index in range(1500)], 0),
                                       cancelled=cancellation.is_cancelled)
@@ -178,18 +179,14 @@ def test_capacity_is_reserved_before_preparation_and_unclaimed_source_is_release
     producer = threading.Thread(target=produce)
     producer.start()
     try:
-        wait_until(lambda: len(emitted) == MAX_PENDING_CANDIDATE_BATCHES)
-        assert producer.is_alive() and len(prepared_threads) == MAX_PENDING_CANDIDATE_BATCHES
-        assert len(archive._reservations) == MAX_PENDING_CANDIDATE_BATCHES
-        assert all(payload.reservation.prepared_rows is not None for payload in emitted)
-        if stop_waiting:
-            cancellation.cancel()
-        else:
-            emitted[0].reservation.release_unclaimed()
+        # No GUI consumer releases a slot. The fourth publication must still
+        # return, unless the actual run was explicitly stopped.
         wait_until(lambda: not producer.is_alive())
-        assert len(prepared_threads) == (3 if stop_waiting else 4)
-        assert errors == (["cancelled"] if stop_waiting else [])
-        assert len(archive._reservations) == MAX_PENDING_CANDIDATE_BATCHES
+        assert len(prepared_threads) == (3 if cancel_run else 4)
+        assert len(emitted) == len(prepared_threads)
+        assert errors == (["cancelled"] if cancel_run else [])
+        assert len(archive._reservations) == len(emitted)
+        assert all(payload.reservation.prepared_rows is not None for payload in emitted)
         assert threading.get_ident() not in prepared_threads
     finally:
         cancellation.cancel()
@@ -258,7 +255,7 @@ def test_stop_after_preparation_before_emission_discards_the_completed_source(ap
     finally:
         release.set()
     producer.join(5)
-    assert not producer.is_alive() and errors == ["cancelled"]
+    assert not producer.is_alive() and errors == []
     assert not emitted and not archive._reservations and archive._jobs.empty()
     gc.collect()
     assert all(reference() is None for reference in source_refs)
