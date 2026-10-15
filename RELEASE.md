@@ -27,6 +27,22 @@ Also review `README.md`, `docs/USAGE.md`, `docs/DEVELOPMENT.md`, `BUILD.md`, and
 
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
 
+## v3.4.3 Release Scope
+
+This patch release includes the three fixes in `v3.4.2..b384359`:
+script-stop/reverse-lookup protection, EasyCon connection compatibility, and
+separation of history I/O from automatic search. The user-facing notes live in
+the [3.4.3 changelog section](CHANGELOG.md#343). The target-bound Project_Xs
+configuration feature from `b173733` is deferred and excluded from this release.
+
+- Check stopping a script without cancelling the entire search, unique shiny
+  reverse-lookup protection, and continued automation while history is cleared
+  or disk I/O lags.
+- Verify fresh-frame OCR and screenshots, cancellation during script preparation,
+  and UI callbacks while automatic tasks are running.
+- Check real serial connection stability on affected controllers. Automated
+  tests do not establish device compatibility on the affected user's setup.
+
 ## v3.4.2 Release Scope
 
 This patch restores the internal text area of numeric inputs. The official

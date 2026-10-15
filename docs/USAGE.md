@@ -2,7 +2,7 @@
 
 [返回项目首页](../README.md) · [开发指南](DEVELOPMENT.md) · [更新日志](../CHANGELOG.md)
 
-本指南按 v3.4.0 说明各工作区的使用方式和参数行为。v3.4.0 安装包发布前，新增功能仅在源码版可用；正式安装包请从[最新正式版](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/latest)下载，以该页版本号和 Assets 为准。版本差异见 [3.4.0 更新说明](../CHANGELOG.md#340)。
+本指南按 v3.4.3 说明各工作区的使用方式和参数行为。v3.4.3 安装包发布前，本次修复仅在源码版可用；正式安装包请从[最新正式版](https://github.com/XiaoyuBook/auto-bdsp-rng/releases/latest)下载，以该页版本号和 Assets 为准。版本差异见 [3.4.3 更新说明](../CHANGELOG.md#343)。
 
 ## 目录
 
