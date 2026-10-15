@@ -2001,7 +2001,15 @@ class EasyConPanel(QWidget):
             previous = self._last_native_display_status
             if previous is not None and previous[1] and not connected:
                 self.easycon_status.showMessage("连接已断开", 5000)
-                self._append_log("warn", "伊机控连接已断开")
+                message = "伊机控连接已断开"
+                try:
+                    diagnostic = getattr(self.native_backend, "connection_diagnostic", None)
+                    detail = diagnostic() if callable(diagnostic) else ""
+                except Exception as exc:
+                    detail = f"读取断线原因失败: {exc}"
+                if detail:
+                    message += f"；{detail}"
+                self._append_log("warn", message)
             self._update_run_enabled()
 
     def reserve_native_script_run(self) -> bool:
@@ -3305,7 +3313,7 @@ class EasyConPanel(QWidget):
         self.connect_native()
 
     def connect_native(self, *, on_finished: Callable[[bool], None] | None = None) -> bool:
-        """Accept a background handshake; report its outcome through a callback/signal."""
+        """Connect on the UI thread as in 3.3.x, then queue the result callback."""
 
         if self._shutting_down:
             return False
@@ -3380,8 +3388,16 @@ class EasyConPanel(QWidget):
 
     def _start_native_lifecycle(self, operation: BackendOperation) -> None:
         self._native_lifecycle_thread = operation
-        operation.finished.connect(self._native_lifecycle_finished)
         self._update_run_enabled()
+        if operation.operation == "connect":
+            # Restore the 3.3.x serial-opening thread for driver compatibility.
+            # Use the operation as a result holder without starting its QThread;
+            # the persistent serial/report threads still perform all normal I/O.
+            operation.run()
+            # Automatic workflows expect completion after connect_native returns.
+            QTimer.singleShot(0, self._native_lifecycle_finished)
+            return
+        operation.finished.connect(self._native_lifecycle_finished)
         try:
             operation.start()
         except Exception as exc:
@@ -4891,11 +4907,10 @@ class EasyConPanel(QWidget):
         self._last_native_display_status = (status, connected, self._native_connection_failed)
         running = status == EasyConStatus.RUNNING
         busy = self._native_connection_busy()
-        cancellable = self.native_connecting and not self.native_disconnecting and not self._shutting_down
-        self.connect_button.setEnabled(cancellable or (not busy and not running))
-        self.toolbar_connect_button.setEnabled(cancellable or (not busy and not running))
+        self.connect_button.setEnabled(not busy and not running)
+        self.toolbar_connect_button.setEnabled(not busy and not running)
         self.port_combo.setEnabled(not busy and not connected and not running)
-        self.disconnect_button.setEnabled(cancellable or (not busy and not connected and not running))
+        self.disconnect_button.setEnabled(not busy and not connected and not running)
         self.bridge_path.setEnabled(False)
         self.browse_bridge_button.setEnabled(False)
         self.mock_check.setEnabled(False)
@@ -4908,7 +4923,7 @@ class EasyConPanel(QWidget):
             button_text = "正在取消" if self.native_connecting else "正在断开"
             backend_text = f"连接: {button_text}"
         elif self.native_connecting:
-            button_text = "取消连接"
+            button_text = "正在连接"
             backend_text = "连接: 正在连接"
         elif running and connected:
             button_text = "断开连接"

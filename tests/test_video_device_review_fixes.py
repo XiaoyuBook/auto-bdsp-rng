@@ -678,19 +678,20 @@ def test_real_disconnect_blocks_both_automatic_start_buttons_and_entry(app, monk
 
 
 @pytest.mark.parametrize("kind", ["rng", "tid"])
-def test_automatic_start_coalesces_same_port_connect_and_waits_for_delivery(app, monkeypatch, tmp_path, kind):
+@pytest.mark.parametrize("connect_success", [True, False])
+def test_automatic_start_coalesces_same_port_connect_and_waits_for_delivery(
+    app, monkeypatch, tmp_path, kind, connect_success,
+):
     window = MainWindow()
     settle_startup(window)
     _rng, _tid, starts = configure_automatic_buttons(window, monkeypatch, tmp_path)
-    gate, entered = threading.Event(), threading.Event()
-
     class Backend(FakeNativeBackend):
         calls = 0
 
         def connect(self, port):
             self.calls += 1
-            entered.set()
-            assert gate.wait(3)
+            if not connect_success:
+                raise RuntimeError("serial unavailable")
             super().connect(port)
 
     backend = Backend()
@@ -701,14 +702,13 @@ def test_automatic_start_coalesces_same_port_connect_and_waits_for_delivery(app,
     window._latest_preview_frame = np.zeros((20, 30, 3), np.uint8)
     window._latest_preview_source = window._preview_source
     assert window.easycon_tab.connect_native()
-    wait_until(entered.is_set)
+    # The synchronous handshake has returned, but do not deliver its callback yet.
+    assert bool(backend.connected_port) == connect_success
+    assert window.easycon_tab._native_connection_busy()
     panel = window.auto_rng_tab if kind == "rng" else window.auto_tid_rng_tab
-    try:
-        assert panel.start_button.isEnabled()
-        panel.start_button.click()
-        assert panel._preparing and not starts[kind]
-        gate.set()
-        wait_until(lambda: len(starts[kind]) == 1)
-        assert backend.calls == 1
-    finally:
-        gate.set()
+    assert panel.start_button.isEnabled()
+    panel.start_button.click()
+    assert panel._preparing and not starts[kind]
+    wait_until(lambda: bool(starts[kind]) or not panel._preparing)
+    assert len(starts[kind]) == int(connect_success)
+    assert backend.calls == 1

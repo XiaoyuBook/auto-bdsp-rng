@@ -21,8 +21,12 @@ from auto_bdsp_rng.automation.easycon import (
     EasyConInstallation,
     EasyConStatus,
 )
-from auto_bdsp_rng.automation.easycon.native.device import SwitchButton, SwitchReport
+from auto_bdsp_rng.automation.easycon.native.device import (
+    DeviceConnectionError, NintendoSwitchDevice, SwitchButton, SwitchReport, TTLSerialTransport,
+)
+from auto_bdsp_rng.automation.easycon.native_backend import NativeEasyConBackend
 from auto_bdsp_rng.ui.easycon_panel import DEFAULT_KEY_MAPPING, EasyConPanel, KeyMappingDialog
+from tests.automation.test_easycon_native_device import FakeSerial
 from tests.ui_wait import close_all_widgets
 
 
@@ -280,58 +284,48 @@ def shutdown_panel(panel: EasyConPanel, *, wait_ms: int = 2000) -> bool:
     return panel._shutdown_complete
 
 
-def test_native_handshake_keeps_qt_responsive_and_coalesces_duplicate_requests(easycon_panel_factory):
-    entered, release = threading.Event(), threading.Event()
+def test_native_handshake_opens_serial_on_ui_thread_and_keeps_connection(easycon_panel_factory, monkeypatch):
+    serial_port = FakeSerial()
+    opening_threads: list[QThread] = []
 
-    class SlowBackend(FakeNativeBackend):
-        def __init__(self):
-            super().__init__()
-            self.connect_calls = 0
-            self.connect_thread = None
+    def serial_factory(_port, _baudrate):
+        opening_threads.append(QThread.currentThread())
+        assert panel.native_connecting
+        assert not panel.connect_button.isEnabled()
+        assert panel.connect_button.text() == "正在连接"
+        return serial_port
 
-        def connect(self, port):
-            self.connect_calls += 1
-            self.connect_thread = QThread.currentThread()
-            entered.set()
-            assert release.wait(3)
-            super().connect(port)
-
-    backend = SlowBackend()
+    device = NintendoSwitchDevice(
+        transport_factory=lambda port, baudrate: TTLSerialTransport(port, baudrate, serial_factory=serial_factory),
+        baudrates=(115200,), report_interval=0,
+    )
+    backend = NativeEasyConBackend(device=device)
+    monkeypatch.setattr(backend, "list_ports", lambda: ["COM7"])
     panel = easycon_panel_factory(native_backend=backend)
     panel.show_connection_dialog()
-    heartbeats: list[float] = []
-    timer = QTimer(panel)
-    timer.setInterval(5)
-    timer.timeout.connect(lambda: heartbeats.append(time.monotonic()))
-    timer.start()
     results: list[bool] = []
-    started = time.monotonic()
-    try:
-        assert panel.connect_native(on_finished=results.append)
-        assert time.monotonic() - started < 0.2
-        assert panel.native_connecting and panel.connect_button.text() == "取消连接"
-        assert panel.connection_presentation()[1:3] == ("connecting", "正在连接")
-        assert panel.connection_dialog.isVisible()
-        assert panel.connect_native(on_finished=results.append)
-        assert not panel.reserve_native_script_run()
-        process_events_until(lambda: entered.is_set() and len(heartbeats) >= 3)
-        assert backend.connect_calls == 1 and results == []
-        assert backend.connect_thread is not panel.thread()
-        release.set()
-        process_events_until(lambda: len(results) == 2)
-        assert results == [True, True]
-        assert not panel._native_connection_busy()
-        assert backend.connected_port == "COM7"
-        assert not panel.connection_dialog.isVisible()
-    finally:
-        release.set()
-        timer.stop()
+    assert panel.connect_native(on_finished=results.append)
+    assert opening_threads == [panel.thread()]
+    assert backend.connected_port == "COM7" and results == []
+    assert panel.connection_presentation()[1:3] == ("connecting", "正在连接")
+    assert panel.connection_dialog.isVisible()
+    assert panel.connect_native(on_finished=results.append)
+    assert not panel.reserve_native_script_run()
+    process_events_until(lambda: len(results) == 2)
+    assert results == [True, True] and len(opening_threads) == 1
+    assert not panel._native_connection_busy()
+    assert not panel.connection_dialog.isVisible()
+    # Destroy the completed Qt operation before exercising the persistent I/O.
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    result = backend.run_script_text("A 1\nB 1", "connection.ecs")
+    assert result.status is EasyConStatus.COMPLETED
+    panel._poll_native_connection_status()
+    assert backend.connected_port == "COM7" and not serial_port.closed
+    assert "伊机控连接已断开" not in panel.log_view.toPlainText()
 
 
-def test_native_cancel_cleans_late_handshake_before_retry(easycon_panel_factory):
-    entered, release = threading.Event(), threading.Event()
-
-    class SlowBackend(FakeNativeBackend):
+def test_native_cancel_cleans_completed_handshake_before_result_delivery(easycon_panel_factory):
+    class Backend(FakeNativeBackend):
         def __init__(self):
             super().__init__()
             self.connect_calls = 0
@@ -339,34 +333,28 @@ def test_native_cancel_cleans_late_handshake_before_retry(easycon_panel_factory)
 
         def connect(self, port):
             self.connect_calls += 1
-            entered.set()
-            assert release.wait(3)
             super().connect(port)
 
         def disconnect(self):
             self.disconnect_calls += 1
             super().disconnect()
 
-    backend = SlowBackend()
+    backend = Backend()
     panel = easycon_panel_factory(native_backend=backend)
     results: list[bool] = []
-    try:
-        assert panel.connect_native(on_finished=results.append)
-        process_events_until(entered.is_set)
-        panel.connect_button.click()
-        assert panel.native_disconnecting
-        assert panel.connection_presentation()[1:3] == ("disconnecting", "正在取消")
-        assert not panel.connect_native()
-        assert panel.disconnect_native()  # Repeated cancellation is harmless.
-        release.set()
-        process_events_until(lambda: results == [False])
-        assert backend.connected_port is None and backend.disconnect_calls == 1
-        assert panel.connection_presentation()[1:3] == ("cancelled", "已取消连接")
-        assert panel.connect_button.isEnabled() and panel.port_combo.isEnabled()
-        assert connect_native(panel)
-        assert backend.connect_calls == 2
-    finally:
-        release.set()
+    assert panel.connect_native(on_finished=results.append)
+    assert not panel.connect_button.isEnabled()
+    assert panel.disconnect_native()
+    assert panel.native_disconnecting
+    assert panel.connection_presentation()[1:3] == ("disconnecting", "正在取消")
+    assert not panel.connect_native()
+    assert panel.disconnect_native()  # Repeated cancellation is harmless.
+    process_events_until(lambda: results == [False])
+    assert backend.connected_port is None and backend.disconnect_calls == 1
+    assert panel.connection_presentation()[1:3] == ("cancelled", "已取消连接")
+    assert panel.connect_button.isEnabled() and panel.port_combo.isEnabled()
+    assert connect_native(panel)
+    assert backend.connect_calls == 2
 
 
 def test_native_disconnect_allows_script_to_finish_ui_callback(easycon_panel_factory):
@@ -398,15 +386,12 @@ def test_native_disconnect_allows_script_to_finish_ui_callback(easycon_panel_fac
     assert backend.connected_port is None and panel.task_state_text == "未运行"
 
 
-def test_native_shutdown_cancels_connect_and_waits_without_blocking_ui(easycon_panel_factory):
-    entered, release = threading.Event(), threading.Event()
+def test_native_shutdown_before_connection_result_cleans_up_without_blocking_ui(easycon_panel_factory):
     operations: list[str] = []
 
-    class SlowBackend(FakeNativeBackend):
+    class Backend(FakeNativeBackend):
         def connect(self, port):
             operations.append("connect")
-            entered.set()
-            assert release.wait(3)
             super().connect(port)
 
         def disconnect(self):
@@ -420,29 +405,24 @@ def test_native_shutdown_cancels_connect_and_waits_without_blocking_ui(easycon_p
         def close_if_idle(self):
             return False
 
-    backend = SlowBackend()
+    backend = Backend()
     panel = easycon_panel_factory(native_backend=backend)
     connections: list[bool] = []
     shutdowns: list[bool] = []
     panel.nativeShutdownFinished.connect(shutdowns.append)
-    try:
-        assert panel.connect_native(on_finished=connections.append)
-        process_events_until(entered.is_set)
-        started = time.monotonic()
-        assert panel.shutdown() is False
-        assert panel.shutdown() is False
-        assert time.monotonic() - started < 0.2
-        assert not panel.connect_native() and not panel.disconnect_native()
-        assert panel._shutdown_in_progress
-        QTimer.singleShot(0, release.set)
-        process_events_until(lambda: bool(shutdowns))
-        assert connections == [False] and shutdowns == [True]
-        assert operations == ["connect", "disconnect", "close"]
-        assert backend.closed and backend.connected_port is None
-        assert panel.native_backend is None and panel.shutdown() is True
-        assert panel.connection_presentation() == ("伊机控 未连接", "disconnected", "已关闭", False)
-    finally:
-        release.set()
+    assert panel.connect_native(on_finished=connections.append)
+    started = time.monotonic()
+    assert panel.shutdown() is False
+    assert panel.shutdown() is False
+    assert time.monotonic() - started < 0.2
+    assert not panel.connect_native() and not panel.disconnect_native()
+    assert panel._shutdown_in_progress
+    process_events_until(lambda: bool(shutdowns))
+    assert connections == [False] and shutdowns == [True]
+    assert operations == ["connect", "disconnect", "close"]
+    assert backend.closed and backend.connected_port is None
+    assert panel.native_backend is None and panel.shutdown() is True
+    assert panel.connection_presentation() == ("伊机控 未连接", "disconnected", "已关闭", False)
 
 
 def test_native_shutdown_failure_restores_controls_and_can_retry(easycon_panel_factory):
@@ -1193,6 +1173,91 @@ def test_easycon_panel_polls_native_physical_disconnect(easycon_panel):
     assert easycon_panel.connect_button.text() == "连接"
     assert easycon_panel.port_combo.isEnabled() is True
     assert easycon_panel.easycon_status.currentMessage() == "连接已断开"
+
+
+@pytest.mark.parametrize("failure_stage", ["query", "read", "write"])
+def test_native_serial_failure_reaches_disconnect_log_and_reconnects(
+    easycon_panel_factory, monkeypatch, failure_stage,
+):
+    from serial import SerialException, SerialTimeoutException
+
+    failure = (SerialTimeoutException("Write timeout") if failure_stage == "write"
+               else SerialException(f"{failure_stage} failed: Windows error 995"))
+
+    class FailingSerial(FakeSerial):
+        fail = False
+
+        @property
+        def in_waiting(self):
+            if self.fail and failure_stage == "query":
+                raise failure
+            if self.fail and failure_stage == "read":
+                return 1
+            return super().in_waiting
+
+        def read(self, size=1):
+            if self.fail and failure_stage == "read":
+                raise failure
+            return super().read(size)
+
+        def write(self, data):
+            if self.fail and failure_stage == "write":
+                raise failure
+            return super().write(data)
+
+    serial_ports: list[FailingSerial] = []
+
+    def serial_factory(_port, _baudrate):
+        serial_port = FailingSerial()
+        serial_ports.append(serial_port)
+        return serial_port
+
+    device = NintendoSwitchDevice(
+        transport_factory=lambda port, baudrate: TTLSerialTransport(port, baudrate, serial_factory=serial_factory),
+        baudrates=(115200,), report_interval=0,
+    )
+    backend = NativeEasyConBackend(device=device)
+    monkeypatch.setattr(backend, "list_ports", lambda: ["COM7"])
+    panel = easycon_panel_factory(native_backend=backend)
+    persisted: list[tuple[str, str]] = []
+    panel._run_log_sink = lambda level, message: persisted.append((level, message))
+    assert connect_native(panel)
+    transport = device.transport
+    serial_ports[0].fail = True
+    if failure_stage == "write":
+        with pytest.raises(DeviceConnectionError):
+            transport.write(SwitchReport().to_bytes(), wait=True)
+    process_events_until(lambda: not backend.connected_port)
+    panel._poll_native_connection_status()
+    panel._poll_native_connection_status()
+    warnings = [message for level, message in persisted
+                if level == "WARNING" and message.startswith("伊机控连接已断开")]
+    assert len(warnings) == 1
+    assert "串口=COM7" in warnings[0] and "波特率=115200" in warnings[0]
+    assert "收发线程=已停止" in warnings[0]
+    assert repr(failure) in warnings[0]
+    assert warnings[0] in panel.log_view.toPlainText()
+    assert panel.connect_button.isEnabled()
+
+    assert connect_native(panel)
+    assert serial_ports[0].closed and len(serial_ports) == 2
+    assert backend.connected_port == "COM7"
+    assert repr(failure) not in backend.connection_diagnostic()
+    assert backend.run_script_text("A 1", "reconnect.ecs").status is EasyConStatus.COMPLETED
+
+
+def test_native_diagnostic_error_does_not_block_disconnected_controls(easycon_panel, monkeypatch):
+    assert connect_native(easycon_panel)
+    backend = easycon_panel.native_backend
+
+    def unavailable_diagnostic():
+        raise RuntimeError("diagnostic unavailable")
+
+    monkeypatch.setattr(backend, "connection_diagnostic", unavailable_diagnostic, raising=False)
+    backend.connected_port = None
+    easycon_panel._poll_native_connection_status()
+    assert easycon_panel.connect_button.isEnabled()
+    assert "伊机控连接已断开；读取断线原因失败: diagnostic unavailable" in easycon_panel.log_view.toPlainText()
 
 
 def test_easycon_panel_polls_native_disconnect_while_script_runs(easycon_panel):

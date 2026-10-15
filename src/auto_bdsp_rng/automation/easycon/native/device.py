@@ -821,6 +821,26 @@ class NintendoSwitchDevice:
         except Exception:
             pass
 
+    def connection_diagnostic(self) -> str:
+        """Describe the last connection without discarding the transport error."""
+
+        transport = self.transport
+        status = getattr(transport, "status", None)
+        details = [
+            f"串口={self.port or getattr(transport, 'port', None) or '无'}",
+            f"波特率={self.connected_baudrate or getattr(transport, 'baudrate', None) or '未知'}",
+            f"传输状态={getattr(status, 'value', status) or '无'}",
+        ]
+        if isinstance(transport, TTLSerialTransport):
+            io_thread = transport._thread
+            details.append(f"收发线程={'运行中' if io_thread is not None and io_thread.is_alive() else '已停止'}")
+        report_thread = self._report_thread
+        details.append(f"报告线程={'运行中' if report_thread is not None and report_thread.is_alive() else '已停止'}")
+        details.append(f"已请求停止={self._report_stop.is_set()}")
+        failure = getattr(transport, "failure", None) or self.failure
+        details.append(f"原始异常={failure!r}" if failure is not None else "未记录底层异常")
+        return "；".join(details)
+
     def connect(self, port: str, *, cancel_event: threading.Event | None = None) -> bool:
         actual_port = str(port).strip()
         if not actual_port or (cancel_event is not None and cancel_event.is_set()):

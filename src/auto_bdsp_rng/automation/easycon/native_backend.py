@@ -200,6 +200,9 @@ class NativeEasyConBackend(EasyConBackend):
     def connected_port(self) -> str | None:
         return self._device.port if self._device.is_connected else None
 
+    def connection_diagnostic(self) -> str:
+        return self._device.connection_diagnostic()
+
     @property
     def is_running(self) -> bool:
         with self._state_lock:

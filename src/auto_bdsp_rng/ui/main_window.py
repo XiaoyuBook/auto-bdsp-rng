@@ -8986,7 +8986,9 @@ class MainWindow(QMainWindow):
             self._show_error("视频源未连接", "请先通过顶部视频源入口连接视频源")
             return False
         status = self.easycon_tab._native_status()
-        if status == EasyConStatus.BRIDGE_CONNECTED:
+        # The handshake may be done while its UI completion is still queued.
+        # Join that pending connection so automatic preparation gets its callback.
+        if status == EasyConStatus.BRIDGE_CONNECTED and not self.easycon_tab._native_connection_busy():
             return True
         if status == EasyConStatus.RUNNING:
             self._show_error("伊机控正在运行", "已有伊机控脚本正在运行，请先停止当前脚本")
