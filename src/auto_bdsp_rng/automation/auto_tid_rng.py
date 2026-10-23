@@ -496,8 +496,7 @@ class AutoTidRngRunner:
                 AutoTidRngPhase.IDLE,
                 message,
                 summary=("已请求停止自动 TID，停止脚本时发生错误，请展开详情"
-                         if script_stop_error else f"已请求停止自动 TID：{normalized_reason}" if normalized_reason
-                         else "已请求停止自动 TID"),
+                         if script_stop_error else "已请求停止自动 TID"),
                 event_type="task.stop_requested", level="WARNING" if script_stop_error else None,
                 stop_reason=normalized_reason,
             )
@@ -906,6 +905,8 @@ class AutoTidRngRunner:
         self._set_progress(
             phase,
             message,
+            summary=getattr(message, "summary", "") or "开始新一轮自动 TID 测种",
+            event_type=getattr(message, "event_type", "round.started"),
             loop_index=self._completed_loops,
             seed_text="",
             current_advances=None,
@@ -1245,7 +1246,7 @@ class AutoTidRngRunner:
         except Exception as exc:
             self._fail(str(exc))
             return
-        self._set_progress(AutoTidRngPhase.OCR_TID, f"反查 ID 脚本完成——{path.name}", last_script_path=path)
+        self._set_progress(AutoTidRngPhase.OCR_TID, f"反查 ID 脚本完成——{path.name}", summary="反查脚本已执行完成，正在识别 TID", last_script_path=path)
 
     def _ocr_tid(self) -> None:
         try:
@@ -1255,9 +1256,9 @@ class AutoTidRngRunner:
             return
         tid = parse_tid_text(text)
         if tid is None:
-            self._set_progress(AutoTidRngPhase.FAILED, f"OCR 未识别到有效 TID：{text}", ocr_text=text)
+            self._set_progress(AutoTidRngPhase.FAILED, f"OCR 未识别到有效 TID：{text}", summary="未识别到有效 TID，流程已停止，请检查游戏画面", ocr_text=text)
             return
-        self._set_progress(AutoTidRngPhase.CALIBRATE_DELAY, f"OCR TID={tid}", ocr_text=text, ocr_tid=tid)
+        self._set_progress(AutoTidRngPhase.CALIBRATE_DELAY, f"OCR TID={tid}", summary="TID 识别完成，正在校准延迟", ocr_text=text, ocr_tid=tid)
 
     def _calibrate_delay(self) -> None:
         seed = self._require_seed()
@@ -1271,13 +1272,13 @@ class AutoTidRngRunner:
         if state is None:
             self._set_progress(
                 AutoTidRngPhase.FAILED,
-                f"ID 数据中未找到 OCR TID {tid}（反查范围 ±{self.config.reverse_lookup_window}）",
+                f"ID 数据中未找到 OCR TID {tid}（反查范围 ±{self.config.reverse_lookup_window}）", summary="未找到匹配的 TID，流程已停止，请检查识别结果",
             )
             return
         actual_delay = int(state.advances) - int(trigger)
         self._set_progress(
             AutoTidRngPhase.COMPLETED,
-            f"delay 校准完成：实际 delay={actual_delay}",
+            f"delay 校准完成：实际 delay={actual_delay}", summary="TID 延迟校准已完成",
             ocr_advances=int(state.advances),
             actual_delay=actual_delay,
         )
@@ -1309,7 +1310,7 @@ class AutoTidRngRunner:
             return
         if message:
             if phase == AutoTidRngPhase.FAILED:
-                summary = summary or f"自动 TID 已停止：{message.splitlines()[0][:120]}"
+                summary = summary or "自动 TID 发生错误，流程已停止，请查看完整日志中的诊断详情"
                 level = level or "ERROR"
                 event_type = "task.failed"
             message = LogMessage(

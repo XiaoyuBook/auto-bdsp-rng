@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from auto_bdsp_rng.log_events import LogMessage
+
 import threading
 import time
 from dataclasses import replace
@@ -3901,7 +3903,9 @@ def test_auto_rng_progress_preserves_selected_configuration_group_and_stop_prior
     panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.COMPLETED))
     assert panel.runtime_card.property("state") == "completed"
     assert panel.toolbar_status.text() == "流程已完成 · 可查看轮次"
-    panel.apply_progress(AutoRngProgress(phase=AutoRngPhase.FAILED, log_message="没有可用画面"))
+    panel.apply_progress(AutoRngProgress(
+        phase=AutoRngPhase.FAILED, log_message=LogMessage("没有可用画面", summary="没有可用画面"),
+    ))
     assert panel.runtime_card.property("state") == "failed"
     assert panel.runtime_description_label.text() == "没有可用画面"
 
@@ -4127,7 +4131,7 @@ def test_auto_rng_panel_apply_progress_updates_summary_and_log(app):
             current_advances=0,
             remaining_to_trigger=100,
             final_flash_frames=100,
-            log_message="最终撞闪剩余 100 帧",
+            log_message=LogMessage("最终撞闪剩余 100 帧", summary="最终撞闪剩余 100 帧"),
         )
     )
 

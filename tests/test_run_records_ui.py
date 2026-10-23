@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from auto_bdsp_rng.log_events import LogMessage
+
 import pytest
 import time
 
@@ -308,7 +310,7 @@ def test_run_log_buffer_hard_cap_and_panel_small_capacity_receive_live_entries(a
     hard_cap_buffer = RunLogBuffer(max_entries=MAX_LOG_ENTRIES + 100)
 
     for index in range(MAX_LOG_ENTRIES + 1):
-        hard_cap_buffer.publish("容量测试", f"记录 {index}")
+        hard_cap_buffer.publish("容量测试", LogMessage(f"记录 {index}", summary=f"记录 {index}"))
 
     hard_cap_entries = hard_cap_buffer.snapshot()
     assert hard_cap_buffer.max_entries == MAX_LOG_ENTRIES
@@ -319,7 +321,7 @@ def test_run_log_buffer_hard_cap_and_panel_small_capacity_receive_live_entries(a
     small_buffer = RunLogBuffer(max_entries=3)
     panel = RunLogPanel(small_buffer)
     for message in ("第一条", "第二条", "第三条", "第四条"):
-        small_buffer.publish("自动定点", message)
+        small_buffer.publish("自动定点", LogMessage(message, summary=message))
     app.processEvents()
 
     assert [entry.message for entry in small_buffer.snapshot()] == ["第二条", "第三条", "第四条"]
@@ -330,10 +332,10 @@ def test_run_log_buffer_hard_cap_and_panel_small_capacity_receive_live_entries(a
 def test_run_log_panel_combines_source_level_and_keyword_filters(app):
     buffer = RunLogBuffer()
     panel = RunLogPanel(buffer)
-    buffer.publish("自动定点", "needle but informational", level="INFO")
-    buffer.publish("自动定点", "ordinary failure", level="ERROR")
-    buffer.publish("自动 TID", "needle from another source", level="ERROR")
-    buffer.publish("自动定点", "Final NEEDLE failure", level="ERROR")
+    buffer.publish("自动定点", LogMessage("needle but informational", summary="needle but informational"), level="INFO")
+    buffer.publish("自动定点", LogMessage("ordinary failure", summary="ordinary failure"), level="ERROR")
+    buffer.publish("自动 TID", LogMessage("needle from another source", summary="needle from another source"), level="ERROR")
+    buffer.publish("自动定点", LogMessage("Final NEEDLE failure", summary="Final NEEDLE failure"), level="ERROR")
     app.processEvents()
 
     panel.set_source_filter("自动定点")
@@ -350,9 +352,9 @@ def test_run_log_panel_combines_source_level_and_keyword_filters(app):
 
 def test_round_history_link_filters_by_run_and_round_and_can_be_cancelled(app):
     buffer = RunLogBuffer()
-    buffer.publish("自动定点", "本轮日志", run_id="run-a", round_id=8)
-    buffer.publish("自动定点", "同轮次号但另一次运行", run_id="run-b", round_id=8)
-    buffer.publish("自动定点", "同一次运行但另一轮", run_id="run-a", round_id=9)
+    buffer.publish("自动定点", LogMessage("本轮日志", summary="本轮日志"), run_id="run-a", round_id=8)
+    buffer.publish("自动定点", LogMessage("同轮次号但另一次运行", summary="同轮次号但另一次运行"), run_id="run-b", round_id=8)
+    buffer.publish("自动定点", LogMessage("同一次运行但另一轮", summary="同一次运行但另一轮"), run_id="run-a", round_id=9)
     history = HistoryPanel()
     history.cycle_start(8, run_id="run-a", round_id=8, target_label="谢米")
     logs = RunLogWindow(buffer)
@@ -372,8 +374,8 @@ def test_round_history_link_filters_by_run_and_round_and_can_be_cancelled(app):
 def test_clear_display_does_not_clear_the_session_buffer(app):
     buffer = RunLogBuffer()
     panel = RunLogPanel(buffer)
-    buffer.publish("应用", "保留一")
-    buffer.publish("应用", "保留二")
+    buffer.publish("应用", LogMessage("保留一", summary="保留一"))
+    buffer.publish("应用", LogMessage("保留二", summary="保留二"))
     app.processEvents()
 
     panel.clear_button.click()
@@ -382,7 +384,7 @@ def test_clear_display_does_not_clear_the_session_buffer(app):
     assert panel.log_model.rowCount() == 0
     assert [entry.message for entry in buffer.snapshot()] == ["保留一", "保留二"]
 
-    buffer.publish("应用", "清空后新增")
+    buffer.publish("应用", LogMessage("清空后新增", summary="清空后新增"))
     app.processEvents()
     assert _messages(panel) == ["清空后新增"]
 
@@ -402,7 +404,7 @@ def test_log_empty_artwork_tracks_filtered_rows_without_changing_the_buffer(app)
     assert panel.empty_state.isVisible()
     assert panel.empty_state.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-    buffer.publish("应用", "可见记录")
+    buffer.publish("应用", LogMessage("可见记录", summary="可见记录"))
     app.processEvents()
     assert not panel.empty_state.isVisible()
     panel.search_edit.setText("未匹配的内容")
@@ -419,7 +421,7 @@ def test_log_empty_artwork_tracks_filtered_rows_without_changing_the_buffer(app)
     app.processEvents()
     assert panel.empty_state.isVisible()
     assert len(buffer.snapshot()) == 1
-    buffer.publish("应用", "新记录")
+    buffer.publish("应用", LogMessage("新记录", summary="新记录"))
     app.processEvents()
     assert not panel.empty_state.isVisible()
     assert _messages(panel) == ["新记录"]
@@ -527,7 +529,7 @@ def test_auto_rng_round_button_preserves_unread_detailed_log_count(app, tmp_path
     app.processEvents()
     window.run_log_window.close()
     window.tabs.setCurrentWidget(window.auto_rng_tab)
-    window._run_log_buffer.publish("自动定点", "需要查看的错误", level="ERROR")
+    window._run_log_buffer.publish("自动定点", LogMessage("需要查看的错误", summary="需要查看的错误"), level="ERROR")
     app.processEvents()
     assert window.run_log_window.unread_problem_count == 1
     window.auto_rng_tab.runtime_log_button.click()
@@ -550,7 +552,7 @@ def test_auto_rng_latest_message_uses_only_the_workspace_footer(app, tmp_path):
     )
     before = len(window._run_log_buffer.snapshot())
 
-    window.auto_rng_tab.add_log("第一行\n最终消息")
+    window.auto_rng_tab.add_log(LogMessage("第一行\n最终消息", summary="最终消息"))
     app.processEvents()
 
     assert window.auto_rng_tab.log_group.isHidden()
@@ -613,15 +615,15 @@ def test_help_menu_and_log_page_save_switches_stay_synchronized(
 def test_closed_log_window_counts_critical_and_clears_unread_when_reopened(app):
     buffer = RunLogBuffer()
     logs = RunLogWindow(buffer)
-    buffer.publish("应用", "警告", level="WARNING")
-    buffer.publish("应用", "严重错误", level="CRITICAL")
+    buffer.publish("应用", LogMessage("警告", summary="警告"), level="WARNING")
+    buffer.publish("应用", LogMessage("严重错误", summary="严重错误"), level="CRITICAL")
     app.processEvents()
     assert logs.unread_problem_count == 2
     logs.show_logs()
     app.processEvents()
     assert logs.unread_problem_count == 0
     logs.close()
-    buffer.publish("应用", "关闭期间发生错误", level="ERROR")
+    buffer.publish("应用", LogMessage("关闭期间发生错误", summary="关闭期间发生错误"), level="ERROR")
     app.processEvents()
     assert logs.unread_problem_count == 1
     logs.show_logs()
@@ -652,13 +654,13 @@ def test_auto_tid_progress_creates_round_records_and_links_exact_round_logs(app,
     window._active_auto_tid_round_id = 1
     window.history_tab.begin_run("tid-run", "自动 TID")
     window.history_tab.cycle_start(1, run_id="tid-run", round_id=1, target_label="自动 TID")
-    window._write_run_log("自动 TID", "第一轮日志")
+    window._write_run_log("自动 TID", LogMessage("第一轮日志", summary="第一轮日志"))
 
     window.auto_tid_rng_tab.apply_progress(
         AutoTidRngProgress(
             phase=AutoTidRngPhase.SEARCH_TARGET,
             loop_index=2,
-            log_message="第二轮开始",
+            log_message=LogMessage("第二轮开始", summary="第二轮开始"),
         )
     )
     app.processEvents()

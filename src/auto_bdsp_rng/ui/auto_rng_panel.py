@@ -3439,11 +3439,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.log_view.appendPlainText("\n".join(stamped))
         if not is_user_message(message, level):
             return
-        latest_line = next((line.strip() for line in reversed(log_summary(message).splitlines()) if line.strip()), None)
+        latest_line = next((line.strip() for line in reversed(log_summary(message, level).splitlines()) if line.strip()), None)
         if latest_line is not None:
             self.latest_log_time_label.setText(timestamp)
             self.latest_log_label.setText(latest_line)
-            self.latest_log_label.setToolTip(text)
+            self.latest_log_label.setToolTip(latest_line)
             self.latestMessageChanged.emit(latest_line)
 
     def set_candidates(self, rows: list[list[str]], locked_index: int | None = None) -> None:

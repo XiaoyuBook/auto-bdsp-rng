@@ -1,3 +1,4 @@
+from auto_bdsp_rng.log_events import LogMessage
 from threading import Thread
 
 import pytest
@@ -39,7 +40,7 @@ def test_complete_log_window_reuses_model_and_receives_workers_while_closed(app,
     assert w.easycon_tab.virtual_controller_enabled
     logs.close()
     assert not logs.isVisible()
-    worker = Thread(target=lambda: w._run_log_buffer.publish("后台测试", "关闭后仍收到日志", level="ERROR"))
+    worker = Thread(target=lambda: w._run_log_buffer.publish("后台测试", LogMessage("关闭后仍收到日志", summary="关闭后仍收到日志"), level="ERROR"))
     worker.start()
     worker.join()
     settle()
@@ -71,8 +72,8 @@ def test_live_source_current_run_and_historical_round_routes_are_independent(app
     entries = [("old", 2, "历史同编号轮次"), ("current", 1, "当前运行上一轮"),
                ("current", 2, "当前运行本轮")]
     for run, round_id, message in entries:
-        w._run_log_buffer.publish("自动定点", message, run_id=run, round_id=round_id)
-    w._run_log_buffer.publish("OCR", "历史轮次的 OCR", run_id="old", round_id=2)
+        w._run_log_buffer.publish("自动定点", LogMessage(message, summary=message), run_id=run, round_id=round_id)
+    w._run_log_buffer.publish("OCR", LogMessage("历史轮次的 OCR", summary="历史轮次的 OCR"), run_id="old", round_id=2)
     settle()
     log = w.run_log_window.log_panel
     w.tabs.setCurrentWidget(w.auto_rng_tab)
@@ -104,7 +105,7 @@ def test_realtime_fold_restore_preserves_state_and_keeps_video_and_actions(app, 
     w.resize(*size)
     w.tabs.setCurrentWidget(w.run_records_tab)
     for index in range(40):
-        w._run_log_buffer.publish("折叠测试", f"保留 {index}")
+        w._run_log_buffer.publish("折叠测试", LogMessage(f"保留 {index}", summary=f"保留 {index}"))
     settle()
     live.source_combo.setCurrentIndex(live.source_combo.findData("折叠测试"))
     live.follow_check.setChecked(False)
@@ -117,7 +118,7 @@ def test_realtime_fold_restore_preserves_state_and_keeps_video_and_actions(app, 
     assert w.preview_label.isVisible() and w.monitor_preview_scroll.verticalScrollBar().maximum() == 0
     for control in (live.collapse_button, live.expand_button):
         assert live.rect().contains(QRect(control.mapTo(live, QPoint()), control.size()))
-    worker = Thread(target=lambda: w._run_log_buffer.publish("折叠测试", "折叠期间更新"))
+    worker = Thread(target=lambda: w._run_log_buffer.publish("折叠测试", LogMessage("折叠期间更新", summary="折叠期间更新")))
     worker.start()
     worker.join()
     settle()
@@ -137,7 +138,7 @@ def test_realtime_fold_restore_preserves_state_and_keeps_video_and_actions(app, 
 
 def test_complete_window_log_operations_preserve_shared_buffer(app, window, monkeypatch, tmp_path):
     w, logs = window, window.run_log_window
-    w._run_log_buffer.publish("操作测试", '<完整消息> & "中文"', level="ERROR")
+    w._run_log_buffer.publish("操作测试", LogMessage('<完整消息> & "中文"', summary='<完整消息> & "中文"'), level="ERROR")
     settle()
     logs.show_logs("操作测试")
     panel = logs.log_panel
@@ -157,6 +158,41 @@ def test_complete_window_log_operations_preserve_shared_buffer(app, window, monk
     panel.clear_action.trigger()
     assert panel.log_model.rowCount() == 0 and w._run_log_buffer.snapshot() == snapshot
     assert '<完整消息> & "中文"' in w.live_log_panel.text.toPlainText()
-    w._run_log_buffer.publish("操作测试", "新的完整消息", level="ERROR")
+    w._run_log_buffer.publish("操作测试", LogMessage("新的完整消息", summary="新的完整消息"), level="ERROR")
     settle()
     assert messages(panel) == ["新的完整消息"]
+
+
+def test_all_main_window_log_sinks_keep_internal_text_out_of_live_view(app, window):
+    w = window
+    raw = 'Traceback: C:\\private\\device.json; Seed=123; monotonic=9; backend_ready=False'
+    w._write_run_log("视频源", raw)
+    w._write_run_log("OCR", raw, level="ERROR")
+    w.auto_rng_tab.add_log(raw)
+    w.auto_rng_tab.add_log(raw, level="ERROR")
+    w.auto_tid_rng_tab.add_log(raw, level="WARNING")
+    w.easycon_tab._append_log("info", raw)
+    w.easycon_tab._append_log("stdout", raw)
+    w.easycon_tab._append_log("stderr", raw)
+    w._write_run_log("QQ 通知", raw, level="WARNING")
+    w._write_run_log("Seed 捕捉", LogMessage(raw, summary="测种完成，正在搜索目标"))
+    settle()
+    live, panel = w.live_log_panel, w.run_log_window.log_panel
+    for source in ("OCR", "自动定点", "自动 TID", "伊机控", "QQ 通知", "Seed 捕捉", None):
+        live.source_combo.setCurrentIndex(live.source_combo.findData(source))
+        live.set_collapsed(True)
+        live.set_collapsed(False)
+        assert "Traceback" not in live.text.toPlainText()
+        assert "private" not in live.text.toPlainText()
+        assert "monotonic" not in live.text.toPlainText()
+        assert "backend_ready" not in live.text.toPlainText()
+    assert "测种完成，正在搜索目标" in live.text.toPlainText()
+    assert "脚本报告错误信息" in live.text.toPlainText()
+    assert "操作未能完成" in live.text.toPlainText()
+    assert any(entry.message == raw for entry in w._run_log_buffer.snapshot())
+    assert "Traceback" not in panel._filtered_text()
+    assert "Traceback" not in w.auto_rng_tab.latest_log_label.toolTip()
+    assert "Traceback" not in w.auto_tid_rng_tab.latest_log_label.toolTip()
+    assert "Traceback" not in w.easycon_tab.latest_log_label.toolTip()
+    panel.view_combo.setCurrentIndex(panel.view_combo.findData("all"))
+    assert raw in panel._filtered_text()

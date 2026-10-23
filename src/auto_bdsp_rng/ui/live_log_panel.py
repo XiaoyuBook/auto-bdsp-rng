@@ -69,6 +69,10 @@ class _LiveLogText(QTextEdit):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.beginEditBlock()
         for entry in entries:
+            # Enforce the presentation boundary at the final rendering point,
+            # too: no caller can accidentally render an unclassified raw log.
+            if not entry.user_message:
+                continue
             first = self.document().isEmpty()
             if not first:
                 cursor.insertBlock()
@@ -86,7 +90,7 @@ class _LiveLogText(QTextEdit):
             message_block.setRightMargin(6)
             message_block.setBottomMargin(10)
             cursor.insertBlock(message_block)
-            cursor.insertText(entry.display_message, self._text_format(
+            cursor.insertText(entry.user_message, self._text_format(
                 13, "#954A44" if entry.level in {"ERROR", "CRITICAL"} else "#293640",
             ))
         cursor.endEditBlock()
@@ -318,7 +322,8 @@ class LiveLogPanel(QFrame):
     def _refresh(self, *_args) -> None:
         entries = self._buffer.snapshot()
         for entry in entries:
-            self._add_source(entry.source)
+            if entry.user_visible:
+                self._add_source(entry.source)
         self._last_seq = max((entry.seq for entry in entries), default=0)
         selected = [entry for entry in entries if self._matches(entry)]
         self._visible_count = len(selected)
@@ -348,7 +353,7 @@ class LiveLogPanel(QFrame):
         selected = [entry for entry in entries if self._matches(entry)]
         new_entries = [entry for entry in selected if entry.seq > self._last_seq]
         for entry in entries:
-            if entry.seq > self._last_seq:
+            if entry.seq > self._last_seq and entry.user_visible:
                 self._add_source(entry.source)
         self._last_seq = max((entry.seq for entry in entries), default=self._last_seq)
         self._visible_count = len(selected)

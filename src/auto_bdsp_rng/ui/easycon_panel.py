@@ -62,7 +62,7 @@ from auto_bdsp_rng.automation.easycon import (
     save_config,
     scan_builtin_scripts,
 )
-from auto_bdsp_rng.log_events import is_user_message, log_summary, script_output_message
+from auto_bdsp_rng.log_events import LogMessage, log_summary, script_output_message
 from auto_bdsp_rng.resources import (
     bundled_easycon_bridge_path,
     remap_legacy_script_path,
@@ -2070,7 +2070,7 @@ class EasyConPanel(QWidget):
                 ports = list(self._ensure_native_backend().list_ports())  # type: ignore[attr-defined]
             except Exception as exc:
                 ports = []
-                self._append_log("warn", f"刷新串口失败: {exc}")
+                self._append_log("warn", LogMessage(f"刷新串口失败: {exc}", summary="刷新串口失败，请检查设备连接后重试"))
         else:
             ports = list_ports(self.installation) if self.installation.is_available else []
         ports = [
@@ -2091,9 +2091,9 @@ class EasyConPanel(QWidget):
         else:
             self.port_combo.setCurrentIndex(-1)
         self.port_combo.blockSignals(False)
-        self._append_log("info", f"已刷新串口: {', '.join(ports) if ports else '未发现'}")
+        self._append_log("info", LogMessage(f"已刷新串口: {', '.join(ports) if ports else '未发现'}", summary="串口列表已刷新"))
         if not ports and not self.mock_check.isChecked():
-            self._append_log("warn", "未发现串口；请连接设备后刷新串口，运行按钮已禁用")
+            self._append_log("warn", LogMessage("未发现串口；请连接设备后刷新串口，运行按钮已禁用", summary="未发现串口，请连接设备后刷新"))
         self._save_config_from_ui()
         self._update_run_enabled()
         self._update_status_labels()
@@ -2107,7 +2107,7 @@ class EasyConPanel(QWidget):
             return
         self.port_combo.setCurrentText(selected)
         self._preferred_last_port = selected
-        self._append_log("info", f"已自动选择串口: {selected}")
+        self._append_log("info", LogMessage(f"已自动选择串口: {selected}", summary="已自动选择可用串口"))
         self._save_config_from_ui()
         self._update_run_enabled()
         self._update_status_labels()
@@ -2210,7 +2210,7 @@ class EasyConPanel(QWidget):
         self._rebuild_parameter_widgets(parameters)
         self.template_mode_label.setText("模板副本" if any(value == "填入这里" for value in self.parameter_defaults.values()) else "普通脚本")
         self._update_run_enabled()
-        self._append_log("info", f"已加载脚本: {path.name}")
+        self._append_log("info", LogMessage(f"已加载脚本: {path.name}", summary="脚本已加载，可以检查并运行"))
         self.execution.clear()
         try:
             self._remember_recent_script(path)
@@ -2232,7 +2232,7 @@ class EasyConPanel(QWidget):
         self.script_name_label.setText("未命名文档.txt")
         self._saved_editor_text = ""
         self.editor.setPlainText("")
-        self._append_log("info", "已新建空白脚本")
+        self._append_log("info", LogMessage("已新建空白脚本", summary="已新建空白脚本"))
         self.execution.clear()
 
     def save_script(self) -> Path | None:
@@ -2260,7 +2260,7 @@ class EasyConPanel(QWidget):
             # 同步持久化参数值到当前编辑器状态，避免下次打开时旧参数覆盖新内容
             self._sync_persisted_params_from_editor()
             self._update_dirty_indicator()
-            self._append_log("info", f"已保存: {self.current_script_path.name}")
+            self._append_log("info", LogMessage(f"已保存: {self.current_script_path.name}", summary="脚本已保存"))
             return self.current_script_path
         # 新文件，弹出保存对话框
         path, _ = QFileDialog.getSaveFileName(
@@ -2285,7 +2285,7 @@ class EasyConPanel(QWidget):
         self.execution.refresh_sources()
         self._update_dirty_indicator()
         self._remember_recent_script(output)
-        self._append_log("info", f"已保存: {output.name}")
+        self._append_log("info", LogMessage(f"已保存: {output.name}", summary="脚本已保存"))
         return output
 
     def _rebuild_parameter_widgets(self, parameters) -> None:
@@ -2405,7 +2405,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = True
         process.kill()
-        self._append_log("warn", "正在停止脚本")
+        self._append_log("warn", LogMessage("正在停止脚本", summary="正在停止脚本"))
 
     def run_script(self) -> None:
         if self._is_native_mode():
@@ -2448,7 +2448,7 @@ class EasyConPanel(QWidget):
         self.elapsed_label.setText("00:00:00")
         self.run_timer.start()
         self._append_log("warn", cli_connection_notice())
-        self._append_log("info", f"开始运行脚本，端口: {self._display_port(port)}")
+        self._append_log("info", LogMessage(f"开始运行脚本，端口: {self._display_port(port)}", summary="开始执行脚本"))
         self.task_state_text = "执行中"
         self._update_status_labels()
         self.process.start()
@@ -2494,7 +2494,7 @@ class EasyConPanel(QWidget):
             self.elapsed_label.setText("00:00:00")
             self.run_timer.start()
             self.task_state_text = "执行中"
-            self._append_log("info", f"通过 Python 原生后端运行脚本: {self.current_script_name}")
+            self._append_log("info", LogMessage(f"通过 Python 原生后端运行脚本: {self.current_script_name}", summary="开始执行脚本"))
             self._update_native_controls()
             self._update_run_enabled()
             self.nativeScriptStarted.emit()
@@ -2572,7 +2572,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = False
         self._set_script_error(error)
-        self._append_log("error", f"原生脚本运行失败: {error}")
+        self._append_log("error", LogMessage(f"原生脚本运行失败: {error}", summary="脚本执行失败，请检查脚本和手柄连接"))
         self._finish_run(
             "失败",
             exit_code=1,
@@ -2605,7 +2605,7 @@ class EasyConPanel(QWidget):
         pause = getattr(self.native_backend, "pause_current_script", None)
         if callable(pause) and pause():
             self.execution.poll()
-            self._append_log("info", "已请求暂停：WAIT 可立即暂停，按键或摇杆完成当前动作后暂停")
+            self._append_log("info", LogMessage("已请求暂停：WAIT 可立即暂停，按键或摇杆完成当前动作后暂停", summary="已请求暂停，当前动作结束后暂停脚本"))
 
     def resume_native_script(self) -> None:
         if not self._native_script_paused():
@@ -2626,7 +2626,7 @@ class EasyConPanel(QWidget):
         self.execution.show_current()
         self.execution.poll()
         self._refresh_script_action_buttons()
-        self._append_log("info", "已应用编辑器中的代码，从暂停位置继续运行")
+        self._append_log("info", LogMessage("已应用编辑器中的代码，从暂停位置继续运行", summary="已应用修改，脚本继续运行"))
 
     def stop_native_script(self) -> None:
         try:
@@ -2636,7 +2636,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = True
         self.task_state_text = "正在停止"
-        self._append_log("warn", "已请求停止当前脚本，等待脚本退出")
+        self._append_log("warn", LogMessage("已请求停止当前脚本，等待脚本退出", summary="已请求停止脚本，正在等待退出"))
         self._update_status_labels()
 
     def run_script_via_bridge(self) -> None:
@@ -2663,7 +2663,7 @@ class EasyConPanel(QWidget):
         self.task_state_text = "执行中"
         self._update_bridge_controls()
         self._update_run_enabled()
-        self._append_log("info", "通过常驻连接运行脚本")
+        self._append_log("info", LogMessage("通过常驻连接运行脚本", summary="开始执行脚本"))
         thread = QThread(self)
         worker = BridgeScriptWorker(self._ensure_bridge_backend(), script_text, self.current_script_name)
         worker.moveToThread(thread)
@@ -2718,7 +2718,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = False
         self._set_script_error(error)
-        self._append_log("error", f"Bridge 运行失败: {error}")
+        self._append_log("error", LogMessage(f"Bridge 运行失败: {error}", summary="脚本执行失败，请检查脚本和手柄连接"))
         self.bridge_status = EasyConStatus.FAILED
         self._finish_run(
             "失败",
@@ -2744,7 +2744,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = True
         self.task_state_text = "正在停止"
-        self._append_log("warn", "已请求停止当前 Bridge 任务，等待脚本退出")
+        self._append_log("warn", LogMessage("已请求停止当前 Bridge 任务，等待脚本退出", summary="已请求停止脚本，正在等待退出"))
         self._update_status_labels()
 
     def begin_external_native_script(self, name: str) -> None:
@@ -2795,7 +2795,7 @@ class EasyConPanel(QWidget):
 
     def fail_external_native_script(self, error: str) -> None:
         self.stop_requested = False
-        self._append_log("error", f"自动流程脚本失败: {error}")
+        self._append_log("error", LogMessage(f"自动流程脚本失败: {error}", summary="自动流程脚本执行失败，请查看完整日志中的诊断详情"))
         self._finish_run("失败", exit_code=1)
         self._update_native_controls()
 
@@ -2846,7 +2846,7 @@ class EasyConPanel(QWidget):
     def fail_external_bridge_script(self, error: str) -> None:
         self.stop_requested = False
         self.bridge_status = EasyConStatus.FAILED
-        self._append_log("error", f"自动流程脚本失败: {error}")
+        self._append_log("error", LogMessage(f"自动流程脚本失败: {error}", summary="自动流程脚本执行失败，请查看完整日志中的诊断详情"))
         self._finish_run("失败", exit_code=1)
 
     @staticmethod
@@ -2942,7 +2942,11 @@ class EasyConPanel(QWidget):
                 self.task_state_text = "未运行"
             self.easycon_status.showMessage(self.task_state_text, 3000)
         log_level = "error" if status.startswith("失败") else "warn" if status.startswith("已中止") else "info"
-        self._append_log(log_level, status)
+        self._append_log(log_level, LogMessage(status, summary={
+            "error": "脚本执行失败，请查看完整日志中的诊断详情",
+            "warn": "脚本已停止",
+            "info": "脚本已执行完成",
+        }[log_level]))
         self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
         self._cleanup_cli_script()
         self.current_run_started_at = None
@@ -3246,7 +3250,7 @@ class EasyConPanel(QWidget):
             cursor.setPosition(overflow, QTextCursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
-        latest = log_summary(event) if is_user_message(event, sink_level) else ""
+        latest = log_summary(event, sink_level)
         latest_line = next((line.strip() for line in reversed(latest.splitlines()) if line.strip()), None)
         if latest_line is not None:
             self.latest_log_label.setText(latest_line[-512:])
@@ -3461,13 +3465,13 @@ class EasyConPanel(QWidget):
             if not self._shutting_down:
                 if error is not None:
                     self.task_state_text = "连接失败"
-                    self._append_log("error", f"连接伊机控失败: {error}")
+                    self._append_log("error", LogMessage(f"连接伊机控失败: {error}", summary="连接伊机控失败，请检查串口和设备连接"))
                     self.easycon_status.showMessage("连接失败", 5000)
                     self._show_failure_toast(str(error))
                 elif cancelled:
                     self.task_state_text = "已取消连接"
                     self.easycon_status.showMessage("已取消连接", 3000)
-                    self._append_log("info", "已取消伊机控连接")
+                    self._append_log("info", LogMessage("已取消伊机控连接", summary="已取消连接伊机控"))
                 else:
                     self.task_state_text = "已完成"
                     self._preferred_last_port = operation.port
@@ -3475,7 +3479,7 @@ class EasyConPanel(QWidget):
                         self._save_config_from_ui()
                     except OSError as exc:
                         self._append_log("warn", f"串口已连接，但无法保存配置: {exc}")
-                    self._append_log("info", f"Python 原生伊机控已连接: {self._display_port(operation.port)}")
+                    self._append_log("info", LogMessage(f"Python 原生伊机控已连接: {self._display_port(operation.port)}", summary="伊机控已连接，可以运行脚本"))
                     self.easycon_status.showMessage("已连接", 3000)
                     self._show_connection_toast(self._display_port(operation.port))
                     self.connection_dialog.hide()
@@ -3484,7 +3488,7 @@ class EasyConPanel(QWidget):
         elif not self._shutting_down:
             if error is not None:
                 self.task_state_text = "断开失败"
-                self._append_log("error", f"断开伊机控失败: {error}")
+                self._append_log("error", LogMessage(f"断开伊机控失败: {error}", summary="未能断开伊机控，请查看完整日志中的诊断详情"))
                 self.easycon_status.showMessage("断开失败", 5000)
                 self._show_failure_toast(str(error))
             else:
@@ -3492,7 +3496,7 @@ class EasyConPanel(QWidget):
                 self._native_connection_cancelled = False
                 self.stop_requested = False
                 self.task_state_text = "未运行"
-                self._append_log("info", "已断开伊机控")
+                self._append_log("info", LogMessage("已断开伊机控", summary="伊机控已断开"))
                 self.easycon_status.showMessage("已断开", 3000)
             self._update_run_enabled()
         operation.deleteLater()
@@ -3523,14 +3527,14 @@ class EasyConPanel(QWidget):
             self.bridge_connecting = False
             self.bridge_status = EasyConStatus.FAILED
             self.task_state_text = "连接失败"
-            self._append_log("error", f"连接伊机控失败: {exc}")
+            self._append_log("error", LogMessage(f"连接伊机控失败: {exc}", summary="连接伊机控失败，请检查串口和设备连接"))
             self._show_failure_toast(str(exc))
             self._update_bridge_controls()
             return
         self.bridge_connecting = False
         self.bridge_status = EasyConStatus.BRIDGE_CONNECTED
         self.task_state_text = "已完成"
-        self._append_log("info", f"已连接伊机控: {self._display_port(port)}")
+        self._append_log("info", LogMessage(f"已连接伊机控: {self._display_port(port)}", summary="伊机控已连接，可以运行脚本"))
         self.easycon_status.showMessage("已连接", 3000)
         self._show_connection_toast(self._display_port(port))
         self._update_bridge_controls()
@@ -3542,10 +3546,10 @@ class EasyConPanel(QWidget):
         try:
             self._ensure_bridge_backend().disconnect()
         except Exception as exc:
-            self._append_log("error", f"断开伊机控失败: {exc}")
+            self._append_log("error", LogMessage(f"断开伊机控失败: {exc}", summary="未能断开伊机控，请查看完整日志中的诊断详情"))
             return
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
-        self._append_log("info", "已断开伊机控")
+        self._append_log("info", LogMessage("已断开伊机控", summary="伊机控已断开"))
         self.easycon_status.showMessage("已断开", 3000)
         self._update_bridge_controls()
         self._update_run_enabled()
@@ -4294,7 +4298,7 @@ class EasyConPanel(QWidget):
                 overlay.set_active(True)
                 overlay.show_overlay()
             source_label = "系统级键盘捕获" if source == "hook" else "窗口内键盘捕获"
-            self._append_log("info", f"键盘控制已启用（{source_label}）")
+            self._append_log("info", LogMessage(f"键盘控制已启用（{source_label}）", summary="键盘控制已启用"))
             self.setFocus()
             return True
 
@@ -4362,7 +4366,7 @@ class EasyConPanel(QWidget):
             overlay.set_active(True)
             overlay.show_overlay()
         source_label = "系统级键盘捕获" if source == "hook" else "窗口内键盘捕获"
-        self._append_log("info", f"键盘控制已启用（{source_label}）")
+        self._append_log("info", LogMessage(f"键盘控制已启用（{source_label}）", summary="键盘控制已启用"))
         self.setFocus()
         return True
 
@@ -4399,7 +4403,7 @@ class EasyConPanel(QWidget):
         if overlay is not None:
             overlay.set_active(False)
         if log:
-            self._append_log("info", "键盘控制已切换为待机")
+            self._append_log("info", LogMessage("键盘控制已切换为待机", summary="键盘控制已切换为待机"))
         return True
 
     def _handle_escape_key(self, down: bool, *, control_down: bool = False) -> bool:
@@ -4469,7 +4473,7 @@ class EasyConPanel(QWidget):
                 overlay.hide()
                 self._vpad_hide_pending = False
         if had_controller and log:
-            self._append_log("info", "键盘控制已关闭")
+            self._append_log("info", LogMessage("键盘控制已关闭", summary="键盘控制已关闭"))
         self._update_keyboard_control_presentation()
         return stopped
 
@@ -4740,7 +4744,7 @@ class EasyConPanel(QWidget):
         self.record_btn.setText("停止录制")
         self.pause_btn.setEnabled(True)
         self._update_keyboard_control_presentation()
-        self._append_log("info", "开始录制，操作命令将实时追加到当前脚本末尾")
+        self._append_log("info", LogMessage("开始录制，操作命令将实时追加到当前脚本末尾", summary="开始录制，操作会实时追加到当前脚本"))
 
     def _stop_recording(self, *, deferred_cleanup: list[Callable[[], object]] | None = None) -> None:
         self._release_virtual_controller_keys(deferred_cleanup=deferred_cleanup)
@@ -4752,10 +4756,10 @@ class EasyConPanel(QWidget):
         self._update_keyboard_control_presentation()
         self._refresh_script_action_buttons()
         if self._recorded_lines:
-            self._append_log("info", f"录制完成，已实时追加 {len(self._recorded_lines)} 行脚本")
+            self._append_log("info", LogMessage(f"录制完成，已实时追加 {len(self._recorded_lines)} 行脚本", summary="录制已完成，操作已追加到当前脚本"))
             self._recorded_lines = []
         else:
-            self._append_log("info", "录制已停止（无操作记录）")
+            self._append_log("info", LogMessage("录制已停止（无操作记录）", summary="录制已停止，没有记录到操作"))
 
     def _toggle_pause_recording(self) -> None:
         if not self._recording:
@@ -4767,7 +4771,7 @@ class EasyConPanel(QWidget):
         self._recording_paused = True
         self.pause_btn.setText("继续录制")
         self._update_keyboard_control_presentation()
-        self._append_log("info", "录制已暂停")
+        self._append_log("info", LogMessage("录制已暂停", summary="录制已暂停"))
 
     def _resume_recording(self) -> None:
         if not self._recording or not self._recording_paused:
@@ -4778,7 +4782,7 @@ class EasyConPanel(QWidget):
         self.pause_btn.setText("暂停录制")
         self.pause_btn.setEnabled(True)
         self._update_keyboard_control_presentation()
-        self._append_log("info", "录制已恢复")
+        self._append_log("info", LogMessage("录制已恢复", summary="录制已恢复"))
 
     def _release_virtual_controller_keys(
         self, *, deferred_cleanup: list[Callable[[], object]] | None = None,

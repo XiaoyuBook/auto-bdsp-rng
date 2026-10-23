@@ -2,7 +2,8 @@
 
 The string value is always the original diagnostic message. This preserves
 script callbacks, history consumers and disk logging while the UI can use a
-short, explicitly authored summary. Unknown/plain messages remain visible.
+short, explicitly authored summary. Unclassified messages are diagnostic only;
+warnings and failures without user copy receive a fixed, safe notice.
 """
 
 from __future__ import annotations
@@ -42,10 +43,22 @@ class LogMessage(str):
         return value
 
 
-def log_summary(message: object) -> str:
-    """Use authored summaries, keeping ordinary messages backward compatible."""
+def log_summary(message: object, level: str = "INFO") -> str:
+    """Return only user-authored copy, never fall back to diagnostic text.
 
-    return getattr(message, "summary", "") or str(message)
+    Severity must not bypass this boundary: an exception is still diagnostic
+    even when reported as ERROR. Diagnostic summaries also stay out of user UI.
+    """
+
+    effective_level = log_level(message, level)
+    summary = getattr(message, "summary", "")
+    if summary and effective_level != "DEBUG" and not getattr(message, "diagnostic", False):
+        return summary
+    if effective_level == "WARNING":
+        return "操作遇到问题，请查看完整日志中的诊断详情"
+    if effective_level in {"ERROR", "CRITICAL"}:
+        return "操作未能完成，请查看完整日志中的诊断详情"
+    return ""
 
 
 def log_level(message: object, level: str = "INFO") -> str:
@@ -58,10 +71,7 @@ def log_level(message: object, level: str = "INFO") -> str:
 
 
 def is_user_message(message: object, level: str = "INFO") -> bool:
-    effective_level = log_level(message, level)
-    return effective_level in PROBLEM_LEVELS or (
-        effective_level != "DEBUG" and not getattr(message, "diagnostic", False)
-    )
+    return bool(log_summary(message, level))
 
 
 def script_output_message(message: str, *, error: bool = False) -> LogMessage:

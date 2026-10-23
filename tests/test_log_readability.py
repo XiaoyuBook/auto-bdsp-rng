@@ -5,9 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from auto_bdsp_rng.log_events import LogMessage, script_output_message
+from auto_bdsp_rng.log_events import LogMessage, log_summary, script_output_message
 from auto_bdsp_rng.run_log import RunLogManager
 from auto_bdsp_rng.ui.live_log_panel import LiveLogPanel
 from auto_bdsp_rng.ui.run_log_panel import RunLogBuffer, RunLogPanel
@@ -20,7 +21,7 @@ def settle(app):
         app.processEvents()
 
 
-def test_user_views_hide_diagnostics_but_keep_unknown_messages_and_failures(app):
+def test_user_views_require_authored_summaries_and_keep_failures_safe(app):
     buffer = RunLogBuffer()
     panel, live = RunLogPanel(buffer), LiveLogPanel(buffer)
     buffer.publish("自动 TID", LogMessage("开始=True；线程=False", summary="按钮状态", diagnostic=True, level="DEBUG"))
@@ -30,20 +31,21 @@ def test_user_views_hide_diagnostics_but_keep_unknown_messages_and_failures(app)
     settle(app)
 
     assert len(buffer.snapshot()) == 4
-    assert len(panel.visible_entries()) == 3
+    assert len(panel.visible_entries()) == 2
     assert panel.proxy_model.index(0, 1).data() == "信息"
     assert panel.proxy_model.index(0, 2).data() == "自动 TID · 第 3 轮"
     assert panel.proxy_model.index(0, 3).data() == "测种完成"
     text = live.text.toPlainText()
     assert "测种完成" in text and "第 3 轮" in text
-    assert "未迁移的普通消息" in text and "TimeoutError: 原始原因" in text
+    assert "未迁移的普通消息" not in text and "TimeoutError: 原始原因" not in text
+    assert "操作未能完成，请查看完整日志中的诊断详情" in text
     assert "monotonic" not in text and "开始=True" not in text
     panel.view_combo.setCurrentIndex(panel.view_combo.findData("all"))
     assert len(panel.visible_entries()) == 4
     panel.view_combo.setCurrentIndex(panel.view_combo.findData("problems"))
     assert [entry.level for entry in panel.visible_entries()] == ["ERROR"]
     panel.clear_filters()
-    assert panel.view_combo.currentData() == "user" and len(panel.visible_entries()) == 3
+    assert panel.view_combo.currentData() == "user" and len(panel.visible_entries()) == 2
 
 
 def test_details_search_copy_and_export_preserve_chinese_and_raw_parameters(app, tmp_path, monkeypatch):
@@ -113,8 +115,8 @@ def test_late_add_cannot_overwrite_a_newer_coalesced_update(app):
     buffer = RunLogBuffer()
     panel = RunLogPanel(buffer)
     buffer.blockSignals(True)
-    first = buffer.publish("计时", LogMessage("first", coalesce_key="sample"))
-    latest = buffer.publish("计时", LogMessage("latest", coalesce_key="sample"))
+    first = buffer.publish("计时", LogMessage("first", summary="首次摘要", coalesce_key="sample"))
+    latest = buffer.publish("计时", LogMessage("latest", summary="最近摘要", coalesce_key="sample"))
     panel.update_entry(latest)
     panel.add_entry(first)
     assert panel.visible_entries()[0].message == "latest"
@@ -161,7 +163,8 @@ def test_live_reader_preserves_literal_text_and_retains_complete_messages(app):
 
     def publish():
         for index in range(600):
-            buffer.publish("输入检查", f'记录 {index}：<b>中文原文</b> & "引号"')
+            summary = f'记录 {index}：<b>中文原文</b> & "引号"'
+            buffer.publish("输入检查", LogMessage(f"内部原文 {index}", summary=summary))
 
     worker = Thread(target=publish)
     worker.start()
@@ -177,7 +180,7 @@ def test_live_reader_preserves_literal_text_and_retains_complete_messages(app):
     assert len(buffer.snapshot()) == 600
     live.follow_check.setChecked(False)
     live.text.verticalScrollBar().setValue(0)
-    buffer.publish("输入检查", "最后一条")
+    buffer.publish("输入检查", LogMessage("最后一条", summary="最后一条"))
     settle(app)
     assert live.text.verticalScrollBar().value() == 0
 
@@ -198,6 +201,81 @@ def test_diagnostic_metadata_cannot_downgrade_a_failure(app):
     buffer.publish("自动 TID", LogMessage("原始错误", diagnostic=True, level="DEBUG"), level="ERROR")
     assert panel.visible_entries()[0].level == "ERROR"
     assert panel.proxy_model.index(0, 1).data() == "错误"
+
+
+@pytest.mark.parametrize("level", ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
+@pytest.mark.parametrize("kind", ["plain", "unclassified", "diagnostic", "authored"])
+def test_raw_payload_never_bypasses_the_user_presentation_boundary(app, level, kind):
+    raw = 'Traceback: C:\\private\\config.json\nSeed=123; monotonic=9; enabled=True; token=internal-test'
+    summary = "测种完成，正在搜索目标"
+    message = raw if kind == "plain" else LogMessage(
+        raw, summary=summary if kind in {"authored", "diagnostic"} else "",
+        diagnostic=kind == "diagnostic", details="内部参数详情",
+    )
+    buffer = RunLogBuffer()
+    panel, live = RunLogPanel(buffer), LiveLogPanel(buffer)
+    entry = buffer.publish("测试模块", message, level=level)
+    settle(app)
+    # Check rendering itself as well as normal signal delivery and filtering.
+    live.text.set_entries([entry])
+    live.source_combo.setCurrentIndex(0)
+    live.set_collapsed(True)
+    live.set_collapsed(False)
+    text = live.text.toPlainText()
+    for internal in ("Traceback", "private", "Seed=", "monotonic", "enabled", "token", "内部参数详情"):
+        assert internal not in text
+    expected_visible = level in {"WARNING", "ERROR", "CRITICAL"} or (kind == "authored" and level != "DEBUG")
+    assert entry.user_visible is expected_visible
+    assert bool(panel.visible_entries()) is expected_visible
+    if expected_visible:
+        expected = summary if kind == "authored" else log_summary(message, level)
+        assert expected in text
+        assert panel.proxy_model.index(0, 3).data() == expected
+        assert "Traceback" not in panel.proxy_model.index(0, 3).data(int(Qt.ItemDataRole.ToolTipRole))
+        panel.copy_filtered()
+        assert "Traceback" not in QApplication.clipboard().text()
+        panel.view_combo.setCurrentIndex(panel.view_combo.findData("problems"))
+        assert "Traceback" not in panel._filtered_text()
+    else:
+        assert text == ""
+        assert live.source_combo.findData("测试模块") < 0
+    panel.view_combo.setCurrentIndex(panel.view_combo.findData("all"))
+    assert panel.visible_entries()[0].message == raw
+    assert raw in panel._filtered_text()
+
+
+@pytest.mark.parametrize("task", ["rng", "tid"])
+def test_runner_failed_progress_keeps_exception_in_diagnostics_only(app, tmp_path, task):
+    from auto_bdsp_rng.automation.auto_rng.models import AutoRngConfig, AutoRngPhase
+    from auto_bdsp_rng.automation.auto_rng.runner import AutoRngRunner
+    from auto_bdsp_rng.automation.auto_tid_rng import (
+        AutoTidRngConfig, AutoTidRngPhase, AutoTidRngRunner,
+    )
+
+    raw = "RuntimeError: C:\\private\\seed.json; monotonic=999; internal-state=False"
+    buffer = RunLogBuffer()
+    live = LiveLogPanel(buffer)
+
+    def receive(progress):
+        if progress.log_message:
+            buffer.publish("自动任务", progress.log_message)
+
+    if task == "rng":
+        runner = AutoRngRunner(
+            AutoRngConfig(script_dir=tmp_path), progress_callback=receive,
+        )
+        failed = AutoRngPhase.FAILED
+    else:
+        runner = AutoTidRngRunner(
+            AutoTidRngConfig(script_dir=tmp_path), progress_callback=receive,
+        )
+        failed = AutoTidRngPhase.FAILED
+    runner._set_progress(failed, raw)
+    settle(app)
+    assert any(raw in entry.full_text() for entry in buffer.snapshot())
+    assert "流程已停止" in live.text.toPlainText()
+    for internal in ("RuntimeError", "private", "monotonic", "internal-state"):
+        assert internal not in live.text.toPlainText()
 
 
 @pytest.mark.parametrize("has_target", [False, True])

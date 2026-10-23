@@ -1,3 +1,4 @@
+from auto_bdsp_rng.log_events import LogMessage
 from threading import Thread
 
 import numpy as np
@@ -32,7 +33,7 @@ def test_video_and_logs_remain_visible_and_keep_state_across_pages(window, monke
     w._sync_seed64_from_state32()
     w._handle_auto_capture_progress(12, 40)
     w._update_auto_rng_header(advances=9876)
-    w._run_log_buffer.publish("Seed 捕捉", "保留本次捕捉日志")
+    w._run_log_buffer.publish("Seed 捕捉", LogMessage("保留本次捕捉日志", summary="保留本次捕捉日志"))
     expected_seed = [box.text() for box in w.seed64_outputs]
     for index in range(w.tabs.count()):
         w.tabs.setCurrentIndex(index)
@@ -69,12 +70,12 @@ def test_narrow_toolbar_keeps_start_stop_and_script_controls_reachable(window, m
 
 def test_live_logs_filter_queued_messages_without_modifying_session(window):
     buffer = RunLogBuffer(max_entries=8)
-    buffer.publish("Seed 捕捉", "捕捉开始")
+    buffer.publish("Seed 捕捉", LogMessage("捕捉开始", summary="捕捉开始"))
     panel = LiveLogPanel(buffer, window)
     panel.show()
     worker = Thread(target=lambda: (
-        buffer.publish("自动定点", "<测试> 保留原始文本", "ERROR"),
-        buffer.publish("Seed 捕捉", "捕捉完成"),
+        buffer.publish("自动定点", LogMessage("<测试> 保留原始文本", summary="<测试> 保留原始文本"), "ERROR"),
+        buffer.publish("Seed 捕捉", LogMessage("捕捉完成", summary="捕捉完成")),
     ))
     worker.start()
     worker.join()
@@ -96,13 +97,13 @@ def test_live_logs_filter_queued_messages_without_modifying_session(window):
 def test_live_log_follow_can_pause_and_resume(window):
     panel = window.live_log_panel
     for index in range(60):
-        window._run_log_buffer.publish("Seed 捕捉", f"眨眼事件 {index}")
+        window._run_log_buffer.publish("Seed 捕捉", LogMessage(f"眨眼事件 {index}", summary=f"眨眼事件 {index}"))
     settle()
     scrollbar = panel.text.verticalScrollBar()
     assert scrollbar.value() == scrollbar.maximum() > 0
     panel.follow_check.setChecked(False)
     scrollbar.setValue(0)
-    window._run_log_buffer.publish("Seed 捕捉", "最后一条")
+    window._run_log_buffer.publish("Seed 捕捉", LogMessage("最后一条", summary="最后一条"))
     settle()
     assert scrollbar.value() == 0
     panel.follow_check.setChecked(True)
