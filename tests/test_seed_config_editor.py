@@ -7,7 +7,8 @@ import cv2
 import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 
 from auto_bdsp_rng.blink_detection import load_project_xs_config, save_project_xs_config
 from auto_bdsp_rng.blink_detection.models import BlinkObservation
@@ -621,6 +622,75 @@ def test_switching_edit_targets_keeps_current_draft_and_blocks_start(window, con
     assert not window._ensure_automation_start_available()
     editor.cancel_button.click()
     assert window._ensure_automation_start_available()
+
+
+@pytest.mark.parametrize("opened,requested", [
+    ("seed", "seed"), ("seed", "tid"), ("tid", "reidentify"), ("reidentify", "seed"),
+])
+def test_edit_button_reveals_existing_draft_after_switching_pages(window, configs, opened, requested):
+    first, second, _template = configs
+    before = [path.read_bytes() for path in (first, second)]
+    panel, binding, editor = open_editor(window, opened, second)
+    window.npc_count.setText("27")
+    window.tabs.setCurrentWidget(window.bdsp_tab)
+    requested_panel, requested_binding = binding_for(window, requested)
+    window.tabs.setCurrentWidget(requested_panel)
+    window.reveal_page_configuration(requested_panel)
+    requested_panel.config_groups.reveal(requested_binding)
+    scroll = requested_panel.config_scroll if requested == "tid" else requested_panel.config_panel
+    scroll.ensureWidgetVisible(requested_binding.edit_button)
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    button = requested_binding.edit_button
+    assert button.isVisible() and button.isEnabled()
+    assert window.childAt(button.mapTo(window, button.rect().center())) is button
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+    QApplication.processEvents()
+    QApplication.processEvents()
+    assert window.tabs.currentWidget() is panel
+    assert editor.editor.isVisible() and editor.binding is binding
+    assert window.npc_count.text() == "27"
+    assert window._selected_config_path() == str(second)
+    window._refresh_task_config_bindings()
+    QApplication.processEvents()
+    for view in editor._bindings():
+        assert not view.combo.isEnabled()
+        assert view.edit_button.isEnabled()
+    assert [path.read_bytes() for path in (first, second)] == before
+    editor.cancel_button.click()
+    for view in editor._bindings():
+        assert view.combo.isEnabled()
+
+
+@pytest.mark.parametrize("busy", ["capture", "selection", "preparing", "running"])
+def test_blocked_edit_shows_reason_at_button_and_can_retry_when_idle(window, configs, monkeypatch, busy):
+    _first, second, _template = configs
+    before = second.read_bytes()
+    panel, binding = binding_for(window, "seed")
+    window.tabs.setCurrentWidget(panel)
+    binding.combo.setCurrentIndex(binding.combo.findData(str(second)))
+    with monkeypatch.context() as state:
+        if busy == "capture":
+            state.setattr(window, "_capture_thread", object())
+        elif busy == "selection":
+            state.setattr(window, "_selection_mode", "roi")
+        elif busy == "preparing":
+            state.setattr(window.auto_tid_rng_tab, "_preparing", True)
+        else:
+            state.setattr(window.auto_tid_rng_tab, "_runner_thread", object())
+        binding.edit_button.click()
+        assert not window.seed_config_editor.active
+        assert binding.edit_message.isVisible()
+        assert "请先结束捕捉、框选或自动任务" in binding.edit_message.text()
+    window.statusBar().showMessage("其他状态更新")
+    QApplication.processEvents()
+    assert binding.edit_message.isVisible()
+    binding.edit_button.click()
+    assert window.seed_config_editor.active and window.seed_config_editor.editor.isVisible()
+    assert not binding.edit_message.isVisible()
+    window.seed_config_editor.cancel_button.click()
+    assert second.read_bytes() == before
 
 
 def test_saved_manual_tool_index_restores_to_primary_task(window):

@@ -95,12 +95,17 @@ class SeedConfigEditorController(QObject):
         w = self.window
         if self.active:
             self.reveal()
-            w.statusBar().showMessage("请先保存或取消当前配置编辑，再编辑其他配置。")
+            w.statusBar().showMessage(
+                "已展开当前正在编辑的配置。" if binding is self.binding
+                else "请先保存或取消当前配置编辑，再编辑其他配置。"
+            )
             return
         if w._capture_thread is not None or w._selection_mode is not None or any(
             p._preparing or p._runner_thread is not None for p in (w.auto_rng_tab, w.auto_tid_rng_tab)
         ):
-            w.statusBar().showMessage("请先结束捕捉、框选或自动任务，再编辑配置。")
+            message = "请先结束捕捉、框选或自动任务，再编辑配置。"
+            binding.set_edit_message(message)
+            w.statusBar().showMessage(message)
             return
         starter_locked = (binding is w.auto_rng_tab.seed_config_binding
                           and w.auto_rng_tab.starter_automation_check.isChecked())
@@ -146,7 +151,8 @@ class SeedConfigEditorController(QObject):
             for control in (panel.start_button, *panel.start_menu.actions())
         ]
         for view in self._bindings():
-            view.selector.setEnabled(False)
+            view.set_edit_message("")
+            view.set_selection_locked(True)
         w.config_combo.setEnabled(False)
         self.refresh()
         w._refresh_automation_start_state()
@@ -311,7 +317,7 @@ class SeedConfigEditorController(QObject):
         w.calibrate_shiny_threshold_button.show()
         self.previous_selection = None
         for view in self._bindings():
-            view.selector.setEnabled(True)
+            view.set_selection_locked(False)
         w.config_combo.setEnabled(True)
         for control, tooltip in self.start_tooltips:
             control.setToolTip(tooltip)

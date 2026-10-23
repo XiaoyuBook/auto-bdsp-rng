@@ -176,6 +176,7 @@ class TaskConfigBinding(QWidget):
         super().__init__(parent)
         self._source = None
         self._fixed_path = None
+        self._selection_locked = False
         self._refresh_pending = False
         self.combo = ChevronComboBox()
         self.combo.setAccessibleName(title)
@@ -204,6 +205,13 @@ class TaskConfigBinding(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         layout.addWidget(self.selector)
+        self.edit_message = QLabel()
+        self.edit_message.setObjectName("TaskFieldHint")
+        self.edit_message.setTextFormat(Qt.TextFormat.PlainText)
+        self.edit_message.setWordWrap(True)
+        self.edit_message.setAccessibleName("配置编辑提示")
+        self.edit_message.hide()
+        layout.addWidget(self.edit_message)
 
     def bind_source(self, source):
         self._source = source
@@ -218,6 +226,16 @@ class TaskConfigBinding(QWidget):
         if fixed != self._fixed_path:
             self._fixed_path = fixed
             self.refresh()
+
+    def set_selection_locked(self, locked):
+        """Keep file selection locked without disabling the editor entry point."""
+        self._selection_locked = bool(locked)
+        self.combo.setEnabled(not self._selection_locked and self._fixed_path is None
+                              and self.combo.count() > 0)
+
+    def set_edit_message(self, message):
+        self.edit_message.setText(message)
+        self.edit_message.setVisible(bool(message))
 
     def _schedule_refresh(self, *_args):
         if self._refresh_pending:
@@ -246,12 +264,13 @@ class TaskConfigBinding(QWidget):
                 for index in range(source.count()):
                     self.combo.addItem(source.itemText(index), source.itemData(index))
                 self.combo.setCurrentIndex(source.currentIndex())
-        self.combo.setEnabled(self._fixed_path is None and self.combo.count() > 0)
+        self.set_selection_locked(self._selection_locked)
         self.edit_button.setEnabled(bool(self.combo.currentData()))
         self.combo.setToolTip(str(self.combo.currentData() or (source.toolTip() if source else "")))
 
     def _selection_changed(self, index):
         if self._fixed_path is None and self._source is not None and index >= 0:
+            self.set_edit_message("")
             self._source.setCurrentIndex(self._source.findData(self.combo.currentData()))
             self.refresh()
 

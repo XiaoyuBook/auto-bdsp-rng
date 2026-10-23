@@ -126,6 +126,35 @@ def test_shared_binding_survives_blocked_source_refresh(app):
         app.processEvents()
 
 
+@pytest.mark.parametrize("fixed", [False, True])
+def test_binding_refresh_keeps_selection_locked_and_editor_accessible(app, fixed):
+    source = QComboBox()
+    source.addItem("a.json", "a.json")
+    view = TaskConfigBinding("Seed 配置")
+    view.bind_source(source)
+    if fixed:
+        view.set_fixed_path("starter.json")
+    try:
+        view.set_selection_locked(True)
+        with QSignalBlocker(source):
+            source.clear()
+            source.addItem("b.json", "b.json")
+        app.processEvents()
+        assert view.combo.currentData() == ("starter.json" if fixed else "b.json")
+        assert not view.combo.isEnabled()
+        assert view.edit_button.isEnabled()
+        requested = []
+        view.editRequested.connect(requested.append)
+        view.edit_button.click()
+        assert requested == [view.combo.currentData()]
+        view.set_selection_locked(False)
+        assert view.combo.isEnabled() is (not fixed)
+    finally:
+        view.deleteLater()
+        source.deleteLater()
+        app.processEvents()
+
+
 @pytest.mark.parametrize("escape", [False, True])
 def test_readiness_script_action_reveals_the_missing_controls_group(window, tmp_path, escape):
     w, panel = window, window.auto_rng_tab
