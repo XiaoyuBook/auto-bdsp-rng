@@ -2,13 +2,10 @@
 
 from PySide6.QtCore import QEvent, QObject, QRect
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
-
-class _ThresholdInput(QDoubleSpinBox):
-    def wheelEvent(self, event) -> None:  # noqa: N802
-        event.ignore()
+from auto_bdsp_rng.ui.spin_box import ChevronDoubleSpinBox
 
 
 _PANEL_STYLE = """
@@ -86,7 +83,7 @@ class VideoInfoOverlay(QObject):
         self.score_value.setObjectName("VideoMatchScore")
         self.score_value.setAccessibleName("实时匹配分数")
         self.score_value.setToolTip("当前视频画面的眼睛模板匹配分数")
-        self.threshold = _ThresholdInput()
+        self.threshold = ChevronDoubleSpinBox()
         self.threshold.setLocale(threshold.locale())
         self.threshold.setRange(threshold.minimum(), threshold.maximum())
         self.threshold.setDecimals(threshold.decimals())

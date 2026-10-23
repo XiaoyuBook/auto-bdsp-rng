@@ -154,6 +154,55 @@ def test_matching_uses_live_result_and_threshold_is_synced_and_locked_during_cap
     assert w.monitor_frame_info.text() == "1280 × 720"
 
 
+@pytest.mark.parametrize("with_frame", [False, True])
+def test_threshold_text_is_visible_and_mouse_editable_during_preview_refresh(window, with_frame):
+    w = window
+    w.tabs.setCurrentWidget(w.project_xs_tab)
+    w.threshold.setValue(.9)
+    if with_frame:
+        show_frame(w)
+    overlay = w.video_overlay
+    overlay.set_match_score(.98)
+    w.activateWindow()
+    settle()
+
+    field = overlay.threshold
+    editor = field.lineEdit()
+    assert field.isVisible() and field.isEnabled()
+    assert field.rect().contains(editor.geometry())
+    assert editor.width() >= editor.fontMetrics().horizontalAdvance("0.90") + 4
+
+    point = field.mapTo(w.preview_label, field.rect().center())
+    target = w.preview_label.childAt(point)
+    assert target is editor
+    QTest.mouseClick(target, Qt.MouseButton.LeftButton, pos=target.mapFrom(w.preview_label, point))
+    assert editor.hasFocus()
+    QTest.keyClick(editor, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClicks(editor, "0.")
+    overlay.set_match_score(.87654)
+    overlay.set_frame_rect(w.preview_label._pixmap_rect)
+    settle()
+    assert editor.text() == "0."
+    assert w.threshold.value() == .9
+    QTest.keyClicks(editor, "83")
+    QTest.keyClick(editor, Qt.Key.Key_Return)
+    assert field.value() == w._config_from_form().capture.threshold == .83
+
+    field.clearFocus()
+    settle()
+    before = field.grab().toImage()
+    ratio = before.devicePixelRatio()
+    area = editor.geometry().adjusted(2, 2, -2, -2)
+    ink = [before.pixelColor(x, y)
+           for y in range(round(area.top() * ratio), round((area.bottom() + 1) * ratio))
+           for x in range(round(area.left() * ratio), round((area.right() + 1) * ratio))]
+    assert sum(color.alpha() > 0 and color.lightness() > 100 for color in ink) > 5
+    w.threshold.setValue(.92)
+    settle()
+    assert field.value() == .92
+    assert before != field.grab().toImage()
+
+
 def test_tid_capture_service_publishes_new_seed_in_video(window, monkeypatch, tmp_path):
     w = window
     show_frame(w)
