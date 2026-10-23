@@ -153,6 +153,35 @@ def test_script_output_is_a_summary_with_literal_raw_details(app):
     assert buffer.snapshot()[0].message == raw
 
 
+def test_live_reader_preserves_literal_text_and_retains_complete_messages(app):
+    buffer = RunLogBuffer()
+    live = LiveLogPanel(buffer)
+    live.resize(410, 320)
+    live.show()
+
+    def publish():
+        for index in range(600):
+            buffer.publish("输入检查", f'记录 {index}：<b>中文原文</b> & "引号"')
+
+    worker = Thread(target=publish)
+    worker.start()
+    worker.join()
+    settle(app)
+    text = live.text.toPlainText()
+    assert '<b>中文原文</b> & "引号"' in text
+    assert "记录 299：" not in text and "记录 300：" in text and "记录 599：" in text
+    first = live.text.document().begin()
+    assert "输入检查" in first.text()
+    assert "记录 300：" in first.next().text()
+    assert text.count("记录 ") == live.DISPLAY_LIMIT
+    assert len(buffer.snapshot()) == 600
+    live.follow_check.setChecked(False)
+    live.text.verticalScrollBar().setValue(0)
+    buffer.publish("输入检查", "最后一条")
+    settle(app)
+    assert live.text.verticalScrollBar().value() == 0
+
+
 def test_selecting_debug_level_opens_diagnostics(app):
     buffer = RunLogBuffer()
     panel = RunLogPanel(buffer)
