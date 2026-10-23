@@ -169,6 +169,7 @@ from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.image_io import write_image
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
+from auto_bdsp_rng.log_events import LogMessage, log_level, log_summary, script_output_message
 from auto_bdsp_rng.ui_stall_diagnostics import start_ui_stall_diagnostics
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
@@ -2390,13 +2391,14 @@ class MainWindow(QMainWindow):
 
     def _write_run_log(self, source: str, message: object, *, level: str = "INFO") -> None:
         text = str(message)
+        level = log_level(message, level)
         if level == "ERROR" and source in ("自动定点", "自动 TID") and hasattr(self, "_qq_task_details"):
             self._qq_task_details[source] = text
         run_id, round_id = self._run_log_context(str(source))
         try:
             self._run_log_buffer.publish(
                 str(source),
-                text,
+                message,
                 level=level,
                 run_id=run_id,
                 round_id=round_id,
@@ -2420,7 +2422,10 @@ class MainWindow(QMainWindow):
             tail = hint + tail[-(limit - len(hint)):]
         text = tail
         run_id, round_id = self._run_log_context("伊机控")
-        self._run_log_buffer.publish("伊机控", text, level=level, run_id=run_id, round_id=round_id)
+        output = script_output_message(text, error=level in {"ERROR", "CRITICAL"})
+        if isinstance(message, LogMessage):
+            output = LogMessage(text, summary=log_summary(message), event_type=message.event_type)
+        self._run_log_buffer.publish("伊机控", output, level=level, run_id=run_id, round_id=round_id)
 
     def _refresh_ui_stall_diagnostics(self) -> None:
         guard = self._ui_stall_guard
@@ -6251,7 +6256,10 @@ class MainWindow(QMainWindow):
         if not success:
             self._write_run_log(
                 "视频源",
-                f"视频源连接失败；{self._video_source_diagnostic_snapshot()}",
+                LogMessage(
+                    f"视频源连接失败；{self._video_source_diagnostic_snapshot()}",
+                    summary="视频源连接失败，请检查采集设备和连接设置", event_type="video.failed",
+                ),
                 level="ERROR",
             )
             self._stop_capture_broker_process(
@@ -6288,7 +6296,10 @@ class MainWindow(QMainWindow):
         self._release_preview_capture()
         self._preview_timer.start()
         self.statusBar().showMessage("共享视频源已连接，预览将持续显示")
-        self._write_run_log("视频源", f"视频源已连接；{self._video_source_diagnostic_snapshot()}")
+        self._write_run_log("视频源", LogMessage(
+            f"视频源已连接；{self._video_source_diagnostic_snapshot()}",
+            summary="视频源已连接，可以开始预览和识别", event_type="video.connected",
+        ))
         self.video_source_dialog.hide()
 
     def _capture_broker_start_finished(
@@ -8926,7 +8937,11 @@ class MainWindow(QMainWindow):
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))
             self._write_run_log(
                 "历史记录",
-                f"捕获 Seed {values[0]}；初始 Adv {int(values[1])}；NPC {int(values[2])}；最大搜索 {int(values[3])}",
+                LogMessage(
+                    f"捕获 Seed {values[0]}；初始 Adv {int(values[1])}；NPC {int(values[2])}；最大搜索 {int(values[3])}",
+                    summary=f"已记录本轮 Seed，起始推进数 {int(values[1])}", event_type="seed.recorded",
+                    diagnostic=True, level="DEBUG",
+                ),
             )
         elif event == "auto_tid_log" and len(values) >= 1:
             h.auto_tid_log(str(values[0]))
@@ -8991,8 +9006,12 @@ class MainWindow(QMainWindow):
             delay_text = used_delay if used_delay is not None else "-"
             self._write_run_log(
                 "历史记录",
-                f"本轮结果：{'出闪' if is_shiny else '未出闪'}；间隔 {interval_text}；"
-                f"启动 Adv {trigger_text}；delay {delay_text}",
+                LogMessage(
+                    f"本轮结果：{'出闪' if is_shiny else '未出闪'}；间隔 {interval_text}；"
+                    f"启动 Adv {trigger_text}；delay {delay_text}",
+                    summary=f"本轮结果：{'检测到疑似闪光，请人工确认' if is_shiny else '未检测到闪光'}",
+                    event_type="round.result",
+                ),
             )
         elif event == "attempt_result" and len(values) >= 6:
             loop_index = int(values[0])
@@ -10577,7 +10596,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(self._text("capturing"))
         self._write_run_log(
             "Seed 捕捉",
-            f"开始普通 Seed 捕捉；眨眼数 {config.capture.blink_count}；NPC {config.npc}",
+            LogMessage(
+                f"开始普通 Seed 捕捉；眨眼数 {config.capture.blink_count}；NPC {config.npc}",
+                summary=f"开始识别 Seed，需要采集 {config.capture.blink_count} 次眨眼", event_type="seed.started",
+            ),
         )
 
         last_display_frame_at = 0.0
@@ -10669,7 +10691,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Capturing {reidentify_blink_count} blinks...")
         self._write_run_log(
             "Seed 捕捉",
-            f"开始校正；眨眼数 {reidentify_blink_count}；NPC {config.npc}；当前 Adv {tracked_advances}",
+            LogMessage(
+                f"开始校正；眨眼数 {reidentify_blink_count}；NPC {config.npc}；当前 Adv {tracked_advances}",
+                summary=f"开始校正位置，需要采集 {reidentify_blink_count} 次眨眼", event_type="position.started",
+            ),
         )
 
         last_display_frame_at = 0.0
@@ -10757,7 +10782,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Capturing {config.capture.blink_count} Pokemon blinks...")
         self._write_run_log(
             "Seed 捕捉",
-            f"开始 TID/SID Seed 捕捉；眨眼数 {config.capture.blink_count}",
+            LogMessage(
+                f"开始 TID/SID Seed 捕捉；眨眼数 {config.capture.blink_count}",
+                summary=f"开始 TID 测种，需要采集 {config.capture.blink_count} 次眨眼", event_type="seed.started",
+            ),
         )
 
         last_display_frame_at = 0.0
@@ -10889,13 +10917,19 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("TID/SID 测种完成")
             self._write_run_log(
                 "Seed 捕捉",
-                f"TID/SID Seed 捕捉完成；Seed {' '.join(result.state.format_words())}",
+                LogMessage(
+                    f"TID/SID Seed 捕捉完成；Seed {' '.join(result.state.format_words())}",
+                    summary="TID 测种完成，Seed 已回填", event_type="seed.captured",
+                ),
             )
         else:
             self.statusBar().showMessage(self._text("seed_captured"))
             self._write_run_log(
                 "Seed 捕捉",
-                f"普通 Seed 捕捉完成；Seed {' '.join(result.state.format_words())}",
+                LogMessage(
+                    f"普通 Seed 捕捉完成；Seed {' '.join(result.state.format_words())}",
+                    summary="Seed 识别完成，结果已回填", event_type="seed.captured",
+                ),
             )
         if mock_dialog is not None:
             self.statusBar().showMessage(f"Mock {self._capture_mode_label()}：已选择模拟成功")

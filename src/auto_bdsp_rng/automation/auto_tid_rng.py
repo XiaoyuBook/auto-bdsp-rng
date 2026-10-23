@@ -12,6 +12,7 @@ from typing import Any
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
+from auto_bdsp_rng.log_events import LogMessage
 from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64, SeedState32
 
 
@@ -494,6 +495,10 @@ class AutoTidRngRunner:
             self._set_progress(
                 AutoTidRngPhase.IDLE,
                 message,
+                summary=("已请求停止自动 TID，停止脚本时发生错误，请展开详情"
+                         if script_stop_error else f"已请求停止自动 TID：{normalized_reason}" if normalized_reason
+                         else "已请求停止自动 TID"),
+                event_type="task.stop_requested", level="WARNING" if script_stop_error else None,
                 stop_reason=normalized_reason,
             )
         except Exception:
@@ -885,7 +890,10 @@ class AutoTidRngRunner:
             updates,
             include_start=True,
         )
-        self._set_progress(phase, message, **updates)
+        self._set_progress(
+            phase, message, summary=f"正在等待{label}，剩余 {updates['remaining_to_trigger']} 次推进",
+            event_type="wait.started", **updates,
+        )
         return updates
 
     def _begin_cycle(self, message: str, *, phase: AutoTidRngPhase = AutoTidRngPhase.RUN_SEED_SCRIPT) -> None:
@@ -960,7 +968,10 @@ class AutoTidRngRunner:
             return
         if self.should_stop():
             return
-        self._set_progress(AutoTidRngPhase.CAPTURE_TIDSID, f"测种脚本完成——{path.name}", last_script_path=path)
+        self._set_progress(
+            AutoTidRngPhase.CAPTURE_TIDSID, f"测种脚本完成——{path.name}",
+            summary="测种脚本执行完成，开始识别 Seed", last_script_path=path,
+        )
 
     def _capture_tidsid(self) -> None:
         try:
@@ -968,7 +979,10 @@ class AutoTidRngRunner:
         except Exception as exc:
             detail = self._exception_chain_text(exc)
             self._loop_or_complete(
-                f"TID/SID 测种失败: {detail}；捕获服务将重新运行测种脚本"
+                LogMessage(
+                    f"TID/SID 测种失败: {detail}；捕获服务将重新运行测种脚本",
+                    summary="测种失败，将重新运行测种脚本", event_type="seed.retry", level="WARNING",
+                )
             )
             return
         if seed.measured_at is None:
@@ -988,6 +1002,7 @@ class AutoTidRngRunner:
                 f"；起点Adv={int(seed.current_advances)}"
                 f"；计时起点(monotonic)={self._seconds_text(seed.measured_at)}"
             ),
+            summary="测种完成，正在搜索目标 TID", event_type="seed.captured",
             seed_text=seed.seed_text,
             current_advances=seed.current_advances,
             seed_measured_wall_time=seed.measured_wall_time,
@@ -1009,6 +1024,7 @@ class AutoTidRngRunner:
             self._set_progress(
                 AutoTidRngPhase.SEARCH_TARGET,
                 message,
+                summary="本轮搜索范围内未找到目标 TID，将重新测种", event_type="round.no_target",
                 current_advances=seed.current_advances,
                 id_states=states,
                 id_elapsed_seconds=elapsed,
@@ -1021,6 +1037,7 @@ class AutoTidRngRunner:
                     f"目标DisplayTID={','.join(f'{value:06d}' for value in target_display_tids) or '-'}；"
                     f"Seed={self._seed_text_for_log(seed)}；当前Adv={int(seed.current_advances)}"
                 ),
+                summary="本轮 TID 搜索参数", event_type="search.diagnostics", diagnostic=True, level="DEBUG",
                 current_advances=seed.current_advances,
                 id_states=states,
                 id_elapsed_seconds=elapsed,
@@ -1041,6 +1058,8 @@ class AutoTidRngRunner:
                 f"取名脚本触发帧 {trigger}；delay={int(self.config.delay)}；"
                 f"需等待Adv={max(0, int(trigger) - int(seed.current_advances))}"
             ),
+            summary=f"已找到目标 TID：{target.display_tid:06d}，正在等待取名时机",
+            event_type="target.found",
             target_tid=target.tid,
             target_sid=target.sid,
             target_display_tid=target.display_tid,
@@ -1058,7 +1077,10 @@ class AutoTidRngRunner:
         except Exception as exc:
             self._fail(str(exc))
             return
-        self._set_progress(AutoTidRngPhase.COMPLETED, f"取名脚本完成——{path.name}", last_script_path=path)
+        self._set_progress(
+            AutoTidRngPhase.COMPLETED, f"取名脚本完成——{path.name}",
+            summary="取名脚本执行完成，请确认游戏内 TID", event_type="task.completed", last_script_path=path,
+        )
 
     def _wait_name_trigger(self) -> None:
         seed = self._require_seed()
@@ -1095,7 +1117,10 @@ class AutoTidRngRunner:
                     "取名帧等待进度",
                     updates,
                 )
-            self._set_progress(AutoTidRngPhase.WAIT_NAME_TRIGGER, message, **updates)
+            self._set_progress(
+                AutoTidRngPhase.WAIT_NAME_TRIGGER, message, summary="取名等待计时采样",
+                event_type="wait.sample", diagnostic=True, level="DEBUG", coalesce_key="wait.name", **updates,
+            )
 
         self._advance_counter.run_until(
             trigger,
@@ -1132,6 +1157,7 @@ class AutoTidRngRunner:
                 f"{prefix}，运行取名脚本",
                 updates,
             ),
+            summary="已到达取名时机，开始执行取名脚本", event_type="script.started",
             **updates,
         )
         # The schedule is complete.  Keep its values in ``progress`` for
@@ -1174,7 +1200,10 @@ class AutoTidRngRunner:
                     "反查帧等待进度",
                     updates,
                 )
-            self._set_progress(AutoTidRngPhase.WAIT_REVERSE_TRIGGER, message, **updates)
+            self._set_progress(
+                AutoTidRngPhase.WAIT_REVERSE_TRIGGER, message, summary="反查等待计时采样",
+                event_type="wait.sample", diagnostic=True, level="DEBUG", coalesce_key="wait.reverse", **updates,
+            )
 
         self._advance_counter.run_until(
             trigger,
@@ -1204,6 +1233,7 @@ class AutoTidRngRunner:
                 f"{prefix}，运行反查 ID 脚本",
                 updates,
             ),
+            summary="已到达反查时机，开始执行反查 ID 脚本", event_type="script.started",
             **updates,
         )
         self._wait_phase = None
@@ -1270,9 +1300,26 @@ class AutoTidRngRunner:
             return tuple(int(value) for value in self.config.target_display_tids)
         return tuple(int(value) for value in self.config.target_tids)
 
-    def _set_progress(self, phase: AutoTidRngPhase, message: str = "", **updates: object) -> None:
+    def _set_progress(
+        self, phase: AutoTidRngPhase, message: str = "", *, summary: str = "",
+        event_type: str = "progress", diagnostic: bool = False,
+        level: str | None = None, coalesce_key: str | None = None, **updates: object,
+    ) -> None:
         if self._stop_requested and phase != AutoTidRngPhase.IDLE:
             return
+        if message:
+            if phase == AutoTidRngPhase.FAILED:
+                summary = summary or f"自动 TID 已停止：{message.splitlines()[0][:120]}"
+                level = level or "ERROR"
+                event_type = "task.failed"
+            message = LogMessage(
+                message, summary=summary or getattr(message, "summary", ""),
+                details=getattr(message, "details", ""),
+                event_type=getattr(message, "event_type", event_type) if event_type == "progress" else event_type,
+                phase=phase.value, diagnostic=diagnostic or getattr(message, "diagnostic", False),
+                level=level or getattr(message, "level", None),
+                coalesce_key=coalesce_key or getattr(message, "coalesce_key", None),
+            )
         values = {
             "phase": phase,
             "loop_index": updates.get("loop_index", self.progress.loop_index),

@@ -10,7 +10,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 import threading
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QTableView,
@@ -44,6 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from auto_bdsp_rng.log_events import LEVEL_LABELS, PROBLEM_LEVELS, LogMessage, log_level
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
@@ -65,12 +67,56 @@ class RunLogEntry:
     message: str
     run_id: str | None = None
     round_id: int | None = None
+    summary: str = ""
+    details: str = ""
+    event_type: str = "message"
+    phase: str = ""
+    diagnostic: bool = False
+    coalesce_key: str | None = None
+    repeat_count: int = 1
+    first_message: str = ""
+    last_timestamp: datetime | None = None
+
+    @property
+    def user_visible(self) -> bool:
+        return self.level in PROBLEM_LEVELS or (self.level != "DEBUG" and not self.diagnostic)
+
+    @property
+    def display_message(self) -> str:
+        text = self.summary or " ".join(self.message.splitlines())
+        return f"{text}（累计 {self.repeat_count} 次）" if self.repeat_count > 1 else text
+
+    @property
+    def source_label(self) -> str:
+        return f"{self.source} · 第 {self.round_id} 轮" if self.round_id else self.source
+
+    def full_text(self) -> str:
+        timestamp = self.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        lines = [self.display_message, ""] if self.summary else []
+        if self.first_message:
+            lines.extend(("首次记录：", self.first_message, "", "最近记录："))
+        else:
+            lines.append("完整内容：")
+        lines.append(self.message)
+        if self.details and self.details != self.message:
+            lines.extend(("", "诊断参数：", self.details))
+        lines.extend(("", "记录信息：", f"{timestamp} · {LEVEL_LABELS.get(self.level, self.level)} · {self.source_label}"))
+        if self.run_id:
+            lines.append(f"运行：{self.run_id}")
+        if self.phase:
+            lines.append(f"阶段：{self.phase}")
+        if self.event_type != "message":
+            lines.append(f"事件：{self.event_type}")
+        if self.last_timestamp:
+            lines.append(f"最近更新：{self.last_timestamp:%H:%M:%S.%f}"[:-3])
+        return "\n".join(lines)
 
 
 class RunLogBuffer(QObject):
     """Thread-safe, bounded storage for one application's live log entries."""
 
     entryAdded = Signal(object)
+    entryUpdated = Signal(object)
 
     def __init__(
         self,
@@ -100,8 +146,10 @@ class RunLogBuffer(QObject):
         round_id: int | None = None,
     ) -> RunLogEntry:
         safe_source = " ".join(str(source).split()) or "应用"
-        safe_level = str(level).strip().upper() or "INFO"
+        metadata = message if isinstance(message, LogMessage) else None
+        safe_level = log_level(message, level)
         entry_message = str(message)
+        updated = False
         with self._lock:
             entry = RunLogEntry(
                 seq=self._next_seq,
@@ -111,13 +159,39 @@ class RunLogBuffer(QObject):
                 message=entry_message,
                 run_id=run_id,
                 round_id=round_id,
+                summary=metadata.summary if metadata is not None else "",
+                details=metadata.details if metadata is not None else "",
+                event_type=metadata.event_type if metadata is not None else "message",
+                phase=metadata.phase if metadata is not None else "",
+                diagnostic=metadata.diagnostic if metadata is not None else False,
+                coalesce_key=metadata.coalesce_key if metadata is not None else None,
             )
-            self._next_seq += 1
-            self._entries.append(entry)
+            previous = self._entries[-1] if self._entries else None
+            if entry.coalesce_key and previous is not None and (
+                entry.source, entry.run_id, entry.round_id, entry.level, entry.event_type,
+                entry.phase, entry.diagnostic, entry.coalesce_key
+            ) == (
+                previous.source, previous.run_id, previous.round_id, previous.level, previous.event_type,
+                previous.phase, previous.diagnostic, previous.coalesce_key
+            ):
+                entry = replace(
+                    entry, seq=previous.seq, timestamp=previous.timestamp,
+                    repeat_count=previous.repeat_count + 1,
+                    first_message=previous.first_message or previous.message,
+                    last_timestamp=entry.timestamp,
+                )
+                self._entries[-1] = entry
+                updated = True
+            else:
+                self._next_seq += 1
+                self._entries.append(entry)
 
         # Qt selects a queued connection when publish() runs outside the UI
         # thread, so subscribers never need to touch widgets from that thread.
-        self.entryAdded.emit(entry)
+        if updated:
+            self.entryUpdated.emit(entry)
+        else:
+            self.entryAdded.emit(entry)
         return entry
 
     def snapshot(self) -> tuple[RunLogEntry, ...]:
@@ -126,7 +200,7 @@ class RunLogBuffer(QObject):
 
 
 class _RunLogTableModel(QAbstractTableModel):
-    HEADERS = ("时间", "级别", "来源", "消息")
+    HEADERS = ("时间", "级别", "任务 / 轮次", "进展与结果")
 
     def __init__(self, max_entries: int, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -150,16 +224,15 @@ class _RunLogTableModel(QAbstractTableModel):
             return entry
         if role in (int(Qt.ItemDataRole.DisplayRole), int(Qt.ItemDataRole.EditRole)):
             if column == 0:
-                return entry.timestamp.strftime("%H:%M:%S.%f")[:-3]
+                return (entry.last_timestamp or entry.timestamp).strftime("%H:%M:%S")
             if column == 1:
-                return entry.level
+                return LEVEL_LABELS.get(entry.level, entry.level)
             if column == 2:
-                return entry.source
+                return entry.source_label
             if column == 3:
-                return entry.message.replace("\r\n", "\n").replace("\r", "\n")
+                return entry.display_message
         if role == int(Qt.ItemDataRole.ToolTipRole):
-            timestamp = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            return f"{timestamp} [{entry.level}] [{entry.source}] {entry.message}"
+            return f"{entry.display_message[:500]}\n双击查看完整内容和诊断详情"
         if role == int(Qt.ItemDataRole.TextAlignmentRole):
             return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         if role == int(Qt.ItemDataRole.ForegroundRole):
@@ -218,6 +291,7 @@ class _RunLogTableModel(QAbstractTableModel):
 
     def add_entry(self, entry: RunLogEntry) -> bool:
         if entry.seq in self._sequences:
+            self.update_entry(entry)
             return False
         position = bisect_left([item.seq for item in self._entries], entry.seq)
         self.beginInsertRows(QModelIndex(), position, position)
@@ -231,6 +305,14 @@ class _RunLogTableModel(QAbstractTableModel):
             self._sequences.discard(removed.seq)
             self.endRemoveRows()
         return True
+
+    def update_entry(self, entry: RunLogEntry) -> None:
+        for row, previous in enumerate(self._entries):
+            if previous.seq == entry.seq:
+                if entry.repeat_count > previous.repeat_count:
+                    self._entries[row] = entry
+                    self.dataChanged.emit(self.index(row, 0), self.index(row, len(self.HEADERS) - 1))
+                return
 
     def clear(self) -> None:
         if not self._entries:
@@ -249,6 +331,7 @@ class _RunLogFilterProxyModel(QSortFilterProxyModel):
         self._search_text = ""
         self._run_id: str | None = None
         self._round_id: int | None = None
+        self._view_mode = "user"
         self.setDynamicSortFilter(True)
 
     def set_source_filter(self, source: str | None) -> None:
@@ -263,6 +346,10 @@ class _RunLogFilterProxyModel(QSortFilterProxyModel):
         self._search_text = text.strip().casefold()
         self.invalidateFilter()
 
+    def set_view_mode(self, mode: str) -> None:
+        self._view_mode = mode
+        self.invalidateFilter()
+
     def set_round_filter(self, run_id: str | None, round_id: int | None) -> None:
         self._run_id = run_id
         self._round_id = round_id
@@ -275,6 +362,10 @@ class _RunLogFilterProxyModel(QSortFilterProxyModel):
         entry = model.index(source_row, 0, source_parent).data(ENTRY_ROLE)
         if not isinstance(entry, RunLogEntry):
             return False
+        if self._view_mode == "user" and not entry.user_visible:
+            return False
+        if self._view_mode == "problems" and entry.level not in PROBLEM_LEVELS:
+            return False
         if self._source_filter is not None and entry.source != self._source_filter:
             return False
         if self._level_filter is not None and entry.level != self._level_filter:
@@ -285,7 +376,9 @@ class _RunLogFilterProxyModel(QSortFilterProxyModel):
             return False
         if self._search_text:
             timestamp = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            searchable = "\n".join((timestamp, entry.level, entry.source, entry.message)).casefold()
+            searchable = "\n".join((timestamp, entry.level, LEVEL_LABELS.get(entry.level, entry.level),
+                                    entry.source_label, entry.summary, entry.message, entry.first_message,
+                                    entry.details, entry.phase, entry.event_type, entry.run_id or "")).casefold()
             if self._search_text not in searchable:
                 return False
         return True
@@ -296,13 +389,7 @@ class RunLogPanel(QWidget):
 
     countsChanged = Signal(int, int)
 
-    _LEVEL_LABELS = {
-        "DEBUG": "调试",
-        "INFO": "信息",
-        "WARNING": "警告",
-        "ERROR": "错误",
-        "CRITICAL": "严重",
-    }
+    _LEVEL_LABELS = LEVEL_LABELS
 
     def __init__(
         self,
@@ -333,6 +420,7 @@ class RunLogPanel(QWidget):
         # present in the snapshot or arrives as a queued signal; seq de-duplication
         # makes both paths safe.
         self._buffer.entryAdded.connect(self.add_entry)
+        self._buffer.entryUpdated.connect(self.update_entry)
         self._model.replace(list(self._buffer.snapshot()))
         self._rebuild_filter_options()
         self._refresh_view_state()
@@ -350,17 +438,26 @@ class RunLogPanel(QWidget):
         filters.setContentsMargins(0, 0, 0, 0)
         filters.setSpacing(10)
 
+        view_field, self.view_combo = self._combo_field("日志视图", "用户日志")
+        self.view_combo.setItemData(0, "user")
+        self.view_combo.addItem("全部诊断", "all")
+        self.view_combo.addItem("仅看问题", "problems")
+        self.view_combo.setObjectName("RunLogViewFilter")
+        self.view_combo.setMinimumWidth(106)
+        self.view_combo.setToolTip("用户日志显示任务进展与结果；全部诊断包含内部状态和计时采样。")
+        filters.addLayout(view_field, 0, 0)
+
         source_field, self.source_combo = self._combo_field("来源", "全部来源")
         self.source_combo.setObjectName("RunLogSourceFilter")
         self.source_combo.setMinimumWidth(120)
-        filters.addLayout(source_field, 0, 0)
+        filters.addLayout(source_field, 0, 1)
 
         level_field, self.level_combo = self._combo_field("级别", "全部级别")
         self.level_combo.setObjectName("RunLogLevelFilter")
         for level, label in self._LEVEL_LABELS.items():
             self.level_combo.addItem(label, level)
         self.level_combo.setMinimumWidth(104)
-        filters.addLayout(level_field, 0, 1)
+        filters.addLayout(level_field, 0, 2)
 
         search_field = QVBoxLayout()
         search_field.setSpacing(3)
@@ -371,9 +468,9 @@ class RunLogPanel(QWidget):
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setMinimumWidth(130)
         search_field.addWidget(self.search_edit)
-        filters.addLayout(search_field, 0, 2)
+        filters.addLayout(search_field, 0, 3)
         self.search_field = search_field
-        filters.setColumnStretch(2, 1)
+        filters.setColumnStretch(3, 1)
 
         toggle_row = QHBoxLayout()
         self.filter_toggles = toggle_row
@@ -388,7 +485,8 @@ class RunLogPanel(QWidget):
         self.save_check.setChecked(self._save_enabled)
         toggle_row.addWidget(self.follow_check)
         toggle_row.addWidget(self.save_check)
-        filters.addLayout(toggle_row, 0, 3)
+        toggle_row.addStretch(1)
+        filters.addLayout(toggle_row, 1, 0, 1, 4)
         root.addLayout(filters)
 
         self.correlation_frame = QFrame(self)
@@ -432,10 +530,42 @@ class RunLogPanel(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 110)
-        self.table.setColumnWidth(1, 104)
-        self.table.setColumnWidth(2, 140)
+        self.table.setColumnWidth(0, 78)
+        self.table.setColumnWidth(1, 62)
+        self.table.setColumnWidth(2, 160)
         root.addWidget(self.table, 1)
+
+        self.details_frame = QFrame(self)
+        self.details_frame.setObjectName("RunLogDetails")
+        details_layout = QVBoxLayout(self.details_frame)
+        details_layout.setContentsMargins(8, 0, 8, 0)
+        details_layout.setSpacing(4)
+        self.details_button = QToolButton(self.details_frame)
+        self.details_button.setText("展开详情")
+        self.details_button.setCheckable(True)
+        self.details_button.setEnabled(False)
+        self.details_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.details_button.setArrowType(Qt.ArrowType.RightArrow)
+        self.details_button.setAccessibleName("展开所选日志详情")
+        details_heading = QHBoxLayout()
+        details_heading.addWidget(self.details_button)
+        self.details_hint = QLabel("选中一条日志可查看全文，双击可直接展开", self.details_frame)
+        self.details_hint.setObjectName("RunLogCount")
+        self.details_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        details_heading.addWidget(self.details_hint, 1)
+        self.copy_details_button = QPushButton("复制详情", self.details_frame)
+        self.copy_details_button.setEnabled(False)
+        details_heading.addWidget(self.copy_details_button)
+        details_layout.addLayout(details_heading)
+        self.details_text = QPlainTextEdit(self.details_frame)
+        self.details_text.setObjectName("RunLogDetailsText")
+        self.details_text.setAccessibleName("所选日志的完整内容和诊断详情")
+        self.details_text.setReadOnly(True)
+        self.details_text.setMinimumHeight(72)
+        self.details_text.setMaximumHeight(160)
+        self.details_text.hide()
+        details_layout.addWidget(self.details_text)
+        root.addWidget(self.details_frame)
 
         self.footer_frame = QFrame(self)
         self.footer_frame.setObjectName("RunLogFooter")
@@ -452,6 +582,8 @@ class RunLogPanel(QWidget):
         self.clear_button = QPushButton("清空显示", self)
         self.copy_button = QPushButton("复制", self)
         self.export_button = QPushButton("导出", self)
+        self.copy_button.setToolTip("复制当前筛选结果；用户日志复制摘要，全部诊断复制原始内容和参数。")
+        self.export_button.setToolTip("导出当前筛选结果；需要完整内容时请选择全部诊断。")
         self.open_dir_button = QPushButton("日志目录", self)
         for button in (self.copy_button, self.export_button):
             button.setFixedHeight(34)
@@ -550,16 +682,16 @@ class RunLogPanel(QWidget):
         self.filters_layout.removeItem(self.filter_toggles)
         self.filters_layout.removeItem(self.search_field)
         if compact:
-            self.filters_layout.addLayout(self.search_field, 1, 0, 1, 2)
-            self.filters_layout.addLayout(self.filter_toggles, 2, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+            self.filters_layout.addLayout(self.search_field, 1, 0, 1, 3)
+            self.filters_layout.addLayout(self.filter_toggles, 2, 0, 1, 3)
             self.filters_layout.setColumnStretch(1, 1)
-            self.filters_layout.setColumnStretch(2, 0)
+            self.filters_layout.setColumnStretch(3, 0)
         else:
-            self.filters_layout.addLayout(self.search_field, 0, 2)
-            self.filters_layout.addLayout(self.filter_toggles, 0, 3)
+            self.filters_layout.addLayout(self.search_field, 0, 3)
+            self.filters_layout.addLayout(self.filter_toggles, 1, 0, 1, 4)
             self.filters_layout.setColumnStretch(1, 0)
-            self.filters_layout.setColumnStretch(2, 1)
-        for column, width in enumerate((78, 64, 84) if compact else (110, 104, 140)):
+            self.filters_layout.setColumnStretch(3, 1)
+        for column, width in enumerate((78, 52, 110) if compact else (78, 62, 160)):
             self.table.setColumnWidth(column, width)
 
     @staticmethod
@@ -579,6 +711,7 @@ class RunLogPanel(QWidget):
         return layout, combo
 
     def _connect_signals(self) -> None:
+        self.view_combo.currentIndexChanged.connect(self._apply_view_filter)
         self.source_combo.currentIndexChanged.connect(self._apply_source_filter)
         self.level_combo.currentIndexChanged.connect(self._apply_level_filter)
         self.search_edit.textChanged.connect(self._apply_search_filter)
@@ -588,6 +721,10 @@ class RunLogPanel(QWidget):
         self.copy_button.clicked.connect(self.copy_filtered)
         self.export_button.clicked.connect(self.export_filtered)
         self.open_dir_button.clicked.connect(self._open_log_directory)
+        self.table.selectionModel().currentChanged.connect(self._show_selected_details)
+        self.table.doubleClicked.connect(lambda _index: self.details_button.setChecked(True))
+        self.details_button.toggled.connect(self._toggle_details)
+        self.copy_details_button.clicked.connect(self._copy_details)
         self.proxy_model.rowsInserted.connect(self._on_proxy_rows_inserted)
         self.proxy_model.rowsRemoved.connect(self._refresh_view_state)
         self.proxy_model.modelReset.connect(self._refresh_view_state)
@@ -602,6 +739,38 @@ class RunLogPanel(QWidget):
         self._ensure_source_option(entry.source)
         self._ensure_level_option(entry.level)
         self._refresh_view_state()
+
+    @Slot(object)
+    def update_entry(self, entry: object) -> None:
+        if isinstance(entry, RunLogEntry):
+            # An update from another publisher can reach Qt before the first
+            # queued add. add_entry also rejects older repeat snapshots.
+            self.add_entry(entry)
+            self._show_selected_details()
+
+    def _show_selected_details(self, *_args: object) -> None:
+        entry = self.table.currentIndex().data(ENTRY_ROLE)
+        valid = isinstance(entry, RunLogEntry)
+        self.details_button.setEnabled(valid)
+        self.copy_details_button.setEnabled(valid)
+        if not valid:
+            self.details_text.clear()
+            self.details_hint.setText("选中一条日志可查看全文，双击可直接展开")
+            return
+        self.details_hint.setText(entry.source_label)
+        self.details_text.setPlainText(entry.full_text())
+
+    def _toggle_details(self, expanded: bool) -> None:
+        self.details_button.setText("收起详情" if expanded else "展开详情")
+        self.details_button.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.details_text.setVisible(expanded)
+        if expanded:
+            self._show_selected_details()
+
+    def _copy_details(self) -> None:
+        self._show_selected_details()
+        if self.details_text.toPlainText():
+            QGuiApplication.clipboard().setText(self.details_text.toPlainText())
 
     def set_save_enabled(self, enabled: bool) -> None:
         """Synchronize the checkbox without invoking the persistence callback."""
@@ -659,6 +828,7 @@ class RunLogPanel(QWidget):
     def clear_filters(self) -> None:
         """Restore the full current view without clearing buffered entries."""
         self.source_combo.setCurrentIndex(0)
+        self.view_combo.setCurrentIndex(0)
         self.level_combo.setCurrentIndex(0)
         self.search_edit.clear()
         self.clear_round_filter()
@@ -666,6 +836,8 @@ class RunLogPanel(QWidget):
     @Slot()
     def clear_display(self) -> None:
         self._model.clear()
+        self.table.setCurrentIndex(QModelIndex())
+        self._show_selected_details()
         self._refresh_view_state()
 
     def visible_entries(self) -> tuple[RunLogEntry, ...]:
@@ -705,10 +877,13 @@ class RunLogPanel(QWidget):
     def _filtered_text(self) -> str:
         lines: list[str] = []
         for entry in self.visible_entries():
+            if self.view_combo.currentData() == "all":
+                lines.extend((entry.full_text(), ""))
+                continue
             timestamp = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            messages = entry.message.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            messages = entry.display_message.replace("\r\n", "\n").replace("\r", "\n").split("\n")
             for message in messages or [""]:
-                lines.append(f"{timestamp} [{entry.level}] [{entry.source}] {message}")
+                lines.append(f"{timestamp} [{entry.level}] [{entry.source_label}] {message}")
         return "\n".join(lines)
 
     def _rebuild_filter_options(self) -> None:
@@ -725,23 +900,35 @@ class RunLogPanel(QWidget):
             self.level_combo.addItem(self._LEVEL_LABELS.get(level, level), level)
 
     @Slot(int)
+    def _apply_view_filter(self, _index: int) -> None:
+        self.proxy_model.set_view_mode(str(self.view_combo.currentData()))
+        self._refresh_view_state()
+        self._show_selected_details()
+        self._follow_filtered_rows()
+
+    @Slot(int)
     def _apply_source_filter(self, _index: int) -> None:
         value = self.source_combo.currentData()
         self.proxy_model.set_source_filter(str(value) if value is not None else None)
         self._refresh_view_state()
+        self._show_selected_details()
         self._follow_filtered_rows()
 
     @Slot(int)
     def _apply_level_filter(self, _index: int) -> None:
         value = self.level_combo.currentData()
+        if value == "DEBUG" and self.view_combo.currentData() == "user":
+            self.view_combo.setCurrentIndex(self.view_combo.findData("all"))
         self.proxy_model.set_level_filter(str(value) if value is not None else None)
         self._refresh_view_state()
+        self._show_selected_details()
         self._follow_filtered_rows()
 
     @Slot(str)
     def _apply_search_filter(self, text: str) -> None:
         self.proxy_model.set_search_text(text)
         self._refresh_view_state()
+        self._show_selected_details()
         self._follow_filtered_rows()
 
     @Slot(bool)

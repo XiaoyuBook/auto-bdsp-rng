@@ -62,6 +62,7 @@ from auto_bdsp_rng.automation.easycon import (
     save_config,
     scan_builtin_scripts,
 )
+from auto_bdsp_rng.log_events import is_user_message, log_summary, script_output_message
 from auto_bdsp_rng.resources import (
     bundled_easycon_bridge_path,
     remap_legacy_script_path,
@@ -3180,11 +3181,13 @@ class EasyConPanel(QWidget):
             "warn": "WARNING",
             "error": "ERROR",
             "stderr": "ERROR",
+            "debug": "DEBUG",
         }.get(level, "INFO")
+        event = script_output_message(text, error=level == "stderr") if level in {"stdout", "stderr"} else message
         sink = self._run_log_sink if persist else self._native_result_log_sink
         if sink is not None:
             try:
-                sink(sink_level, text)
+                sink(sink_level, event)
             except Exception:
                 pass
         color = {
@@ -3243,7 +3246,8 @@ class EasyConPanel(QWidget):
             cursor.setPosition(overflow, QTextCursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
-        latest_line = next((line.strip() for line in reversed(visible.splitlines()) if line.strip()), None)
+        latest = log_summary(event) if is_user_message(event, sink_level) else ""
+        latest_line = next((line.strip() for line in reversed(latest.splitlines()) if line.strip()), None)
         if latest_line is not None:
             self.latest_log_label.setText(latest_line[-512:])
             self.latest_log_label.setToolTip(latest_line[-4096:])

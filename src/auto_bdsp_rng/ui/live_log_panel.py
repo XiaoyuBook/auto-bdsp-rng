@@ -96,6 +96,7 @@ class LiveLogPanel(QFrame):
         self.source_combo.currentIndexChanged.connect(self._refresh)
         self.follow_check.toggled.connect(self._follow)
         buffer.entryAdded.connect(self._receive, Qt.ConnectionType.QueuedConnection)
+        buffer.entryUpdated.connect(self._update_entry, Qt.ConnectionType.QueuedConnection)
         self._refresh()
 
     @property
@@ -129,11 +130,12 @@ class LiveLogPanel(QFrame):
     @staticmethod
     def _line(entry: RunLogEntry) -> str:
         level = {"INFO": "信息", "WARNING": "警告", "ERROR": "错误", "CRITICAL": "严重", "DEBUG": "调试"}.get(entry.level, entry.level)
-        return f"{entry.timestamp:%H:%M:%S}  {entry.source} · {level}\n{entry.message}"
+        timestamp = entry.last_timestamp or entry.timestamp
+        return f"{timestamp:%H:%M:%S}  {entry.source_label} · {level}\n{entry.display_message}"
 
     def _matches(self, entry: RunLogEntry) -> bool:
         source = self.source_combo.currentData()
-        return source is None or source == entry.source
+        return entry.user_visible and (source is None or source == entry.source)
 
     def _add_source(self, source: str) -> None:
         if self.source_combo.findData(source) < 0:
@@ -157,10 +159,18 @@ class LiveLogPanel(QFrame):
         if entry.seq > self._last_seq and not self._flush_timer.isActive():
             self._flush_timer.start(0)
 
+    @Slot(object)
+    def _update_entry(self, entry: RunLogEntry) -> None:
+        if not self._matches(entry):
+            return
+        position = self.text.verticalScrollBar().value()
+        self._refresh()
+        if not self.follow_check.isChecked():
+            self.text.verticalScrollBar().setValue(position)
+
     def _flush(self) -> None:
         entries = self._buffer.snapshot()
-        source = self.source_combo.currentData()
-        selected = [entry for entry in entries if source is None or entry.source == source]
+        selected = [entry for entry in entries if self._matches(entry)]
         new_entries = [entry for entry in selected if entry.seq > self._last_seq]
         for entry in entries:
             if entry.seq > self._last_seq:

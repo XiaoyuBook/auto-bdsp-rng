@@ -82,6 +82,7 @@ from auto_bdsp_rng.data import (
 )
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.log_events import is_user_message, log_level, log_summary
 from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
@@ -3387,8 +3388,8 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
                 if remaining is not None and remaining < 0
                 else f"软件活帧等待，还需过 {remaining_text} 帧；到达撞闪启动点后自动运行脚本。"
             )
-        elif progress.log_message:
-            self.runtime_description_label.setText(progress.log_message)
+        elif progress.log_message and is_user_message(progress.log_message):
+            self.runtime_description_label.setText(log_summary(progress.log_message))
         elif progress.phase == AutoRngPhase.IDLE:
             self.runtime_description_label.setText("等待自动流程开始。")
         elif previous_phase != progress.phase:
@@ -3423,9 +3424,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
 
     def add_log(self, message: str, *, level: str = "INFO") -> None:
         text = str(message)
+        level = log_level(message, level)
         if self._run_log_sink is not None:
             try:
-                self._run_log_sink(level, text)
+                self._run_log_sink(level, message)
             except Exception:
                 pass
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -3435,7 +3437,9 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             for line in lines
         ]
         self.log_view.appendPlainText("\n".join(stamped))
-        latest_line = next((line.strip() for line in reversed(lines) if line.strip()), None)
+        if not is_user_message(message, level):
+            return
+        latest_line = next((line.strip() for line in reversed(log_summary(message).splitlines()) if line.strip()), None)
         if latest_line is not None:
             self.latest_log_time_label.setText(timestamp)
             self.latest_log_label.setText(latest_line)

@@ -63,6 +63,7 @@ from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.rng_core.cancellation import SearchCancelled
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
+from auto_bdsp_rng.log_events import LogMessage, is_user_message, log_level, log_summary
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
@@ -653,10 +654,14 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         if snapshot != getattr(self, "_run_controls_snapshot", None):
             self._run_controls_snapshot = snapshot
             self.add_log(
-                f"TID 按钮状态：开始={snapshot[7]}；停止={snapshot[8]}；"
-                f"目标数={snapshot[0]}；共享启动可用={snapshot[1]}；准备中={snapshot[2]}；"
-                f"运行线程={snapshot[3]}；停止待退出={snapshot[4]}；结果已返回={snapshot[5]}；"
-                f"页面可用={snapshot[6]}；禁用原因={reason or '无'}"
+                LogMessage(
+                    f"TID 按钮状态：开始={snapshot[7]}；停止={snapshot[8]}；"
+                    f"目标数={snapshot[0]}；共享启动可用={snapshot[1]}；准备中={snapshot[2]}；"
+                    f"运行线程={snapshot[3]}；停止待退出={snapshot[4]}；结果已返回={snapshot[5]}；"
+                    f"页面可用={snapshot[6]}；禁用原因={reason or '无'}",
+                    summary="TID 操作按钮状态已更新", event_type="ui.controls",
+                    diagnostic=True, level="DEBUG", coalesce_key="tid.controls",
+                )
             )
 
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -1716,16 +1721,19 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def add_log(self, message: str, *, level: str = "INFO") -> None:
         text = str(message)
+        level = log_level(message, level)
         if self._run_log_sink is not None:
             try:
-                self._run_log_sink(level, text)
+                self._run_log_sink(level, message)
             except Exception:
                 pass
         timestamp = datetime.now().strftime("%H:%M:%S")
         lines = text.splitlines() or [""]
         stamped = [line if _TIMESTAMP_RE.match(line) else f"[{timestamp}] {line}" for line in lines]
         self.log_view.appendPlainText("\n".join(stamped))
-        latest_line = next((line.strip() for line in reversed(lines) if line.strip()), None)
+        if not is_user_message(message, level):
+            return
+        latest_line = next((line.strip() for line in reversed(log_summary(message).splitlines()) if line.strip()), None)
         if latest_line is not None:
             self.latest_log_label.setText(latest_line)
             self.latest_log_label.setToolTip(text)

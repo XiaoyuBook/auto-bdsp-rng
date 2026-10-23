@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, Qt, Signal, Slot
@@ -52,9 +53,15 @@ class RunLogWindow(QDialog):
         root.addWidget(self.log_panel, 1)
         self.setStyleSheet("QDialog#RunLogWindow { background: #F2F4F7; }")
         buffer.entryAdded.connect(self._on_entry_added, Qt.ConnectionType.QueuedConnection)
+        buffer.entryUpdated.connect(self._on_entry_added, Qt.ConnectionType.QueuedConnection)
         initial = buffer.snapshot()
-        self._initial_seq = max((entry.seq for entry in initial), default=0)
+        self._read_through_seq = max((entry.seq for entry in initial), default=0)
+        self._problem_versions = OrderedDict(
+            (entry.seq, entry.repeat_count) for entry in initial if entry.level in {"WARNING", "ERROR", "CRITICAL"}
+        )
+        self._unread_problem_sequences = set(self._problem_versions)
         self.unread_problem_count = sum(entry.level in {"WARNING", "ERROR", "CRITICAL"} for entry in initial)
+        self._buffer = buffer
 
     def show_logs(
         self, source: str | None = None, *, run_id: str | None = None,
@@ -92,13 +99,30 @@ class RunLogWindow(QDialog):
             self._mark_read()
 
     def _mark_read(self) -> None:
+        self._unread_problem_sequences.clear()
+        entries = self._buffer.snapshot()
+        self._read_through_seq = max((entry.seq for entry in entries), default=self._read_through_seq)
+        self._problem_versions = OrderedDict(
+            (entry.seq, entry.repeat_count) for entry in entries
+            if entry.level in {"WARNING", "ERROR", "CRITICAL"}
+        )
         if getattr(self, "unread_problem_count", 0):
             self.unread_problem_count = 0
             self.unreadProblemsChanged.emit(0)
 
     @Slot(object)
     def _on_entry_added(self, entry: RunLogEntry) -> None:
-        if entry.seq > self._initial_seq and entry.level in {"WARNING", "ERROR", "CRITICAL"}:
-            if not self.isVisible() or self.isMinimized():
+        if entry.level in {"WARNING", "ERROR", "CRITICAL"}:
+            if entry.seq <= self._read_through_seq and entry.seq not in self._problem_versions:
+                return
+            if entry.repeat_count <= self._problem_versions.get(entry.seq, 0):
+                return
+            self._problem_versions[entry.seq] = entry.repeat_count
+            self._problem_versions.move_to_end(entry.seq)
+            while len(self._problem_versions) > self._buffer.max_entries:
+                expired, _version = self._problem_versions.popitem(last=False)
+                self._unread_problem_sequences.discard(expired)
+            if (not self.isVisible() or self.isMinimized()) and entry.seq not in self._unread_problem_sequences:
+                self._unread_problem_sequences.add(entry.seq)
                 self.unread_problem_count += 1
                 self.unreadProblemsChanged.emit(self.unread_problem_count)
