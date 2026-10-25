@@ -28,7 +28,12 @@ def wrapped_capture_error():
         raise RuntimeError('Project_Xs 测种未完成') from cause
 
 
-def test_clicking_the_real_retry_row_replaces_startup_details_with_the_actual_cause(app, tmp_path):
+def plain_capture_error():
+    raise RuntimeError('Project_Xs 测种未完成')
+
+
+@pytest.mark.parametrize('capture', [plain_capture_error, wrapped_capture_error], ids=['plain-failure', 'confirmed-timeout'])
+def test_retry_details_show_business_text_and_require_an_explicit_action_for_raw_causes(app, tmp_path, capture):
     buffer = RunLogBuffer()
     full, live = RunLogPanel(buffer), LiveLogPanel(buffer)
     full.resize(1080, 620)
@@ -36,14 +41,14 @@ def test_clicking_the_real_retry_row_replaces_startup_details_with_the_actual_ca
     buffer.publish('自动定点', LogMessage('开始自动流程', summary='正在开始测种'), round_id=1)
     full.table.setCurrentIndex(full.proxy_model.index(0, 3))
     full.details_button.click()
-    assert '开始自动流程' in full.details_text.toPlainText()
+    assert '正在开始测种' in full.details_text.toPlainText()
     settings = QSettings(str(tmp_path / 'settings.ini'), QSettings.Format.IniFormat)
     panel = AutoRngPanel(settings=settings, run_log_sink=lambda level, message: buffer.publish('自动定点', message, level, round_id=1))
     seed_script = tmp_path / '测种.txt'
     seed_script.write_text('A 100\n', encoding='utf-8')
     runner = AutoRngRunner(
         AutoRngConfig(script_dir=tmp_path, seed_script_path=seed_script, start_phase=AutoRngPhase.CAPTURE_SEED),
-        services=AutoRngServices(capture_seed=wrapped_capture_error, run_script_text=lambda *_: None),
+        services=AutoRngServices(capture_seed=capture, run_script_text=lambda *_: None),
     )
     worker = AutoRngWorker(runner)
     worker.progressChanged.connect(panel.apply_progress)
@@ -51,7 +56,7 @@ def test_clicking_the_real_retry_row_replaces_startup_details_with_the_actual_ca
     worker.run()
     settle(app)
     # Automatic scrolling must not silently change a deliberately selected row.
-    assert '开始自动流程' in full.details_text.toPlainText()
+    assert '正在开始测种' in full.details_text.toPlainText()
     row, failure = next((row, entry) for row, entry in enumerate(full.visible_entries()) if entry.event_type == 'seed.retry')
     index = full.proxy_model.index(row, 3)
     full.table.scrollTo(index)
@@ -61,19 +66,46 @@ def test_clicking_the_real_retry_row_replaces_startup_details_with_the_actual_ca
     QTest.mouseClick(full.table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
     settle(app)
     details = full.details_text.toPlainText()
-    assert 'Project_Xs 测种未完成' in details
-    assert 'TimeoutError: 获取游戏画面超时' in details
-    assert 'C:\\private\\capture.json' in details
-    assert '等待画面或识别结果超时' in details
-    assert details.index('TimeoutError: 获取游戏画面超时') < details.index('问题原文：')
-    assert details.index('TimeoutError: 获取游戏画面超时') < details.index('RuntimeError: Project_Xs 测种未完成')
+    assert '测种失败（连续 1/5），将重新运行测种脚本' in details
+    for internal in ('Project_Xs', 'RuntimeError', 'TimeoutError', 'private', '异常原因链', '事件：'):
+        assert internal not in details
+    assert '画面' not in details and '眼睛框选' not in details
+    if capture is plain_capture_error:
+        assert '超时' not in details
+        assert all('超时' not in entry.user_message for entry in buffer.snapshot())
+    else:
+        assert '等待操作结果超时' in details
     assert failure.timestamp.strftime('%H:%M:%S') in full.details_hint.text()
     assert '警告' in full.details_hint.text()
     full.copy_details_button.click()
-    assert 'TimeoutError: 获取游戏画面超时' in QApplication.clipboard().text()
+    assert QApplication.clipboard().text() == details
+    assert 'Project_Xs' not in live.text.toPlainText()
+
+    QTest.mouseClick(full.raw_details_button, Qt.MouseButton.LeftButton)
+    details = full.details_text.toPlainText()
+    assert 'Project_Xs 测种未完成' in details
+    if capture is wrapped_capture_error:
+        assert 'TimeoutError: 获取游戏画面超时' in details
+        assert 'C:\\private\\capture.json' in details
+        assert details.index('TimeoutError: 获取游戏画面超时') < details.index('问题原文：')
+        assert details.index('TimeoutError: 获取游戏画面超时') < details.index('RuntimeError: Project_Xs 测种未完成')
+    full.copy_details_button.click()
+    assert QApplication.clipboard().text() == details
     assert 'private' not in live.text.toPlainText()
     full.copy_button.click()
-    assert 'private' not in QApplication.clipboard().text()
+    assert 'Project_Xs' not in QApplication.clipboard().text()
+    full.raw_details_button.click()
+    assert 'Project_Xs' not in full.details_text.toPlainText()
+
+    # Returning from diagnostics must also restore safe details in both views.
+    for mode in ('problems', 'user'):
+        full.view_combo.setCurrentIndex(full.view_combo.findData('all'))
+        full.table.setCurrentIndex(full.proxy_model.index(0, 3))
+        assert full.raw_details_button.isChecked()
+        full.view_combo.setCurrentIndex(full.view_combo.findData(mode))
+        full.table.setCurrentIndex(full.proxy_model.index(0, 3))
+        assert not full.raw_details_button.isChecked()
+        assert 'Project_Xs' not in full.details_text.toPlainText()
 
 
 @pytest.mark.parametrize('task', ['rng', 'tid'])
@@ -105,7 +137,8 @@ def test_worker_keeps_nested_cause_without_changing_its_string_failure_signal(ap
     failure = next(entry for entry in buffer.snapshot() if entry.level == 'ERROR')
     assert '获取游戏画面超时' in failure.full_text()
     assert 'TimeoutError' in failure.details
-    assert '等待画面或识别结果超时' in failure.user_context
+    assert '等待操作结果超时' in failure.user_context
+    assert '画面' not in failure.user_context
     assert 'private' not in failure.user_message
 
 
@@ -121,6 +154,7 @@ def test_coalesced_selected_failure_keeps_both_first_and_latest_diagnostic_cause
         if attempt == 1:
             panel.table.setCurrentIndex(panel.proxy_model.index(0, 3))
             panel.details_button.click()
+            panel.raw_details_button.click()
     details = panel.details_text.toPlainText()
     assert '第 1 次具体原因' in details and '第 2 次具体原因' in details
     assert '首次诊断详情' in details and '最近记录' in details

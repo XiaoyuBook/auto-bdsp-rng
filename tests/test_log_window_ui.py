@@ -211,7 +211,9 @@ def test_round_restart_shows_one_actionable_warning_instead_of_a_history_duplica
     warnings = [entry for entry in window._run_log_buffer.snapshot() if entry.user_visible and entry.level == "WARNING"]
     assert len(warnings) == 1 and warnings[0].source == "自动定点"
     assert "操作遇到问题" not in window.live_log_panel.text.toPlainText()
-    assert "眼睛框选" in window.live_log_panel.text.toPlainText()
+    assert "测种失败（连续 1/5），将重新运行测种脚本" in window.live_log_panel.text.toPlainText()
+    assert "眼睛框选" not in window.live_log_panel.text.toPlainText()
+    assert "超时" not in window.live_log_panel.text.toPlainText()
     archived = next(entry for entry in window._run_log_buffer.snapshot() if entry.event_type == "history.round_restarted")
     assert not archived.user_visible and "原始原因" in archived.full_text()
     assert window.run_log_window.unread_problem_count == 1

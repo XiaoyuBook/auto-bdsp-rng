@@ -57,6 +57,12 @@ def test_details_search_copy_and_export_preserve_chinese_and_raw_parameters(app,
     assert len(panel.visible_entries()) == 1
     panel.table.setCurrentIndex(panel.proxy_model.index(0, 3))
     panel.details_button.click()
+    assert "已找到目标 TID：000123" in panel.details_text.toPlainText()
+    assert original not in panel.details_text.toPlainText()
+    assert "run-a" not in panel.details_text.toPlainText()
+    panel.copy_details_button.click()
+    assert original not in QApplication.clipboard().text()
+    panel.raw_details_button.click()
     assert original in panel.details_text.toPlainText()
     assert "延迟：100 次推进" in panel.details_text.toPlainText()
     assert "run-a" in panel.details_text.toPlainText()
@@ -74,6 +80,7 @@ def test_details_search_copy_and_export_preserve_chinese_and_raw_parameters(app,
     panel.clear_display()
     assert not panel.details_text.toPlainText()
     assert not panel.copy_details_button.isEnabled()
+    assert not panel.raw_details_button.isEnabled()
     assert buffer.snapshot()[0].message == original
 
 

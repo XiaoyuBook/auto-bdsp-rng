@@ -103,6 +103,14 @@ class RunLogEntry:
     def source_label(self) -> str:
         return f"{self.source} · 第 {self.round_id} 轮" if self.round_id else self.source
 
+    def user_details_text(self) -> str:
+        timestamp = self.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        lines = [self.user_message or "此条为诊断记录，可通过“原始诊断”查看。", "", "记录信息：",
+                 f"{timestamp} · {LEVEL_LABELS.get(self.level, self.level)} · {self.source_label}"]
+        if self.last_timestamp:
+            lines.append(f"最近更新：{self.last_timestamp:%H:%M:%S.%f}"[:-3])
+        return "\n".join(lines)
+
     def full_text(self) -> str:
         timestamp = self.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         heading = self.display_message if self.summary else log_summary(self)
@@ -587,17 +595,26 @@ class RunLogPanel(QWidget):
         self.details_button.setAccessibleName("展开所选日志详情")
         details_heading = QHBoxLayout()
         details_heading.addWidget(self.details_button)
-        self.details_hint = QLabel("选中一条日志可查看全文，双击可直接展开", self.details_frame)
+        self.details_hint = QLabel("选中一条日志可查看详情，双击可直接展开", self.details_frame)
         self.details_hint.setObjectName("RunLogCount")
         self.details_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         details_heading.addWidget(self.details_hint, 1)
+        self.raw_details_button = QToolButton(self.details_frame)
+        self.raw_details_button.setObjectName("RunLogRawDetails")
+        self.raw_details_button.setText("原始诊断")
+        self.raw_details_button.setCheckable(True)
+        self.raw_details_button.setEnabled(False)
+        self.raw_details_button.setToolTip("显示异常原文、原因链及内部参数，供排查问题使用。")
+        self.raw_details_button.setAccessibleName("显示所选日志的原始诊断")
+        self.raw_details_button.hide()
+        details_heading.addWidget(self.raw_details_button)
         self.copy_details_button = QPushButton("复制详情", self.details_frame)
         self.copy_details_button.setEnabled(False)
         details_heading.addWidget(self.copy_details_button)
         details_layout.addLayout(details_heading)
         self.details_text = QPlainTextEdit(self.details_frame)
         self.details_text.setObjectName("RunLogDetailsText")
-        self.details_text.setAccessibleName("所选日志的完整内容和诊断详情")
+        self.details_text.setAccessibleName("所选日志详情")
         self.details_text.setReadOnly(True)
         self.details_text.setMinimumHeight(72)
         self.details_text.setMaximumHeight(160)
@@ -657,6 +674,20 @@ class RunLogPanel(QWidget):
             QFrame#RunLogFooter {
                 background: transparent;
                 border: 0;
+            }
+            QToolButton#RunLogRawDetails {
+                background: transparent;
+                border: 0;
+                border-radius: 4px;
+                color: #64707D;
+                padding: 4px 8px;
+            }
+            QToolButton#RunLogRawDetails:hover {
+                background: #F2F4F7;
+            }
+            QToolButton#RunLogRawDetails:checked {
+                background: #EAF7F1;
+                color: #047857;
             }
             QWidget#RunLogPanel QPushButton#RunLogClear,
             QWidget#RunLogPanel QPushButton#RunLogCopy,
@@ -762,6 +793,7 @@ class RunLogPanel(QWidget):
         self.table.selectionModel().currentChanged.connect(self._show_selected_details)
         self.table.doubleClicked.connect(lambda _index: self.details_button.setChecked(True))
         self.details_button.toggled.connect(self._toggle_details)
+        self.raw_details_button.toggled.connect(self._show_selected_details)
         self.copy_details_button.clicked.connect(self._copy_details)
         self.proxy_model.rowsInserted.connect(self._on_proxy_rows_inserted)
         self.proxy_model.rowsRemoved.connect(self._refresh_view_state)
@@ -790,21 +822,24 @@ class RunLogPanel(QWidget):
         entry = self.table.currentIndex().data(ENTRY_ROLE)
         valid = isinstance(entry, RunLogEntry)
         self.details_button.setEnabled(valid)
+        self.raw_details_button.setEnabled(valid)
         self.copy_details_button.setEnabled(valid)
         if not valid:
             self.details_text.clear()
-            self.details_hint.setText("选中一条日志可查看全文，双击可直接展开")
+            self.details_hint.setText("选中一条日志可查看详情，双击可直接展开")
+            self.details_hint.setToolTip("")
             return
         timestamp = entry.last_timestamp or entry.timestamp
         hint = f"正在查看 {timestamp:%H:%M:%S} · {LEVEL_LABELS.get(entry.level, entry.level)} · {entry.source_label}"
         self.details_hint.setText(hint)
         self.details_hint.setToolTip(hint)
-        self.details_text.setPlainText(entry.full_text())
+        self.details_text.setPlainText(entry.full_text() if self.raw_details_button.isChecked() else entry.user_details_text())
 
     def _toggle_details(self, expanded: bool) -> None:
         self.details_button.setText("收起详情" if expanded else "展开详情")
         self.details_button.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
         self.details_text.setVisible(expanded)
+        self.raw_details_button.setVisible(expanded)
         if expanded:
             self._show_selected_details()
 
@@ -943,6 +978,7 @@ class RunLogPanel(QWidget):
     @Slot(int)
     def _apply_view_filter(self, _index: int) -> None:
         self.proxy_model.set_view_mode(str(self.view_combo.currentData()))
+        self.raw_details_button.setChecked(self.view_combo.currentData() == "all")
         self._refresh_view_state()
         self._show_selected_details()
         self._follow_filtered_rows()

@@ -8,6 +8,7 @@ warnings and failures without user copy receive a fixed, safe notice.
 
 from __future__ import annotations
 
+import re
 
 PROBLEM_LEVELS = frozenset({"WARNING", "ERROR", "CRITICAL"})
 LEVEL_LABELS = {
@@ -107,44 +108,44 @@ def exception_details(error: BaseException | None) -> str:
 
 
 def problem_context(message: object, *, operation: str = "") -> str:
-    """Select closed, actionable copy; never copy an exception substring."""
+    """Describe confirmed conditions without guessing a failure's location.
+
+    An unsuccessful measurement alone is not evidence of a capture, template
+    or timeout problem. Ordinary backend text is diagnostic, not a diagnosis.
+    """
 
     text = (exception_details(message) if isinstance(message, BaseException)
             else str(message) + "\n" + getattr(message, "details", "")).casefold()
-    if not operation and "脚本" in text:
-        operation = "脚本执行"
+    kinds: set[str] = set()
+    if isinstance(message, BaseException):
+        current: BaseException | None = message
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            kinds.update(base.__name__ for base in type(current).__mro__)
+            current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    else:
+        details = getattr(message, "details", "")
+        if details.startswith("异常原因链："):
+            kinds.update(re.findall(r"^(\w+):", details, flags=re.MULTILINE))
     if "相同 seed" in text and "无候选" in text:
-        return "连续测得相同 Seed 且没有候选。请重新框选眼睛区域并检查眼睛模板，再开始测种。"
+        return "连续测得相同 Seed 且未找到目标。请确认测种流程已正确重置。"
     if "连续 5 次 seed 捕获失败" in text:
-        return "已连续 5 次测种失败，触发保护停止。请检查游戏画面、眼睛框选和模板，再重新开始。"
-    if any(word in text for word in ("serialexception", "could not open port", "串口", "单片机连接失败")):
+        return "已连续 5 次测种失败，触发保护停止。"
+    if kinds & {"SerialException", "PortNotOpenError"} or "could not open port" in text or "单片机连接失败" in text:
         return "请检查单片机连接和串口选择，关闭占用串口的其他程序，然后重新连接伊机控。"
-    if any(word in text for word in ("未配置", "不存在", "filenotfounderror", "no such file")):
-        return "所需脚本或配置文件不可用。请重新选择对应文件，并保存配置后重试。"
-    if any(word in text for word in ("permissionerror", "permission denied", "拒绝访问", "access is denied")):
-        return "文件或设备的访问被拒绝。请检查目录写入权限，并关闭占用设备的其他程序。"
-    if any(word in text for word in ("timeout", "timed out", "超时")):
-        if "脚本" in operation:
-            return "等待脚本或设备响应超时。请确认游戏已进入脚本所需界面，并检查手柄连接。"
-        if operation in {"软件更新", "QQ 通知"}:
-            return "网络请求超时。请检查网络连接后重试。"
-        if any(word in operation for word in ("测种", "捕捉", "捕获", "校正", "视频")):
-            return "等待画面或识别结果超时。请确认游戏画面正常、眼睛框选正确，再重新尝试。"
-        return "等待操作响应超时。请检查本步骤所需的设备与设置后重试。"
-    if any(word in text for word in ("ocr", "未识别", "识别失败")):
-        return "未取得有效识别结果。请确认游戏停留在所需画面，检查识别区域后重新测试。"
-    if any(word in operation for word in ("测种", "捕捉", "校正")):
-        return "请确认游戏处于测种画面，并检查视频连接、眼睛框选和模板；具体失败原因保留在详情中。"
-    if "脚本" in operation:
-        return "请检查所选脚本、游戏当前界面和伊机控连接；具体失败原因保留在详情中。"
-    if "搜索" in operation:
-        return "请检查搜索范围和筛选条件；具体失败原因保留在详情中。"
+    if "FileNotFoundError" in kinds:
+        return "未找到所需文件，请检查对应设置。"
+    if "PermissionError" in kinds:
+        return "访问被拒绝，请检查对应文件或设备的权限。"
+    if "TimeoutError" in kinds:
+        return "等待操作结果超时。"
     return ""
 
 
 def task_failure(message: object, *, task: str, phase: str = "") -> LogMessage:
     operation = {
-        "捕获Seed": "眨眼测种", "TID/SID测种": "TID 测种",
+        "捕获Seed": "测种", "TID/SID测种": "TID 测种",
         "搜索目标": "目标搜索", "搜索目标Display TID": "目标 TID 搜索",
         "运行测种脚本": "测种脚本执行", "运行过帧脚本": "过帧脚本执行",
         "运行撞闪脚本": "撞闪脚本执行", "运行取名脚本": "取名脚本执行",
@@ -156,7 +157,7 @@ def task_failure(message: object, *, task: str, phase: str = "") -> LogMessage:
     }.get(phase, task)
     return LogMessage(
         message, summary=f"{operation}失败，流程已停止",
-        context=problem_context(message, operation=operation) or "原始原因保留在详情中，请核对当前步骤的配置后重试。",
+        context=problem_context(message, operation=operation),
         details=exception_details(message) if isinstance(message, BaseException) else getattr(message, "details", ""),
         event_type="task.failed", level="ERROR",
     )

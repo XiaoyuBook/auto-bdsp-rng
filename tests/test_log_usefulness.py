@@ -97,8 +97,9 @@ def test_worker_failure_names_the_step_and_recovery_without_exposing_exception(a
     panel._runner_failed(raw)
     live_text = LiveLogPanel(buffer).text.toPlainText()
     assert "测种失败，流程已停止" in live_text
-    assert "等待画面或识别结果超时" in live_text
-    assert "眼睛框选" in live_text
+    assert "超时" not in live_text
+    assert "眼睛框选" not in live_text
+    assert "画面" not in live_text
     assert any(raw in entry.full_text() for entry in buffer.snapshot())
     assert "private" not in live_text and "monotonic" not in live_text
 
