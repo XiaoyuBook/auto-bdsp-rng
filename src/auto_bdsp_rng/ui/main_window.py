@@ -169,7 +169,7 @@ from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.image_io import write_image
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
-from auto_bdsp_rng.log_events import LogMessage, log_level, log_summary, script_output_message
+from auto_bdsp_rng.log_events import LogMessage, log_level, script_output_message
 from auto_bdsp_rng.ui_stall_diagnostics import start_ui_stall_diagnostics
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
@@ -2424,7 +2424,8 @@ class MainWindow(QMainWindow):
         run_id, round_id = self._run_log_context("伊机控")
         output = script_output_message(text, error=level in {"ERROR", "CRITICAL"})
         if isinstance(message, LogMessage):
-            output = LogMessage(text, summary=log_summary(message), event_type=message.event_type)
+            output = LogMessage(text, summary=message.summary, context=message.context,
+                                diagnostic=message.diagnostic, event_type=message.event_type)
         self._run_log_buffer.publish("伊机控", output, level=level, run_id=run_id, round_id=round_id)
 
     def _refresh_ui_stall_diagnostics(self) -> None:
@@ -10574,7 +10575,7 @@ class MainWindow(QMainWindow):
             self._cancel_capture()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
-            self._write_run_log("Seed 捕捉", LogMessage(f"已请求停止{self._capture_mode_label()}", summary="已请求停止捕捉"), level="WARNING")
+            self._write_run_log("Seed 捕捉", LogMessage(f"已请求停止{self._capture_mode_label()}", summary="已请求停止捕捉"))
             return
         from auto_bdsp_rng.ui.mock_capture import start_mock_capture
         if start_mock_capture(self, "seed"):
@@ -10659,7 +10660,7 @@ class MainWindow(QMainWindow):
             self._cancel_capture()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
-            self._write_run_log("Seed 捕捉", LogMessage(f"已请求停止{self._capture_mode_label()}", summary="已请求停止捕捉"), level="WARNING")
+            self._write_run_log("Seed 捕捉", LogMessage(f"已请求停止{self._capture_mode_label()}", summary="已请求停止捕捉"))
             return
         from auto_bdsp_rng.ui.mock_capture import start_mock_capture
         if start_mock_capture(self, "reidentify"):
@@ -10762,7 +10763,7 @@ class MainWindow(QMainWindow):
             self._cancel_capture()
             self.capture_button.setText(self._text("stop_capture"))
             self.statusBar().showMessage(self._text("capture_stopping"))
-            self._write_run_log("Seed 捕捉", LogMessage(f"已请求停止{self._capture_mode_label()}", summary="已请求停止捕捉"), level="WARNING")
+            self._write_run_log("Seed 捕捉", LogMessage(f"已请求停止{self._capture_mode_label()}", summary="已请求停止捕捉"))
             return
         try:
             if config is None:
@@ -10866,7 +10867,7 @@ class MainWindow(QMainWindow):
         if self._capture_error is not None or self._capture_cancel.is_set():
             if self._capture_cancel.is_set():
                 self.statusBar().showMessage(self._text("capture_stopped"))
-                self._write_run_log("Seed 捕捉", LogMessage(f"{self._capture_mode_label()}已停止", summary="捕捉已停止"), level="WARNING")
+                self._write_run_log("Seed 捕捉", LogMessage(f"{self._capture_mode_label()}已停止", summary="捕捉已停止"))
             elif mock_dialog is not None:
                 self.statusBar().showMessage(str(self._capture_error))
                 self._write_run_log("Seed 捕捉", str(self._capture_error), level="WARNING")

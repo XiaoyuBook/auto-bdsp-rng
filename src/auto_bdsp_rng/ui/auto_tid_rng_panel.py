@@ -63,7 +63,7 @@ from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.rng_core.cancellation import SearchCancelled
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
-from auto_bdsp_rng.log_events import LogMessage, is_user_message, log_level, log_summary
+from auto_bdsp_rng.log_events import LogMessage, is_user_message, log_level, log_summary, log_user_text, task_failure
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
@@ -1645,7 +1645,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             description = phase_text
         self.runtime_phase_label.setText(title)
         self.runtime_description_label.setText(description)
-        self.runtime_description_label.setToolTip(progress.log_message or description)
+        self.runtime_description_label.setToolTip(log_user_text(progress.log_message) or description)
         self.runtime_round_label.setText(f"第 {progress.loop_index} 轮" if progress.loop_index > 0 else "尚未开始")
         self.runtime_current_value.setText(self._runtime_number(current))
         self.runtime_target_value.setText(self._runtime_number(target))
@@ -1736,7 +1736,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         latest_line = next((line.strip() for line in reversed(log_summary(message, level).splitlines()) if line.strip()), None)
         if latest_line is not None:
             self.latest_log_label.setText(latest_line)
-            self.latest_log_label.setToolTip(latest_line)
+            self.latest_log_label.setToolTip(log_user_text(message, level))
 
     def set_id_states(
         self, states: list[IDState8], *, elapsed_seconds: tuple[float | None, ...] = (),
@@ -2039,6 +2039,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self._runner_returned()
 
     def _runner_failed(self, message: str) -> None:
+        message = task_failure(message, task="自动 TID", phase=self._last_progress.phase.value)
         progress = replace(self._last_progress, phase=AutoTidRngPhase.FAILED, log_message=message)
         self._last_progress = progress
         self._render_runtime(progress)

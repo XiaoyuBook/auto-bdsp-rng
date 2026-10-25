@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from auto_bdsp_rng.log_events import LEVEL_LABELS, PROBLEM_LEVELS, LogMessage, log_level, log_summary
+from auto_bdsp_rng.log_events import LEVEL_LABELS, PROBLEM_LEVELS, LogMessage, log_context, log_level, log_summary
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
@@ -76,6 +76,7 @@ class RunLogEntry:
     repeat_count: int = 1
     first_message: str = ""
     last_timestamp: datetime | None = None
+    context: str = ""
 
     @property
     def user_visible(self) -> bool:
@@ -84,7 +85,13 @@ class RunLogEntry:
     @property
     def user_message(self) -> str:
         text = log_summary(self)
-        return f"{text}（累计 {self.repeat_count} 次）" if text and self.repeat_count > 1 else text
+        if text and self.repeat_count > 1 and self.event_type != "wait.progress":
+            text = f"{text}（累计 {self.repeat_count} 次）"
+        return "\n".join(part for part in (text, self.user_context) if part)
+
+    @property
+    def user_context(self) -> str:
+        return log_context(self)
 
     @property
     def display_message(self) -> str:
@@ -97,7 +104,7 @@ class RunLogEntry:
 
     def full_text(self) -> str:
         timestamp = self.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        lines = [self.display_message, ""] if self.summary else []
+        lines = [self.display_message, *([self.context] if self.context else []), ""] if self.summary else []
         if self.first_message:
             lines.extend(("首次记录：", self.first_message, "", "最近记录："))
         else:
@@ -165,6 +172,7 @@ class RunLogBuffer(QObject):
                 run_id=run_id,
                 round_id=round_id,
                 summary=metadata.summary if metadata is not None else "",
+                context=metadata.context if metadata is not None else "",
                 details=metadata.details if metadata is not None else "",
                 event_type=metadata.event_type if metadata is not None else "message",
                 phase=metadata.phase if metadata is not None else "",
@@ -344,7 +352,7 @@ class _RunLogFilterProxyModel(QSortFilterProxyModel):
             entry = super().data(index, ENTRY_ROLE)
             if isinstance(entry, RunLogEntry):
                 if index.column() == 3 and role in (int(Qt.ItemDataRole.DisplayRole), int(Qt.ItemDataRole.EditRole)):
-                    return entry.user_message
+                    return entry.user_message.replace("\n", " · ")
                 if role == int(Qt.ItemDataRole.ToolTipRole):
                     return f"{entry.user_message[:500]}\n双击查看完整内容和诊断详情"
         return super().data(index, role)
@@ -392,7 +400,7 @@ class _RunLogFilterProxyModel(QSortFilterProxyModel):
         if self._search_text:
             timestamp = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             searchable = "\n".join((timestamp, entry.level, LEVEL_LABELS.get(entry.level, entry.level),
-                                    entry.source_label, entry.summary, entry.message, entry.first_message,
+                                    entry.source_label, entry.summary, entry.context, entry.message, entry.first_message,
                                     entry.details, entry.phase, entry.event_type, entry.run_id or "")).casefold()
             if self._search_text not in searchable:
                 return False

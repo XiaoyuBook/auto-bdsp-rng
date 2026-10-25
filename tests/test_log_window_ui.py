@@ -187,7 +187,7 @@ def test_all_main_window_log_sinks_keep_internal_text_out_of_live_view(app, wind
         assert "monotonic" not in live.text.toPlainText()
         assert "backend_ready" not in live.text.toPlainText()
     assert "测种完成，正在搜索目标" in live.text.toPlainText()
-    assert "脚本报告错误信息" in live.text.toPlainText()
+    assert "脚本返回错误输出" in live.text.toPlainText()
     assert "操作未能完成" in live.text.toPlainText()
     assert any(entry.message == raw for entry in w._run_log_buffer.snapshot())
     assert "Traceback" not in panel._filtered_text()

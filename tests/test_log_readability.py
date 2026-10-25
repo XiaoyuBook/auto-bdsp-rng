@@ -143,11 +143,13 @@ def test_a_new_retry_after_reading_reopens_one_unread_problem(app):
     assert logs.unread_problem_count == 0
 
 
-def test_script_output_is_a_summary_with_literal_raw_details(app):
+def test_plain_script_output_stays_in_diagnostics_with_literal_raw_details(app):
     buffer = RunLogBuffer()
     panel = RunLogPanel(buffer)
     raw = '<输出> & "中文"\n' * 1000
     buffer.publish("伊机控", script_output_message(raw))
+    assert not panel.visible_entries()
+    panel.view_combo.setCurrentIndex(panel.view_combo.findData("all"))
     assert panel.proxy_model.index(0, 3).data() == "脚本输出已更新（1000 行）"
     panel.table.setCurrentIndex(panel.proxy_model.index(0, 0))
     assert raw in panel.details_text.toPlainText()
@@ -164,7 +166,7 @@ def test_live_reader_preserves_literal_text_and_retains_complete_messages(app):
     def publish():
         for index in range(600):
             summary = f'记录 {index}：<b>中文原文</b> & "引号"'
-            buffer.publish("输入检查", LogMessage(f"内部原文 {index}", summary=summary))
+            buffer.publish("输入检查", LogMessage(f"内部原文 {index}", summary=summary, context=f"本条结果 {index}"))
 
     worker = Thread(target=publish)
     worker.start()

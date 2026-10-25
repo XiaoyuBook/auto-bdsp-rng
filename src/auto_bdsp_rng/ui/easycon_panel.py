@@ -2405,7 +2405,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = True
         process.kill()
-        self._append_log("warn", LogMessage("正在停止脚本", summary="正在停止脚本"))
+        self._append_log("info", LogMessage("正在停止脚本", summary="正在停止脚本"))
 
     def run_script(self) -> None:
         if self._is_native_mode():
@@ -2636,7 +2636,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = True
         self.task_state_text = "正在停止"
-        self._append_log("warn", LogMessage("已请求停止当前脚本，等待脚本退出", summary="已请求停止脚本，正在等待退出"))
+        self._append_log("info", LogMessage("已请求停止当前脚本，等待脚本退出", summary="已请求停止脚本，正在等待退出"))
         self._update_status_labels()
 
     def run_script_via_bridge(self) -> None:
@@ -2744,7 +2744,7 @@ class EasyConPanel(QWidget):
             return
         self.stop_requested = True
         self.task_state_text = "正在停止"
-        self._append_log("warn", LogMessage("已请求停止当前 Bridge 任务，等待脚本退出", summary="已请求停止脚本，正在等待退出"))
+        self._append_log("info", LogMessage("已请求停止当前 Bridge 任务，等待脚本退出", summary="已请求停止脚本，正在等待退出"))
         self._update_status_labels()
 
     def begin_external_native_script(self, name: str) -> None:
@@ -2941,11 +2941,10 @@ class EasyConPanel(QWidget):
             elif not self._native_connection_active():
                 self.task_state_text = "未运行"
             self.easycon_status.showMessage(self.task_state_text, 3000)
-        log_level = "error" if status.startswith("失败") else "warn" if status.startswith("已中止") else "info"
+        log_level = "error" if status.startswith("失败") else "info"
         self._append_log(log_level, LogMessage(status, summary={
             "error": "脚本执行失败，请查看完整日志中的诊断详情",
-            "warn": "脚本已停止",
-            "info": "脚本已执行完成",
+            "info": "脚本已停止" if status.startswith("已中止") else "脚本已执行完成",
         }[log_level]))
         self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
         self._cleanup_cli_script()
@@ -3188,6 +3187,14 @@ class EasyConPanel(QWidget):
             "debug": "DEBUG",
         }.get(level, "INFO")
         event = script_output_message(text, error=level == "stderr") if level in {"stdout", "stderr"} else message
+        if level == "error" and "脚本" in text and "Traceback" not in text:
+            line = extract_compile_error_line("", text)
+            if line is not None:
+                event = LogMessage(
+                    message, summary=f"脚本第 {line} 行执行失败",
+                    context="请在脚本编辑区查看已标记的错误行，修正后重新运行。",
+                    event_type="script.failed",
+                )
         sink = self._run_log_sink if persist else self._native_result_log_sink
         if sink is not None:
             try:

@@ -90,9 +90,13 @@ class _LiveLogText(QTextEdit):
             message_block.setRightMargin(6)
             message_block.setBottomMargin(10)
             cursor.insertBlock(message_block)
-            cursor.insertText(entry.user_message, self._text_format(
+            title = entry.user_message.split("\n", 1)[0]
+            cursor.insertText(title, self._text_format(
                 13, "#954A44" if entry.level in {"ERROR", "CRITICAL"} else "#293640",
             ))
+            if entry.user_context:
+                # A soft line break preserves the two-block retention rule.
+                cursor.insertText("\u2028" + entry.user_context, self._text_format(12, "#63717C"))
         cursor.endEditBlock()
 
     def _align_timestamps(self) -> None:

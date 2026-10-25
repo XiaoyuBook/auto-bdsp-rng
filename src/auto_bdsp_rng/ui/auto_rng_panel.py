@@ -82,7 +82,7 @@ from auto_bdsp_rng.data import (
 )
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
-from auto_bdsp_rng.log_events import is_user_message, log_level, log_summary
+from auto_bdsp_rng.log_events import is_user_message, log_level, log_summary, log_user_text, task_failure
 from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
@@ -3443,7 +3443,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         if latest_line is not None:
             self.latest_log_time_label.setText(timestamp)
             self.latest_log_label.setText(latest_line)
-            self.latest_log_label.setToolTip(latest_line)
+            self.latest_log_label.setToolTip(log_user_text(message, level))
             self.latestMessageChanged.emit(latest_line)
 
     def set_candidates(self, rows: list[list[str]], locked_index: int | None = None) -> None:
@@ -3690,6 +3690,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runFinished.emit(progress)
 
     def _runner_failed(self, message: str) -> None:
+        message = task_failure(message, task="自动定点", phase=self._runtime_phase.value if self._runtime_phase else "")
         self.set_phase_text("失败")
         if message != self._last_failed_progress_message:
             self.add_log(message, level="ERROR")

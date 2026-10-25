@@ -12,7 +12,7 @@ from typing import Any
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
-from auto_bdsp_rng.log_events import LogMessage
+from auto_bdsp_rng.log_events import LogMessage, problem_context, task_failure
 from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64, SeedState32
 
 
@@ -891,6 +891,7 @@ class AutoTidRngRunner:
         )
         self._set_progress(
             phase, message, summary=f"正在等待{label}，剩余 {updates['remaining_to_trigger']} 次推进",
+            context=f"当前推进 {int(seed.current_advances):,}；触发推进 {int(trigger):,}。到点后自动执行脚本，无需手动操作。",
             event_type="wait.started", **updates,
         )
         return updates
@@ -906,6 +907,9 @@ class AutoTidRngRunner:
             phase,
             message,
             summary=getattr(message, "summary", "") or "开始新一轮自动 TID 测种",
+            context=getattr(message, "context", "") or (
+                f"目标池 {len(self._target_display_tids())} 个 TID；搜索上限 {self.config.frame_threshold:,} 帧；delay {self.config.delay}。"
+            ),
             event_type=getattr(message, "event_type", "round.started"),
             loop_index=self._completed_loops,
             seed_text="",
@@ -983,6 +987,7 @@ class AutoTidRngRunner:
                 LogMessage(
                     f"TID/SID 测种失败: {detail}；捕获服务将重新运行测种脚本",
                     summary="测种失败，将重新运行测种脚本", event_type="seed.retry", level="WARNING",
+                    context=problem_context(exc, operation="TID 测种"),
                 )
             )
             return
@@ -1004,6 +1009,7 @@ class AutoTidRngRunner:
                 f"；计时起点(monotonic)={self._seconds_text(seed.measured_at)}"
             ),
             summary="测种完成，正在搜索目标 TID", event_type="seed.captured",
+            context=f"当前推进 {seed.current_advances:,}；搜索上限 {self.config.frame_threshold:,} 帧；目标池 {len(self._target_display_tids())} 个 TID。",
             seed_text=seed.seed_text,
             current_advances=seed.current_advances,
             seed_measured_wall_time=seed.measured_wall_time,
@@ -1026,6 +1032,7 @@ class AutoTidRngRunner:
                 AutoTidRngPhase.SEARCH_TARGET,
                 message,
                 summary="本轮搜索范围内未找到目标 TID，将重新测种", event_type="round.no_target",
+                context=f"已搜索 {self.config.frame_threshold:,} 帧，生成 {len(states):,} 个 ID，目标池 {len(target_display_tids)} 个 TID 均未命中。",
                 current_advances=seed.current_advances,
                 id_states=states,
                 id_elapsed_seconds=elapsed,
@@ -1049,7 +1056,11 @@ class AutoTidRngRunner:
         self._target = target
         if trigger < 0:
             self._loop_or_complete(
-                f"目标 Display TID {target.display_tid:06d} @ Adv {target.advances} 小于 delay {self.config.delay}，重新测种"
+                LogMessage(
+                    f"目标 Display TID {target.display_tid:06d} @ Adv {target.advances} 小于 delay {self.config.delay}，重新测种",
+                    summary=f"目标 TID {target.display_tid:06d} 来不及触发，重新测种",
+                    context=f"目标推进 {target.advances:,}；delay {self.config.delay}，脚本应在测种起点之前启动。本轮不执行取名。",
+                )
             )
             return
         self._set_progress(
@@ -1060,6 +1071,7 @@ class AutoTidRngRunner:
                 f"需等待Adv={max(0, int(trigger) - int(seed.current_advances))}"
             ),
             summary=f"已找到目标 TID：{target.display_tid:06d}，正在等待取名时机",
+            context=f"目标推进 {target.advances:,}；当前 {seed.current_advances:,}；取名脚本在 {trigger:,} 启动（delay {self.config.delay}）。",
             event_type="target.found",
             target_tid=target.tid,
             target_sid=target.sid,
@@ -1081,6 +1093,7 @@ class AutoTidRngRunner:
         self._set_progress(
             AutoTidRngPhase.COMPLETED, f"取名脚本完成——{path.name}",
             summary="取名脚本执行完成，请确认游戏内 TID", event_type="task.completed", last_script_path=path,
+            context=(f"本轮目标 TID {self._target.display_tid:06d}；请核对游戏内最终显示的 TID。" if self._target else "请核对游戏内最终显示的 TID。"),
         )
 
     def _wait_name_trigger(self) -> None:
@@ -1090,7 +1103,11 @@ class AutoTidRngRunner:
             self._fail("取名脚本触发帧尚未计算")
             return
         if trigger < int(seed.current_advances):
-            self._loop_or_complete(f"已超过取名脚本触发帧 {trigger}，当前帧 {seed.current_advances}，重新测种")
+            self._loop_or_complete(LogMessage(
+                f"已超过取名脚本触发帧 {trigger}，当前帧 {seed.current_advances}，重新测种",
+                summary="已错过取名时机，本轮不执行取名，正在重新测种",
+                context=f"取名启动点 {trigger:,}；当前推进 {seed.current_advances:,}，已超过 {seed.current_advances - trigger:,} 帧。",
+            ))
             return
         self._begin_wait(
             phase=AutoTidRngPhase.WAIT_NAME_TRIGGER,
@@ -1099,7 +1116,10 @@ class AutoTidRngRunner:
             label="取名帧",
         )
 
+        last_notice_bucket = 0
+
         def on_frame(live_current: int) -> None:
+            nonlocal last_notice_bucket
             updates = self._wait_progress_updates(
                 now=self._read_monotonic(),
                 current_advances=live_current,
@@ -1118,9 +1138,17 @@ class AutoTidRngRunner:
                     "取名帧等待进度",
                     updates,
                 )
+            bucket = int(float(updates.get("wait_elapsed_seconds", 0)) // 30)
+            notify = bucket > last_notice_bucket and int(updates["remaining_to_trigger"]) > 0
+            if notify:
+                last_notice_bucket = bucket
+                message = message or self._format_wait_timing_message("取名等待状态更新", updates)
             self._set_progress(
-                AutoTidRngPhase.WAIT_NAME_TRIGGER, message, summary="取名等待计时采样",
-                event_type="wait.sample", diagnostic=True, level="DEBUG", coalesce_key="wait.name", **updates,
+                AutoTidRngPhase.WAIT_NAME_TRIGGER, message,
+                summary=f"仍在等待取名，剩余 {updates['remaining_to_trigger']:,} 次推进" if notify else "取名等待计时采样",
+                context=f"已等待 {float(updates['wait_elapsed_seconds']):.0f} 秒；当前推进 {live_current:,}；触发推进 {int(trigger):,}。" if notify else "",
+                event_type="wait.progress" if notify else "wait.sample", diagnostic=not notify,
+                level="INFO" if notify else "DEBUG", coalesce_key="wait.name.progress" if notify else "wait.name", **updates,
             )
 
         self._advance_counter.run_until(
@@ -1145,9 +1173,12 @@ class AutoTidRngRunner:
         actual_current = int(updates.get("current_advances", self._advance_counter.current_advances))
         if actual_current > int(trigger):
             self._loop_or_complete(
-                self._format_wait_timing_message(
-                    f"已超过取名脚本触发帧 {trigger}，实际Adv={actual_current}，重新测种",
-                    updates,
+                LogMessage(
+                    self._format_wait_timing_message(
+                        f"已超过取名脚本触发帧 {trigger}，实际Adv={actual_current}，重新测种", updates,
+                    ),
+                    summary="已错过取名时机，本轮不执行取名，正在重新测种",
+                    context=f"取名启动点 {int(trigger):,}；当前推进 {actual_current:,}，已超过 {actual_current - int(trigger):,} 帧。",
                 )
             )
             return
@@ -1159,6 +1190,7 @@ class AutoTidRngRunner:
                 updates,
             ),
             summary="已到达取名时机，开始执行取名脚本", event_type="script.started",
+            context=f"当前推进 {actual_current:,}；本轮目标 TID {self._target.display_tid:06d}。" if self._target else f"当前推进 {actual_current:,}。",
             **updates,
         )
         # The schedule is complete.  Keep its values in ``progress`` for
@@ -1182,7 +1214,10 @@ class AutoTidRngRunner:
             label="反查帧",
         )
 
+        last_notice_bucket = 0
+
         def on_frame(live_current: int) -> None:
+            nonlocal last_notice_bucket
             updates = self._wait_progress_updates(
                 now=self._read_monotonic(),
                 current_advances=live_current,
@@ -1201,9 +1236,17 @@ class AutoTidRngRunner:
                     "反查帧等待进度",
                     updates,
                 )
+            bucket = int(float(updates.get("wait_elapsed_seconds", 0)) // 30)
+            notify = bucket > last_notice_bucket and int(updates["remaining_to_trigger"]) > 0
+            if notify:
+                last_notice_bucket = bucket
+                message = message or self._format_wait_timing_message("反查等待状态更新", updates)
             self._set_progress(
-                AutoTidRngPhase.WAIT_REVERSE_TRIGGER, message, summary="反查等待计时采样",
-                event_type="wait.sample", diagnostic=True, level="DEBUG", coalesce_key="wait.reverse", **updates,
+                AutoTidRngPhase.WAIT_REVERSE_TRIGGER, message,
+                summary=f"仍在等待反查，剩余 {updates['remaining_to_trigger']:,} 次推进" if notify else "反查等待计时采样",
+                context=f"已等待 {float(updates['wait_elapsed_seconds']):.0f} 秒；当前推进 {live_current:,}；触发推进 {int(trigger):,}。" if notify else "",
+                event_type="wait.progress" if notify else "wait.sample", diagnostic=not notify,
+                level="INFO" if notify else "DEBUG", coalesce_key="wait.reverse.progress" if notify else "wait.reverse", **updates,
             )
 
         self._advance_counter.run_until(
@@ -1235,6 +1278,7 @@ class AutoTidRngRunner:
                 updates,
             ),
             summary="已到达反查时机，开始执行反查 ID 脚本", event_type="script.started",
+            context=f"计划启动点 {int(trigger):,}；实际推进 {actual_current:,}。反查结果将用于计算实际 delay。",
             **updates,
         )
         self._wait_phase = None
@@ -1258,7 +1302,7 @@ class AutoTidRngRunner:
         if tid is None:
             self._set_progress(AutoTidRngPhase.FAILED, f"OCR 未识别到有效 TID：{text}", summary="未识别到有效 TID，流程已停止，请检查游戏画面", ocr_text=text)
             return
-        self._set_progress(AutoTidRngPhase.CALIBRATE_DELAY, f"OCR TID={tid}", summary="TID 识别完成，正在校准延迟", ocr_text=text, ocr_tid=tid)
+        self._set_progress(AutoTidRngPhase.CALIBRATE_DELAY, f"OCR TID={tid}", summary="TID 识别完成，正在校准延迟", context=f"识别到的游戏内 TID：{tid}。", ocr_text=text, ocr_tid=tid)
 
     def _calibrate_delay(self) -> None:
         seed = self._require_seed()
@@ -1279,6 +1323,7 @@ class AutoTidRngRunner:
         self._set_progress(
             AutoTidRngPhase.COMPLETED,
             f"delay 校准完成：实际 delay={actual_delay}", summary="TID 延迟校准已完成",
+            context=f"实际 delay {actual_delay} 帧；原设置 {self.config.delay} 帧。请核对后应用到后续任务。",
             ocr_advances=int(state.advances),
             actual_delay=actual_delay,
         )
@@ -1302,7 +1347,7 @@ class AutoTidRngRunner:
         return tuple(int(value) for value in self.config.target_tids)
 
     def _set_progress(
-        self, phase: AutoTidRngPhase, message: str = "", *, summary: str = "",
+        self, phase: AutoTidRngPhase, message: str = "", *, summary: str = "", context: str = "",
         event_type: str = "progress", diagnostic: bool = False,
         level: str | None = None, coalesce_key: str | None = None, **updates: object,
     ) -> None:
@@ -1310,11 +1355,15 @@ class AutoTidRngRunner:
             return
         if message:
             if phase == AutoTidRngPhase.FAILED:
-                summary = summary or "自动 TID 发生错误，流程已停止，请查看完整日志中的诊断详情"
+                if not summary and not getattr(message, "summary", ""):
+                    failure = task_failure(message, task="自动 TID", phase=self.progress.phase.value)
+                    summary = failure.summary
+                    context = "；".join(part for part in (context, failure.context) if part)
                 level = level or "ERROR"
                 event_type = "task.failed"
             message = LogMessage(
                 message, summary=summary or getattr(message, "summary", ""),
+                context=context or getattr(message, "context", ""),
                 details=getattr(message, "details", ""),
                 event_type=getattr(message, "event_type", event_type) if event_type == "progress" else event_type,
                 phase=phase.value, diagnostic=diagnostic or getattr(message, "diagnostic", False),
