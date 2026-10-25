@@ -8930,7 +8930,12 @@ class MainWindow(QMainWindow):
                 target_label=h.current_target_label,
             )
             reason = str(values[0]) if values else "本轮未能继续"
-            self._write_run_log("历史记录", f"本轮结束，继续重试：{reason}", level="WARNING")
+            # The runner publishes the actionable warning for this same
+            # failure. Keep its archival copy without a duplicate alert.
+            self._write_run_log("历史记录", LogMessage(
+                f"本轮结束，继续重试：{reason}",
+                summary="已归档本轮重试原因", event_type="history.round_restarted", diagnostic=True,
+            ))
         elif event == "seed_captured" and len(values) >= 4:
             self.auto_rng_tab.clear_candidate_targets("已捕获 Seed，正在搜索本轮候选")
             h.seed_captured(str(values[0]), int(values[1]), int(values[2]), int(values[3]))

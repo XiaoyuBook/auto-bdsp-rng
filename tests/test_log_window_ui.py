@@ -1,4 +1,4 @@
-from auto_bdsp_rng.log_events import LogMessage
+from auto_bdsp_rng.log_events import LogMessage, problem_context
 from threading import Thread
 
 import pytest
@@ -196,3 +196,22 @@ def test_all_main_window_log_sinks_keep_internal_text_out_of_live_view(app, wind
     assert "Traceback" not in w.easycon_tab.latest_log_label.toolTip()
     panel.view_combo.setCurrentIndex(panel.view_combo.findData("all"))
     assert raw in panel._filtered_text()
+
+
+def test_round_restart_shows_one_actionable_warning_instead_of_a_history_duplicate(app, window):
+    window._handle_auto_history_event("cycle_start", (1,))
+    message = LogMessage(
+        "seed 捕获失败（连续 1/5）: 原始原因，进入下一轮测种",
+        summary="测种失败（连续 1/5），将重新运行测种脚本",
+        context=problem_context("原始原因", operation="眨眼测种"), level="WARNING", event_type="seed.retry",
+    )
+    window._handle_auto_history_event("cycle_restart", (message,))
+    window.auto_rng_tab.add_log(message)
+    settle()
+    warnings = [entry for entry in window._run_log_buffer.snapshot() if entry.user_visible and entry.level == "WARNING"]
+    assert len(warnings) == 1 and warnings[0].source == "自动定点"
+    assert "操作遇到问题" not in window.live_log_panel.text.toPlainText()
+    assert "眼睛框选" in window.live_log_panel.text.toPlainText()
+    archived = next(entry for entry in window._run_log_buffer.snapshot() if entry.event_type == "history.round_restarted")
+    assert not archived.user_visible and "原始原因" in archived.full_text()
+    assert window.run_log_window.unread_problem_count == 1
