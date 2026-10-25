@@ -18,7 +18,7 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     ShinyCheckResult,
 )
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import normalize_delay_candidates
-from auto_bdsp_rng.log_events import LogMessage, problem_context, task_failure
+from auto_bdsp_rng.log_events import LogMessage, exception_details, problem_context, task_failure
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_HIT_PARAMETER,
     ROAMER_SPECIES,
@@ -680,6 +680,7 @@ class AutoRngRunner:
                     f"seed 捕获失败（连续 {self._seed_capture_failures}/5）: {exc}，进入下一轮测种",
                     summary=f"测种失败（连续 {self._seed_capture_failures}/5），将重新运行测种脚本",
                     context=problem_context(exc, operation="眨眼测种"),
+                    details=exception_details(exc),
                     event_type="seed.retry", phase=AutoRngPhase.RUN_SEED_SCRIPT.value, level="WARNING",
                 )
             )
@@ -1178,6 +1179,7 @@ class AutoRngRunner:
                         f"补救测 Seed 第 {attempt} 次失败（{attempt}/{recovery_attempts}）: "
                         f"{exc}，继续尝试",
                         summary=f"补救测种失败，准备第 {attempt + 1}/{recovery_attempts} 次尝试",
+                        details=exception_details(exc),
                         event_type="seed.retry", level="WARNING", coalesce_key="seed.recovery.retry",
                     )
                 continue
@@ -1200,7 +1202,7 @@ class AutoRngRunner:
             self._clear_current_cycle_state()
             self._set_progress(
                 AutoRngPhase.FAILED,
-                message,
+                LogMessage(message, details=exception_details(last_error)),
                 locked_target=None,
                 raw_target_advances=None,
                 fixed_delay=None,
@@ -1970,6 +1972,7 @@ class AutoRngRunner:
                                     f"{label} 第 {attempt} 次失败（{attempt}/{attempts}）: {exc}，继续尝试",
                                     summary=f"{label}失败，准备第 {attempt + 1}/{attempts} 次尝试",
                                     context=problem_context(exc, operation=label),
+                                    details=exception_details(exc),
                                     event_type="position.retry", phase=self.progress.phase.value,
                                     level="WARNING", coalesce_key="position.retry",
                                 )

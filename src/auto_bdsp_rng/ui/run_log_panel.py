@@ -77,6 +77,7 @@ class RunLogEntry:
     first_message: str = ""
     last_timestamp: datetime | None = None
     context: str = ""
+    first_details: str = ""
 
     @property
     def user_visible(self) -> bool:
@@ -104,14 +105,26 @@ class RunLogEntry:
 
     def full_text(self) -> str:
         timestamp = self.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        lines = [self.display_message, *([self.context] if self.context else []), ""] if self.summary else []
+        heading = self.display_message if self.summary else log_summary(self)
+        explanation = self.user_context if self.user_visible else self.context
+        lines = [heading, *([explanation] if explanation else []), ""] if heading else []
+        details_first = bool(self.level in PROBLEM_LEVELS and self.details and self.details != self.message)
+        if details_first:
+            # Put the current cause before raw records and bookkeeping so it
+            # is visible immediately in the compact details pane.
+            if not self.details.startswith("异常原因链："):
+                lines.append("诊断详情：")
+            lines.extend((self.details, ""))
         if self.first_message:
-            lines.extend(("首次记录：", self.first_message, "", "最近记录："))
+            lines.extend(("首次记录：", self.first_message))
+            if self.first_details and self.first_details != self.first_message:
+                lines.extend(("", "首次诊断详情：", self.first_details))
+            lines.extend(("", "最近记录："))
         else:
-            lines.append("完整内容：")
+            lines.append("问题原文：" if self.level in PROBLEM_LEVELS else "完整内容：")
         lines.append(self.message)
-        if self.details and self.details != self.message:
-            lines.extend(("", "诊断参数：", self.details))
+        if self.details and self.details != self.message and not details_first:
+            lines.extend(("", "诊断详情：", self.details))
         lines.extend(("", "记录信息：", f"{timestamp} · {LEVEL_LABELS.get(self.level, self.level)} · {self.source_label}"))
         if self.run_id:
             lines.append(f"运行：{self.run_id}")
@@ -191,6 +204,7 @@ class RunLogBuffer(QObject):
                     entry, seq=previous.seq, timestamp=previous.timestamp,
                     repeat_count=previous.repeat_count + 1,
                     first_message=previous.first_message or previous.message,
+                    first_details=previous.first_details if previous.first_message else previous.details,
                     last_timestamp=entry.timestamp,
                 )
                 self._entries[-1] = entry
@@ -501,6 +515,7 @@ class RunLogPanel(QWidget):
         toggle_row.setSpacing(12)
         self.follow_check = QCheckBox("自动跟随", self)
         self.follow_check.setObjectName("RunLogAutoFollow")
+        self.follow_check.setToolTip("自动滚动到最新日志；详情仍对应当前选中的记录。")
         self.follow_check.setChecked(True)
         self.save_check = QCheckBox("自动保存（7 天）", self)
         self.save_check.setToolTip("自动保存运行日志到文件，保留最近 7 天。")
@@ -780,7 +795,10 @@ class RunLogPanel(QWidget):
             self.details_text.clear()
             self.details_hint.setText("选中一条日志可查看全文，双击可直接展开")
             return
-        self.details_hint.setText(entry.source_label)
+        timestamp = entry.last_timestamp or entry.timestamp
+        hint = f"正在查看 {timestamp:%H:%M:%S} · {LEVEL_LABELS.get(entry.level, entry.level)} · {entry.source_label}"
+        self.details_hint.setText(hint)
+        self.details_hint.setToolTip(hint)
         self.details_text.setPlainText(entry.full_text())
 
     def _toggle_details(self, expanded: bool) -> None:

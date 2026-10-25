@@ -82,7 +82,7 @@ from auto_bdsp_rng.data import (
 )
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
-from auto_bdsp_rng.log_events import is_user_message, log_level, log_summary, log_user_text, task_failure
+from auto_bdsp_rng.log_events import LogMessage, is_user_message, log_level, log_summary, log_user_text, task_failure
 from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
@@ -220,25 +220,33 @@ class AutoRngWorker(QObject):
     def __init__(self, runner: object) -> None:
         super().__init__()
         self.runner = runner
+        self.failure_event: LogMessage | None = None
         setattr(self.runner, "progress_callback", self.progressChanged.emit)
 
     @Slot()
     def run(self) -> None:
+        self.failure_event = None
         try:
             result = self.runner.run()
         except SearchCancelled as exc:
             if callable(getattr(self.runner, "should_stop", None)) and self.runner.should_stop():
                 self.finished.emit(self.runner.progress)
             else:
-                self.failed.emit(str(exc))
+                self._emit_failure(exc)
             return
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self._emit_failure(exc)
             return
         if isinstance(result, AutoRngProgress) and result.phase == AutoRngPhase.FAILED:
+            self.failure_event = result.log_message if isinstance(result.log_message, LogMessage) else None
             self.failed.emit(result.log_message)
             return
         self.finished.emit(result)
+
+    def _emit_failure(self, error: BaseException) -> None:
+        phase = getattr(getattr(self.runner, "progress", None), "phase", None)
+        self.failure_event = task_failure(error, task="自动定点", phase=getattr(phase, "value", ""))
+        self.failed.emit(str(error))
 
     @Slot()
     def stop(self) -> None:
@@ -3690,7 +3698,11 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         self.runFinished.emit(progress)
 
     def _runner_failed(self, message: str) -> None:
-        message = task_failure(message, task="自动定点", phase=self._runtime_phase.value if self._runtime_phase else "")
+        worker = self.sender() or self._runner_worker
+        failure = getattr(worker, "failure_event", None)
+        message = failure if isinstance(failure, LogMessage) and str(failure) == message else task_failure(
+            message, task="自动定点", phase=self._runtime_phase.value if self._runtime_phase else "",
+        )
         self.set_phase_text("失败")
         if message != self._last_failed_progress_message:
             self.add_log(message, level="ERROR")

@@ -319,22 +319,29 @@ class AutoTidRngWorker(QObject):
     def __init__(self, runner: object) -> None:
         super().__init__()
         self.runner = runner
+        self.failure_event: LogMessage | None = None
         setattr(self.runner, "progress_callback", self.progressChanged.emit)
 
     @Slot()
     def run(self) -> None:
+        self.failure_event = None
         try:
             result = self.runner.run()
         except SearchCancelled as exc:
             if callable(getattr(self.runner, "should_stop", None)) and self.runner.should_stop():
                 self.finished.emit(self.runner.progress)
             else:
-                self.failed.emit(str(exc))
+                self._emit_failure(exc)
             return
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self._emit_failure(exc)
             return
         self.finished.emit(result)
+
+    def _emit_failure(self, error: BaseException) -> None:
+        phase = getattr(getattr(self.runner, "progress", None), "phase", None)
+        self.failure_event = task_failure(error, task="自动 TID", phase=getattr(phase, "value", ""))
+        self.failed.emit(str(error))
 
     def request_stop(self, reason: str | None = None) -> None:
         """Forward a stop request while tolerating legacy runner doubles."""
@@ -2039,7 +2046,11 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self._runner_returned()
 
     def _runner_failed(self, message: str) -> None:
-        message = task_failure(message, task="自动 TID", phase=self._last_progress.phase.value)
+        worker = self.sender() or self._runner_worker
+        failure = getattr(worker, "failure_event", None)
+        message = failure if isinstance(failure, LogMessage) and str(failure) == message else task_failure(
+            message, task="自动 TID", phase=self._last_progress.phase.value,
+        )
         progress = replace(self._last_progress, phase=AutoTidRngPhase.FAILED, log_message=message)
         self._last_progress = progress
         self._render_runtime(progress)

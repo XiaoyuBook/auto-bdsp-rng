@@ -2406,6 +2406,9 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._run_log_manager.write(source, text, level=level)
+        diagnostic_details = getattr(message, "details", "")
+        if diagnostic_details and diagnostic_details not in text:
+            self._run_log_manager.write(source, "诊断详情：\n" + diagnostic_details, level="DEBUG")
 
     def _publish_native_output_tail(self, level: str, message: str) -> None:
         # This is the one final UI publication. Streaming output already went

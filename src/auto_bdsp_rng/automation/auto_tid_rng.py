@@ -12,7 +12,7 @@ from typing import Any
 
 from auto_bdsp_rng.automation.auto_rng.ocr_regions import OcrRegion
 from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
-from auto_bdsp_rng.log_events import LogMessage, problem_context, task_failure
+from auto_bdsp_rng.log_events import LogMessage, exception_details, problem_context, task_failure
 from auto_bdsp_rng.rng_core import BDSPXorshift, SeedPair64, SeedState32
 
 
@@ -969,7 +969,7 @@ class AutoTidRngRunner:
                 return
             self.services.run_script_text(text, path.name)
         except Exception as exc:
-            self._fail(str(exc))
+            self._fail(exc)
             return
         if self.should_stop():
             return
@@ -988,6 +988,7 @@ class AutoTidRngRunner:
                     f"TID/SID 测种失败: {detail}；捕获服务将重新运行测种脚本",
                     summary="测种失败，将重新运行测种脚本", event_type="seed.retry", level="WARNING",
                     context=problem_context(exc, operation="TID 测种"),
+                    details=exception_details(exc),
                 )
             )
             return
@@ -1088,7 +1089,7 @@ class AutoTidRngRunner:
             text, path = self._read_script(self.config.name_script_path, "取名脚本")
             self.services.run_script_text(text, path.name)
         except Exception as exc:
-            self._fail(str(exc))
+            self._fail(exc)
             return
         self._set_progress(
             AutoTidRngPhase.COMPLETED, f"取名脚本完成——{path.name}",
@@ -1288,7 +1289,7 @@ class AutoTidRngRunner:
             text, path = self._read_script(self.config.reverse_id_script_path, "反查 ID 脚本")
             self.services.run_script_text(text, path.name)
         except Exception as exc:
-            self._fail(str(exc))
+            self._fail(exc)
             return
         self._set_progress(AutoTidRngPhase.OCR_TID, f"反查 ID 脚本完成——{path.name}", summary="反查脚本已执行完成，正在识别 TID", last_script_path=path)
 
@@ -1296,7 +1297,7 @@ class AutoTidRngRunner:
         try:
             text = self.services.recognize_tid()
         except Exception as exc:
-            self._fail(f"OCR 失败: {exc}")
+            self._fail(exc, prefix="OCR 失败: ")
             return
         tid = parse_tid_text(text)
         if tid is None:
@@ -1328,7 +1329,9 @@ class AutoTidRngRunner:
             actual_delay=actual_delay,
         )
 
-    def _fail(self, message: str) -> None:
+    def _fail(self, message: str | BaseException, *, prefix: str = "") -> None:
+        if isinstance(message, BaseException):
+            message = LogMessage(prefix + str(message), details=exception_details(message))
         self._set_progress(AutoTidRngPhase.FAILED, message)
 
     def _require_seed(self) -> AutoTidSeedResult:

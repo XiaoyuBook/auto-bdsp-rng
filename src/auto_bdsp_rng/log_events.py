@@ -93,10 +93,24 @@ def log_user_text(message: object, level: str = "INFO") -> str:
     return "\n".join(part for part in (log_summary(message, level), log_context(message, level)) if part)
 
 
+def exception_details(error: BaseException | None) -> str:
+    """Keep causal messages for explicit diagnostics, including wrapped errors."""
+
+    chain: list[str] = []
+    seen: set[int] = set()
+    current = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    return "异常原因链：\n" + "\n上层异常：\n".join(reversed(chain)) if chain else ""
+
+
 def problem_context(message: object, *, operation: str = "") -> str:
     """Select closed, actionable copy; never copy an exception substring."""
 
-    text = str(message).casefold()
+    text = (exception_details(message) if isinstance(message, BaseException)
+            else str(message) + "\n" + getattr(message, "details", "")).casefold()
     if not operation and "脚本" in text:
         operation = "脚本执行"
     if "相同 seed" in text and "无候选" in text:
@@ -143,6 +157,7 @@ def task_failure(message: object, *, task: str, phase: str = "") -> LogMessage:
     return LogMessage(
         message, summary=f"{operation}失败，流程已停止",
         context=problem_context(message, operation=operation) or "原始原因保留在详情中，请核对当前步骤的配置后重试。",
+        details=exception_details(message) if isinstance(message, BaseException) else getattr(message, "details", ""),
         event_type="task.failed", level="ERROR",
     )
 
