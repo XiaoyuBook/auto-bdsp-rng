@@ -27,6 +27,29 @@ Also review `README.md`, `docs/USAGE.md`, `docs/DEVELOPMENT.md`, `BUILD.md`, and
 
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
 
+## v3.4.4 Release Scope
+
+This patch release includes all five fixes in `v3.4.3..7548f38`: video threshold
+editing, reopening inline configuration drafts, readable user log summaries,
+the bottom-right live log layout, and isolation of raw diagnostic output.
+The user-facing notes live in the [3.4.4 changelog section](CHANGELOG.md#344).
+
+- Verify video threshold text and mouse editing with the pinned Qt 6.12 runtime.
+- Reopen an existing configuration draft after changing pages; capture,
+  selection, and automatic tasks must still show their blocking reason.
+- Exercise user, diagnostic, and problem log views, source/round filters,
+  folding, following, unread counts, coalesced updates, and copy/export.
+  Raw paths, exceptions, internal state, and script output must stay out of
+  the live view and user summaries, including warning/error fallback notices.
+- Verify complete diagnostic details and disk records remain available, and
+  check a direct v3.4.3-to-v3.4.4 incremental package alongside the full ZIP.
+
+Local preparation on 2026-10-25 passed 273 focused tests covering release
+metadata, packaging resources, threshold editing, configuration entry points,
+logs, and workspace layouts. The CLI and generated release notes both report
+3.4.4; UTF-8 and local documentation links were verified. The README screenshot
+was rendered with isolated settings at 1440 x 960 logical pixels / DPR 1.25.
+
 ## v3.4.3 Release Scope
 
 This patch release includes the three fixes in `v3.4.2..b384359`:
