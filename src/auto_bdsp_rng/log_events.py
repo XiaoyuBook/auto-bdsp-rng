@@ -102,7 +102,11 @@ def exception_details(error: BaseException | None) -> str:
     current = error
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        chain.append(f"{type(current).__name__}: {current}")
+        text = f"{type(current).__name__}: {current}"
+        diagnostic_details = getattr(current, "diagnostic_details", "")
+        if isinstance(diagnostic_details, str) and diagnostic_details:
+            text += "\n" + diagnostic_details
+        chain.append(text)
         current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
     return "异常原因链：\n" + "\n上层异常：\n".join(reversed(chain)) if chain else ""
 

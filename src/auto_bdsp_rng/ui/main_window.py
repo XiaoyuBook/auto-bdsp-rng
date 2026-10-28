@@ -14,6 +14,7 @@ from auto_bdsp_rng.ui.video_lifecycle import BrokerStopThread, CaptureDeviceEnum
 from auto_bdsp_rng.notifications.qq_service import QQNotificationService
 from auto_bdsp_rng.ui.qq_notifications import QQNotificationDialog, notification_icon
 
+import json
 import sys
 import threading
 import time
@@ -87,6 +88,7 @@ from PySide6.QtWidgets import (
 from auto_bdsp_rng import __version__
 from auto_bdsp_rng.blink_detection import (
     BlinkCaptureConfig,
+    BlinkObservation,
     PreviewFrameCapture,
     ProjectXsCaptureConfigError,
     ProjectXsIntegrationError,
@@ -8950,6 +8952,11 @@ class MainWindow(QMainWindow):
                     diagnostic=True, level="DEBUG",
                 ),
             )
+        elif event == "seed_solver_input" and values and isinstance(values[0], dict):
+            self._write_run_log("自动定点", LogMessage(
+                "测种求解输入（采集已完成）：" + json.dumps(values[0], ensure_ascii=False),
+                summary="测种求解输入已记录", event_type="seed.solver_input", diagnostic=True, level="DEBUG",
+            ), level="DEBUG")
         elif event == "auto_tid_log" and len(values) >= 1:
             h.auto_tid_log(str(values[0]))
         elif event == "candidates_found" and len(values) >= 2:
@@ -9252,6 +9259,7 @@ class MainWindow(QMainWindow):
         search_cancellation = SearchCancellation()
         history_archive = self.history_tab._archive
         emit_history = self.autoHistoryEvent.emit
+        seed_recovery_preparation = {"checks": 0, "recoveries": 0}
         from auto_bdsp_rng.automation.auto_rng.starter_flow import (
             DialogObserver, STARTER_SLOTS, STARTER_TIMING, StarterFlow,
             crop_starter_dialog,
@@ -9421,6 +9429,22 @@ class MainWindow(QMainWindow):
                 raise
             finally:
                 self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
+            if isinstance(observation, BlinkObservation):
+                emit_history("seed_solver_input", ({
+                    "npc": tracking_config.npc,
+                    "blinks": list(observation.blinks),
+                    "intervals": list(observation.intervals),
+                    "seed_config_path": seed_config_path,
+                    "eye_image_path": str(tracking_config.capture.eye_image_path),
+                    "roi": list(tracking_config.capture.roi),
+                    "threshold": tracking_config.capture.threshold,
+                    "video_generation_at_start": frame_generation,
+                    "video_generation_now": self._video_source_generation,
+                    "run_cancelled": search_cancellation.is_cancelled(),
+                    "capture_cancelled": self._capture_cancel.is_set(),
+                    "script_reserved": bool(getattr(self.easycon_tab, "_native_run_reserved", False)),
+                    "preparation": dict(seed_recovery_preparation),
+                },))
             result = recover_seed_from_observation(observation, npc=tracking_config.npc)
             elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
             elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
@@ -10275,10 +10299,13 @@ class MainWindow(QMainWindow):
             )
 
         def recover_zoom_mode_service() -> bool:
-            return self._recover_zoom_mode_with_preview_paused(
+            seed_recovery_preparation["checks"] += 1
+            recovered = self._recover_zoom_mode_with_preview_paused(
                 tracking_config.capture,
                 run_script_text_service,
             )
+            seed_recovery_preparation["recoveries"] += int(bool(recovered))
+            return recovered
 
         def run_starter_flow_service(seed: AutoRngSeedResult, target: AutoRngTarget, delay: int) -> ShinyCheckResult:
             species = config.target_species

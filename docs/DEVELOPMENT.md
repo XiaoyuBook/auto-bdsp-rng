@@ -75,6 +75,8 @@ Broker 停止与 OBS/摄像头预览释放都在后台执行。`disconnect_video
 
 捕获异常时通过 `exception_details` 保留原因链，放入 `LogMessage.details`，不能仅存 `str(exc)` 后丢弃内层原因。自动任务 Worker 保留失败事件供界面接收，原有字符串失败信号保持兼容；用户列表与默认详情只显示安全摘要及用户说明，原因链、内部组件名和参数留在主动打开的原始诊断中。“复制详情”复制当前展示内容，切回用户或问题视图时关闭原始诊断。详情显示所选记录的时间和级别，合并事件保存首次与最近诊断，磁盘通过独立 DEBUG 记录保存补充原因链。`test_log_failure_details.py` 覆盖真实测种重试、普通失败不误报超时、Worker 信号、实际鼠标选中失败行、诊断切换、详情复制和磁盘保存。
 
+自动定点失败换轮统一在 `_restart_from_seed_script` 检查固定轮数上限；到达上限后以失败终态结束，不再发出“继续重试”的历史事件或开始新一轮。采集完成后通过 `seed_solver_input` 事件把求解输入、配置快照、准备动作次数和取消状态送回 UI，以 DEBUG 诊断记录保存。`ProjectXsSeedRecoveryError` 保留原始错误文本及原因链，同时提供可重放输入和异常所在函数；`exception_details` 只将其追加到显式诊断。补救测种的 `details` 参数必须在 `_set_progress` 中接收，校正失败转入下一轮时也不能提前转成普通字符串而丢失原因链。相关回归包括 `test_long_run_seed_recovery.py` 与 `test_seed_recovery_diagnostics.py`，区分真实求解器测试和主动注入失败的流程测试。
+
 `ui_stall_diagnostics.py` 使用默认 250 ms 的 Qt 心跳和独立采样线程，在心跳延迟超过 2 秒时记录一次 Python 线程堆栈、时间及版本，不读取画面或局部变量；只有运行日志保存开启时工作，诊断文件保留七个自然日。Python 采样线程无法在原生扩展持续持有 GIL 时运行，因此正式 `run()` 入口启用单次 `faulthandler.dump_traceback_later` 回退，并独占该进程级超时器。嵌入与测试入口默认不启用回退；已有超时器的宿主不可直接开启，因为 Python 不提供读取或恢复他人超时器的接口。诊断不替换异常钩子、信号处理或崩溃处理，关闭确认被取消时仍保持运行，退出路径必须先停止诊断再关闭日志管理器。
 
 对应回归测试为 `tests/test_video_lifecycle_performance.py`、`tests/test_ui_stall_diagnostics.py`，以及 Capture Broker、OBS、预览、关闭和日志相关界面测试。压力测试显示主窗口、伊机控和完整日志窗口，并同时检查短行、超长行输出的完整文件保存、单次发布与 Qt 心跳。

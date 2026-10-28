@@ -1076,7 +1076,10 @@ class AutoRngRunner:
                 self._recover_seed_after_reidentify_failure(exc, max_attempts)
                 return
             self._restart_from_seed_script(
-                f"{label}连续 {max_attempts} 次失败: {exc}，进入下一轮测种"
+                LogMessage(
+                    f"{label}连续 {max_attempts} 次失败: {exc}，进入下一轮测种",
+                    details=exception_details(exc),
+                )
             )
             return
         if self.should_stop():
@@ -1126,7 +1129,9 @@ class AutoRngRunner:
         except Exception as exc:
             if self.should_stop():
                 return
-            self._restart_from_seed_script(f"过场校正连续 2 次失败: {exc}，进入下一轮测种")
+            self._restart_from_seed_script(LogMessage(
+                f"过场校正连续 2 次失败: {exc}，进入下一轮测种", details=exception_details(exc),
+            ))
             return
         if self.should_stop():
             return
@@ -1215,8 +1220,11 @@ class AutoRngRunner:
             )
             raise RuntimeError(message) from last_error
         self._restart_from_seed_script(
-            f"校正连续 {reidentify_attempts} 次失败；补救测 Seed 连续 {recovery_attempts} 次失败"
-            f"（全局连续 {self._seed_capture_failures}/5）: {last_error}，进入下一轮测种"
+            LogMessage(
+                f"校正连续 {reidentify_attempts} 次失败；补救测 Seed 连续 {recovery_attempts} 次失败"
+                f"（全局连续 {self._seed_capture_failures}/5）: {last_error}，进入下一轮测种",
+                details=exception_details(last_error),
+            )
         )
 
     def _final_calibrate(self) -> None:
@@ -1875,7 +1883,7 @@ class AutoRngRunner:
         )
 
     def _set_progress(
-        self, phase: AutoRngPhase, message: str = "", *, summary: str = "", context: str = "",
+        self, phase: AutoRngPhase, message: str = "", *, summary: str = "", context: str = "", details: str = "",
         event_type: str = "progress", diagnostic: bool = False,
         level: str | None = None, coalesce_key: str | None = None, **updates: object,
     ) -> None:
@@ -1892,7 +1900,7 @@ class AutoRngRunner:
             message = LogMessage(
                 message, summary=summary or getattr(message, "summary", ""),
                 context=context or getattr(message, "context", ""),
-                details=getattr(message, "details", ""),
+                details=details or getattr(message, "details", ""),
                 event_type=getattr(message, "event_type", event_type) if event_type == "progress" else event_type,
                 phase=phase.value, diagnostic=diagnostic or getattr(message, "diagnostic", False),
                 level=level or getattr(message, "level", None),
@@ -1984,6 +1992,26 @@ class AutoRngRunner:
 
     def _restart_from_seed_script(self, message: str) -> None:
         if self.should_stop():
+            return
+        if self.config.loop_mode == "count" and self._completed_loops >= self.config.loop_count:
+            failure = task_failure(message, task="自动定点", phase=self.progress.phase.value)
+            self._clear_current_cycle_state()
+            self._set_progress(
+                AutoRngPhase.FAILED,
+                LogMessage(
+                    message,
+                    summary=failure.summary,
+                    context=" ".join(part for part in (
+                        failure.context,
+                        f"已达到设定的 {self.config.loop_count} 轮，不再开始下一轮。",
+                    ) if part),
+                    details=failure.details,
+                    event_type="task.failed", level="ERROR",
+                ),
+                locked_target=None, raw_target_advances=None, fixed_delay=None,
+                trigger_advances=None, current_advances=None, remaining_to_trigger=None,
+                final_flash_frames=None, last_script_path=None, seed_text="",
+            )
             return
         if self._cycle_started:
             self._history("cycle_restart", message)

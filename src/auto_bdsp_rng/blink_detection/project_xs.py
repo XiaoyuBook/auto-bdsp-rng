@@ -6,6 +6,7 @@ import heapq
 import os
 import sys
 import time
+import traceback
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -52,6 +53,27 @@ class ProjectXsCaptureConfigError(ProjectXsIntegrationError):
 
 class ProjectXsNoFrameError(ProjectXsIntegrationError):
     """Raised when a capture source repeatedly returns no frame."""
+
+
+class ProjectXsSeedRecoveryError(ProjectXsIntegrationError):
+    """Keep replayable solver inputs for explicit diagnostics after capture."""
+
+    def __init__(self, message: str, observation: BlinkObservation, npc: int, error: Exception, *, stage: str) -> None:
+        super().__init__(message)
+        frames = traceback.extract_tb(error.__traceback__)
+        site = frames[-1] if frames else None
+        payload = {
+            "stage": stage,
+            "npc": npc,
+            "blink_count": len(observation.blinks),
+            "interval_count": len(observation.intervals),
+            "blinks": list(observation.blinks),
+            "intervals": list(observation.intervals),
+            "failure_type": type(error).__name__,
+            "failure_function": site.name if site is not None else "",
+            "failure_line": site.lineno if site is not None else None,
+        }
+        self.diagnostic_details = "测种求解输入（仅诊断）：\n" + json.dumps(payload, ensure_ascii=False)
 
 
 def _template_shape(eye_image: Any) -> tuple[int, int] | None:
@@ -1108,14 +1130,20 @@ def recover_seed_from_observation(
     try:
         rng = rngtool.recov(list(observation.blinks), list(observation.intervals), npc=npc)
     except AssertionError as exc:
-        raise ProjectXsIntegrationError("Project_Xs could not validate the recovered seed") from exc
+        raise ProjectXsSeedRecoveryError(
+            "Project_Xs could not validate the recovered seed", observation, npc, exc, stage="recover",
+        ) from exc
     except Exception as exc:
-        raise ProjectXsIntegrationError("Project_Xs seed recovery failed") from exc
+        raise ProjectXsSeedRecoveryError(
+            "Project_Xs seed recovery failed", observation, npc, exc, stage="recover",
+        ) from exc
 
     try:
         state = SeedState32.from_words(rng.get_state())
     except (AttributeError, TypeError, ValueError) as exc:
-        raise ProjectXsIntegrationError("Project_Xs returned an invalid seed state") from exc
+        raise ProjectXsSeedRecoveryError(
+            "Project_Xs returned an invalid seed state", observation, npc, exc, stage="result_state",
+        ) from exc
 
     return ProjectXsSeedResult(state=state, observation=observation)
 
