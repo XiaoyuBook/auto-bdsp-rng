@@ -1,0 +1,259 @@
+{
+  "base": "fa3f6550c872efa77083c901fc9ce64e6659b43e",
+  "current": "659131de433b3c2f1cf0af0882765aa4589633ae",
+  "checks": {
+    "identical_runner_definitions": [
+      "ProjectXsAdvanceCounter",
+      "ProjectXsTimelineAdvanceCounter",
+      "AutoRngRunner._reset_advance_counter",
+      "AutoRngRunner._build_advance_counter",
+      "AutoRngRunner._timing_state",
+      "AutoRngRunner._seed_measured_at",
+      "AutoRngRunner._with_measurement_time"
+    ],
+    "identical_adapter_definitions": [
+      "advance_seed_state",
+      "load_project_xs_config",
+      "track_advances",
+      "plan_timeline"
+    ],
+    "identical_core_files": 3,
+    "actual_solver_cases": [
+      {
+        "npc": 0,
+        "prior_jump": 0,
+        "same_state": true,
+        "same_assertion": true
+      },
+      {
+        "npc": 0,
+        "prior_jump": 104523047,
+        "same_state": true,
+        "same_assertion": true
+      },
+      {
+        "npc": 1,
+        "prior_jump": 0,
+        "same_state": true,
+        "same_assertion": true
+      },
+      {
+        "npc": 1,
+        "prior_jump": 104523047,
+        "same_state": true,
+        "same_assertion": true
+      },
+      {
+        "npc": 2,
+        "prior_jump": 0,
+        "same_state": true,
+        "same_assertion": true
+      },
+      {
+        "npc": 2,
+        "prior_jump": 104523047,
+        "same_state": true,
+        "same_assertion": true
+      }
+    ],
+    "advance_state_cases": 6,
+    "ordinary_counter_samples": 21,
+    "timeline_counter_samples": 12,
+    "ordinary_post_advance_decisions": [
+      {
+        "requested": 0,
+        "next_phase": "校正位置"
+      },
+      {
+        "requested": 899999,
+        "next_phase": "校正位置"
+      },
+      {
+        "requested": 900000,
+        "next_phase": "校正位置"
+      },
+      {
+        "requested": 900001,
+        "next_phase": "捕获Seed"
+      },
+      {
+        "requested": 104523047,
+        "next_phase": "捕获Seed"
+      }
+    ],
+    "fixed_delay_decision_cases": 42
+  },
+  "differences": {
+    "retry_preparation": [
+      {
+        "version": "v2",
+        "initialization_forced": true,
+        "initialization_block_exists": true,
+        "zoom_checks": []
+      },
+      {
+        "version": "current-ocr-negative",
+        "initialization_forced": false,
+        "initialization_block_exists": false,
+        "zoom_checks": [
+          false
+        ]
+      },
+      {
+        "version": "current-ocr-positive",
+        "initialization_forced": false,
+        "initialization_block_exists": false,
+        "zoom_checks": [
+          true
+        ]
+      },
+      {
+        "version": "current-with-old-script",
+        "initialization_forced": false,
+        "initialization_block_exists": true,
+        "zoom_checks": [
+          false
+        ]
+      }
+    ],
+    "large_advance_after_exit": [
+      {
+        "version": "v2",
+        "next_phase": "捕获Seed"
+      },
+      {
+        "version": "current",
+        "next_phase": "运行测种脚本"
+      }
+    ],
+    "default_advance_script_arithmetic": [
+      {
+        "version": "v2.0.0",
+        "values": {
+          "目标帧数": 104522497,
+          "翻全国图鉴次数": 13936,
+          "翻神奥图鉴次数": 0,
+          "翻页次数": 13,
+          "剩余帧数": 157,
+          "地下过帧": 1
+        }
+      },
+      {
+        "version": "659131de433b3c2f1cf0af0882765aa4589633ae",
+        "values": {
+          "目标帧数": 104522747,
+          "翻全国图鉴次数": 13936,
+          "翻神奥图鉴次数": 1,
+          "翻页次数": 1,
+          "剩余帧数": 67,
+          "地下过帧": 0
+        }
+      }
+    ]
+  },
+  "vendor_gitlink": {
+    "v2.0.0": "b6cfaaeca8aa6a95e2f07ccaef606e301fa8ad7a",
+    "659131de433b3c2f1cf0af0882765aa4589633ae": "b6cfaaeca8aa6a95e2f07ccaef606e301fa8ad7a"
+  },
+  "date": "2026-10-29",
+  "method": "Read versioned source from Git; execute legacy/current functions with compatible shared data types and identical synthetic inputs; device recovery branches are mocked.",
+  "native_differential_pytest": {
+    "passed": 6,
+    "failed": 0,
+    "temporary_build": true
+  },
+  "native_npc_phase_cases": [
+    {
+      "npc": 0,
+      "distance": 0,
+      "advances": 1061,
+      "same_state": true
+    },
+    {
+      "npc": 1,
+      "distance": 0,
+      "advances": 1118,
+      "same_state": true
+    },
+    {
+      "npc": 1,
+      "distance": 1,
+      "advances": 1081,
+      "same_state": true
+    },
+    {
+      "npc": 2,
+      "distance": 0,
+      "advances": 1090,
+      "same_state": true
+    },
+    {
+      "npc": 2,
+      "distance": 1,
+      "advances": 1148,
+      "same_state": true
+    },
+    {
+      "npc": 2,
+      "distance": 2,
+      "advances": 1176,
+      "same_state": true
+    }
+  ],
+  "injected_failure_loop_limit": [
+    {
+      "version": "v2",
+      "started_rounds": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "hits": 6,
+      "failed_rounds": [
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "error": "连续 5 次 seed 捕获失败，自动流程停止: Project_Xs could not validate the recovered seed"
+    },
+    {
+      "version": "current",
+      "started_rounds": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "hits": 6,
+      "failed_rounds": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "error": ""
+    }
+  ],
+  "scope_limits": [
+    "Not a full v2.0.0 binary or dependency environment replay.",
+    "No physical nine-hour run, HOME button verification, or camera/OCR failure reproduction.",
+    "Failure samples and failure-loop cases intentionally inject incorrect inputs.",
+    "Both versions pin the same Project_Xs commit; its RNG source files have no local changes."
+  ]
+}
