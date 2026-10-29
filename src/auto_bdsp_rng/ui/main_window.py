@@ -94,6 +94,7 @@ from auto_bdsp_rng.blink_detection import (
     ProjectXsIntegrationError,
     ProjectXsNoFrameError,
     ProjectXsReidentifyResult,
+    ProjectXsSeedResult,
     ProjectXsTrackingConfig,
     advance_seed_state,
     capture_pokemon_blinks,
@@ -171,7 +172,7 @@ from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.image_io import write_image
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
-from auto_bdsp_rng.log_events import LogMessage, log_level, script_output_message
+from auto_bdsp_rng.log_events import LogMessage, exception_details, log_level, script_output_message
 from auto_bdsp_rng.ui_stall_diagnostics import start_ui_stall_diagnostics
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
@@ -8952,10 +8953,16 @@ class MainWindow(QMainWindow):
                     diagnostic=True, level="DEBUG",
                 ),
             )
-        elif event == "seed_solver_input" and values and isinstance(values[0], dict):
-            self._write_run_log("自动定点", LogMessage(
-                "测种求解输入（采集已完成）：" + json.dumps(values[0], ensure_ascii=False),
-                summary="测种求解输入已记录", event_type="seed.solver_input", diagnostic=True, level="DEBUG",
+        elif event in {"seed_solver_input", "seed_solver_result"} and values and isinstance(values[0], dict):
+            source = "Seed 捕捉" if len(values) > 1 and values[1] == "Seed 捕捉" else "自动定点"
+            is_input = event == "seed_solver_input"
+            label = "测种求解输入（采集已完成）" if is_input else "测种求解结果"
+            self._write_run_log(source, LogMessage(
+                label + "：" + json.dumps(values[0], ensure_ascii=False),
+                summary="测种求解输入已记录" if is_input else "测种求解结果已记录",
+                event_type="seed.solver_input" if is_input else "seed.solver_result",
+                details=str(values[2]) if len(values) > 2 else "",
+                diagnostic=True, level="DEBUG",
             ), level="DEBUG")
         elif event == "auto_tid_log" and len(values) >= 1:
             h.auto_tid_log(str(values[0]))
@@ -9429,27 +9436,19 @@ class MainWindow(QMainWindow):
                 raise
             finally:
                 self._call_on_ui_thread(lambda: self._restore_auto_preview_after_capture(preview_was_running))
-            if isinstance(observation, BlinkObservation):
-                emit_history("seed_solver_input", ({
-                    "npc": tracking_config.npc,
-                    "blinks": list(observation.blinks),
-                    "intervals": list(observation.intervals),
-                    "seed_config_path": seed_config_path,
-                    "eye_image_path": str(tracking_config.capture.eye_image_path),
-                    "roi": list(tracking_config.capture.roi),
-                    "threshold": tracking_config.capture.threshold,
+            result = self._recover_player_seed(
+                observation, tracking_config, entry_point="automatic",
+                diagnostic_state={
+                    "start_phase": config.start_phase.value,
                     "video_generation_at_start": frame_generation,
                     "video_generation_now": self._video_source_generation,
                     "run_cancelled": search_cancellation.is_cancelled(),
                     "capture_cancelled": self._capture_cancel.is_set(),
                     "script_reserved": bool(getattr(self.easycon_tab, "_native_run_reserved", False)),
                     "preparation": dict(seed_recovery_preparation),
-                },))
-            result = recover_seed_from_observation(observation, npc=tracking_config.npc)
-            elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
-            elapsed_advances = elapsed_seconds * (tracking_config.npc + 1)
-            if elapsed_advances:
-                result = replace(result, state=advance_seed_state(result.state, elapsed_advances).state)
+                    "warmup_discard_seconds": AUTO_CAPTURE_WARMUP_DISCARD_SECONDS,
+                },
+            )
             seed_result = AutoRngSeedResult(
                 seed=result.state,
                 current_advances=1 if config.starter_automation else 0,
@@ -10603,6 +10602,62 @@ class MainWindow(QMainWindow):
             self._refresh_tracked_advances_from_clock()
         self._set_tracked_advances(self._tracked_advances + advances)
 
+    def _recover_player_seed(
+        self,
+        observation: BlinkObservation,
+        config: ProjectXsTrackingConfig,
+        *,
+        entry_point: str,
+        diagnostic_state: dict[str, object] | None = None,
+    ) -> ProjectXsSeedResult:
+        """Use the same solver and time adjustment for manual and automatic capture."""
+        source = "自动定点" if entry_point == "automatic" else "Seed 捕捉"
+        measurement_id = uuid.uuid4().hex if isinstance(observation, BlinkObservation) else ""
+        if measurement_id:
+            capture = config.capture
+            payload = {
+                "measurement_id": measurement_id,
+                "entry_point": entry_point,
+                "npc": config.npc,
+                "blinks": list(observation.blinks),
+                "intervals": list(observation.intervals),
+                "offset_time": observation.offset_time,
+                "seed_config_path": str(config.source_path),
+                "eye_image_path": str(capture.eye_image_path),
+                "roi": list(capture.roi),
+                "threshold": capture.threshold,
+                "configured_blink_count": capture.blink_count,
+                "capture_source": capture.video_source or capture.source,
+                "monitor_window": capture.monitor_window,
+                "window_prefix": capture.window_prefix,
+                "camera": capture.camera,
+                "crop": list(capture.crop) if capture.crop is not None else None,
+                **(diagnostic_state or {}),
+            }
+            self.autoHistoryEvent.emit("seed_solver_input", (payload, source))
+        stage = "recover"
+        try:
+            result = recover_seed_from_observation(observation, npc=config.npc)
+            stage = "elapsed_advance"
+            elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
+            elapsed_advances = elapsed_seconds * (config.npc + 1)
+            if elapsed_advances:
+                result = replace(result, state=advance_seed_state(result.state, elapsed_advances).state)
+        except Exception as exc:
+            if measurement_id:
+                self.autoHistoryEvent.emit("seed_solver_result", ({
+                    "measurement_id": measurement_id, "entry_point": entry_point,
+                    "outcome": "failed", "stage": stage, "failure_type": type(exc).__name__,
+                }, source, exception_details(exc)))
+            raise
+        if measurement_id:
+            self.autoHistoryEvent.emit("seed_solver_result", ({
+                "measurement_id": measurement_id, "entry_point": entry_point,
+                "outcome": "succeeded", "elapsed_seconds": elapsed_seconds,
+                "elapsed_advances": elapsed_advances,
+            }, source))
+        return result
+
     def capture_seed(self, *, config: ProjectXsTrackingConfig | None = None) -> None:
         if self._is_closing:
             return
@@ -10664,6 +10719,7 @@ class MainWindow(QMainWindow):
                 self._capture_progress = (done, total)
 
         store_progress = self._wrap_capture_progress_with_keep_awake(store_progress)
+        entry_point = "configuration_test" if self.seed_config_editor.testing else "manual"
 
         def run_capture() -> None:
             try:
@@ -10674,12 +10730,13 @@ class MainWindow(QMainWindow):
                     progress_callback=store_progress,
                     show_window=False,
                 )
-                result = recover_seed_from_observation(observation, npc=config.npc)
-                elapsed_seconds = max(0, round(time.perf_counter() - observation.offset_time))
-                elapsed_advances = elapsed_seconds * (config.npc + 1)
-                if elapsed_advances:
-                    result = replace(result, state=advance_seed_state(result.state, elapsed_advances).state)
-                self._capture_result = result
+                self._capture_result = self._recover_player_seed(
+                    observation, config, entry_point=entry_point,
+                    diagnostic_state={
+                        "capture_cancelled": self._capture_cancel.is_set(),
+                        "warmup_discard_seconds": None,
+                    },
+                )
             except Exception as exc:  # pragma: no cover - exercised through UI polling
                 self._capture_error = exc if isinstance(exc, Exception) else Exception(str(exc))
 
