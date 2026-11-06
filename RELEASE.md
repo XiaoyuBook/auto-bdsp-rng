@@ -27,6 +27,42 @@ Also review `README.md`, `docs/USAGE.md`, `docs/DEVELOPMENT.md`, `BUILD.md`, and
 
 The release workflow refuses to publish when the pushed tag, `pyproject.toml`, package `__version__`, and matching changelog heading disagree.
 
+## v3.4.5 Release Scope
+
+This patch release includes all 11 commits in `v3.4.4..52854d8`, followed by
+the version and documentation update. The user-facing notes live in the
+[3.4.5 changelog section](CHANGELOG.md#345). It improves actionable live logs
+and failure details, fixes round-limit handling during retries, and unifies
+the Seed-solving entry points and elapsed-advance processing.
+
+- Verify automatic and manual script syntax/runtime failures retain the error
+  line and cause through the worker, live view, and default details.
+- Exercise search, advance, remeasurement, correction/recovery, passage,
+  shiny checks, reverse lookup, TID, and recording failures. The displayed
+  cause and retry/next-round/stop action must match the actual outcome.
+- Check finite round limits after Seed/correction failures, manual stop,
+  coalesced retries, and first/latest failure details. Internal paths, module
+  names, raw exceptions, and solver inputs remain in explicit diagnostics.
+- Compare automatic, manual, and configuration-test Seed entry points;
+  retain replayable solver inputs and success/failure results. The reported
+  long-running Seed failure followed by successful manual restart has not
+  been reproduced on real hardware or established as fixed.
+- Verify the full ZIP and a direct v3.4.4-to-v3.4.5 incremental package from
+  a clean checkout, preserving user scripts and Project_Xs configurations.
+
+The pre-release workflow/log regression on 2026-11-06 passed 697 tests,
+including 54 added stage-diagnostic checks. Device, recognition, time, and
+notification services were simulated; this does not establish real-hardware
+or frozen-package validation. Version preparation does not publish packages.
+
+Local version preparation on 2026-11-06 passed 61 tests covering release
+metadata/notes, CLI behavior, packaging resources, and update-package builds.
+The CLI and generated release body report 3.4.5; version consistency, UTF-8,
+local document links, unchanged historical entries, and Git whitespace checks
+were verified. The test process returned 0; teardown reported a locked
+temporary history database during cleanup. No package build or publication
+was performed during this preparation.
+
 ## v3.4.4 Release Scope
 
 This patch release includes all five fixes in `v3.4.3..7548f38`: video threshold

@@ -116,15 +116,17 @@ The starter automation requires both `seed.ecs` and `reverse.ecs` under
 `script/御三家反查.txt` in the outer script directory. Automatic starter mode
 uses the bundled scripts even when a user has customized the outer copy.
 
+## Release Notes And Artifacts
+
 The release notes are generated from the current changelog after version
 validation:
 
 ```powershell
-python .\scripts\generate_release_notes.py --tag v3.4.0 --output .\release\release-notes.md
+python .\scripts\generate_release_notes.py --tag v3.4.5 --output .\release\release-notes.md
 ```
 
-The expected complete archive is `release/auto-bdsp-rng-v3.4.0-windows-x64.zip`.
-Use a manifest from v3.3.3 to check the direct incremental upgrade; see
+The expected complete archive is `release/auto-bdsp-rng-v3.4.5-windows-x64.zip`.
+Use a manifest from v3.4.4 to check the direct incremental upgrade; see
 [RELEASE.md](RELEASE.md) for the publication and regression checklist.
 
 ## UI And Sponsor Assets
