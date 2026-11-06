@@ -18,7 +18,13 @@ from auto_bdsp_rng.automation.auto_rng.models import (
     ShinyCheckResult,
 )
 from auto_bdsp_rng.automation.auto_rng.delay_strategy import normalize_delay_candidates
-from auto_bdsp_rng.log_events import LogMessage, exception_details, problem_context, task_failure
+from auto_bdsp_rng.log_events import (
+    LogMessage,
+    exception_details,
+    operation_failure,
+    problem_context,
+    task_failure,
+)
 from auto_bdsp_rng.automation.auto_rng.scripts import (
     AUTO_HIT_PARAMETER,
     ROAMER_SPECIES,
@@ -1020,7 +1026,8 @@ class AutoRngRunner:
         except Exception as exc:
             self._set_progress(
                 AutoRngPhase.RUN_ADVANCE_SCRIPT,
-                f"过帧脚本启动失败——{path.name}: {exc}", summary="过帧脚本未能启动，请检查脚本和手柄连接",
+                LogMessage(f"过帧脚本启动失败——{path.name}: {exc}", details=exception_details(exc)),
+                summary="过帧脚本执行失败", context=problem_context(exc, operation="过帧脚本执行"),
                 last_script_path=path,
             )
             raise
@@ -1078,6 +1085,7 @@ class AutoRngRunner:
             self._restart_from_seed_script(
                 LogMessage(
                     f"{label}连续 {max_attempts} 次失败: {exc}，进入下一轮测种",
+                    summary=f"{label}连续 {max_attempts} 次失败，将从测种脚本重新开始",
                     details=exception_details(exc),
                 )
             )
@@ -1130,7 +1138,8 @@ class AutoRngRunner:
             if self.should_stop():
                 return
             self._restart_from_seed_script(LogMessage(
-                f"过场校正连续 2 次失败: {exc}，进入下一轮测种", details=exception_details(exc),
+                f"过场校正连续 2 次失败: {exc}，进入下一轮测种",
+                summary="过场校正连续 2 次失败，将从测种脚本重新开始", details=exception_details(exc),
             ))
             return
         if self.should_stop():
@@ -1734,7 +1743,16 @@ class AutoRngRunner:
             self._locked_target = None
             self._history("cycle_result", False, interval, None, used_delay)
             self._cycle_started = False
-            self._set_progress(AutoRngPhase.LOOP_CHECK, f"反查失败: {exc}", summary="自动反查失败，请查看完整日志中的诊断详情")
+            self._set_progress(
+                AutoRngPhase.LOOP_CHECK,
+                operation_failure(
+                    exc,
+                    summary="自动反查失败，本轮结束",
+                    context="本轮未取得反查结果；将按轮次设置继续或结束任务。",
+                    raw_message=f"反查失败: {exc}",
+                ),
+                level="WARNING",
+            )
             return
         if self.should_stop():
             return
@@ -1772,6 +1790,7 @@ class AutoRngRunner:
                         log_message=LogMessage(
                             f"delay 样本保存失败，本轮继续使用原策略: {exc}",
                             summary="延迟样本保存失败，本轮继续使用原策略",
+                            details=exception_details(exc),
                             event_type="delay.save_failed", level="WARNING",
                         ),
                     )
@@ -1901,6 +1920,7 @@ class AutoRngRunner:
                 message, summary=summary or getattr(message, "summary", ""),
                 context=context or getattr(message, "context", ""),
                 details=details or getattr(message, "details", ""),
+                user_details=getattr(message, "user_details", ""),
                 event_type=getattr(message, "event_type", event_type) if event_type == "progress" else event_type,
                 phase=phase.value, diagnostic=diagnostic or getattr(message, "diagnostic", False),
                 level=level or getattr(message, "level", None),

@@ -82,7 +82,16 @@ from auto_bdsp_rng.data import (
 )
 from auto_bdsp_rng.gen8_static import StateFilter
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
-from auto_bdsp_rng.log_events import LogMessage, is_user_message, log_level, log_summary, log_user_text, task_failure
+from auto_bdsp_rng.log_events import (
+    LogMessage,
+    is_user_message,
+    log_level,
+    log_summary,
+    log_user_text,
+    task_failure,
+    operation_failure,
+    present_log_message,
+)
 from auto_bdsp_rng.ui.run_log_panel import MAX_LOG_ENTRIES
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
@@ -3431,6 +3440,7 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
             self.add_log(progress.log_message, level=level)
 
     def add_log(self, message: str, *, level: str = "INFO") -> None:
+        message = present_log_message("自动定点", message, level)
         text = str(message)
         level = log_level(message, level)
         if self._run_log_sink is not None:
@@ -3593,7 +3603,14 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
         except (AutoScriptError, ValueError) as exc:
             self.set_phase_text("配置错误")
             self.runtime_description_label.setText(str(exc))
-            self.add_log(str(exc), level="WARNING")
+            self.add_log(
+                operation_failure(
+                    exc,
+                    summary="自动流程配置无效",
+                    context="请检查所选脚本和必需参数后重新开始。",
+                ),
+                level="WARNING",
+            )
             return
         self.startRequested.emit(config)
 

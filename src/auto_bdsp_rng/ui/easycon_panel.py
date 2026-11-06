@@ -62,7 +62,14 @@ from auto_bdsp_rng.automation.easycon import (
     save_config,
     scan_builtin_scripts,
 )
-from auto_bdsp_rng.log_events import LogMessage, log_summary, script_output_message
+from auto_bdsp_rng.log_events import (
+    LogMessage,
+    log_summary,
+    operation_failure,
+    present_log_message,
+    script_failure,
+    script_output_message,
+)
 from auto_bdsp_rng.resources import (
     bundled_easycon_bridge_path,
     remap_legacy_script_path,
@@ -466,13 +473,16 @@ class BridgeScriptWorker(QObject):
     def __init__(self, backend: BridgeEasyConBackend, script_text: str, script_name: str) -> None:
         super().__init__()
         self.backend = backend
+        self.failure_event: LogMessage | None = None
         self.script_text = script_text
         self.script_name = script_name
 
     def run(self) -> None:
+        self.failure_event = None
         try:
             result = self.backend.run_script_text(self.script_text, self.script_name)
         except Exception as exc:
+            self.failure_event = script_failure(exc)
             self.failed.emit(str(exc))
             return
         self.finished.emit(result)
@@ -491,11 +501,13 @@ class NativeScriptWorker(QObject):
     ) -> None:
         super().__init__()
         self.backend = backend
+        self.failure_event: LogMessage | None = None
         self.script_text = script_text
         self.script_name = script_name
         self.script_dir = script_dir
 
     def run(self) -> None:
+        self.failure_event = None
         try:
             run = getattr(self.backend, "run_editable_script_text", self.backend.run_script_text)
             result = run(
@@ -504,6 +516,7 @@ class NativeScriptWorker(QObject):
                 script_dir=self.script_dir,
             )
         except Exception as exc:
+            self.failure_event = script_failure(exc)
             self.failed.emit(str(exc))
             return
         self.finished.emit(result)
@@ -1675,7 +1688,15 @@ class EasyConPanel(QWidget):
             try:
                 hook.set_mapped_keys_enabled(False)
             except Exception as exc:
-                self._append_log("error", f"暂停菜单中的键盘捕获失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='键盘控制未能暂停',
+                        context='请停止键盘控制后重试。',
+                        raw_message=f"暂停菜单中的键盘捕获失败: {exc}",
+                    ),
+                )
                 self._deactivate_virtual_controller(hide_overlay=True, log=False)
 
     def _resume_controller_input_after_menu(self) -> None:
@@ -1685,7 +1706,15 @@ class EasyConPanel(QWidget):
             try:
                 hook.set_mapped_keys_enabled(self.virtual_controller_enabled)
             except Exception as exc:
-                self._append_log("error", f"恢复菜单后的键盘捕获失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='键盘控制未能恢复',
+                        context='请重新启用键盘控制。',
+                        raw_message=f"恢复菜单后的键盘捕获失败: {exc}",
+                    ),
+                )
                 self._deactivate_virtual_controller(hide_overlay=True, log=False)
 
     # ── 底部状态栏 ──────────────────────────────────────
@@ -2191,7 +2220,15 @@ class EasyConPanel(QWidget):
             QMessageBox.warning(self, "脚本编码不明确", "脚本不是 UTF-8 编码，暂不加载以避免乱码。")
             return False
         except OSError as exc:
-            self._append_log("warn", f"无法打开脚本：{exc}")
+            self._append_log(
+                "warn",
+                operation_failure(
+                    exc,
+                    summary='无法打开所选脚本',
+                    context='请确认脚本仍然存在，并重新选择。',
+                    raw_message=f"无法打开脚本：{exc}",
+                ),
+            )
             return False
         parameters = parse_script_parameters(text)
         self.parameter_defaults = {parameter.name: parameter.default for parameter in parameters}
@@ -2215,7 +2252,15 @@ class EasyConPanel(QWidget):
         try:
             self._remember_recent_script(path)
         except OSError as exc:
-            self._append_log("warn", f"保存最近脚本记录失败: {exc}")
+            self._append_log(
+                "warn",
+                operation_failure(
+                    exc,
+                    summary='最近使用的脚本列表未保存',
+                    context='脚本内容不受影响；可稍后重新打开脚本。',
+                    raw_message=f"保存最近脚本记录失败: {exc}",
+                ),
+            )
         return True
 
     def _load_script_item(self, item: QListWidgetItem) -> None:
@@ -2254,7 +2299,15 @@ class EasyConPanel(QWidget):
                     newline=self.current_script_newline,
                 )
             except OSError as exc:
-                self._append_log("error", f"保存脚本失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='脚本保存失败',
+                        context='请确认保存位置可写，或另存到其他位置。',
+                        raw_message=f"保存脚本失败: {exc}",
+                    ),
+                )
                 return None
             self._saved_editor_text = self.editor.toPlainText()
             # 同步持久化参数值到当前编辑器状态，避免下次打开时旧参数覆盖新内容
@@ -2276,7 +2329,15 @@ class EasyConPanel(QWidget):
                 newline=self.current_script_newline,
             )
         except OSError as exc:
-            self._append_log("error", f"保存脚本失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='脚本保存失败',
+                    context='请确认保存位置可写，或另存到其他位置。',
+                    raw_message=f"保存脚本失败: {exc}",
+                ),
+            )
             return None
         self.current_script_path = output
         self.current_script_name = output.name
@@ -2426,7 +2487,15 @@ class EasyConPanel(QWidget):
                 newline=self.current_script_newline,
             )
         except OSError as exc:
-            self._append_log("error", f"创建 CLI 临时脚本失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='脚本准备失败',
+                    context='请确认临时文件目录可写后重试。',
+                    raw_message=f"创建 CLI 临时脚本失败: {exc}",
+                ),
+            )
             return
         self._cleanup_cli_script()
         self._cli_script_path = script_path
@@ -2474,7 +2543,15 @@ class EasyConPanel(QWidget):
         try:
             native_backend = self._ensure_native_backend()
         except Exception as exc:
-            self._append_log("error", f"原生伊机控后端不可用: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='伊机控暂时不可用',
+                    context='请重新连接伊机控后重试。',
+                    raw_message=f"原生伊机控后端不可用: {exc}",
+                ),
+            )
             return
         if not self.reserve_native_script_run():
             self._append_log("warn", "已有伊机控脚本正在运行")
@@ -2527,22 +2604,42 @@ class EasyConPanel(QWidget):
                 if thread is not None:
                     thread.deleteLater()
                 raise
-            self._append_log("error", f"无法启动原生伊机控脚本线程: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='脚本未能启动',
+                    context='请停止当前任务后重新运行。',
+                    raw_message=f"无法启动原生伊机控脚本线程: {exc}",
+                ),
+            )
             self._finish_run("失败", exit_code=1)
             if thread is not None:
                 thread.deleteLater()
+
+    def _report_script_result_error(self, result: object) -> bool:
+        stderr = str(getattr(result, "stderr", ""))
+        status = getattr(result, "status", None)
+        exit_code = getattr(result, "exit_code", None)
+        if self.stop_requested or status == EasyConStatus.CANCELLED or exit_code == 130:
+            return False
+        if status == EasyConStatus.FAILED:
+            error = getattr(result, "error", None) or stderr or "脚本执行程序未返回具体原因"
+            self._set_script_error(str(error))
+            event = script_failure(error, compile_error=exit_code == 2)
+            self._append_log("error", event)
+            return True
+        if stderr:
+            self._append_log("stderr", stderr.rstrip())
+        return False
 
     def _native_run_finished(self, result: object) -> None:
         if self._shutting_down:
             return
         stdout = getattr(result, "stdout", "")
-        stderr = getattr(result, "stderr", "")
-        if getattr(result, "status", None) == EasyConStatus.FAILED:
-            self._set_script_error(str(stderr) or "脚本执行失败，请展开脚本输出")
         if stdout:
             self._append_log("stdout", str(stdout).rstrip(), persist=not self.native_output_streamed)
-        if stderr:
-            self._append_log("stderr", str(stderr).rstrip())
+        failure_reported = self._report_script_result_error(result)
         status = getattr(result, "status", None)
         exit_code = getattr(result, "exit_code", None)
         summary = (
@@ -2555,6 +2652,7 @@ class EasyConPanel(QWidget):
         self.stop_requested = False
         self._finish_run(
             summary,
+            failure_reported=failure_reported,
             exit_code=exit_code,
             started_at=getattr(result, "started_at", None),
             ended_at=getattr(result, "ended_at", None),
@@ -2571,10 +2669,12 @@ class EasyConPanel(QWidget):
         if self._shutting_down:
             return
         self.stop_requested = False
-        self._set_script_error(error)
-        self._append_log("error", LogMessage(f"原生脚本运行失败: {error}", summary="脚本执行失败，请检查脚本和手柄连接"))
+        self._set_script_error(str(error))
+        event = getattr(self.native_run_worker, "failure_event", None) or script_failure(error)
+        self._append_log("error", event)
         self._finish_run(
             "失败",
+            failure_reported=True,
             exit_code=1,
             started_at=self.current_run_started_at,
             script_path=self.current_run_script_path,
@@ -2632,7 +2732,15 @@ class EasyConPanel(QWidget):
         try:
             self._ensure_native_backend().stop_current_script()  # type: ignore[attr-defined]
         except Exception as exc:
-            self._append_log("error", f"停止当前脚本失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='停止脚本失败',
+                    context='请确认脚本是否仍在运行，再重试停止。',
+                    raw_message=f"停止当前脚本失败: {exc}",
+                ),
+            )
             return
         self.stop_requested = True
         self.task_state_text = "正在停止"
@@ -2685,10 +2793,7 @@ class EasyConPanel(QWidget):
             return
         if result.stdout:
             self._append_log("stdout", result.stdout.rstrip())
-        if result.stderr:
-            self._append_log("stderr", result.stderr.rstrip())
-        if result.status == EasyConStatus.FAILED:
-            self._set_script_error(result.stderr or "脚本执行失败，请展开脚本输出")
+        failure_reported = self._report_script_result_error(result)
         status = (
             "已中止"
             if self.stop_requested or result.exit_code == 130
@@ -2701,9 +2806,18 @@ class EasyConPanel(QWidget):
             self.bridge_status = self._ensure_bridge_backend().status()
         except Exception as exc:
             self.bridge_status = EasyConStatus.FAILED
-            self._append_log("error", f"Bridge 状态刷新失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='无法获取伊机控连接状态',
+                    context='请检查设备连接后刷新。',
+                    raw_message=f"Bridge 状态刷新失败: {exc}",
+                ),
+            )
         self._finish_run(
             status,
+            failure_reported=failure_reported,
             exit_code=result.exit_code,
             started_at=result.started_at,
             ended_at=result.ended_at,
@@ -2717,11 +2831,13 @@ class EasyConPanel(QWidget):
             self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
             return
         self.stop_requested = False
-        self._set_script_error(error)
-        self._append_log("error", LogMessage(f"Bridge 运行失败: {error}", summary="脚本执行失败，请检查脚本和手柄连接"))
+        self._set_script_error(str(error))
+        event = getattr(self.bridge_run_worker, "failure_event", None) or script_failure(error)
+        self._append_log("error", event)
         self.bridge_status = EasyConStatus.FAILED
         self._finish_run(
             "失败",
+            failure_reported=True,
             exit_code=1,
             started_at=self.current_run_started_at,
             script_path=self.current_run_script_path,
@@ -2740,7 +2856,15 @@ class EasyConPanel(QWidget):
         try:
             self._ensure_bridge_backend().stop_current_script()
         except Exception as exc:
-            self._append_log("error", f"停止 Bridge 当前任务失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='停止脚本失败',
+                    context='请确认脚本是否仍在运行，再重试停止。',
+                    raw_message=f"停止 Bridge 当前任务失败: {exc}",
+                ),
+            )
             return
         self.stop_requested = True
         self.task_state_text = "正在停止"
@@ -2768,11 +2892,9 @@ class EasyConPanel(QWidget):
 
     def finish_external_native_script(self, result: object) -> None:
         stdout = getattr(result, "stdout", "")
-        stderr = getattr(result, "stderr", "")
         if stdout:
             self._append_log("stdout", str(stdout).rstrip(), persist=not self.native_output_streamed)
-        if stderr:
-            self._append_log("stderr", str(stderr).rstrip())
+        failure_reported = self._report_script_result_error(result)
         result_status = getattr(result, "status", None)
         exit_code = getattr(result, "exit_code", None)
         status = (
@@ -2785,6 +2907,7 @@ class EasyConPanel(QWidget):
         self.stop_requested = False
         self._finish_run(
             status,
+            failure_reported=failure_reported,
             exit_code=exit_code,
             started_at=getattr(result, "started_at", None),
             ended_at=getattr(result, "ended_at", None),
@@ -2793,10 +2916,10 @@ class EasyConPanel(QWidget):
         )
         self._update_native_controls()
 
-    def fail_external_native_script(self, error: str) -> None:
+    def fail_external_native_script(self, error: object) -> None:
         self.stop_requested = False
-        self._append_log("error", LogMessage(f"自动流程脚本失败: {error}", summary="自动流程脚本执行失败，请查看完整日志中的诊断详情"))
-        self._finish_run("失败", exit_code=1)
+        self._append_log("error", script_failure(error))
+        self._finish_run("失败", exit_code=1, failure_reported=True)
         self._update_native_controls()
 
     def begin_external_bridge_script(self, name: str) -> None:
@@ -2820,11 +2943,9 @@ class EasyConPanel(QWidget):
 
     def finish_external_bridge_script(self, result: object) -> None:
         stdout = getattr(result, "stdout", "")
-        stderr = getattr(result, "stderr", "")
         if stdout:
             self._append_log("stdout", str(stdout).rstrip())
-        if stderr:
-            self._append_log("stderr", str(stderr).rstrip())
+        failure_reported = self._report_script_result_error(result)
         status = (
             "已中止"
             if self.stop_requested or getattr(result, "exit_code", None) == 130
@@ -2836,6 +2957,7 @@ class EasyConPanel(QWidget):
         self.bridge_status = EasyConStatus.BRIDGE_CONNECTED if status.startswith("已完成") else EasyConStatus.FAILED
         self._finish_run(
             status,
+            failure_reported=failure_reported,
             exit_code=getattr(result, "exit_code", None),
             started_at=getattr(result, "started_at", None),
             ended_at=getattr(result, "ended_at", None),
@@ -2843,11 +2965,11 @@ class EasyConPanel(QWidget):
             port=getattr(result, "port", None),
         )
 
-    def fail_external_bridge_script(self, error: str) -> None:
+    def fail_external_bridge_script(self, error: object) -> None:
         self.stop_requested = False
         self.bridge_status = EasyConStatus.FAILED
-        self._append_log("error", LogMessage(f"自动流程脚本失败: {error}", summary="自动流程脚本执行失败，请查看完整日志中的诊断详情"))
-        self._finish_run("失败", exit_code=1)
+        self._append_log("error", script_failure(error))
+        self._finish_run("失败", exit_code=1, failure_reported=True)
 
     @staticmethod
     def _filter_cli_line(line: str) -> str | None:
@@ -2908,13 +3030,20 @@ class EasyConPanel(QWidget):
             self.stop_requested = False
             self._finish_run("已中止", exit_code=130)
             return
-        if exit_code != 0:
-            self._report_cli_failure(exit_code)
+        failure_reported = self._report_cli_failure(exit_code) if exit_code != 0 else False
         status = "已完成" if exit_code == 0 else f"失败，exit code: {exit_code}"
-        self._finish_run(status, exit_code=exit_code)
+        self._finish_run(status, exit_code=exit_code, failure_reported=failure_reported)
 
     def _process_error(self, error) -> None:  # type: ignore[no-untyped-def]
-        self._append_log("error", f"进程启动失败: {error}")
+        self._append_log(
+            "error",
+            operation_failure(
+                error,
+                summary='脚本执行程序未能启动',
+                context='请检查所选执行程序是否可用。',
+                raw_message=f"进程启动失败: {error}",
+            ),
+        )
         self._show_failure_toast(str(error))
         self._finish_run("失败", exit_code=None)
 
@@ -2926,6 +3055,7 @@ class EasyConPanel(QWidget):
         ended_at: datetime | None = None,
         script_path: Path | None = None,
         port: str | None = None,
+        failure_reported: bool = False,
     ) -> None:
         ended_at = ended_at or datetime.now()
         started_at = started_at or self.current_run_started_at
@@ -2942,10 +3072,11 @@ class EasyConPanel(QWidget):
                 self.task_state_text = "未运行"
             self.easycon_status.showMessage(self.task_state_text, 3000)
         log_level = "error" if status.startswith("失败") else "info"
-        self._append_log(log_level, LogMessage(status, summary={
-            "error": "脚本执行失败，请查看完整日志中的诊断详情",
-            "info": "脚本已停止" if status.startswith("已中止") else "脚本已执行完成",
-        }[log_level]))
+        if log_level != "error" or not failure_reported:
+            self._append_log(log_level, LogMessage(status, summary={
+                "error": "脚本未能执行完成",
+                "info": "脚本已停止" if status.startswith("已中止") else "脚本已执行完成",
+            }[log_level]))
         self._append_run_summary(exit_code, started_at, ended_at, script_path, port)
         self._cleanup_cli_script()
         self.current_run_started_at = None
@@ -2962,24 +3093,32 @@ class EasyConPanel(QWidget):
         try:
             remove_temporary_cli_script(path)
         except OSError as exc:
-            self._append_log("warn", f"清理 CLI 临时脚本失败: {exc}")
+            self._append_log(
+                "warn",
+                operation_failure(
+                    exc,
+                    summary='脚本临时文件未清理',
+                    context='可在脚本停止后重试清理。',
+                    raw_message=f"清理 CLI 临时脚本失败: {exc}",
+                ),
+            )
 
-    def _report_cli_failure(self, exit_code: int | None) -> None:
+    def _report_cli_failure(self, exit_code: int | None) -> bool:
         stdout = "".join(self.current_run_stdout)
         stderr = "".join(self.current_run_stderr)
         failure_type = classify_cli_failure(stdout, stderr, exit_code)
         if failure_type == "script_compile_failed":
             line = extract_compile_error_line(stdout, stderr)
-            if line is None:
-                self._set_script_error(stderr or stdout or "脚本编译失败，请展开脚本输出")
-                self._append_log("error", "脚本编译失败，请查看 stderr/stdout。")
-                return
-            self._append_log("error", f"脚本编译失败，疑似行号: {line}")
-            self._set_script_error(stderr or stdout, line=line)
-            self.editor.go_to_line(line)
-            return
+            message = stderr or stdout or "脚本编译失败，执行程序未返回具体原因"
+            self._set_script_error(message, line=line)
+            self._append_log("error", script_failure(message, compile_error=True, line=line))
+            if line is not None:
+                self.editor.go_to_line(line)
+            return True
         if failure_type == "device_connection_failed":
             self._append_log("error", "单片机连接失败，请检查串口、reset 和端口占用情况。")
+            return True
+        return False
 
     def _tick_run_timer(self) -> None:
         if self._native_script_paused():
@@ -3186,15 +3325,10 @@ class EasyConPanel(QWidget):
             "stderr": "ERROR",
             "debug": "DEBUG",
         }.get(level, "INFO")
-        event = script_output_message(text, error=level == "stderr") if level in {"stdout", "stderr"} else message
-        if level == "error" and "脚本" in text and "Traceback" not in text:
-            line = extract_compile_error_line("", text)
-            if line is not None:
-                event = LogMessage(
-                    message, summary=f"脚本第 {line} 行执行失败",
-                    context="请在脚本编辑区查看已标记的错误行，修正后重新运行。",
-                    event_type="script.failed",
-                )
+        event = message if isinstance(message, LogMessage) else (
+            script_output_message(text, error=level == "stderr") if level in {"stdout", "stderr"} else message
+        )
+        event = present_log_message("伊机控", event, sink_level)
         sink = self._run_log_sink if persist else self._native_result_log_sink
         if sink is not None:
             try:
@@ -3291,7 +3425,15 @@ class EasyConPanel(QWidget):
         try:
             output.write_text(self.log_view.toPlainText(), encoding="utf-8")
         except OSError as exc:
-            self._append_log("error", f"保存日志失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='日志导出失败',
+                    context='请确认保存位置可写，或选择其他位置。',
+                    raw_message=f"保存日志失败: {exc}",
+                ),
+            )
             return None
         self._append_log("info", f"已保存日志: {output}")
         return output
@@ -3354,7 +3496,15 @@ class EasyConPanel(QWidget):
         try:
             backend = self._ensure_native_backend()
         except Exception as exc:
-            self._append_log("error", f"原生伊机控后端不可用: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='伊机控暂时不可用',
+                    context='请重新连接伊机控后重试。',
+                    raw_message=f"原生伊机控后端不可用: {exc}",
+                ),
+            )
             return False
         self.easycon_status.clearMessage()
         self._native_connection_failed = False
@@ -3389,7 +3539,15 @@ class EasyConPanel(QWidget):
         try:
             backend = self._ensure_native_backend()
         except Exception as exc:
-            self._append_log("error", f"原生伊机控后端不可用: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='伊机控暂时不可用',
+                    context='请重新连接伊机控后重试。',
+                    raw_message=f"原生伊机控后端不可用: {exc}",
+                ),
+            )
             return False
         self.native_disconnecting = True
         self._native_disconnect_requested = True
@@ -3426,7 +3584,15 @@ class EasyConPanel(QWidget):
             try:
                 callback(success)
             except Exception as exc:
-                self._append_log("error", f"处理伊机控连接结果失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='伊机控连接结果处理失败',
+                        context='请重新连接后重试。',
+                        raw_message=f"处理伊机控连接结果失败: {exc}",
+                    ),
+                )
 
     def _native_lifecycle_finished(self) -> None:
         operation = self._native_lifecycle_thread
@@ -3472,7 +3638,13 @@ class EasyConPanel(QWidget):
             if not self._shutting_down:
                 if error is not None:
                     self.task_state_text = "连接失败"
-                    self._append_log("error", LogMessage(f"连接伊机控失败: {error}", summary="连接伊机控失败，请检查串口和设备连接"))
+                    self._append_log(
+                        "error",
+                        operation_failure(
+                            error,
+                            summary="伊机控连接失败",
+                        ),
+                    )
                     self.easycon_status.showMessage("连接失败", 5000)
                     self._show_failure_toast(str(error))
                 elif cancelled:
@@ -3485,7 +3657,15 @@ class EasyConPanel(QWidget):
                     try:
                         self._save_config_from_ui()
                     except OSError as exc:
-                        self._append_log("warn", f"串口已连接，但无法保存配置: {exc}")
+                        self._append_log(
+                            "warn",
+                            operation_failure(
+                                exc,
+                                summary='伊机控已连接，但连接设置未保存',
+                                context='本次连接仍可使用；下次启动可能需要重新选择串口。',
+                                raw_message=f"串口已连接，但无法保存配置: {exc}",
+                            ),
+                        )
                     self._append_log("info", LogMessage(f"Python 原生伊机控已连接: {self._display_port(operation.port)}", summary="伊机控已连接，可以运行脚本"))
                     self.easycon_status.showMessage("已连接", 3000)
                     self._show_connection_toast(self._display_port(operation.port))
@@ -3495,7 +3675,14 @@ class EasyConPanel(QWidget):
         elif not self._shutting_down:
             if error is not None:
                 self.task_state_text = "断开失败"
-                self._append_log("error", LogMessage(f"断开伊机控失败: {error}", summary="未能断开伊机控，请查看完整日志中的诊断详情"))
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        error,
+                        summary="伊机控未能断开",
+                        context="请停止当前任务后重试断开。",
+                    ),
+                )
                 self.easycon_status.showMessage("断开失败", 5000)
                 self._show_failure_toast(str(error))
             else:
@@ -3534,7 +3721,13 @@ class EasyConPanel(QWidget):
             self.bridge_connecting = False
             self.bridge_status = EasyConStatus.FAILED
             self.task_state_text = "连接失败"
-            self._append_log("error", LogMessage(f"连接伊机控失败: {exc}", summary="连接伊机控失败，请检查串口和设备连接"))
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary="伊机控连接失败",
+                ),
+            )
             self._show_failure_toast(str(exc))
             self._update_bridge_controls()
             return
@@ -3553,7 +3746,14 @@ class EasyConPanel(QWidget):
         try:
             self._ensure_bridge_backend().disconnect()
         except Exception as exc:
-            self._append_log("error", LogMessage(f"断开伊机控失败: {exc}", summary="未能断开伊机控，请查看完整日志中的诊断详情"))
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary="伊机控未能断开",
+                    context="请停止当前任务后重试断开。",
+                ),
+            )
             return
         self.bridge_status = EasyConStatus.BRIDGE_DISCONNECTED
         self._append_log("info", LogMessage("已断开伊机控", summary="伊机控已断开"))
@@ -3640,7 +3840,15 @@ class EasyConPanel(QWidget):
                 self._ensure_native_backend().press(button, duration)  # type: ignore[attr-defined]
             except Exception as exc:
                 self.task_state_text = "连接失败"
-                self._append_log("error", f"发送手柄按钮失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='手柄按键发送失败',
+                        context='请检查伊机控连接后重试。',
+                        raw_message=f"发送手柄按钮失败: {exc}",
+                    ),
+                )
                 self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_native_controls()
                 return
@@ -3657,7 +3865,15 @@ class EasyConPanel(QWidget):
             except Exception as exc:
                 self.bridge_status = EasyConStatus.FAILED
                 self.task_state_text = "连接失败"
-                self._append_log("error", f"发送手柄按钮失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='手柄按键发送失败',
+                        context='请检查伊机控连接后重试。',
+                        raw_message=f"发送手柄按钮失败: {exc}",
+                    ),
+                )
                 self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_bridge_controls()
                 return
@@ -3704,7 +3920,12 @@ class EasyConPanel(QWidget):
         except Exception as exc:
             self._append_log(
                 "warn",
-                f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {exc}",
+                operation_failure(
+                    exc,
+                    summary='亮屏保活未完成，继续捕捉',
+                    context='请留意游戏是否自动息屏；本次捕捉继续进行。',
+                    raw_message=f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {exc}",
+                ),
             )
             return False
         self._capture_keep_awake_future = future
@@ -3771,7 +3992,12 @@ class EasyConPanel(QWidget):
         if error:
             self._append_log(
                 "warn",
-                f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {error}",
+                operation_failure(
+                    error,
+                    summary='亮屏保活未完成，继续捕捉',
+                    context='请留意游戏是否自动息屏；本次捕捉继续进行。',
+                    raw_message=f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {error}",
+                ),
             )
             if terminal_failure:
                 self._reset_failed_keep_awake_bridge()
@@ -3786,7 +4012,15 @@ class EasyConPanel(QWidget):
             try:
                 backend.close()
             except Exception as exc:
-                self._append_log("warn", f"清理失效 Bridge 连接失败: {exc}")
+                self._append_log(
+                    "warn",
+                    operation_failure(
+                        exc,
+                        summary='旧的伊机控连接未能释放',
+                        context='请停止当前任务后重新连接。',
+                        raw_message=f"清理失效 Bridge 连接失败: {exc}",
+                    ),
+                )
         self.bridge_connecting = False
         self.bridge_status = EasyConStatus.FAILED
         self.easycon_status.showMessage("连接已失效，请重新连接")
@@ -3857,7 +4091,15 @@ class EasyConPanel(QWidget):
             try:
                 native_backend.stop_current_script()  # type: ignore[attr-defined]
             except Exception as exc:
-                self._append_log("warn", f"停止原生伊机控脚本失败: {exc}")
+                self._append_log(
+                    "warn",
+                    operation_failure(
+                        exc,
+                        summary='停止脚本失败',
+                        context='请确认脚本是否仍在运行，再重试停止。',
+                        raw_message=f"停止原生伊机控脚本失败: {exc}",
+                    ),
+                )
             native_thread.requestInterruption()
             native_thread.quit()
 
@@ -3962,7 +4204,15 @@ class EasyConPanel(QWidget):
         try:
             script_path = create_temporary_cli_script(f"{CAPTURE_KEEP_AWAKE_BUTTON} {duration_ms}\n")
         except OSError as exc:
-            self._append_log("warn", f"捕捉亮屏保活生成 CLI 脚本失败，继续捕捉: {exc}")
+            self._append_log(
+                "warn",
+                operation_failure(
+                    exc,
+                    summary='亮屏保活未完成，继续捕捉',
+                    context='请留意游戏是否自动息屏；本次捕捉继续进行。',
+                    raw_message=f"捕捉亮屏保活生成 CLI 脚本失败，继续捕捉: {exc}",
+                ),
+            )
             return False
         port = self._connection_port()
         process = QProcess(self)
@@ -4018,7 +4268,15 @@ class EasyConPanel(QWidget):
         self._clear_capture_keep_awake_cli(process)
         if timed_out or cancelled:
             return
-        self._append_log("warn", f"捕捉亮屏保活 CLI 启动失败，继续捕捉: {error}")
+        self._append_log(
+            "warn",
+            operation_failure(
+                error,
+                summary='亮屏保活未完成，继续捕捉',
+                context='请留意游戏是否自动息屏；本次捕捉继续进行。',
+                raw_message=f"捕捉亮屏保活 CLI 启动失败，继续捕捉: {error}",
+            ),
+        )
 
     def _capture_keep_awake_cli_timeout(self) -> None:
         process = self._capture_keep_awake_cli_process
@@ -4042,7 +4300,15 @@ class EasyConPanel(QWidget):
         try:
             remove_temporary_cli_script(script_path)
         except OSError as exc:
-            self._append_log("warn", f"清理捕捉亮屏保活 CLI 临时脚本失败: {exc}")
+            self._append_log(
+                "warn",
+                operation_failure(
+                    exc,
+                    summary='亮屏保活临时文件未清理',
+                    context='可在退出后重试清理。',
+                    raw_message=f"清理捕捉亮屏保活 CLI 临时脚本失败: {exc}",
+                ),
+            )
         process.deleteLater()
 
     def _settle_capture_keep_awake_cli(self, *, wait_ms: int) -> bool:
@@ -4075,7 +4341,15 @@ class EasyConPanel(QWidget):
                 self._ensure_native_backend().stick(side, direction, duration)  # type: ignore[attr-defined]
             except Exception as exc:
                 self.task_state_text = "连接失败"
-                self._append_log("error", f"发送摇杆动作失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='摇杆动作发送失败',
+                        context='请检查伊机控连接后重试。',
+                        raw_message=f"发送摇杆动作失败: {exc}",
+                    ),
+                )
                 self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_native_controls()
                 return
@@ -4092,7 +4366,15 @@ class EasyConPanel(QWidget):
             except Exception as exc:
                 self.bridge_status = EasyConStatus.FAILED
                 self.task_state_text = "连接失败"
-                self._append_log("error", f"发送摇杆动作失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='摇杆动作发送失败',
+                        context='请检查伊机控连接后重试。',
+                        raw_message=f"发送摇杆动作失败: {exc}",
+                    ),
+                )
                 self._deactivate_virtual_controller(hide_overlay=True, log=False)
                 self._update_bridge_controls()
                 return
@@ -4296,7 +4578,15 @@ class EasyConPanel(QWidget):
                     hook.set_mapped_keys_enabled(True)
                 except Exception as exc:
                     self._deactivate_virtual_controller(log=False)
-                    self._append_log("error", f"恢复系统级键盘捕获失败: {exc}")
+                    self._append_log(
+                        "error",
+                        operation_failure(
+                            exc,
+                            summary='键盘控制未能恢复',
+                            context='请重新启用键盘控制。',
+                            raw_message=f"恢复系统级键盘捕获失败: {exc}",
+                        ),
+                    )
                     return False
             self.virtual_controller_enabled = True
             self._set_keyboard_controller_checked(True)
@@ -4315,7 +4605,15 @@ class EasyConPanel(QWidget):
                 stale_hook.stop()
             except Exception as exc:
                 self._set_keyboard_controller_checked(False)
-                self._append_log("error", f"键盘全局捕获尚未停止，无法重新启用: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='上一次键盘控制尚未停止',
+                        context='请等待停止完成后再启用。',
+                        raw_message=f"键盘全局捕获尚未停止，无法重新启用: {exc}",
+                    ),
+                )
                 return False
             self._keyboard_hook = None
 
@@ -4351,7 +4649,15 @@ class EasyConPanel(QWidget):
                             f"系统级键盘捕获启动失败且未能停止: {stop_exc}",
                         )
                         return False
-                self._append_log("warn", f"系统级键盘捕获不可用，已回退窗口内捕获: {exc}")
+                self._append_log(
+                    "warn",
+                    operation_failure(
+                        exc,
+                        summary='已切换为窗口内键盘控制',
+                        context='请保持软件窗口处于前台后使用键盘控制。',
+                        raw_message=f"系统级键盘捕获不可用，已回退窗口内捕获: {exc}",
+                    ),
+                )
             else:
                 self._keyboard_hook = hook
                 source = "hook"
@@ -4395,7 +4701,15 @@ class EasyConPanel(QWidget):
             try:
                 hook.set_mapped_keys_enabled(False)
             except Exception as exc:
-                self._append_log("error", f"暂停系统级键盘捕获失败: {exc}")
+                self._append_log(
+                    "error",
+                    operation_failure(
+                        exc,
+                        summary='键盘控制未能暂停',
+                        context='请停止键盘控制后重试。',
+                        raw_message=f"暂停系统级键盘捕获失败: {exc}",
+                    ),
+                )
                 self._deactivate_virtual_controller(log=False)
                 return False
         else:
@@ -4464,7 +4778,15 @@ class EasyConPanel(QWidget):
                     hook.stop()
                 except Exception as exc:
                     stopped = False
-                    self._append_log("error", f"停止系统级键盘捕获失败: {exc}")
+                    self._append_log(
+                        "error",
+                        operation_failure(
+                            exc,
+                            summary='键盘控制未能停止',
+                            context='请重试停止，确认完成后再运行脚本。',
+                            raw_message=f"停止系统级键盘捕获失败: {exc}",
+                        ),
+                    )
                 else:
                     self._keyboard_hook = None
 
@@ -4628,7 +4950,15 @@ class EasyConPanel(QWidget):
         except Exception as exc:
             if not self._is_native_mode():
                 self.bridge_status = EasyConStatus.FAILED
-            self._append_log("error", f"键盘控制发送失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='键盘控制未能发送按键',
+                    context='请检查伊机控连接后重新启用键盘控制。',
+                    raw_message=f"键盘控制发送失败: {exc}",
+                ),
+            )
             self._deactivate_virtual_controller(hide_overlay=True)
         return True
 
@@ -4849,7 +5179,15 @@ class EasyConPanel(QWidget):
         try:
             script_path = create_temporary_cli_script(script_text)
         except OSError as exc:
-            self._append_log("error", f"创建 CLI 临时脚本失败: {exc}")
+            self._append_log(
+                "error",
+                operation_failure(
+                    exc,
+                    summary='脚本准备失败',
+                    context='请确认临时文件目录可写后重试。',
+                    raw_message=f"创建 CLI 临时脚本失败: {exc}",
+                ),
+            )
             return False
         self._cleanup_cli_script()
         self._cli_script_path = script_path

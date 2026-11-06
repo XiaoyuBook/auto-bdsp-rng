@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -130,7 +131,7 @@ def test_failure_and_next_round_logs_use_real_main_window_routing(window, monkey
                 warnings = [entry for entry in visible if entry.level == 'WARNING']
                 assert len(warnings) == 2
                 assert '校正失败，准备第 2/2 次尝试' in warnings[0].user_message
-                assert '本轮未能继续，正在重新测种' in warnings[1].user_message
+                assert '校正连续 2 次失败，将从测种脚本重新开始' in warnings[1].user_message
         else:
             expected_rounds = list(range(1, 6)) if scenario == 'five_seed_failures_stop' else [1]
             assert rounds == expected_rounds
@@ -166,7 +167,11 @@ def test_failure_and_next_round_logs_use_real_main_window_routing(window, monkey
             row = next(index for index, entry in enumerate(full.visible_entries()) if entry.seq == problem.seq)
             full.table.setCurrentIndex(full.proxy_model.index(row, 3))
             full.details_button.setChecked(True)
-            assert problem.user_message in full.details_text.toPlainText()
+            details = full.details_text.toPlainText()
+            assert problem.user_message.split("\n", 1)[0] in details
+            for statement in re.split(r"[；;。]", problem.user_context):
+                if statement.strip():
+                    assert statement.strip() in details
             assert 'Project_Xs' not in full.details_text.toPlainText()
             full.raw_details_button.click()
             assert raw_error in full.details_text.toPlainText()

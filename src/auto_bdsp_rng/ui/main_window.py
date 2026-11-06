@@ -172,7 +172,15 @@ from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.resources import app_base_dir, app_icon_path, resource_path, script_directory
 from auto_bdsp_rng.image_io import write_image
 from auto_bdsp_rng.run_log import ExceptionHookGuard, RunLogError, RunLogManager
-from auto_bdsp_rng.log_events import LogMessage, exception_details, log_level, script_output_message
+from auto_bdsp_rng.log_events import (
+    LogMessage,
+    exception_details,
+    log_level,
+    operation_failure,
+    present_log_message,
+    script_failure,
+    script_output_message,
+)
 from auto_bdsp_rng.ui_stall_diagnostics import start_ui_stall_diagnostics
 from auto_bdsp_rng.ui.about_dialog import StartupNoticeDialog
 from auto_bdsp_rng.ui.auto_rng_panel import AutoRngPanel
@@ -1462,9 +1470,11 @@ class ShinyThresholdCalibrationWorker(QObject):
         self._first_keyword = first_keyword
         self._second_keyword = second_keyword
         self._second_capture_frame = second_capture_frame
+        self.failure_error: BaseException | None = None
         self._cancel = threading.Event()
 
     def run(self) -> None:
+        self.failure_error = None
         try:
             result = measure_keyword_interval(
                 self._capture_frame,
@@ -1480,8 +1490,10 @@ class ShinyThresholdCalibrationWorker(QObject):
             if self._cancel.is_set():
                 self.cancelled.emit()
             else:
+                self.failure_error = exc
                 self.failed.emit(str(exc))
         except Exception as exc:
+            self.failure_error = exc
             self.failed.emit(str(exc))
         else:
             self.finished.emit(result.interval_seconds)
@@ -1593,7 +1605,7 @@ class MainWindow(QMainWindow):
     autoSeedCaptured = Signal(object)
     autoScriptStarted = Signal(str)
     autoScriptFinished = Signal(object)
-    autoScriptFailed = Signal(str)
+    autoScriptFailed = Signal(object)
     autoHistoryEvent = Signal(str, object)
     ocrRegionSelected = Signal(str, object)
     tidOcrRegionSelected = Signal(object)
@@ -1839,13 +1851,13 @@ class MainWindow(QMainWindow):
         self._call_on_ui_thread(finish_script)
         failure_message = _auto_script_failure_message(result, name)
         if failure_message is not None:
-            raise RuntimeError(failure_message)
+            raise RuntimeError(failure_message) from getattr(result, "error", None)
         return result
 
     def _fail_auto_script(self, error: BaseException) -> None:
         def fail_script() -> None:
             try:
-                self.autoScriptFailed.emit(str(error))
+                self.autoScriptFailed.emit(script_failure(error))
             finally:
                 self.easycon_tab.release_native_script_run()
 
@@ -2393,6 +2405,7 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _write_run_log(self, source: str, message: object, *, level: str = "INFO") -> None:
+        message = present_log_message(source, message, level)
         text = str(message)
         level = log_level(message, level)
         if level == "ERROR" and source in ("自动定点", "自动 TID") and hasattr(self, "_qq_task_details"):
@@ -2430,7 +2443,8 @@ class MainWindow(QMainWindow):
         run_id, round_id = self._run_log_context("伊机控")
         output = script_output_message(text, error=level in {"ERROR", "CRITICAL"})
         if isinstance(message, LogMessage):
-            output = LogMessage(text, summary=message.summary, context=message.context,
+            output = LogMessage(text, summary=message.summary, context=message.context, details=message.details,
+                                user_details=message.user_details, level=message.level, phase=message.phase,
                                 diagnostic=message.diagnostic, event_type=message.event_type)
         self._run_log_buffer.publish("伊机控", output, level=level, run_id=run_id, round_id=round_id)
 
@@ -5037,7 +5051,7 @@ class MainWindow(QMainWindow):
             self._refresh_automation_start_state()
             message = "OCR 初始化因关闭操作取消，自动流程未启动"
             self.auto_rng_tab.set_phase_text(AutoRngPhase.IDLE.value)
-            self.auto_rng_tab.add_log(message, level="WARNING")
+            self.auto_rng_tab.add_log(LogMessage(message, summary="已取消启动自动定点"))
             self.statusBar().showMessage(message)
         self._refresh_shiny_calibration_button_state()
 
@@ -5895,7 +5909,15 @@ class MainWindow(QMainWindow):
         if process is None:
             if self._video_source_stop_pending and self._capture_broker_start_thread is None:
                 message = "共享视频源进程控制器不存在，无法确认停止"
-                self._write_run_log("视频源", f"{context}: {message}", level="WARNING")
+                self._write_run_log(
+                    "视频源",
+                    operation_failure(
+                        message,
+                        summary="视频源停止状态未能确认",
+                        context="请稍后重试停止视频源。",
+                    ),
+                    level="WARNING",
+                )
                 return False, message
             if self._capture_broker_start_thread is None:
                 return True, None
@@ -5937,7 +5959,15 @@ class MainWindow(QMainWindow):
             self._video_source_cancel_requested = False
         if thread.error is not None or thread.result is False:
             message = str(thread.error or "Broker 未确认停止")
-            self._write_run_log("视频源", f"{self._capture_broker_stop_context}: {message}", level="WARNING")
+            self._write_run_log(
+                "视频源",
+                operation_failure(
+                    thread.error or message,
+                    summary="视频源未能停止",
+                    context="请稍后重试停止视频源。",
+                ),
+                level="WARNING",
+            )
             self._set_video_source_stop_failure(message)
             if self._close_pending:
                 self._reject_pending_close("视频源未能停止", "共享视频源尚未确认停止，请重试断开后再关闭程序。")
@@ -6263,9 +6293,9 @@ class MainWindow(QMainWindow):
         if not success:
             self._write_run_log(
                 "视频源",
-                LogMessage(
-                    f"视频源连接失败；{self._video_source_diagnostic_snapshot()}",
-                    summary="视频源连接失败，请检查采集设备和连接设置", event_type="video.failed",
+                operation_failure(
+                    payload, summary="视频源连接失败", event_type="video.failed",
+                    raw_message=f"视频源连接失败；{self._video_source_diagnostic_snapshot()}；{payload}",
                 ),
                 level="ERROR",
             )
@@ -6276,7 +6306,7 @@ class MainWindow(QMainWindow):
             self._video_source_connected = False
             self._video_source_pending_status = "连接失败"
             error = payload if isinstance(payload, BaseException) else RuntimeError(str(payload))
-            self._show_error("视频源连接失败", error)
+            self._show_error("视频源连接失败", error, source="视频源", write_log=False)
             return
 
         self._video_source_connecting = False
@@ -6536,7 +6566,15 @@ class MainWindow(QMainWindow):
         # must not restart the retained source until the user retries it.
         self._resume_preview_after_selection = False
         self._cancel_preview_action(message, release_preview=False)
-        self._write_run_log("Seed 捕捉", message, level="WARNING")
+        self._write_run_log(
+            "Seed 捕捉",
+            operation_failure(
+                error,
+                summary="预览画面未能释放",
+                context="请重试当前操作。",
+            ),
+            level="WARNING",
+        )
         self.statusBar().showMessage(message)
 
     def _read_live_preview_frame(self, config: BlinkCaptureConfig) -> object:
@@ -7334,7 +7372,15 @@ class MainWindow(QMainWindow):
             frame = self._current_preview_frame_for_ocr()
             text = recognize_ocr_field(frame, field, region)
         except Exception as exc:
-            self._write_run_log("OCR", LogMessage(f"{label}识别失败: {exc}", summary="文字识别失败，请检查画面和识别设置后重试"), level="ERROR")
+            self._write_run_log(
+                "OCR",
+                operation_failure(
+                    exc,
+                    summary=f"{label}识别失败",
+                    raw_message=f"{label}识别失败: {exc}",
+                ),
+                level="ERROR",
+            )
             raise
         self._write_run_log("OCR", f"{label}识别结果: {text or '空'}")
         return text
@@ -7427,7 +7473,15 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             if dialog is not None:
                 dialog.fail_recognition(field, str(exc))
-            self._write_run_log("OCR", LogMessage(f"{label}识别失败: {exc}", summary="文字识别失败，请检查画面和识别设置后重试"), level="ERROR")
+            self._write_run_log(
+                "OCR",
+                operation_failure(
+                    exc,
+                    summary=f"{label}识别失败",
+                    raw_message=f"{label}识别失败: {exc}",
+                ),
+                level="ERROR",
+            )
             return
 
         def task(should_stop: Callable[[], bool]) -> object:
@@ -7458,7 +7512,14 @@ class MainWindow(QMainWindow):
                 return
             if not success:
                 message = str(payload)
-                self._write_run_log("OCR", LogMessage(f"{label}识别失败: {message}", summary="文字识别失败，请检查画面和识别设置后重试"), level="ERROR")
+                self._write_run_log(
+                    "OCR",
+                    operation_failure(
+                        message,
+                        summary=f"{label}识别失败",
+                    ),
+                    level="ERROR",
+                )
                 if dialog is not None:
                     dialog.fail_recognition(field, message)
                 return
@@ -7496,7 +7557,15 @@ class MainWindow(QMainWindow):
             frame = self._current_preview_frame_for_ocr()
             text = recognize_ocr_field(frame, "tid", region)
         except Exception as exc:
-            self._write_run_log("OCR", LogMessage(f"TID识别失败: {exc}", summary="文字识别失败，请检查画面和识别设置后重试"), level="ERROR")
+            self._write_run_log(
+                "OCR",
+                operation_failure(
+                    exc,
+                    summary="TID 识别失败",
+                    raw_message=f"TID识别失败: {exc}",
+                ),
+                level="ERROR",
+            )
             raise
         self._write_run_log("OCR", f"TID识别结果: {text or '空'}")
         return text
@@ -7573,7 +7642,14 @@ class MainWindow(QMainWindow):
                     self._write_run_log("OCR", f"TID识别结果: {text or '空'}")
                     dialog.finish_recognition(True, text)
                 else:
-                    self._write_run_log("OCR", LogMessage(f"TID识别失败: {text}", summary="文字识别失败，请检查画面和识别设置后重试"), level="ERROR")
+                    self._write_run_log(
+                        "OCR",
+                        operation_failure(
+                            text,
+                            summary="TID 识别失败",
+                        ),
+                        level="ERROR",
+                    )
                     dialog.finish_recognition(False, f"失败: {text}")
                 self._refresh_preview_cancel_action()
 
@@ -7687,7 +7763,15 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             message = f"测试全部失败: {exc}"
             self._ocr_full_test_running = False
-            self._write_run_log("OCR", message, level="ERROR")
+            self._write_run_log(
+                "OCR",
+                operation_failure(
+                    exc,
+                    summary="文字识别测试失败",
+                    raw_message=message,
+                ),
+                level="ERROR",
+            )
             self.ocrFullTestFinished.emit(False, message)
             return
 
@@ -7746,13 +7830,21 @@ class MainWindow(QMainWindow):
                 self._write_run_log("OCR", message)
             else:
                 message = f"测试全部失败: {payload}"
-                self._write_run_log("OCR", message, level="ERROR")
+                self._write_run_log(
+                    "OCR",
+                    operation_failure(
+                        payload,
+                        summary="文字识别测试失败",
+                        raw_message=message,
+                    ),
+                    level="ERROR",
+                )
             self.ocrFullTestFinished.emit(success, message)
 
         if not self._start_managed_ocr_task("测试全部", task, completed):
             self._ocr_full_test_running = False
             message = "测试全部失败: 已有 OCR 任务正在运行"
-            self._write_run_log("OCR", message, level="ERROR")
+            self._write_run_log("OCR", LogMessage(message, summary="识别测试未启动，已有文字识别任务正在运行", context="请等待当前识别完成后重试。"), level="ERROR")
             self.ocrFullTestFinished.emit(False, message)
 
     def _add_easycon_image_result_observer(
@@ -7939,7 +8031,11 @@ class MainWindow(QMainWindow):
             try:
                 self._write_run_log(
                     "视频源",
-                    LogMessage(f"预览读帧失败，准备停止视频源；异常链={error_detail}；{diagnostic}", summary="视频画面读取失败，正在停止视频源，请检查采集设备"), level="ERROR",
+                    operation_failure(
+                        error,
+                        summary="视频画面读取失败，正在停止视频源",
+                        raw_message=f"预览读帧失败，准备停止视频源；异常链={error_detail}；{diagnostic}",
+                    ), level="ERROR",
                 )
             except Exception:
                 pass
@@ -8220,9 +8316,14 @@ class MainWindow(QMainWindow):
         self._show_shiny_threshold_dialog(interval_seconds)
 
     def _shiny_threshold_calibration_failed(self, message: str) -> None:
+        error = getattr(self._shiny_calibration_worker, "failure_error", None) or message
         self._reset_shiny_threshold_calibration()
-        log_message = f"[闪光判定校准] 失败: {message}"
-        self.auto_rng_tab.add_log(log_message, level="ERROR")
+        event = operation_failure(
+            error,
+            summary="闪光判定校准失败",
+            raw_message=f"[闪光判定校准] 失败: {message}",
+        )
+        self.auto_rng_tab.add_log(event, level="ERROR")
         QMessageBox.critical(self, "闪光判定校准失败", message)
         self.statusBar().showMessage(message)
 
@@ -8540,7 +8641,13 @@ class MainWindow(QMainWindow):
             self.auto_rng_tab.run_with_runner(runner)
         except Exception as exc:
             self.auto_rng_tab.set_phase_text("启动失败")
-            self.auto_rng_tab.add_log(str(exc), level="ERROR")
+            self.auto_rng_tab.add_log(
+                operation_failure(
+                    exc,
+                    summary="自动定点未能启动",
+                ),
+                level="ERROR",
+            )
         finally:
             if self.auto_rng_tab._runner_thread is None and not connection_pending:
                 self._finish_auto_rng_preparation()
@@ -9149,7 +9256,12 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.easycon_tab._append_log(
                 "warn",
-                f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {exc}",
+                operation_failure(
+                    exc,
+                    summary='亮屏保活未完成，继续捕捉',
+                    context='请留意游戏是否自动息屏；本次捕捉继续进行。',
+                    raw_message=f"捕捉亮屏保活发送 {CAPTURE_KEEP_AWAKE_BUTTON} 失败，继续捕捉: {exc}",
+                ),
             )
 
     def _handle_auto_seed_captured(self, seed_result: AutoRngSeedResult) -> None:
@@ -9743,7 +9855,7 @@ class MainWindow(QMainWindow):
                     )
                 except BaseException as exc:
                     try:
-                        self.autoScriptFailed.emit(str(exc))
+                        self.autoScriptFailed.emit(script_failure(exc))
                     finally:
                         self.easycon_tab.release_native_script_run()
                     raise
@@ -10446,14 +10558,30 @@ class MainWindow(QMainWindow):
         try:
             capture_config = self._config_from_form().capture
         except Exception as exc:
-            self.auto_rng_tab.add_log(f"[捕获精灵信息] 获取截图配置失败: {exc}", level="ERROR")
+            self.auto_rng_tab.add_log(
+                operation_failure(
+                    exc,
+                    summary='精灵信息截图设置无效',
+                    context='请检查截图设置后重试。',
+                    raw_message=f"[捕获精灵信息] 获取截图配置失败: {exc}",
+                ),
+                level="ERROR",
+            )
             return
 
         # 主线程截图笔记页
         try:
             notes_frame = self._capture_preview_frame_for_config(capture_config)
         except Exception as exc:
-            self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图笔记页失败: {exc}", level="ERROR")
+            self.auto_rng_tab.add_log(
+                operation_failure(
+                    exc,
+                    summary='精灵笔记页截图失败',
+                    context='请确认游戏处于笔记页后重试。',
+                    raw_message=f"[捕获精灵信息] 截图笔记页失败: {exc}",
+                ),
+                level="ERROR",
+            )
             return
 
         self._capture_config = capture_config  # 暂存供后续用
@@ -10492,12 +10620,28 @@ class MainWindow(QMainWindow):
         try:
             stats_frame = self._capture_preview_frame_for_config(self._capture_config)
         except Exception as exc:
-            self.auto_rng_tab.add_log(f"[捕获精灵信息] 截图能力页失败: {exc}", level="ERROR")
+            self.auto_rng_tab.add_log(
+                operation_failure(
+                    exc,
+                    summary='精灵能力页截图失败',
+                    context='请确认游戏处于能力页后重试。',
+                    raw_message=f"[捕获精灵信息] 截图能力页失败: {exc}",
+                ),
+                level="ERROR",
+            )
             return
         try:
             stats_result = extract_pokemon_info(stats_image=stats_frame, ocr_regions=self._ocr_region_config())
         except Exception as exc:
-            self.auto_rng_tab.add_log(f"[捕获精灵信息] OCR 能力页失败: {exc}", level="ERROR")
+            self.auto_rng_tab.add_log(
+                operation_failure(
+                    exc,
+                    summary='精灵能力信息识别失败',
+                    context='请确认能力页内容清晰后重试。',
+                    raw_message=f"[捕获精灵信息] OCR 能力页失败: {exc}",
+                ),
+                level="ERROR",
+            )
             return
         stats = stats_result.get("stats")
 
@@ -10962,7 +11106,14 @@ class MainWindow(QMainWindow):
                 self._write_run_log("Seed 捕捉", LogMessage(f"{self._capture_mode_label()}已停止", summary="捕捉已停止"))
             elif mock_dialog is not None:
                 self.statusBar().showMessage(str(self._capture_error))
-                self._write_run_log("Seed 捕捉", str(self._capture_error), level="WARNING")
+                self._write_run_log(
+                    "Seed 捕捉",
+                    operation_failure(
+                        self._capture_error,
+                        summary="测种未完成",
+                    ),
+                    level="WARNING",
+                )
             else:
                 title = (
                     "校正失败"
@@ -11372,7 +11523,15 @@ class MainWindow(QMainWindow):
         write_log: bool = True,
     ) -> None:
         if write_log:
-            self._write_run_log(source, LogMessage(f"{title}: {error}", summary="操作失败，请查看完整日志中的诊断详情"), level="ERROR")
+            self._write_run_log(
+                source,
+                operation_failure(
+                    error,
+                    summary=title,
+                    raw_message=f"{title}: {error}",
+                ),
+                level="ERROR",
+            )
         if isinstance(error, ProjectXsIntegrationError):
             display_title, display_message = _project_xs_capture_error_dialog(
                 error,

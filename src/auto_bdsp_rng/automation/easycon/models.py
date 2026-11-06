@@ -79,6 +79,7 @@ class EasyConRunResult:
     port: str
     stdout: str = ""
     stderr: str = ""
+    error: BaseException | None = field(default=None, compare=False, repr=False)
 
     @property
     def duration_seconds(self) -> float:

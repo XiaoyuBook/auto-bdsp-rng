@@ -69,12 +69,15 @@ def test_retry_details_show_business_text_and_require_an_explicit_action_for_raw
     assert '测种失败（连续 1/5），将重新运行测种脚本' in details
     for internal in ('Project_Xs', 'RuntimeError', 'TimeoutError', 'private', '异常原因链', '事件：'):
         assert internal not in details
-    assert '画面' not in details and '眼睛框选' not in details
+    assert '眼睛框选' not in details
+    assert '具体原因：' in details
+    if capture is plain_capture_error:
+        assert '画面' not in details
     if capture is plain_capture_error:
         assert '超时' not in details
         assert all('超时' not in entry.user_message for entry in buffer.snapshot())
     else:
-        assert '等待操作结果超时' in details
+        assert '读取游戏画面超时' in details
     assert failure.timestamp.strftime('%H:%M:%S') in full.details_hint.text()
     assert '警告' in full.details_hint.text()
     full.copy_details_button.click()
@@ -137,8 +140,7 @@ def test_worker_keeps_nested_cause_without_changing_its_string_failure_signal(ap
     failure = next(entry for entry in buffer.snapshot() if entry.level == 'ERROR')
     assert '获取游戏画面超时' in failure.full_text()
     assert 'TimeoutError' in failure.details
-    assert '等待操作结果超时' in failure.user_context
-    assert '画面' not in failure.user_context
+    assert '读取游戏画面超时' in failure.user_context
     assert 'private' not in failure.user_message
 
 

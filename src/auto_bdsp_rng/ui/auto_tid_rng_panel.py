@@ -63,7 +63,16 @@ from auto_bdsp_rng.gen8_id import IDFilter, IDState8, generate_ids
 from auto_bdsp_rng.rng_core import SeedPair64, SeedState32
 from auto_bdsp_rng.rng_core.cancellation import SearchCancelled
 from auto_bdsp_rng.resources import remap_legacy_script_path, script_directory
-from auto_bdsp_rng.log_events import LogMessage, is_user_message, log_level, log_summary, log_user_text, task_failure
+from auto_bdsp_rng.log_events import (
+    LogMessage,
+    is_user_message,
+    log_level,
+    log_summary,
+    log_user_text,
+    task_failure,
+    operation_failure,
+    present_log_message,
+)
 from auto_bdsp_rng.ui.automation_lifecycle import AutomationLifecycle
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
@@ -1418,7 +1427,15 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _manual_tid_generation_failed(self, error) -> None:
         self._id_result_state = "failed"
         self._refresh_id_result_state()
-        self.add_log(f"ID 搜索失败: {error}", level="ERROR")
+        self.add_log(
+            operation_failure(
+                error,
+                summary='目标 TID 搜索失败',
+                context='请检查搜索设置后重试。',
+                raw_message=f"ID 搜索失败: {error}",
+            ),
+            level="ERROR",
+        )
 
     def cancel_manual_search(self) -> None:
         self._manual_search.cancel()
@@ -1727,6 +1744,7 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
         self.id_table.scrollToItem(self.id_table.item(row, 4), QAbstractItemView.ScrollHint.PositionAtCenter)
 
     def add_log(self, message: str, *, level: str = "INFO") -> None:
+        message = present_log_message("自动 TID", message, level)
         text = str(message)
         level = log_level(message, level)
         if self._run_log_sink is not None:
@@ -1995,7 +2013,15 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
 
     def _result_transfer_failed(self, error: Exception) -> None:
         self.status_badge.setText("复制／导出未完成")
-        self.add_log(f"ID 复制／导出失败: {error}", level="ERROR")
+        self.add_log(
+            operation_failure(
+                error,
+                summary='TID 结果复制或导出失败',
+                context='请重新选择结果或保存位置后重试。',
+                raw_message=f"ID 复制／导出失败: {error}",
+            ),
+            level="ERROR",
+        )
 
     def _show_table_context_menu(self, position) -> None:
         menu = QMenu(self.id_table)
@@ -2076,7 +2102,14 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
             self.status_badge.setText("状态：配置错误")
             self.runtime_phase_label.setText("配置错误")
             self.runtime_description_label.setText(str(exc))
-            self.add_log(str(exc), level="WARNING")
+            self.add_log(
+                operation_failure(
+                    exc,
+                    summary="自动流程配置无效",
+                    context="请检查所选脚本和必需参数后重新开始。",
+                ),
+                level="WARNING",
+            )
             return
         self._active_config = config
         self.cancel_result_transfer()

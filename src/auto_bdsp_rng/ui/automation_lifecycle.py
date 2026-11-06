@@ -4,6 +4,8 @@ The thread pointer owns the resource until QThread.finished, even after the
 worker has returned its result. Shared availability is supplied by MainWindow.
 """
 
+from auto_bdsp_rng.log_events import operation_failure
+
 from PySide6.QtCore import QTimer, Slot
 
 
@@ -57,7 +59,15 @@ class AutomationLifecycle:
         except Exception as exc:
             self._stop_pending = False
             self._sync_run_controls()
-            self.add_log(f"停止请求失败，请重试：{exc}", level="ERROR")
+            self.add_log(
+                operation_failure(
+                    exc,
+                    summary='停止请求未完成',
+                    context='请确认任务是否仍在运行，并重试停止。',
+                    raw_message=f"停止请求失败，请重试：{exc}",
+                ),
+                level="ERROR",
+            )
             return False
         return True
 

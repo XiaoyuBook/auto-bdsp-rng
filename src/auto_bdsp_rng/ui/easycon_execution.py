@@ -7,6 +7,8 @@ from os.path import normcase
 from time import monotonic
 from typing import TYPE_CHECKING
 
+from auto_bdsp_rng.log_events import operation_failure
+
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
@@ -423,7 +425,15 @@ class ExecutionFollower(QObject):
             try:
                 original, text = source, Path(source).read_text(encoding="utf-8-sig")
             except (OSError, UnicodeError) as exc:
-                self.panel._append_log("warn", f"无法查看脚本库：{exc}")
+                self.panel._append_log(
+                    "warn",
+                    operation_failure(
+                        exc,
+                        summary='无法打开脚本库',
+                        context='请确认脚本库文件仍然存在。',
+                        raw_message=f"无法查看脚本库：{exc}",
+                    ),
+                )
                 return
         if key == source_key(self.current_source()) and normalized_text(text) == self.panel.editor.toPlainText():
             self.show_current()

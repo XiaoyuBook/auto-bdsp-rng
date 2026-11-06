@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 import threading
+import re
 
 from PySide6.QtCore import (
     QAbstractTableModel,
@@ -45,7 +46,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from auto_bdsp_rng.log_events import LEVEL_LABELS, PROBLEM_LEVELS, LogMessage, log_context, log_level, log_summary
+from auto_bdsp_rng.log_events import (
+    LEVEL_LABELS,
+    PROBLEM_LEVELS,
+    LogMessage,
+    log_context,
+    log_level,
+    log_summary,
+    present_log_message,
+)
 from auto_bdsp_rng.ui.combo_box import ChevronComboBox as QComboBox
 from auto_bdsp_rng.ui.check_box import CheckmarkCheckBox as QCheckBox
 from auto_bdsp_rng.ui.table_empty_state import TableEmptyState
@@ -78,6 +87,8 @@ class RunLogEntry:
     last_timestamp: datetime | None = None
     context: str = ""
     first_details: str = ""
+    user_details: str = ""
+    first_user_details: str = ""
 
     @property
     def user_visible(self) -> bool:
@@ -105,8 +116,18 @@ class RunLogEntry:
 
     def user_details_text(self) -> str:
         timestamp = self.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        lines = [self.user_message or "此条为诊断记录，可通过“原始诊断”查看。", "", "记录信息：",
-                 f"{timestamp} · {LEVEL_LABELS.get(self.level, self.level)} · {self.source_label}"]
+        lines = [self.user_message.split("\n", 1)[0] or "此条为诊断记录，可通过“原始诊断”查看。"]
+        if self.first_user_details and self.first_user_details != self.user_details:
+            lines.extend(("", "首次问题：", self.first_user_details, "", "最近问题："))
+        if self.user_details:
+            lines.extend(("", self.user_details))
+        extra_context = "".join(
+            part.strip() for part in re.findall(r"[^；;。]+[；;。]?", self.user_context)
+            if part.rstrip("；;。").strip() not in self.user_details
+        ).rstrip("；;")
+        if extra_context:
+            lines.extend(("", extra_context))
+        lines.extend(("", "记录信息：", f"{timestamp} · {LEVEL_LABELS.get(self.level, self.level)} · {self.source_label}"))
         if self.last_timestamp:
             lines.append(f"最近更新：{self.last_timestamp:%H:%M:%S.%f}"[:-3])
         return "\n".join(lines)
@@ -179,7 +200,8 @@ class RunLogBuffer(QObject):
         round_id: int | None = None,
     ) -> RunLogEntry:
         safe_source = " ".join(str(source).split()) or "应用"
-        metadata = message if isinstance(message, LogMessage) else None
+        message = present_log_message(safe_source, message, level)
+        metadata = message
         safe_level = log_level(message, level)
         entry_message = str(message)
         updated = False
@@ -195,6 +217,7 @@ class RunLogBuffer(QObject):
                 summary=metadata.summary if metadata is not None else "",
                 context=metadata.context if metadata is not None else "",
                 details=metadata.details if metadata is not None else "",
+                user_details=metadata.user_details,
                 event_type=metadata.event_type if metadata is not None else "message",
                 phase=metadata.phase if metadata is not None else "",
                 diagnostic=metadata.diagnostic if metadata is not None else False,
@@ -213,6 +236,7 @@ class RunLogBuffer(QObject):
                     repeat_count=previous.repeat_count + 1,
                     first_message=previous.first_message or previous.message,
                     first_details=previous.first_details if previous.first_message else previous.details,
+                    first_user_details=previous.first_user_details if previous.first_message else previous.user_details,
                     last_timestamp=entry.timestamp,
                 )
                 self._entries[-1] = entry
@@ -423,7 +447,7 @@ class _RunLogFilterProxyModel(QSortFilterProxyModel):
             timestamp = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             searchable = "\n".join((timestamp, entry.level, LEVEL_LABELS.get(entry.level, entry.level),
                                     entry.source_label, entry.summary, entry.context, entry.message, entry.first_message,
-                                    entry.details, entry.phase, entry.event_type, entry.run_id or "")).casefold()
+                                    entry.details, entry.user_details, entry.phase, entry.event_type, entry.run_id or "")).casefold()
             if self._search_text not in searchable:
                 return False
         return True
@@ -616,8 +640,8 @@ class RunLogPanel(QWidget):
         self.details_text.setObjectName("RunLogDetailsText")
         self.details_text.setAccessibleName("所选日志详情")
         self.details_text.setReadOnly(True)
-        self.details_text.setMinimumHeight(72)
-        self.details_text.setMaximumHeight(160)
+        self.details_text.setMinimumHeight(120)
+        self.details_text.setMaximumHeight(260)
         self.details_text.hide()
         details_layout.addWidget(self.details_text)
         root.addWidget(self.details_frame)

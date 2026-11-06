@@ -1,6 +1,8 @@
 """Edit a task's Project_Xs file in place, using the existing capture controls."""
 from pathlib import Path
 
+from auto_bdsp_rng.log_events import operation_failure
+
 from PySide6.QtCore import QObject, QPoint, QSignalBlocker, QTimer, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout
 
@@ -296,7 +298,16 @@ class SeedConfigEditorController(QObject):
             try:
                 path.unlink(missing_ok=True)
             except OSError as exc:
-                w._write_run_log("Seed 捕捉", f"清理眼睛模板草稿失败：{exc}", level="WARNING")
+                w._write_run_log(
+                    "Seed 捕捉",
+                    operation_failure(
+                        exc,
+                        summary='眼睛模板临时文件未清理',
+                        context='当前已保存的模板仍可使用。',
+                        raw_message=f"清理眼睛模板草稿失败：{exc}",
+                    ),
+                    level="WARNING",
+                )
         self.eye_drafts.clear()
         if not saved:
             previous = self.previous_config

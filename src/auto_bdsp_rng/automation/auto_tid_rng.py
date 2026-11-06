@@ -495,7 +495,7 @@ class AutoTidRngRunner:
             self._set_progress(
                 AutoTidRngPhase.IDLE,
                 message,
-                summary=("已请求停止自动 TID，停止脚本时发生错误，请展开详情"
+                summary=("已请求停止自动 TID，脚本停止未完成"
                          if script_stop_error else "已请求停止自动 TID"),
                 event_type="task.stop_requested", level="WARNING" if script_stop_error else None,
                 stop_reason=normalized_reason,
@@ -1368,6 +1368,7 @@ class AutoTidRngRunner:
                 message, summary=summary or getattr(message, "summary", ""),
                 context=context or getattr(message, "context", ""),
                 details=getattr(message, "details", ""),
+                user_details=getattr(message, "user_details", ""),
                 event_type=getattr(message, "event_type", event_type) if event_type == "progress" else event_type,
                 phase=phase.value, diagnostic=diagnostic or getattr(message, "diagnostic", False),
                 level=level or getattr(message, "level", None),

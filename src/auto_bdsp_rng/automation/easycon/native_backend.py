@@ -460,6 +460,7 @@ class NativeEasyConBackend(EasyConBackend):
                 script_path,
                 output.text,
                 message,
+                error=exc,
             )
         except Exception as exc:
             message = str(exc)
@@ -471,6 +472,7 @@ class NativeEasyConBackend(EasyConBackend):
                 script_path,
                 output.text,
                 message,
+                error=exc,
             )
         finally:
             if control is not None:
@@ -611,6 +613,7 @@ class NativeEasyConBackend(EasyConBackend):
         script_path: Path,
         stdout: str,
         stderr: str,
+        *, error: BaseException | None = None,
     ) -> EasyConRunResult:
         return EasyConRunResult(
             status=status,
@@ -621,6 +624,7 @@ class NativeEasyConBackend(EasyConBackend):
             port=self.connected_port or "",
             stdout=stdout,
             stderr=stderr,
+            error=error,
         )
 
     def _device_log(self, message: str) -> None:

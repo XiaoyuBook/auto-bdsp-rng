@@ -38,7 +38,8 @@ def test_user_views_require_authored_summaries_and_keep_failures_safe(app):
     text = live.text.toPlainText()
     assert "测种完成" in text and "第 3 轮" in text
     assert "未迁移的普通消息" not in text and "TimeoutError: 原始原因" not in text
-    assert "操作未能完成，请查看完整日志中的诊断详情" in text
+    assert "操作失败" in text
+    assert "请查看完整日志" not in text
     assert "monotonic" not in text and "开始=True" not in text
     panel.view_combo.setCurrentIndex(panel.view_combo.findData("all"))
     assert len(panel.visible_entries()) == 4

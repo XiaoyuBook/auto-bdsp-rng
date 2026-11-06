@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from auto_bdsp_rng.automation.auto_rng.models import AutoRngPhase
 from auto_bdsp_rng.automation.auto_tid_rng import AutoTidRngPhase, AutoTidRngServices
 from auto_bdsp_rng.rng_core import SeedState32
+from auto_bdsp_rng.log_events import LogMessage
 from auto_bdsp_rng.automation.easycon import EasyConConfig, EasyConStatus
 from auto_bdsp_rng.ui import main_window as mw, auto_rng_panel, auto_tid_rng_panel, easycon_panel
 from tests.test_easycon_panel import FakeNativeBackend, UnsupportedKeyboardHookFactory
@@ -276,7 +277,7 @@ def test_log_navigation_uses_current_run_and_round_and_clears_stale_filters(wind
     log = w.run_log_window.log_panel
     w._active_auto_rng_run_id, w._active_auto_rng_round_id = "current", 2
     for run, round_id, message in (("old", 2, "old run"), ("current", 1, "old round"), ("current", 2, "current round")):
-        w._run_log_buffer.publish("自动定点", message, run_id=run, round_id=round_id)
+        w._run_log_buffer.publish("自动定点", LogMessage(message, summary=message), run_id=run, round_id=round_id)
     QApplication.processEvents()
     log.search_edit.setText("stale search")
     log.level_combo.setCurrentIndex(log.level_combo.findData("ERROR"))

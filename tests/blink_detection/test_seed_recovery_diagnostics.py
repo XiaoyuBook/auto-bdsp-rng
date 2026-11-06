@@ -32,7 +32,8 @@ def test_solver_failure_keeps_exact_replay_inputs_without_changing_user_copy(mon
     assert payload['npc'] == 2 and payload['stage'] == 'recover'
     assert payload['failure_function'] == 'fail_recov' and payload['failure_type'] == error_type.__name__
     event = task_failure(error, task='自动定点', phase='捕获Seed')
-    assert log_user_text(event) == '测种失败，流程已停止'
+    assert log_user_text(event).startswith('测种失败，流程已停止\n已采集到眨眼数据，但')
+    assert 'Project_Xs' not in log_user_text(event) and 'private' not in log_user_text(event)
     assert '测种求解输入' in exception_details(error) and 'blinks' in event.details
     assert observation.blinks == (0, 1, 0) and observation.intervals == (999, 12, 24)
 
