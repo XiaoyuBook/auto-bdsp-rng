@@ -254,7 +254,10 @@ class AutoRngWorker(QObject):
 
     def _emit_failure(self, error: BaseException) -> None:
         phase = getattr(getattr(self.runner, "progress", None), "phase", None)
-        self.failure_event = task_failure(error, task="自动定点", phase=getattr(phase, "value", ""))
+        self.failure_event = task_failure(
+            error, task="自动定点", phase=getattr(phase, "value", ""),
+            progress=getattr(self.runner, "progress", None), config=getattr(self.runner, "config", None),
+        )
         self.failed.emit(str(error))
 
     @Slot()
@@ -3717,9 +3720,10 @@ class AutoRngPanel(AutomationLifecycle, QWidget):
     def _runner_failed(self, message: str) -> None:
         worker = self.sender() or self._runner_worker
         failure = getattr(worker, "failure_event", None)
-        message = failure if isinstance(failure, LogMessage) and str(failure) == message else task_failure(
-            message, task="自动定点", phase=self._runtime_phase.value if self._runtime_phase else "",
-        )
+        if isinstance(failure, LogMessage) and str(failure) == message:
+            message = failure
+        elif not isinstance(message, LogMessage) or not message.summary:
+            message = task_failure(message, task="自动定点", phase=self._runtime_phase.value if self._runtime_phase else "")
         self.set_phase_text("失败")
         if message != self._last_failed_progress_message:
             self.add_log(message, level="ERROR")

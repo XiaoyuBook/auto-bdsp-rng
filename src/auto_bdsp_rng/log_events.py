@@ -109,11 +109,14 @@ class _Problem:
     line: int | None = None
     column: int | None = None
     compile_error: bool = False
+    operation: str = ""
+    related_causes: tuple[str, ...] = ()
 
     def user_details(self) -> str:
         lines = ["具体原因：" + (self.causes[0] if self.causes else "当前记录未提供可确认的具体原因。")]
-        if len(self.causes) > 1:
-            lines.extend(("", "相关原因：", *[f"{i}. {cause}" for i, cause in enumerate(self.causes[1:], 1)]))
+        related = tuple(dict.fromkeys((*self.causes[1:], *self.related_causes)))
+        if related:
+            lines.extend(("", "相关原因：", *[f"{i}. {cause}" for i, cause in enumerate(related, 1)]))
         if self.script:
             lines.append(f"脚本：{self.script}")
         if self.line:
@@ -261,6 +264,20 @@ def _reason(kind: str, text: str) -> tuple[str, str]:
                 return reason, "请检查对应设置后重试。"
     if kind in {"BrokerUnavailableError", "BrokerConnectionError"}:
         return "当前视频连接不可用", "请重新连接视频源，确认预览持续更新。"
+    if kind == "DialogFrameCaptureError":
+        return "判闪期间无法读取游戏画面", "请确认视频预览持续更新，并检查当前游戏画面。"
+    if kind == "DialogOcrError":
+        return "判闪期间文字识别失败", "请检查文字识别设置和判闪区域后重试。"
+    if kind == "RuntimeError":
+        if text == "游走撞闪脚本已结束，但未检测到进入战斗":
+            return "撞闪脚本结束后，未检测到进入战斗", "请人工确认当前游戏是否已进入战斗。"
+        if text == "撞闪脚本运行超过 300 秒，已停止自动流程":
+            return "撞闪脚本运行超过 300 秒仍未完成", "请检查脚本等待条件和当前游戏状态。"
+        if text == "撞闪脚本停止超时，已停止自动流程":
+            return "撞闪脚本未在限定时间内停止", "请确认脚本和设备状态后再开始任务。"
+        match = re.match(r"连续 (\d+) 次捕获到相同 seed 且无候选", text)
+        if match:
+            return f"连续 {match[1]} 次测得相同 Seed，且均未找到可用目标", "请确认测种脚本已重置游戏状态，并核对搜索范围和筛选条件。"
     if kind == "TesseractRuntimeError":
         return "文字识别组件运行失败", "请检查文字识别设置后重试。"
     if kind in {"AutoScriptError", "ValueError"}:
@@ -280,30 +297,58 @@ def _reason(kind: str, text: str) -> tuple[str, str]:
 
 
 def _describe_problem(error: object, *, compile_error: bool = False, script_output: bool = False) -> _Problem:
-    records: list[tuple[str, str, object | None]] = []
+    records: list[tuple[str, str, object | None, str]] = []
+    primary_record_count: int | None = None
     if isinstance(error, BaseException):
         current: BaseException | None = error
         seen: set[int] = set()
+        related: list[tuple[str, str, object | None, str]] = []
+        destination = records
         while current is not None and id(current) not in seen:
             seen.add(id(current))
-            records.append((type(current).__name__, str(current), getattr(current, "location", None)))
-            current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+            destination.append((type(current).__name__, str(current), getattr(current, "location", None), getattr(current, "stage", "")))
+            if current.__cause__ is not None:
+                current = current.__cause__
+            else:
+                # An error from a recovery attempt may retain the preceding
+                # stage's handled exception as implicit context. It is useful
+                # background, but not the primary cause of the new failure.
+                current = None if current.__suppress_context__ else current.__context__
+                destination = related
         records.reverse()
+        related.reverse()
+        primary_record_count = len(records)
+        records.extend(related)
     else:
         details = getattr(error, "details", "")
         if details.startswith("异常原因链："):
-            records = [(m[1], m[2], None) for m in re.finditer(r"^(\w+): ?([^\r\n]*)", details, re.MULTILINE)]
+            records = [(m[1], m[2], None, "") for m in re.finditer(r"^(\w+): ?([^\r\n]*)", details, re.MULTILINE)]
         if script_output:
             # Only the actual script result channel may interpret a location.
             # A random warning containing 'TimeoutError' is never a diagnosis.
             for text in str(error).splitlines():
                 if _SCRIPT_LOCATION.fullmatch(text):
-                    records.append(("ScriptCompileError" if compile_error else "ScriptRuntimeError", text, None))
+                    records.append(("ScriptCompileError" if compile_error else "ScriptRuntimeError", text, None, ""))
                     break
     causes: list[str] = []
+    related_causes: list[str] = []
     action, script, line, column = "", "", None, None
-    for kind, text, location in records:
+    operation = ""
+    for index, (kind, text, location, stage) in enumerate(records):
         reason, suggestion = _reason(kind, text)
+        if primary_record_count is not None and index >= primary_record_count:
+            if reason and reason not in causes and reason not in related_causes:
+                related_causes.append(reason)
+            continue
+        if kind in {"DialogFrameCaptureError", "DialogOcrError", "DialogKeywordTimeoutError"}:
+            operation = "判闪"
+        elif kind == "RuntimeError" and text.startswith("OCR 判闪基础设施故障，已停止自动流程:"):
+            operation = "判闪"
+        elif kind == "RuntimeError" and text.startswith("读取 delay 策略失败:"):
+            operation = "延迟策略读取"
+        if kind == "DialogKeywordTimeoutError" and stage in {"before_first", "after_first"}:
+            position = "第一个" if stage == "before_first" else "第二个"
+            reason = f"未在限定时间内识别到{position}判闪关键词"
         if reason and reason not in causes:
             causes.append(reason)
         action = action or suggestion
@@ -315,7 +360,7 @@ def _describe_problem(error: object, *, compile_error: bool = False, script_outp
             script = name if "project_xs" not in name.casefold() and re.fullmatch(r"[\w .()（）-]{1,120}\.(?:txt|ecs)", name, re.IGNORECASE) else "所选脚本"
             line = int(getattr(location, "line", 0) or match["line"])
             column = int(getattr(location, "column", 0) or match["column"])
-    return _Problem(tuple(causes), action, script, line, column, compile_error)
+    return _Problem(tuple(causes), action, script, line, column, compile_error, operation, tuple(related_causes))
 
 
 def problem_context(message: object, *, operation: str = "") -> str:
@@ -349,15 +394,40 @@ def operation_failure(
     )
 
 
-def task_failure(message: object, *, task: str, phase: str = "") -> LogMessage:
+def _workflow_failure_facts(phase: str, progress: object | None, config: object | None) -> str:
+    """Publish only known numeric workflow state, never raw adapter values."""
+    facts: list[str] = []
+    if phase == "捕获Seed" and config is not None:
+        previous = getattr(progress, "last_script_path", None)
+        advance_script = getattr(config, "advance_script_path", None)
+        if previous is not None and previous == advance_script:
+            facts.append("失败发生在过帧后的重新测种")
+    for name, label in (("current_advances", "最近记录推进"), ("raw_target_advances", "目标推进"),
+                        ("target_advances", "目标推进"), ("trigger_advances", "脚本启动点")):
+        value = getattr(progress, name, None)
+        if type(value) is int and value >= 0:
+            facts.append(f"{label} {value:,}")
+    if phase in {"搜索目标", "搜索目标Display TID"}:
+        name = "max_advances" if phase == "搜索目标" else "frame_threshold"
+        upper = getattr(config, name, None)
+        if type(upper) is int and upper >= 0:
+            facts.append(f"搜索上限 {upper:,} 帧")
+    return "；".join(dict.fromkeys(facts))
+
+
+def task_failure(
+    message: object, *, task: str, phase: str = "", progress: object | None = None, config: object | None = None,
+) -> LogMessage:
     operation = {
         "捕获Seed": "测种", "TID/SID测种": "TID 测种", "搜索目标": "目标搜索", "搜索目标Display TID": "目标 TID 搜索",
         "运行测种脚本": "测种脚本执行", "运行过帧脚本": "过帧脚本执行", "运行撞闪脚本": "撞闪脚本执行",
         "运行取名脚本": "取名脚本执行", "运行反查ID脚本": "反查脚本执行", "运行逃跑脚本": "逃跑脚本执行",
-        "校正位置": "位置校正", "最终校准": "最终位置校正", "运行过场脚本": "过场校正", "反查个体": "个体反查",
+        "决策过帧": "过帧准备", "动态调整闪帧": "撞闪时机调整", "循环检查": "换轮处理",
+        "校正位置": "位置校正", "最终校准": "最终位置校正", "运行过场脚本": "过场脚本执行", "过场后校正": "过场校正", "反查个体": "个体反查",
         "等待触发": "撞闪等待", "等待取名帧": "取名等待", "等待反查帧": "反查等待", "OCR识别TID": "TID 识别", "校准delay": "延迟校准",
     }.get(phase, task)
     problem = _describe_problem(message)
+    operation = problem.operation or operation
     summary = f"{operation}失败，流程已停止"
     if problem.line:
         operation = operation.removesuffix("执行")
@@ -366,7 +436,16 @@ def task_failure(message: object, *, task: str, phase: str = "") -> LogMessage:
         summary = f"{operation}第 {problem.line} 行{kind}{reason}，流程已停止"
     guard = "已连续 5 次测种失败，触发保护停止。" if "连续 5 次 seed 捕获失败" in str(message) else ""
     event = operation_failure(message, summary=summary, context=guard + problem.action if guard else "", event_type="task.failed")
-    event.user_details = problem.user_details()
+    if isinstance(message, LogMessage) and message.user_details:
+        # Preserve the phase-local explanation authored before exception
+        # serialization, which also distinguishes preceding handled errors.
+        event.user_details = message.user_details
+        if message.context:
+            event.context = guard + message.context
+    else:
+        event.user_details = problem.user_details()
+    facts = _workflow_failure_facts(phase, progress, config)
+    event.context = "；".join(part for part in (event.context, facts) if part)
     event.level = "ERROR"
     return event
 
@@ -415,7 +494,7 @@ def present_log_message(source: str, message: object, level: str = "INFO") -> Lo
     if effective_level in PROBLEM_LEVELS:
         problem = _describe_problem(message)
         reason = problem.causes[0] if problem.causes else ""
-        if reason and reason not in context and reason not in summary:
+        if reason and not metadata.user_details and reason not in context and reason not in summary:
             context = "；".join(part for part in (reason, context or problem.action) if part)
         user_details = user_details or problem.user_details()
     return LogMessage(

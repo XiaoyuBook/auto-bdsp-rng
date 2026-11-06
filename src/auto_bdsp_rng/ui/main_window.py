@@ -8689,7 +8689,9 @@ class MainWindow(QMainWindow):
             )
             self.auto_tid_rng_tab.run_with_runner(runner)
         except Exception as exc:
-            self.auto_tid_rng_tab._runner_failed(str(exc))
+            self.auto_tid_rng_tab._runner_failed(
+                operation_failure(exc, summary="自动 TID 未能启动", event_type="task.failed"),
+            )
         finally:
             if self.auto_tid_rng_tab._runner_thread is None and not connection_pending:
                 self.auto_tid_rng_tab._worker_done = False
@@ -9953,7 +9955,9 @@ class MainWindow(QMainWindow):
                             self.auto_rng_tab.captureLog.emit(
                                 "[OCR判闪] 游走脚本已结束，但未检测到进入战斗；判定结果未知"
                             )
-                            return ShinyCheckResult(is_shiny=False)
+                            return ShinyCheckResult(
+                                is_shiny=False, error=RuntimeError("游走撞闪脚本已结束，但未检测到进入战斗"),
+                            )
                     if errors:
                         raise errors[0]
                     monitor_started_at = time.monotonic()
@@ -10098,7 +10102,7 @@ class MainWindow(QMainWindow):
                     hard_timeout_seconds=300.0,
                     event_callback=log_ocr_event,
                 )
-            except DialogKeywordTimeoutError:
+            except DialogKeywordTimeoutError as exc:
                 wait_for_script_after_keyword_timeout()
                 script_thread.join(timeout=0.1)
                 if errors:
@@ -10115,6 +10119,7 @@ class MainWindow(QMainWindow):
                     is_shiny=False,
                     first_event_text="去吧/上吧" if is_starter else "出现了",
                     second_event_text="战斗" if is_starter else "去吧",
+                    error=exc,
                 )
             except DialogScriptTimeoutError as exc:
                 stop_current_script_service()
@@ -10251,6 +10256,8 @@ class MainWindow(QMainWindow):
             # 能力页 OCR 重试逻辑：原始 ROI、约 12%（至少 4px）、约 24%（至少 8px）。
             stat_names = ["HP", "攻击", "防御", "特攻", "特防", "速度"]
             candidates: list[object] = []
+            stats_recognized = False
+            search_performed = False
             characteristic_context: dict[str, object] = {
                 "nature": nature,
                 "characteristic": characteristic,
@@ -10282,6 +10289,7 @@ class MainWindow(QMainWindow):
                         time.sleep(0.5)
                     continue
 
+                stats_recognized = True
                 stat_vals = [int(stats.get(n, 0)) for n in stat_names]
                 log(
                     "[自动反查] OCR 能力值: "
@@ -10334,6 +10342,7 @@ class MainWindow(QMainWindow):
                         natures=natures_locked,
                     )
                     attempt_criteria = replace(species_criteria, state_filter=reverse_filter)
+                    search_performed = True
                     species_candidates = list(generate_static_candidates(attempt_criteria))
                     # 标记反查精灵名
                     for c in species_candidates:
@@ -10364,7 +10373,9 @@ class MainWindow(QMainWindow):
                 log("[自动反查] 3次尝试均未找到匹配个体")
                 publish_history_event(history_archive, emit_history, "reverse_lookup_results",
                                       ([], characteristic, None, last_ocr_stats), cancelled=search_cancellation.is_cancelled)
-                return ReverseLookupResult()
+                return ReverseLookupResult(
+                    stats_recognized=stats_recognized, search_performed=search_performed, attempts=attempt,
+                )
             else:
                 delays = [int(getattr(s, "advances", 0)) - target.raw_target_advances + used_delay
                           if target.raw_target_advances else int(getattr(s, "advances", 0))

@@ -1301,7 +1301,17 @@ class AutoTidRngRunner:
             return
         tid = parse_tid_text(text)
         if tid is None:
-            self._set_progress(AutoTidRngPhase.FAILED, f"OCR 未识别到有效 TID：{text}", summary="未识别到有效 TID，流程已停止，请检查游戏画面", ocr_text=text)
+            reason = "文字识别没有返回内容" if not str(text).strip() else "文字识别结果中没有可用的 TID 数字"
+            self._set_progress(
+                AutoTidRngPhase.FAILED,
+                LogMessage(
+                    f"OCR 未识别到有效 TID：{text}",
+                    summary="未识别到有效 TID，流程已停止，请检查游戏画面",
+                    context=reason + "。请确认游戏停留在显示 TID 的页面，并检查识别区域。",
+                    user_details=f"具体原因：{reason}。\n处理建议：确认 TID 页面和识别区域后重新识别。",
+                ),
+                ocr_text=text,
+            )
             return
         self._set_progress(AutoTidRngPhase.CALIBRATE_DELAY, f"OCR TID={tid}", summary="TID 识别完成，正在校准延迟", context=f"识别到的游戏内 TID：{tid}。", ocr_text=text, ocr_tid=tid)
 
@@ -1317,7 +1327,15 @@ class AutoTidRngRunner:
         if state is None:
             self._set_progress(
                 AutoTidRngPhase.FAILED,
-                f"ID 数据中未找到 OCR TID {tid}（反查范围 ±{self.config.reverse_lookup_window}）", summary="未找到匹配的 TID，流程已停止，请检查识别结果",
+                LogMessage(
+                    f"ID 数据中未找到 OCR TID {tid}（反查范围 ±{self.config.reverse_lookup_window}）",
+                    summary="未找到匹配的 TID，流程已停止，请检查识别结果",
+                    context=f"识别 TID {tid}；目标推进 {target.advances:,}；反查范围前后 {self.config.reverse_lookup_window:,} 帧。原 delay {self.config.delay} 帧未更新。",
+                    user_details=(
+                        f"具体原因：在目标推进 {target.advances:,} 前后 {self.config.reverse_lookup_window:,} 帧内，未找到与识别 TID {tid} 匹配的状态。\n"
+                        "处理建议：先核对游戏显示的 TID 与识别结果是否一致，再检查反查范围。"
+                    ),
+                ),
             )
             return
         actual_delay = int(state.advances) - int(trigger)
@@ -1351,7 +1369,7 @@ class AutoTidRngRunner:
 
     def _set_progress(
         self, phase: AutoTidRngPhase, message: str = "", *, summary: str = "", context: str = "",
-        event_type: str = "progress", diagnostic: bool = False,
+        event_type: str = "progress", diagnostic: bool = False, user_details: str = "",
         level: str | None = None, coalesce_key: str | None = None, **updates: object,
     ) -> None:
         if self._stop_requested and phase != AutoTidRngPhase.IDLE:
@@ -1359,8 +1377,11 @@ class AutoTidRngRunner:
         if message:
             if phase == AutoTidRngPhase.FAILED:
                 if not summary and not getattr(message, "summary", ""):
-                    failure = task_failure(message, task="自动 TID", phase=self.progress.phase.value)
+                    failure = task_failure(
+                        message, task="自动 TID", phase=self.progress.phase.value, progress=self.progress, config=self.config,
+                    )
                     summary = failure.summary
+                    user_details = user_details or failure.user_details
                     context = "；".join(part for part in (context, failure.context) if part)
                 level = level or "ERROR"
                 event_type = "task.failed"
@@ -1368,7 +1389,7 @@ class AutoTidRngRunner:
                 message, summary=summary or getattr(message, "summary", ""),
                 context=context or getattr(message, "context", ""),
                 details=getattr(message, "details", ""),
-                user_details=getattr(message, "user_details", ""),
+                user_details=user_details or getattr(message, "user_details", ""),
                 event_type=getattr(message, "event_type", event_type) if event_type == "progress" else event_type,
                 phase=phase.value, diagnostic=diagnostic or getattr(message, "diagnostic", False),
                 level=level or getattr(message, "level", None),

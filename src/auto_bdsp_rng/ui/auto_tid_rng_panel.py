@@ -349,7 +349,10 @@ class AutoTidRngWorker(QObject):
 
     def _emit_failure(self, error: BaseException) -> None:
         phase = getattr(getattr(self.runner, "progress", None), "phase", None)
-        self.failure_event = task_failure(error, task="自动 TID", phase=getattr(phase, "value", ""))
+        self.failure_event = task_failure(
+            error, task="自动 TID", phase=getattr(phase, "value", ""),
+            progress=getattr(self.runner, "progress", None), config=getattr(self.runner, "config", None),
+        )
         self.failed.emit(str(error))
 
     def request_stop(self, reason: str | None = None) -> None:
@@ -2074,9 +2077,10 @@ class AutoTidRngPanel(AutomationLifecycle, QWidget):
     def _runner_failed(self, message: str) -> None:
         worker = self.sender() or self._runner_worker
         failure = getattr(worker, "failure_event", None)
-        message = failure if isinstance(failure, LogMessage) and str(failure) == message else task_failure(
-            message, task="自动 TID", phase=self._last_progress.phase.value,
-        )
+        if isinstance(failure, LogMessage) and str(failure) == message:
+            message = failure
+        elif not isinstance(message, LogMessage) or not message.summary:
+            message = task_failure(message, task="自动 TID", phase=self._last_progress.phase.value)
         progress = replace(self._last_progress, phase=AutoTidRngPhase.FAILED, log_message=message)
         self._last_progress = progress
         self._render_runtime(progress)

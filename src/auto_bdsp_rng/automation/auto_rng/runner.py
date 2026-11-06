@@ -681,11 +681,14 @@ class AutoRngRunner:
             self._seed_capture_failures += 1
             if self._seed_capture_failures >= 5:
                 raise RuntimeError(f"连续 5 次 seed 捕获失败，自动流程停止: {exc}") from exc
+            context = problem_context(exc, operation="眨眼测种")
+            if self.config.advance_script_path is not None and self.progress.last_script_path == self.config.advance_script_path:
+                context = "过帧脚本已完成；失败发生在重新测种阶段。" + context
             self._restart_from_seed_script(
                 LogMessage(
                     f"seed 捕获失败（连续 {self._seed_capture_failures}/5）: {exc}，进入下一轮测种",
                     summary=f"测种失败（连续 {self._seed_capture_failures}/5），将重新运行测种脚本",
-                    context=problem_context(exc, operation="眨眼测种"),
+                    context=context,
                     details=exception_details(exc),
                     event_type="seed.retry", phase=AutoRngPhase.RUN_SEED_SCRIPT.value, level="WARNING",
                 )
@@ -1028,7 +1031,7 @@ class AutoRngRunner:
                 AutoRngPhase.RUN_ADVANCE_SCRIPT,
                 LogMessage(f"过帧脚本启动失败——{path.name}: {exc}", details=exception_details(exc)),
                 summary="过帧脚本执行失败", context=problem_context(exc, operation="过帧脚本执行"),
-                last_script_path=path,
+                diagnostic=True, level="ERROR", last_script_path=path,
             )
             raise
         # 执行后翻转内部同步状态
@@ -1114,6 +1117,10 @@ class AutoRngRunner:
         if service is None:
             raise RuntimeError("过场校正服务未配置")
         seed = self._require_seed()
+        self._set_progress(
+            AutoRngPhase.EXIT_RESEED, f"启动过场脚本——{path.name}",
+            summary="开始执行过场脚本，随后校正位置", event_type="script.started", last_script_path=path,
+        )
         try:
             self.services.run_script_text(path.read_text(encoding="utf-8"), path.name)
         except Exception:
@@ -1140,7 +1147,7 @@ class AutoRngRunner:
             self._restart_from_seed_script(LogMessage(
                 f"过场校正连续 2 次失败: {exc}，进入下一轮测种",
                 summary="过场校正连续 2 次失败，将从测种脚本重新开始", details=exception_details(exc),
-            ))
+            ), failure_phase="过场后校正")
             return
         if self.should_stop():
             return
@@ -1164,9 +1171,13 @@ class AutoRngRunner:
         recovery_attempts = max(1, int(self.config.reidentify_seed_max_attempts))
         self._set_progress(
             AutoRngPhase.CAPTURE_SEED,
-            f"校正连续 {reidentify_attempts} 次失败: {reidentify_error}，"
-            f"开始补救测 Seed（最多 {recovery_attempts} 次）",
+            LogMessage(
+                f"校正连续 {reidentify_attempts} 次失败: {reidentify_error}，"
+                f"开始补救测 Seed（最多 {recovery_attempts} 次）",
+                details=exception_details(reidentify_error),
+            ),
             summary=f"位置校正连续 {reidentify_attempts} 次失败，正在重新测种补救",
+            context=f"旧目标已清除；补救测种最多尝试 {recovery_attempts} 次，成功后重新搜索目标。",
             event_type="seed.recovery", level="WARNING",
             locked_target=None,
             raw_target_advances=None,
@@ -1193,6 +1204,7 @@ class AutoRngRunner:
                         f"补救测 Seed 第 {attempt} 次失败（{attempt}/{recovery_attempts}）: "
                         f"{exc}，继续尝试",
                         summary=f"补救测种失败，准备第 {attempt + 1}/{recovery_attempts} 次尝试",
+                        context=problem_context(exc), user_details=operation_failure(exc, summary="补救测种失败").user_details,
                         details=exception_details(exc),
                         event_type="seed.retry", level="WARNING", coalesce_key="seed.recovery.retry",
                     )
@@ -1213,10 +1225,18 @@ class AutoRngRunner:
                 "连续 5 次 seed 捕获失败，自动流程停止: "
                 f"补救测 Seed 连续 {recovery_attempts} 次失败: {last_error}"
             )
+            failure = task_failure(
+                last_error, task="自动定点", phase=AutoRngPhase.CAPTURE_SEED.value,
+                progress=self.progress, config=self.config,
+            )
             self._clear_current_cycle_state()
             self._set_progress(
                 AutoRngPhase.FAILED,
-                LogMessage(message, details=exception_details(last_error)),
+                LogMessage(
+                    message, summary=failure.summary,
+                    context="已连续 5 次测种失败，触发保护停止。" + failure.context,
+                    details=failure.details, user_details=failure.user_details,
+                ),
                 locked_target=None,
                 raw_target_advances=None,
                 fixed_delay=None,
@@ -1232,6 +1252,12 @@ class AutoRngRunner:
             LogMessage(
                 f"校正连续 {reidentify_attempts} 次失败；补救测 Seed 连续 {recovery_attempts} 次失败"
                 f"（全局连续 {self._seed_capture_failures}/5）: {last_error}，进入下一轮测种",
+                summary=f"补救测种连续 {recovery_attempts} 次失败，将从测种脚本重新开始",
+                context="；".join(part for part in (
+                    problem_context(last_error),
+                    f"本轮补救未能取得新 Seed；连续测种失败计数 {self._seed_capture_failures}/5。",
+                ) if part),
+                user_details=operation_failure(last_error, summary="补救测种失败").user_details,
                 details=exception_details(last_error),
             )
         )
@@ -1550,7 +1576,7 @@ class AutoRngRunner:
             or self.config.target_species in STARTER_SPECIES
         )
         if result.interval_seconds is None and requires_manual_confirmation:
-            self._stop_for_unknown_shiny_result(path)
+            self._stop_for_unknown_shiny_result(path, error=result.error)
             return
         interval_text = "-" if result.interval_seconds is None else f"{result.interval_seconds:.3f}s"
         non_shiny_text = (
@@ -1565,6 +1591,13 @@ class AutoRngRunner:
         )
         if self.config.shiny_threshold_seconds is not None:
             result_context += f"本轮判闪阈值 {self.config.shiny_threshold_seconds:.3f} 秒。"
+        result_details = exception_details(result.error)
+        result_user_details = ""
+        if result.error is not None:
+            explanation = operation_failure(result.error, summary=result_summary)
+            result_context = "；".join(part for part in (explanation.context, result_context) if part)
+            result_user_details = explanation.user_details
+        result_level = "WARNING" if result.interval_seconds is None else None
         trigger = self.progress.trigger_advances
         target = self._require_target()
         used_delay = self._target_delay(target)
@@ -1574,17 +1607,28 @@ class AutoRngRunner:
             self._history("cycle_result", True, result.interval_seconds, trigger, used_delay)
             self._cycle_started = False
             # 判定出闪后执行可替换的录屏脚本。
+            recorded = False
             try:
                 record_path = self.config.record_script_path
                 if record_path is not None and record_path.exists():
                     self.services.run_script_text(record_path.read_text(encoding="utf-8"), record_path.name)
                 else:
                     self.services.run_script_text("Capture 5000\n", "auto_capture")
-            except Exception:
-                pass
+                recorded = True
+            except Exception as exc:
+                if self.should_stop():
+                    return
+                warning = operation_failure(
+                    exc, summary="疑似闪光录像操作失败",
+                    context="流程仍将停止；请人工保存录像，并核对当前游戏结果。",
+                    event_type="recording.failed",
+                )
+                warning.level = "WARNING"
+                self._emit(replace(self.progress, log_message=warning))
             self._set_progress(
                 AutoRngPhase.COMPLETED,
-                f"{attempt_label} 疑似出闪，间隔 {interval_text}，已录像并停止自动流程",
+                f"{attempt_label} 疑似出闪，间隔 {interval_text}，"
+                f"{'已录像' if recorded else '录像未完成'}并停止自动流程",
                 summary="检测到疑似闪光，已停止自动流程，请人工确认", event_type="task.needs_confirmation",
                 context=result_context + "请核对当前游戏画面，确认前不要重启任务。",
                 loop_index=self._completed_loops,
@@ -1608,7 +1652,7 @@ class AutoRngRunner:
                 f"{attempt_label} {non_shiny_text}；"
                 f"当前搜索仍有 {self._later_candidate_count} 个更晚候选，准备逃跑续搜",
                 summary=f"{result_summary}，准备逃跑并尝试后续 {self._later_candidate_count} 个候选",
-                context=result_context,
+                context=result_context, details=result_details, user_details=result_user_details, level=result_level,
                 event_type="attempt.result",
                 loop_index=self._completed_loops,
                 last_script_path=path,
@@ -1622,7 +1666,7 @@ class AutoRngRunner:
                 AutoRngPhase.REVERSE_LOOKUP,
                 f"{attempt_label} {non_shiny_text}，启动自动反查",
                 summary=f"{result_summary}，开始自动反查", event_type="lookup.started",
-                context=result_context,
+                context=result_context, details=result_details, user_details=result_user_details, level=result_level,
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1635,7 +1679,7 @@ class AutoRngRunner:
                 AutoRngPhase.RUN_SEED_SCRIPT,
                 f"{attempt_label} {non_shiny_text}，进入下一轮测种",
                 summary=f"{result_summary}，开始下一轮测种", event_type="round.result",
-                context=result_context,
+                context=result_context, details=result_details, user_details=result_user_details, level=result_level,
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1645,7 +1689,7 @@ class AutoRngRunner:
                 AutoRngPhase.RUN_SEED_SCRIPT,
                 f"{attempt_label} {non_shiny_text}，进入下一轮测种",
                 summary=f"{result_summary}，开始下一轮测种", event_type="round.result",
-                context=result_context,
+                context=result_context, details=result_details, user_details=result_user_details, level=result_level,
                 loop_index=self._completed_loops,
                 last_script_path=path,
             )
@@ -1654,7 +1698,7 @@ class AutoRngRunner:
             AutoRngPhase.COMPLETED,
             f"{attempt_label} {non_shiny_text}，自动流程完成",
             summary=f"{result_summary}，自动流程已结束", event_type="task.completed",
-            context=result_context,
+            context=result_context, details=result_details, user_details=result_user_details, level=result_level,
             loop_index=self._completed_loops,
             last_script_path=path,
         )
@@ -1773,10 +1817,43 @@ class AutoRngRunner:
             if normalized_delays else "没有得到可用的 delay 样本，本轮保留原 delay 设置。"
         )
         candidate_count = len(result.candidates) if isinstance(result, ReverseLookupResult) else None
+        lookup_level = None
+        lookup_user_details = ""
+        if isinstance(result, ReverseLookupResult) and not result.candidates:
+            if result.stats_recognized is False:
+                lookup_context = (
+                    f"已尝试 {result.attempts} 次，均未识别到完整六项能力值。"
+                    "请确认游戏停留在能力页，并检查识别区域。" + lookup_context
+                )
+                lookup_level = "WARNING"
+                lookup_user_details = (
+                    f"具体原因：{result.attempts} 次能力值识别均未得到完整六项，无法据此匹配个体。\n"
+                    "处理建议：确认游戏停留在能力页，并检查识别区域。"
+                )
+            elif result.stats_recognized is True and result.search_performed is False:
+                lookup_context = (
+                    "已识别到能力值，但无法换算成合法个体值范围，未执行匹配搜索。"
+                    "请核对能力值、精灵种类和等级。" + lookup_context
+                )
+                lookup_level = "WARNING"
+                lookup_user_details = (
+                    "具体原因：能力值识别结果无法换算成合法个体值范围，匹配搜索尚未执行。\n"
+                    "处理建议：核对识别的六项能力值、精灵种类和等级。"
+                )
+            elif result.stats_recognized is True:
+                window = min(10_000, max(0, int(self.config.reverse_lookup_window)))
+                lookup_context = (
+                    f"已识别到能力值，但目标推进前后 {window:,} 帧内未找到匹配个体。"
+                    "请核对识别结果、目标和反查范围。" + lookup_context
+                )
+                lookup_user_details = (
+                    f"具体原因：已取得能力值，但目标推进前后 {window:,} 帧内没有匹配个体。\n"
+                    "处理建议：核对识别结果、目标和反查范围；本轮保留原 delay 设置。"
+                )
         self._set_progress(
             AutoRngPhase.REVERSE_LOOKUP, "反查结束，匹配 delay=" + str(normalized_delays),
             summary=f"反查完成，找到 {candidate_count} 个匹配个体" if candidate_count is not None else "反查完成",
-            context=lookup_context, event_type="lookup.completed",
+            context=lookup_context, user_details=lookup_user_details, event_type="lookup.completed", level=lookup_level,
         )
         if self.should_stop():
             return
@@ -1847,13 +1924,22 @@ class AutoRngRunner:
     def _next_attempt_label(self) -> str:
         return f"[第 {self._completed_loops} 轮 / 第 {self._attempt_index + 1} 次]"
 
-    def _stop_for_unknown_shiny_result(self, path: object) -> None:
+    def _stop_for_unknown_shiny_result(self, path: object, *, error: BaseException | None = None) -> None:
         self._cycle_started = False
+        explanation = operation_failure(error, summary="判闪结果未知") if error is not None else None
+        message = LogMessage(
+            f"{self._attempt_label()} OCR 判闪结果未知，已停止自动流程，请人工确认当前战斗",
+            details=exception_details(error),
+            user_details=explanation.user_details if explanation is not None else "",
+        )
         self._set_progress(
             AutoRngPhase.FAILED,
-            f"{self._attempt_label()} OCR 判闪结果未知，已停止自动流程，请人工确认当前战斗",
+            message,
             summary="无法确认是否为闪光，流程已停止，请人工确认当前战斗",
-            context="没有获得完整的判闪计时。请先核对当前游戏结果，确认后再开始下一轮。",
+            context="；".join(part for part in (
+                explanation.context if explanation is not None else "",
+                "没有获得完整的判闪计时。请先核对当前游戏结果，确认后再开始下一轮。",
+            ) if part),
             loop_index=self._completed_loops,
             last_script_path=path,
         )
@@ -1903,7 +1989,7 @@ class AutoRngRunner:
 
     def _set_progress(
         self, phase: AutoRngPhase, message: str = "", *, summary: str = "", context: str = "", details: str = "",
-        event_type: str = "progress", diagnostic: bool = False,
+        event_type: str = "progress", diagnostic: bool = False, user_details: str = "",
         level: str | None = None, coalesce_key: str | None = None, **updates: object,
     ) -> None:
         if self._stop_requested and phase != AutoRngPhase.IDLE:
@@ -1911,8 +1997,9 @@ class AutoRngRunner:
         if message:
             if phase == AutoRngPhase.FAILED:
                 if not summary and not getattr(message, "summary", ""):
-                    failure = task_failure(message, task="自动定点", phase=self.progress.phase.value)
+                    failure = task_failure(message, task="自动定点", phase=self.progress.phase.value, progress=self.progress, config=self.config)
                     summary = failure.summary
+                    user_details = user_details or failure.user_details
                     context = "；".join(part for part in (context, failure.context) if part)
                 level = level or "ERROR"
                 event_type = "task.failed"
@@ -1920,7 +2007,7 @@ class AutoRngRunner:
                 message, summary=summary or getattr(message, "summary", ""),
                 context=context or getattr(message, "context", ""),
                 details=details or getattr(message, "details", ""),
-                user_details=getattr(message, "user_details", ""),
+                user_details=user_details or getattr(message, "user_details", ""),
                 event_type=getattr(message, "event_type", event_type) if event_type == "progress" else event_type,
                 phase=phase.value, diagnostic=diagnostic or getattr(message, "diagnostic", False),
                 level=level or getattr(message, "level", None),
@@ -2010,11 +2097,14 @@ class AutoRngRunner:
         assert last_error is not None
         raise last_error
 
-    def _restart_from_seed_script(self, message: str) -> None:
+    def _restart_from_seed_script(self, message: str, *, failure_phase: str = "") -> None:
         if self.should_stop():
             return
         if self.config.loop_mode == "count" and self._completed_loops >= self.config.loop_count:
-            failure = task_failure(message, task="自动定点", phase=self.progress.phase.value)
+            failure = task_failure(
+                message, task="自动定点", phase=failure_phase or self.progress.phase.value,
+                progress=self.progress, config=self.config,
+            )
             self._clear_current_cycle_state()
             self._set_progress(
                 AutoRngPhase.FAILED,
@@ -2025,7 +2115,7 @@ class AutoRngRunner:
                         failure.context,
                         f"已达到设定的 {self.config.loop_count} 轮，不再开始下一轮。",
                     ) if part),
-                    details=failure.details,
+                    details=failure.details, user_details=failure.user_details,
                     event_type="task.failed", level="ERROR",
                 ),
                 locked_target=None, raw_target_advances=None, fixed_delay=None,

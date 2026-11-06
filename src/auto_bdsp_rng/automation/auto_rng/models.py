@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -137,6 +137,9 @@ class ReverseLookupResult:
 
     candidates: tuple[Any, ...] = ()
     delays: tuple[int, ...] = ()
+    stats_recognized: bool | None = None
+    search_performed: bool | None = None
+    attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -146,6 +149,7 @@ class ShinyCheckResult:
     interval_seconds: float | None = None
     first_event_text: str = "出现了"
     second_event_text: str = "去吧"
+    error: BaseException | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
